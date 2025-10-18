@@ -12,7 +12,7 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    pub async fn new<'a>(window: &'a Window) -> anyhow::Result<Self> {
+    pub async fn new(window: &Window) -> anyhow::Result<Self> {
         let size = window.inner_size();
         let instance = Instance::default();
 
