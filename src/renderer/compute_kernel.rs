@@ -81,7 +81,20 @@ impl FlameRenderer {
     }
 
     /// Run compute pass to generate flame samples
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, num_workgroups: u32) {
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32) {
+        // Update seed for new random samples each frame
+        let params = GpuParams {
+            num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
+            iterations_per_thread,
+            burn_in: 20,
+            width: self.width,
+            height: self.height,
+            seed: rand::random::<u32>(),
+            splat_size: 1.0,
+            _pad0: 0.0,
+        };
+        self.buffers.update_params(queue, &params);
+
         // Clear temp samples texture before rendering new samples
         self.buffers.clear_temp(encoder);
 
