@@ -210,8 +210,8 @@ impl FlameRenderer {
         let params = TonemapParams {
             exposure,
             gamma,
+            density_scale: 1.0,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -237,5 +237,16 @@ impl FlameRenderer {
             _pad1: 0.0,
         };
         self.buffers.update_params(queue, &params);
+    }
+
+    /// Update density scale for alpha blending
+    pub fn update_density_scale(&self, queue: &Queue, density_scale: f32) {
+        let params = TonemapParams {
+            exposure: 1.0,
+            gamma: 2.2,
+            density_scale,
+            _pad0: 0.0,
+        };
+        self.buffers.update_tonemap_params(queue, &params);
     }
 }
