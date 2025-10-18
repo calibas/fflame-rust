@@ -42,7 +42,7 @@ impl FlameRenderer {
     }
 
     /// Resize the accumulation buffer
-    pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame) {
+    pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
         self.width = width;
         self.height = height;
 
@@ -55,11 +55,11 @@ impl FlameRenderer {
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
 
         // Clear accumulation counter
-        self.reset(encoder, queue);
+        self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y);
     }
 
     /// Reset accumulation buffer and sample count
-    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue) {
+    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
         self.samples_accumulated = 0;
 
         // Clear accumulation buffers
@@ -68,20 +68,24 @@ impl FlameRenderer {
         // Update seed to generate different random samples
         let params = GpuParams {
             num_transforms: 2, // Will be updated when flame changes
-            iterations_per_thread: 256,
+            iterations_per_thread,
             burn_in: 20,
             width: self.width,
             height: self.height,
             seed: rand::random::<u32>(),
             splat_size: 1.0,
+            zoom,
+            pan_x,
+            pan_y,
             _pad0: 0.0,
+            _pad1: 0.0,
         };
 
         self.buffers.update_params(queue, &params);
     }
 
     /// Run compute pass to generate flame samples
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32) {
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
         // Update seed for new random samples each frame
         let params = GpuParams {
             num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
@@ -91,7 +95,11 @@ impl FlameRenderer {
             height: self.height,
             seed: rand::random::<u32>(),
             splat_size: 1.0,
+            zoom,
+            pan_x,
+            pan_y,
             _pad0: 0.0,
+            _pad1: 0.0,
         };
         self.buffers.update_params(queue, &params);
 
@@ -175,18 +183,22 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, queue: &Queue, flame: &Flame) {
+    pub fn update_flame(&mut self, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
         self.buffers.update_transforms(queue, flame);
 
         let params = GpuParams {
             num_transforms: flame.transforms.len() as u32,
-            iterations_per_thread: 256,
+            iterations_per_thread,
             burn_in: 20,
             width: self.width,
             height: self.height,
             seed: rand::random::<u32>(),
             splat_size: 1.0,
+            zoom,
+            pan_x,
+            pan_y,
             _pad0: 0.0,
+            _pad1: 0.0,
         };
 
         self.buffers.update_params(queue, &params);
@@ -209,7 +221,7 @@ impl FlameRenderer {
     }
 
     /// Update iterations per thread
-    pub fn update_iterations(&self, queue: &Queue, iterations_per_thread: u32) {
+    pub fn update_iterations(&self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
         let params = GpuParams {
             num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
             iterations_per_thread,
@@ -218,7 +230,11 @@ impl FlameRenderer {
             height: self.height,
             seed: rand::random::<u32>(),
             splat_size: 1.0,
+            zoom,
+            pan_x,
+            pan_y,
             _pad0: 0.0,
+            _pad1: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }

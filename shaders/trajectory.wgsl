@@ -36,7 +36,11 @@ struct Params {
     height: u32,
     seed: u32,
     splat_size: f32,
+    zoom: f32,
+    pan_x: f32,
+    pan_y: f32,
     _pad0: f32,
+    _pad1: f32,
 }
 
 // Bindings
@@ -298,10 +302,13 @@ fn select_transform(rand_val: f32) -> u32 {
 
 // Convert fractal space coords to pixel coords
 fn world_to_pixel(p: vec2<f32>) -> vec2<i32> {
+    // Apply view transform: pan and zoom
+    let transformed = (p - vec2<f32>(params.pan_x, params.pan_y)) * params.zoom;
+
     // Map from fractal space (typically -2 to 2) to pixel space
     let scale = f32(min(params.width, params.height)) * 0.25;
     let center = vec2<f32>(f32(params.width), f32(params.height)) * 0.5;
-    let pixel = center + p * scale;
+    let pixel = center + transformed * scale;
     return vec2<i32>(i32(pixel.x), i32(pixel.y));
 }
 

@@ -7,6 +7,7 @@ pub struct UiResponse {
     pub reset_requested: bool,
     pub flame_changed: bool,
     pub iterations_changed: bool,
+    pub view_changed: bool,
 }
 
 pub struct EguiLayer {
@@ -45,12 +46,16 @@ impl EguiLayer {
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
         flame: &mut crate::scene::transforms::Flame,
         iterations_per_thread: &mut u32,
+        zoom: &mut f32,
+        pan_x: &mut f32,
+        pan_y: &mut f32,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
         let mut reset_requested = false;
         let mut flame_changed = false;
         let mut iterations_changed = false;
+        let mut view_changed = false;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Performance window
@@ -83,6 +88,56 @@ impl EguiLayer {
                 ui.label("Render Settings");
                 if ui.add(egui::Slider::new(iterations_per_thread, 64..=4096).text("Iterations per Thread")).changed() {
                     iterations_changed = true;
+                }
+
+                // View settings
+                ui.separator();
+                ui.label("View");
+                ui.label(format!("Zoom: {:.2}x", zoom));
+                ui.horizontal(|ui| {
+                    if ui.button("Zoom In").clicked() {
+                        *zoom *= 1.5;
+                        view_changed = true;
+                    }
+                    if ui.button("Zoom Out").clicked() {
+                        *zoom /= 1.5;
+                        view_changed = true;
+                    }
+                });
+
+                ui.label(format!("Pan: ({:.3}, {:.3})", pan_x, pan_y));
+
+                // Pan step size depends on zoom (more zoomed in = smaller steps)
+                let pan_step = 0.1 / *zoom;
+
+                // Arrow keys layout
+                ui.horizontal(|ui| {
+                    ui.add_space(30.0);
+                    if ui.button("  ^  ").clicked() {
+                        *pan_y -= pan_step;
+                        view_changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("  <  ").clicked() {
+                        *pan_x -= pan_step;
+                        view_changed = true;
+                    }
+                    if ui.button("  v  ").clicked() {
+                        *pan_y += pan_step;
+                        view_changed = true;
+                    }
+                    if ui.button("  >  ").clicked() {
+                        *pan_x += pan_step;
+                        view_changed = true;
+                    }
+                });
+
+                if ui.button("Reset View").clicked() {
+                    *zoom = 1.0;
+                    *pan_x = 0.0;
+                    *pan_y = 0.0;
+                    view_changed = true;
                 }
             });
 
@@ -226,6 +281,7 @@ impl EguiLayer {
             reset_requested,
             flame_changed,
             iterations_changed,
+            view_changed,
         }
     }
 }
