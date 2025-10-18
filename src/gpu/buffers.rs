@@ -53,7 +53,11 @@ pub struct GpuParams {
     pub height: u32,
     pub seed: u32,
     pub splat_size: f32,
+    pub zoom: f32,
+    pub pan_x: f32,
+    pub pan_y: f32,
     pub _pad0: f32,
+    pub _pad1: f32,
 }
 
 /// Tonemap parameters
@@ -135,7 +139,11 @@ impl FlameBuffers {
             height,
             seed: 12345,
             splat_size: 1.0,
+            zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
             _pad0: 0.0,
+            _pad1: 0.0,
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
