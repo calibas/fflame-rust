@@ -35,14 +35,24 @@ impl EguiLayer {
         target_view: &wgpu::TextureView,
         window: &Window,
         window_size: winit::dpi::PhysicalSize<u32>,
+        metrics: &crate::util::PerformanceMetrics,
     ) {
         let raw_input = self.state.take_egui_input(window);
 
         let full_output = self.ctx.run(raw_input, |ctx| {
-            egui::Window::new("Controls").show(ctx, |ui| {
-                ui.label("Fractal Flame Renderer");
+            egui::Window::new("Performance").show(ctx, |ui| {
+                ui.heading("Fractal Flame Renderer");
                 ui.separator();
-                ui.label("(UI placeholder)");
+
+                ui.label(format!("FPS: {:.1}", metrics.fps()));
+                ui.label(format!("Frame Time: {:.2} ms", metrics.frame_time_ms()));
+
+                let (min, max) = metrics.frame_time_range();
+                ui.label(format!("Frame Time Range: {:.2} - {:.2} ms", min, max));
+
+                ui.separator();
+                ui.label(format!("Total Frames: {}", metrics.frame_count()));
+                ui.label(format!("Resolution: {}x{}", window_size.width, window_size.height));
             });
         });
 

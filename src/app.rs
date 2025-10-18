@@ -5,11 +5,13 @@ use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
 use crate::renderer::FlameRenderer;
 use crate::scene::presets;
+use crate::util::PerformanceMetrics;
 
 pub struct App {
     gpu: GpuContext,
     egui_layer: EguiLayer,
     flame_renderer: Option<FlameRenderer>,
+    metrics: PerformanceMetrics,
 }
 
 impl App {
@@ -31,6 +33,7 @@ impl App {
             gpu,
             egui_layer,
             flame_renderer: Some(flame_renderer),
+            metrics: PerformanceMetrics::new(),
         };
 
         #[allow(deprecated)]
@@ -71,7 +74,8 @@ impl App {
     }
 
     fn update(&mut self) {
-        // Update app state here (UI, animation, etc.)
+        // Update performance metrics
+        self.metrics.update();
     }
 
     fn render(&mut self, window: &Window) -> Result<(), SurfaceError> {
@@ -99,6 +103,7 @@ impl App {
             &view,
             window,
             self.gpu.size,
+            &self.metrics,
         );
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
