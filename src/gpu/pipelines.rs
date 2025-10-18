@@ -3,6 +3,8 @@ use wgpu::*;
 pub struct FlamePipelines {
     pub compute_pipeline: ComputePipeline,
     pub compute_bind_group_layout: BindGroupLayout,
+    pub accumulate_pipeline: ComputePipeline,
+    pub accumulate_bind_group_layout: BindGroupLayout,
     pub tonemap_pipeline: RenderPipeline,
     pub tonemap_bind_group_layout: BindGroupLayout,
 }
@@ -13,6 +15,11 @@ impl FlamePipelines {
         let trajectory_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Trajectory Shader"),
             source: ShaderSource::Wgsl(include_str!("../../shaders/trajectory.wgsl").into()),
+        });
+
+        let accumulate_shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Accumulate Shader"),
+            source: ShaderSource::Wgsl(include_str!("../../shaders/accumulate.wgsl").into()),
         });
 
         let tonemap_shader = device.create_shader_module(ShaderModuleDescriptor {
@@ -111,6 +118,72 @@ impl FlamePipelines {
             cache: None,
         });
 
+        // Create accumulation bind group layout (temporary minimal version)
+        let accumulate_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Accumulate Bind Group Layout"),
+            entries: &[
+                // Previous accumulation (sampled texture)
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // New samples (sampled texture)
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Output texture (storage, write)
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::Rgba16Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                // Params uniform
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let accumulate_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Accumulate Pipeline Layout"),
+            bind_group_layouts: &[&accumulate_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let accumulate_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Accumulate Compute Pipeline"),
+            layout: Some(&accumulate_pipeline_layout),
+            module: &accumulate_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         // Create tonemap render pipeline
         let tonemap_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Tonemap Pipeline Layout"),
@@ -159,6 +232,8 @@ impl FlamePipelines {
         Self {
             compute_pipeline,
             compute_bind_group_layout,
+            accumulate_pipeline,
+            accumulate_bind_group_layout,
             tonemap_pipeline,
             tonemap_bind_group_layout,
         }
@@ -184,7 +259,37 @@ impl FlamePipelines {
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: BindingResource::TextureView(&buffers.accumulation_view),
+                    resource: BindingResource::TextureView(&buffers.temp_samples_view),
+                },
+            ],
+        })
+    }
+
+    /// Create bind group for accumulation pass
+    pub fn create_accumulate_bind_group(
+        &self,
+        device: &Device,
+        buffers: &super::buffers::FlameBuffers,
+    ) -> BindGroup {
+        device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Accumulate Bind Group"),
+            layout: &self.accumulate_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(buffers.previous_accumulation_view()),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&buffers.temp_samples_view),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(buffers.output_accumulation_view()),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: buffers.accumulate_params_buffer.as_entire_binding(),
                 },
             ],
         })
@@ -202,7 +307,7 @@ impl FlamePipelines {
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: BindingResource::TextureView(&buffers.accumulation_view),
+                    resource: BindingResource::TextureView(buffers.current_accumulation_view()),
                 },
                 BindGroupEntry {
                     binding: 1,

@@ -86,17 +86,20 @@ impl App {
             label: Some("Render Encoder"),
         });
 
-        // Run flame compute shader
+        // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
-            // Dispatch compute work (progressive refinement)
+            // 1. Compute new samples
             renderer.compute_pass(&mut encoder, 128); // 128 workgroups * 64 threads = 8192 trajectories per frame
 
-            // Tonemap and render to screen
+            // 2. Accumulate samples (blend with previous frames)
+            renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device);
+
+            // 3. Tonemap and render to screen
             renderer.tonemap_pass(&mut encoder, &view);
         }
 
-        // Render UI on top
-        self.egui_layer.render_ui(
+        // Render UI on top and handle reset
+        let reset_requested = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
             &mut encoder,
@@ -104,9 +107,21 @@ impl App {
             window,
             self.gpu.size,
             &self.metrics,
+            self.flame_renderer.as_mut(),
         );
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
+
+        // Handle reset request (needs to be after submit since we need a new encoder)
+        if reset_requested {
+            if let Some(ref mut renderer) = self.flame_renderer {
+                let mut reset_encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Reset Encoder"),
+                });
+                renderer.reset(&mut reset_encoder, &self.gpu.queue);
+                self.gpu.queue.submit(std::iter::once(reset_encoder.finish()));
+            }
+        }
         frame.present();
 
         Ok(())

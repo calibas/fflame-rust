@@ -77,14 +77,37 @@ impl Default for TonemapParams {
     }
 }
 
+/// Accumulation parameters
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct AccumulateParams {
+    pub width: u32,
+    pub height: u32,
+    pub blend_factor: f32,
+    pub _pad0: f32,
+}
+
 /// Manages GPU buffers and textures for fractal flame rendering
 pub struct FlameBuffers {
     pub transform_buffer: Buffer,
     pub params_buffer: Buffer,
     pub tonemap_params_buffer: Buffer,
-    pub accumulation_texture: Texture,
-    pub accumulation_view: TextureView,
+    pub accumulate_params_buffer: Buffer,
+
+    // Dual textures for ping-pong accumulation
+    pub accumulation_texture_a: Texture,
+    pub accumulation_texture_b: Texture,
+    pub accumulation_view_a: TextureView,
+    pub accumulation_view_b: TextureView,
+
+    // Temp texture for new samples (written by trajectory shader)
+    pub temp_samples_texture: Texture,
+    pub temp_samples_view: TextureView,
+
     pub sampler: Sampler,
+
+    // Track which texture is current for display
+    pub current_is_a: bool,
 }
 
 impl FlameBuffers {
@@ -129,23 +152,45 @@ impl FlameBuffers {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
-        // Create accumulation texture (RGBA16Float for good precision and filterability)
-        let accumulation_texture = device.create_texture(&TextureDescriptor {
-            label: Some("Accumulation Texture"),
-            size: Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba16Float,
-            usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            view_formats: &[],
+        // Create accumulate params buffer
+        let accumulate_params = AccumulateParams {
+            width,
+            height,
+            blend_factor: 1.0,
+            _pad0: 0.0,
+        };
+        let accumulate_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("Accumulate Params Buffer"),
+            contents: bytemuck::cast_slice(&[accumulate_params]),
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
-        let accumulation_view = accumulation_texture.create_view(&TextureViewDescriptor::default());
+        // Helper function to create accumulation texture
+        let create_accum_texture = |label: &str| {
+            let texture = device.create_texture(&TextureDescriptor {
+                label: Some(label),
+                size: Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba16Float,
+                usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&TextureViewDescriptor::default());
+            (texture, view)
+        };
+
+        // Create dual accumulation textures for ping-pong
+        let (accumulation_texture_a, accumulation_view_a) = create_accum_texture("Accumulation Texture A");
+        let (accumulation_texture_b, accumulation_view_b) = create_accum_texture("Accumulation Texture B");
+
+        // Create temp samples texture (written by trajectory shader)
+        let (temp_samples_texture, temp_samples_view) = create_accum_texture("Temp Samples Texture");
 
         // Create sampler for tonemap shader
         let sampler = device.create_sampler(&SamplerDescriptor {
@@ -163,16 +208,36 @@ impl FlameBuffers {
             transform_buffer,
             params_buffer,
             tonemap_params_buffer,
-            accumulation_texture,
-            accumulation_view,
+            accumulate_params_buffer,
+            accumulation_texture_a,
+            accumulation_texture_b,
+            accumulation_view_a,
+            accumulation_view_b,
+            temp_samples_texture,
+            temp_samples_view,
             sampler,
+            current_is_a: true,
         }
     }
 
-    /// Clear accumulation buffer
-    pub fn clear(&self, encoder: &mut CommandEncoder) {
+    /// Clear all accumulation buffers
+    pub fn clear_all(&self, encoder: &mut CommandEncoder) {
+        let range = ImageSubresourceRange {
+            aspect: TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: None,
+            base_array_layer: 0,
+            array_layer_count: None,
+        };
+        encoder.clear_texture(&self.accumulation_texture_a, &range);
+        encoder.clear_texture(&self.accumulation_texture_b, &range);
+        encoder.clear_texture(&self.temp_samples_texture, &range);
+    }
+
+    /// Clear temp samples texture only
+    pub fn clear_temp(&self, encoder: &mut CommandEncoder) {
         encoder.clear_texture(
-            &self.accumulation_texture,
+            &self.temp_samples_texture,
             &ImageSubresourceRange {
                 aspect: TextureAspect::All,
                 base_mip_level: 0,
@@ -183,6 +248,38 @@ impl FlameBuffers {
         );
     }
 
+    /// Get the current accumulation texture view (for display)
+    pub fn current_accumulation_view(&self) -> &TextureView {
+        if self.current_is_a {
+            &self.accumulation_view_a
+        } else {
+            &self.accumulation_view_b
+        }
+    }
+
+    /// Get the previous accumulation texture view (for reading in accumulation shader)
+    pub fn previous_accumulation_view(&self) -> &TextureView {
+        if self.current_is_a {
+            &self.accumulation_view_b
+        } else {
+            &self.accumulation_view_a
+        }
+    }
+
+    /// Get the output accumulation texture view (for writing in accumulation shader)
+    pub fn output_accumulation_view(&self) -> &TextureView {
+        if self.current_is_a {
+            &self.accumulation_view_a
+        } else {
+            &self.accumulation_view_b
+        }
+    }
+
+    /// Swap which texture is current
+    pub fn swap_textures(&mut self) {
+        self.current_is_a = !self.current_is_a;
+    }
+
     /// Update parameters (e.g., when changing resolution or settings)
     pub fn update_params(&self, queue: &Queue, params: &GpuParams) {
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[*params]));
@@ -191,6 +288,11 @@ impl FlameBuffers {
     /// Update tonemap parameters
     pub fn update_tonemap_params(&self, queue: &Queue, params: &TonemapParams) {
         queue.write_buffer(&self.tonemap_params_buffer, 0, bytemuck::cast_slice(&[*params]));
+    }
+
+    /// Update accumulate parameters
+    pub fn update_accumulate_params(&self, queue: &Queue, params: &AccumulateParams) {
+        queue.write_buffer(&self.accumulate_params_buffer, 0, bytemuck::cast_slice(&[*params]));
     }
 
     /// Update transforms

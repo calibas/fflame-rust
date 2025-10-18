@@ -36,8 +36,11 @@ impl EguiLayer {
         window: &Window,
         window_size: winit::dpi::PhysicalSize<u32>,
         metrics: &crate::util::PerformanceMetrics,
-    ) {
+        flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
+    ) -> bool {
         let raw_input = self.state.take_egui_input(window);
+
+        let mut reset_requested = false;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             egui::Window::new("Performance").show(ctx, |ui| {
@@ -53,6 +56,16 @@ impl EguiLayer {
                 ui.separator();
                 ui.label(format!("Total Frames: {}", metrics.frame_count()));
                 ui.label(format!("Resolution: {}x{}", window_size.width, window_size.height));
+
+                // Accumulation controls
+                if let Some(renderer) = &flame_renderer {
+                    ui.separator();
+                    ui.label(format!("Samples Accumulated: {}", renderer.samples_accumulated()));
+
+                    if ui.button("Reset Accumulation").clicked() {
+                        reset_requested = true;
+                    }
+                }
             });
         });
 
@@ -99,5 +112,7 @@ impl EguiLayer {
         for id in &full_output.textures_delta.free {
             self.renderer.free_texture(id);
         }
+
+        reset_requested
     }
 }
