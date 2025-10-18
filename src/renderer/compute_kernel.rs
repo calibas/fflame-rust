@@ -7,6 +7,7 @@ pub struct FlameRenderer {
     pipelines: FlamePipelines,
     buffers: FlameBuffers,
     compute_bind_group: BindGroup,
+    accumulate_bind_group: BindGroup,
     tonemap_bind_group: BindGroup,
     width: u32,
     height: u32,
@@ -25,12 +26,14 @@ impl FlameRenderer {
         let buffers = FlameBuffers::new(device, width, height, flame);
 
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
+        let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
 
         Self {
             pipelines,
             buffers,
             compute_bind_group,
+            accumulate_bind_group,
             tonemap_bind_group,
             width,
             height,
@@ -39,7 +42,7 @@ impl FlameRenderer {
     }
 
     /// Resize the accumulation buffer
-    pub fn resize(&mut self, device: &Device, queue: &Queue, width: u32, height: u32, flame: &Flame) {
+    pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame) {
         self.width = width;
         self.height = height;
 
@@ -48,15 +51,19 @@ impl FlameRenderer {
 
         // Recreate bind groups
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
 
         // Clear accumulation counter
-        self.reset(queue);
+        self.reset(encoder, queue);
     }
 
     /// Reset accumulation buffer and sample count
-    pub fn reset(&mut self, queue: &Queue) {
+    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue) {
         self.samples_accumulated = 0;
+
+        // Clear accumulation buffers
+        self.buffers.clear_all(encoder);
 
         // Update seed to generate different random samples
         let params = GpuParams {
@@ -75,9 +82,8 @@ impl FlameRenderer {
 
     /// Run compute pass to generate flame samples
     pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, num_workgroups: u32) {
-        // Always clear - we're not accumulating across frames with write-only texture
-        // TODO: Implement proper accumulation with atomic operations or dual textures
-        self.buffers.clear(encoder);
+        // Clear temp samples texture before rendering new samples
+        self.buffers.clear_temp(encoder);
 
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
             label: Some("Flame Compute Pass"),
@@ -89,8 +95,46 @@ impl FlameRenderer {
         compute_pass.dispatch_workgroups(num_workgroups, 1, 1);
 
         drop(compute_pass);
+    }
 
+    /// Run accumulation pass to blend new samples with previous accumulation
+    pub fn accumulate_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, device: &Device) {
         self.samples_accumulated += 1;
+
+        // Calculate blend factor for exponential moving average
+        // blend_factor = 1 / samples_accumulated gives equal weight to all samples
+        let blend_factor = 1.0 / self.samples_accumulated as f32;
+
+        let params = AccumulateParams {
+            width: self.width,
+            height: self.height,
+            blend_factor,
+            _pad0: 0.0,
+        };
+
+        self.buffers.update_accumulate_params(queue, &params);
+
+        let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Accumulation Pass"),
+            timestamp_writes: None,
+        });
+
+        compute_pass.set_pipeline(&self.pipelines.accumulate_pipeline);
+        compute_pass.set_bind_group(0, &self.accumulate_bind_group, &[]);
+
+        // Dispatch one thread per 8x8 tile
+        let workgroups_x = (self.width + 7) / 8;
+        let workgroups_y = (self.height + 7) / 8;
+        compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+
+        drop(compute_pass);
+
+        // Swap textures for next frame
+        self.buffers.swap_textures();
+
+        // Recreate bind groups to point to the new current/previous textures
+        self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+        self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
     }
 
     /// Render the accumulation buffer to a texture view with tone mapping
