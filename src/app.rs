@@ -17,6 +17,8 @@ pub struct App {
     pan_x: f32,
     pan_y: f32,
     view_changed_by_keyboard: bool,
+    mouse_dragging: bool,
+    last_mouse_pos: Option<(f32, f32)>,
     metrics: PerformanceMetrics,
 }
 
@@ -45,6 +47,8 @@ impl App {
             pan_x: 0.0,
             pan_y: 0.0,
             view_changed_by_keyboard: false,
+            mouse_dragging: false,
+            last_mouse_pos: None,
             metrics: PerformanceMetrics::new(),
         };
 
@@ -67,6 +71,15 @@ impl App {
                         WindowEvent::KeyboardInput { event: key_event, .. } if !consumed => {
                             // Handle keyboard input only if egui didn't consume it
                             app.handle_keyboard(&key_event);
+                        }
+                        WindowEvent::MouseInput { state, button, .. } if !consumed => {
+                            app.handle_mouse_button(state, button);
+                        }
+                        WindowEvent::CursorMoved { position, .. } if !consumed => {
+                            app.handle_mouse_move(position.x as f32, position.y as f32);
+                        }
+                        WindowEvent::MouseWheel { delta, .. } if !consumed => {
+                            app.handle_mouse_wheel(delta);
                         }
                         WindowEvent::RedrawRequested => {
                             app.update();
@@ -131,6 +144,75 @@ impl App {
                 self.view_changed_by_keyboard = true;
             }
             _ => {}
+        }
+    }
+
+    fn handle_mouse_button(&mut self, state: winit::event::ElementState, button: winit::event::MouseButton) {
+        use winit::event::{ElementState, MouseButton};
+
+        if button == MouseButton::Left {
+            match state {
+                ElementState::Pressed => {
+                    self.mouse_dragging = true;
+                }
+                ElementState::Released => {
+                    self.mouse_dragging = false;
+                    self.last_mouse_pos = None;
+                }
+            }
+        }
+    }
+
+    fn handle_mouse_move(&mut self, x: f32, y: f32) {
+        if self.mouse_dragging {
+            if let Some((last_x, last_y)) = self.last_mouse_pos {
+                // Calculate delta in screen pixels
+                let dx = x - last_x;
+                let dy = y - last_y;
+
+                // Convert to fractal space - scale inversely with zoom and window size
+                let scale = f32::min(self.gpu.size.width as f32, self.gpu.size.height as f32) * 0.25;
+                let pan_dx = -dx / (scale * self.zoom);
+                let pan_dy = -dy / (scale * self.zoom); // Negative to match drag direction
+
+                self.pan_x += pan_dx;
+                self.pan_y += pan_dy;
+                self.view_changed_by_keyboard = true; // Reuse same flag for mouse
+            }
+            self.last_mouse_pos = Some((x, y));
+        }
+    }
+
+    fn handle_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
+        use winit::event::MouseScrollDelta;
+
+        let zoom_factor = match delta {
+            MouseScrollDelta::LineDelta(_x, y) => {
+                // Each line is typically one "click" of the wheel
+                // Positive y = scroll up = zoom in, negative y = scroll down = zoom out
+                if y > 0.0 {
+                    1.1f32.powf(y)
+                } else if y < 0.0 {
+                    1.1f32.powf(y)
+                } else {
+                    1.0
+                }
+            }
+            MouseScrollDelta::PixelDelta(pos) => {
+                // Pixel delta for touchpad scrolling
+                // Positive y = scroll up = zoom in
+                let y = pos.y as f32;
+                if y.abs() > 0.1 {
+                    1.1f32.powf(y * 0.01)
+                } else {
+                    1.0
+                }
+            }
+        };
+
+        if zoom_factor != 1.0 {
+            self.zoom *= zoom_factor;
+            self.view_changed_by_keyboard = true; // Reuse same flag
         }
     }
 
