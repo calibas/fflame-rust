@@ -351,10 +351,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (pixel.x >= 0 && pixel.x < i32(params.width) &&
                 pixel.y >= 0 && pixel.y < i32(params.height)) {
 
-                // Write to texture - just store the color
-                // Multiple writes to same pixel will blend (last write wins)
-                // In a more sophisticated implementation, we'd use atomics with integer buffers
-                textureStore(output_texture, pixel, vec4<f32>(color, 1.0));
+                // Write to texture with small alpha for density accumulation
+                // Each hit contributes a small amount to density
+                // The accumulation pass will sum these up
+                textureStore(output_texture, pixel, vec4<f32>(color, 0.01));
             }
         }
     }

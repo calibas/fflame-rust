@@ -8,6 +8,7 @@ pub struct UiResponse {
     pub flame_changed: bool,
     pub iterations_changed: bool,
     pub view_changed: bool,
+    pub density_changed: bool,
 }
 
 pub struct EguiLayer {
@@ -49,6 +50,7 @@ impl EguiLayer {
         zoom: &mut f32,
         pan_x: &mut f32,
         pan_y: &mut f32,
+        density_scale: &mut f32,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -56,6 +58,7 @@ impl EguiLayer {
         let mut flame_changed = false;
         let mut iterations_changed = false;
         let mut view_changed = false;
+        let mut density_changed = false;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Performance window
@@ -88,6 +91,9 @@ impl EguiLayer {
                 ui.label("Render Settings");
                 if ui.add(egui::Slider::new(iterations_per_thread, 64..=4096).text("Iterations per Thread")).changed() {
                     iterations_changed = true;
+                }
+                if ui.add(egui::Slider::new(density_scale, 0.1..=10.0).text("Density Scale")).changed() {
+                    density_changed = true;
                 }
 
                 // View settings
@@ -282,6 +288,7 @@ impl EguiLayer {
             flame_changed,
             iterations_changed,
             view_changed,
+            density_changed,
         }
     }
 }

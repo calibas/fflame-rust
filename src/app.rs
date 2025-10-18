@@ -16,6 +16,7 @@ pub struct App {
     zoom: f32,
     pan_x: f32,
     pan_y: f32,
+    density_scale: f32,
     view_changed_by_keyboard: bool,
     mouse_dragging: bool,
     last_mouse_pos: Option<(f32, f32)>,
@@ -46,6 +47,7 @@ impl App {
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
+            density_scale: 1.0,
             view_changed_by_keyboard: false,
             mouse_dragging: false,
             last_mouse_pos: None,
@@ -251,13 +253,14 @@ impl App {
             &mut self.zoom,
             &mut self.pan_x,
             &mut self.pan_y,
+            &mut self.density_scale,
         );
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard;
-        if ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed || view_changed {
+        if ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed || view_changed || ui_response.density_changed {
             if let Some(ref mut renderer) = self.flame_renderer {
                 let mut update_encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Update Encoder"),
@@ -269,6 +272,10 @@ impl App {
 
                 if ui_response.iterations_changed || view_changed {
                     renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y);
+                }
+
+                if ui_response.density_changed {
+                    renderer.update_density_scale(&self.gpu.queue, self.density_scale);
                 }
 
                 // Reset accumulation when view changes or user requests it

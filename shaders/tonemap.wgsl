@@ -9,8 +9,8 @@ struct VertexOutput {
 struct TonemapParams {
     exposure: f32,
     gamma: f32,
+    density_scale: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -38,8 +38,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Sample accumulation buffer
     let accum = textureSample(accumulation_texture, accumulation_sampler, input.uv);
 
-    // Extract RGB
+    // Extract RGB and alpha (density)
     var color = accum.rgb;
+    let density = accum.a;
 
     // Apply exposure
     color *= tonemap_params.exposure;
@@ -53,5 +54,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Clamp to valid range
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
 
-    return vec4<f32>(color, 1.0);
+    // Map density to alpha using density_scale
+    // Higher density = more opaque, lower density = more transparent
+    let alpha = clamp(density * tonemap_params.density_scale, 0.0, 1.0);
+
+    return vec4<f32>(color, alpha);
 }
