@@ -32,7 +32,7 @@ impl GpuContext {
 
         let (device, queue) = adapter.request_device(&DeviceDescriptor {
             label: None,
-            required_features: Features::empty(),
+            required_features: Features::CLEAR_TEXTURE,
             required_limits: Limits::default(),
             memory_hints: Default::default(),
         }, None).await?;

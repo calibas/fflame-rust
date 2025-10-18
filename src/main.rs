@@ -2,6 +2,8 @@ mod app;
 mod gpu;
 mod ui;
 mod util;
+mod scene;
+mod renderer;
 
 use app::App;
 use winit::dpi::PhysicalSize;

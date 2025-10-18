@@ -1,0 +1,57 @@
+// Tonemap shader for displaying the accumulation buffer
+// Applies logarithmic tone mapping and gamma correction
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+struct TonemapParams {
+    exposure: f32,
+    gamma: f32,
+    _pad0: f32,
+    _pad1: f32,
+}
+
+@group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
+@group(0) @binding(1) var accumulation_sampler: sampler;
+@group(0) @binding(2) var<uniform> tonemap_params: TonemapParams;
+
+// Vertex shader for fullscreen quad
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var output: VertexOutput;
+
+    // Generate fullscreen triangle
+    let x = f32((vertex_index & 1u) << 2u);
+    let y = f32((vertex_index & 2u) << 1u);
+
+    output.position = vec4<f32>(x - 1.0, 1.0 - y, 0.0, 1.0);
+    output.uv = vec2<f32>(x * 0.5, y * 0.5);
+
+    return output;
+}
+
+// Fragment shader with tone mapping
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    // Sample accumulation buffer
+    let accum = textureSample(accumulation_texture, accumulation_sampler, input.uv);
+
+    // Extract RGB
+    var color = accum.rgb;
+
+    // Apply exposure
+    color *= tonemap_params.exposure;
+
+    // Logarithmic tone mapping for high dynamic range
+    color = log(color + 1.0) / log(10.0);
+
+    // Gamma correction
+    color = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));
+
+    // Clamp to valid range
+    color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+
+    return vec4<f32>(color, 1.0);
+}
