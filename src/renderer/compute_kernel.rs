@@ -194,4 +194,19 @@ impl FlameRenderer {
     pub fn samples_accumulated(&self) -> u32 {
         self.samples_accumulated
     }
+
+    /// Update iterations per thread
+    pub fn update_iterations(&self, queue: &Queue, iterations_per_thread: u32) {
+        let params = GpuParams {
+            num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
+            iterations_per_thread,
+            burn_in: 20,
+            width: self.width,
+            height: self.height,
+            seed: rand::random::<u32>(),
+            splat_size: 1.0,
+            _pad0: 0.0,
+        };
+        self.buffers.update_params(queue, &params);
+    }
 }

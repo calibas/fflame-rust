@@ -3,6 +3,12 @@ use egui_winit::State as EguiWinitState;
 use wgpu::*;
 use winit::{event::WindowEvent, window::Window};
 
+pub struct UiResponse {
+    pub reset_requested: bool,
+    pub flame_changed: bool,
+    pub iterations_changed: bool,
+}
+
 pub struct EguiLayer {
     state: EguiWinitState,
     ctx: egui::Context,
@@ -37,12 +43,17 @@ impl EguiLayer {
         window_size: winit::dpi::PhysicalSize<u32>,
         metrics: &crate::util::PerformanceMetrics,
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
-    ) -> bool {
+        flame: &mut crate::scene::transforms::Flame,
+        iterations_per_thread: &mut u32,
+    ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
         let mut reset_requested = false;
+        let mut flame_changed = false;
+        let mut iterations_changed = false;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
+            // Performance window
             egui::Window::new("Performance").show(ctx, |ui| {
                 ui.heading("Fractal Flame Renderer");
                 ui.separator();
@@ -66,6 +77,104 @@ impl EguiLayer {
                         reset_requested = true;
                     }
                 }
+
+                // Render settings
+                ui.separator();
+                ui.label("Render Settings");
+                if ui.add(egui::Slider::new(iterations_per_thread, 64..=4096).text("Iterations per Thread")).changed() {
+                    iterations_changed = true;
+                }
+            });
+
+            // Transforms window
+            egui::Window::new("Transforms").show(ctx, |ui| {
+                ui.heading(format!("Transforms ({})", flame.transforms.len()));
+                ui.separator();
+
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for (i, transform) in flame.transforms.iter_mut().enumerate() {
+                        ui.push_id(i, |ui| {
+                            egui::CollapsingHeader::new(format!("Transform {}", i))
+                                .default_open(i == 0)
+                                .show(ui, |ui| {
+                                    ui.label("Affine Matrix");
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("a:");
+                                        if ui.add(egui::DragValue::new(&mut transform.a).speed(0.01)).changed() {
+                                            flame_changed = true;
+                                        }
+                                        ui.label("b:");
+                                        if ui.add(egui::DragValue::new(&mut transform.b).speed(0.01)).changed() {
+                                            flame_changed = true;
+                                        }
+                                    });
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("c:");
+                                        if ui.add(egui::DragValue::new(&mut transform.c).speed(0.01)).changed() {
+                                            flame_changed = true;
+                                        }
+                                        ui.label("d:");
+                                        if ui.add(egui::DragValue::new(&mut transform.d).speed(0.01)).changed() {
+                                            flame_changed = true;
+                                        }
+                                    });
+
+                                    ui.horizontal(|ui| {
+                                        ui.label("e:");
+                                        if ui.add(egui::DragValue::new(&mut transform.e).speed(0.01)).changed() {
+                                            flame_changed = true;
+                                        }
+                                        ui.label("f:");
+                                        if ui.add(egui::DragValue::new(&mut transform.f).speed(0.01)).changed() {
+                                            flame_changed = true;
+                                        }
+                                    });
+
+                                    ui.separator();
+                                    ui.label("Weight");
+                                    if ui.add(egui::Slider::new(&mut transform.weight, 0.0..=2.0)).changed() {
+                                        flame_changed = true;
+                                    }
+
+                                    ui.separator();
+                                    ui.label("Color");
+                                    if ui.horizontal(|ui| {
+                                        ui.label("R:");
+                                        let r_changed = ui.add(egui::Slider::new(&mut transform.color[0], 0.0..=1.0)).changed();
+                                        ui.label("G:");
+                                        let g_changed = ui.add(egui::Slider::new(&mut transform.color[1], 0.0..=1.0)).changed();
+                                        ui.label("B:");
+                                        let b_changed = ui.add(egui::Slider::new(&mut transform.color[2], 0.0..=1.0)).changed();
+                                        r_changed || g_changed || b_changed
+                                    }).inner {
+                                        flame_changed = true;
+                                    }
+
+                                    if ui.add(egui::Slider::new(&mut transform.color_speed, 0.0..=1.0).text("Color Speed")).changed() {
+                                        flame_changed = true;
+                                    }
+
+                                    ui.separator();
+                                    ui.label("Variations");
+
+                                    let variation_names = [
+                                        "Linear", "Sinusoidal", "Spherical", "Swirl",
+                                        "Horseshoe", "Polar", "Handkerchief", "Heart",
+                                        "Disc", "Spiral", "Hyperbolic", "Diamond",
+                                        "Ex", "Julia", "Bent", "Waves"
+                                    ];
+
+                                    for (idx, name) in variation_names.iter().enumerate() {
+                                        if ui.add(egui::Slider::new(&mut transform.variations[idx], 0.0..=2.0).text(*name)).changed() {
+                                            flame_changed = true;
+                                        }
+                                    }
+                                });
+                        });
+                    }
+                });
             });
         });
 
@@ -113,6 +222,10 @@ impl EguiLayer {
             self.renderer.free_texture(id);
         }
 
-        reset_requested
+        UiResponse {
+            reset_requested,
+            flame_changed,
+            iterations_changed,
+        }
     }
 }
