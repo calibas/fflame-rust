@@ -4,13 +4,15 @@ use wgpu::SurfaceError;
 use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
 use crate::renderer::FlameRenderer;
-use crate::scene::presets;
+use crate::scene::{presets, transforms::Flame};
 use crate::util::PerformanceMetrics;
 
 pub struct App {
     gpu: GpuContext,
     egui_layer: EguiLayer,
     flame_renderer: Option<FlameRenderer>,
+    flame: Flame,
+    iterations_per_thread: u32,
     metrics: PerformanceMetrics,
 }
 
@@ -33,6 +35,8 @@ impl App {
             gpu,
             egui_layer,
             flame_renderer: Some(flame_renderer),
+            flame,
+            iterations_per_thread: 256,
             metrics: PerformanceMetrics::new(),
         };
 
@@ -98,8 +102,8 @@ impl App {
             renderer.tonemap_pass(&mut encoder, &view);
         }
 
-        // Render UI on top and handle reset
-        let reset_requested = self.egui_layer.render_ui(
+        // Render UI on top and handle updates
+        let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
             &mut encoder,
@@ -108,18 +112,32 @@ impl App {
             self.gpu.size,
             &self.metrics,
             self.flame_renderer.as_mut(),
+            &mut self.flame,
+            &mut self.iterations_per_thread,
         );
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
-        // Handle reset request (needs to be after submit since we need a new encoder)
-        if reset_requested {
+        // Handle UI responses (needs to be after submit since we need a new encoder)
+        if ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed {
             if let Some(ref mut renderer) = self.flame_renderer {
-                let mut reset_encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Reset Encoder"),
+                let mut update_encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Update Encoder"),
                 });
-                renderer.reset(&mut reset_encoder, &self.gpu.queue);
-                self.gpu.queue.submit(std::iter::once(reset_encoder.finish()));
+
+                if ui_response.flame_changed {
+                    renderer.update_flame(&self.gpu.queue, &self.flame);
+                }
+
+                if ui_response.iterations_changed {
+                    renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread);
+                }
+
+                if ui_response.reset_requested {
+                    renderer.reset(&mut update_encoder, &self.gpu.queue);
+                }
+
+                self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
             }
         }
         frame.present();
