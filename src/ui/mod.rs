@@ -27,7 +27,15 @@ impl EguiLayer {
         response.consumed
     }
 
-    pub fn render_ui(&mut self, gpu: &crate::gpu::device::GpuContext, window: &Window) {
+    pub fn render_ui(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target_view: &wgpu::TextureView,
+        window: &Window,
+        window_size: winit::dpi::PhysicalSize<u32>,
+    ) {
         let raw_input = self.state.take_egui_input(window);
 
         let full_output = self.ctx.run(raw_input, |ctx| {
@@ -38,48 +46,29 @@ impl EguiLayer {
             });
         });
 
-        self.state
-            .handle_platform_output(window, full_output.platform_output);
+        self.state.handle_platform_output(window, full_output.platform_output);
 
-        let tris = self
-            .ctx
-            .tessellate(full_output.shapes, full_output.pixels_per_point);
+        let tris = self.ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
 
         let screen_descriptor = egui_wgpu::ScreenDescriptor {
-            size_in_pixels: [gpu.size.width, gpu.size.height],
+            size_in_pixels: [window_size.width, window_size.height],
             pixels_per_point: full_output.pixels_per_point,
         };
 
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("egui encoder"),
-            });
-
         for (id, image_delta) in &full_output.textures_delta.set {
-            self.renderer
-                .update_texture(&gpu.device, &gpu.queue, *id, image_delta);
+            self.renderer.update_texture(device, queue, *id, image_delta);
         }
 
-        self.renderer.update_buffers(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            &tris,
-            &screen_descriptor,
-        );
-
-        let frame = gpu.surface.get_current_texture().unwrap();
-        let view = frame.texture.create_view(&TextureViewDescriptor::default());
+        self.renderer.update_buffers(device, queue, encoder, &tris, &screen_descriptor);
 
         {
             let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("egui render pass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &view,
+                    view: target_view,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color::BLACK),
+                        load: LoadOp::Load, // Load existing content (flame rendering)
                         store: StoreOp::Store,
                     },
                 })],
@@ -90,16 +79,12 @@ impl EguiLayer {
 
             // SAFETY: egui-wgpu's render method has an overly restrictive 'static lifetime.
             // This transmute is safe because we immediately drop the render pass after calling render.
-            let rpass_static: &mut wgpu::RenderPass<'static> =
-                unsafe { std::mem::transmute(&mut rpass) };
+            let rpass_static: &mut wgpu::RenderPass<'static> = unsafe {
+                std::mem::transmute(&mut rpass)
+            };
 
-            self.renderer
-                .render(rpass_static, &tris, &screen_descriptor);
+            self.renderer.render(rpass_static, &tris, &screen_descriptor);
         } // Render pass is dropped here
-
-        // Now we can submit after the render pass is dropped
-        gpu.queue.submit([encoder.finish()]);
-        frame.present();
 
         for id in &full_output.textures_delta.free {
             self.renderer.free_texture(id);

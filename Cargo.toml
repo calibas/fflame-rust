@@ -17,6 +17,8 @@ log = "0.4"
 env_logger = "0.11"
 pollster = "0.4"
 anyhow = "1.0"
+rand = "0.8"
+bytemuck = { version = "1.14", features = ["derive"] }
 
 # Optional
 image = "0.25"

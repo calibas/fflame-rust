@@ -937,6 +937,7 @@ name = "fractal_flame_wgpu"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "clap",
  "egui",
  "egui-wgpu",
@@ -945,6 +946,7 @@ dependencies = [
  "image",
  "log",
  "pollster",
+ "rand",
  "ron",
  "serde",
  "serde_json",
