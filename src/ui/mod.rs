@@ -101,7 +101,7 @@ impl EguiLayer {
                 ui.label("View");
                 ui.horizontal(|ui| {
                     ui.label("Zoom:");
-                    if ui.add(egui::DragValue::new(zoom).speed(0.01).range(0.01..=2000.0)).changed() {
+                    if ui.add(egui::DragValue::new(zoom).speed(0.01).range(0.01..=10000.0)).changed() {
                         view_changed = true;
                     }
                 });
