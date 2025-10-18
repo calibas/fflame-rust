@@ -92,14 +92,19 @@ impl EguiLayer {
                 if ui.add(egui::Slider::new(iterations_per_thread, 64..=4096).text("Iterations per Thread")).changed() {
                     iterations_changed = true;
                 }
-                if ui.add(egui::Slider::new(density_scale, 0.1..=10.0).text("Density Scale")).changed() {
+                if ui.add(egui::Slider::new(density_scale, 0.01..=10.0).text("Density Scale")).changed() {
                     density_changed = true;
                 }
 
                 // View settings
                 ui.separator();
                 ui.label("View");
-                ui.label(format!("Zoom: {:.2}x", zoom));
+                ui.horizontal(|ui| {
+                    ui.label("Zoom:");
+                    if ui.add(egui::DragValue::new(zoom).speed(0.01).range(0.01..=2000.0)).changed() {
+                        view_changed = true;
+                    }
+                });
                 ui.horizontal(|ui| {
                     if ui.button("Zoom In").clicked() {
                         *zoom *= 1.5;
@@ -111,7 +116,18 @@ impl EguiLayer {
                     }
                 });
 
-                ui.label(format!("Pan: ({:.3}, {:.3})", pan_x, pan_y));
+                ui.horizontal(|ui| {
+                    ui.label("Pan X:");
+                    if ui.add(egui::DragValue::new(pan_x).speed(0.01)).changed() {
+                        view_changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Pan Y:");
+                    if ui.add(egui::DragValue::new(pan_y).speed(0.01)).changed() {
+                        view_changed = true;
+                    }
+                });
 
                 // Pan step size depends on zoom (more zoomed in = smaller steps)
                 let pan_step = 0.1 / *zoom;
