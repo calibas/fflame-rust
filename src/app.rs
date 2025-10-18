@@ -92,8 +92,8 @@ impl App {
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
-            // 1. Compute new samples
-            renderer.compute_pass(&mut encoder, 128); // 128 workgroups * 64 threads = 8192 trajectories per frame
+            // 1. Compute new samples with fresh random seed
+            renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread);
 
             // 2. Accumulate samples (blend with previous frames)
             renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device);
