@@ -217,8 +217,9 @@ impl App {
                 self.pan_y += pan_dy;
                 self.view_changed_by_keyboard = true; // Reuse same flag for mouse
             }
-            self.last_mouse_pos = Some((x, y));
         }
+        // Always update mouse position for zoom-to-cursor
+        self.last_mouse_pos = Some((x, y));
     }
 
     fn handle_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
@@ -249,7 +250,47 @@ impl App {
         };
 
         if zoom_factor != 1.0 {
-            self.zoom *= zoom_factor;
+            // Zoom in toward cursor, zoom out from center
+            if zoom_factor > 1.0 {
+                // Zooming in - zoom toward mouse cursor position
+                if let Some((mouse_x, mouse_y)) = self.last_mouse_pos {
+                    // Convert mouse position from screen space to fractal space
+                    // Screen center
+                    let center_x = self.gpu.size.width as f32 / 2.0;
+                    let center_y = self.gpu.size.height as f32 / 2.0;
+
+                    // Mouse offset from center in screen pixels
+                    let mouse_offset_x = mouse_x - center_x;
+                    let mouse_offset_y = mouse_y - center_y;
+
+                    // Convert to fractal space (account for current zoom and scale)
+                    let scale = f32::min(self.gpu.size.width as f32, self.gpu.size.height as f32) * 0.25;
+                    let fractal_offset_x = mouse_offset_x / (scale * self.zoom);
+                    let fractal_offset_y = mouse_offset_y / (scale * self.zoom);
+
+                    // Calculate the point in fractal space that the mouse is pointing at
+                    let point_x = self.pan_x + fractal_offset_x;
+                    let point_y = self.pan_y + fractal_offset_y;
+
+                    // Apply zoom
+                    self.zoom *= zoom_factor;
+
+                    // Adjust pan so the point under the mouse stays in the same place
+                    // After zoom, the fractal coordinates change, so we need to compensate
+                    let new_fractal_offset_x = mouse_offset_x / (scale * self.zoom);
+                    let new_fractal_offset_y = mouse_offset_y / (scale * self.zoom);
+
+                    self.pan_x = point_x - new_fractal_offset_x;
+                    self.pan_y = point_y - new_fractal_offset_y;
+                } else {
+                    // No mouse position, zoom to center
+                    self.zoom *= zoom_factor;
+                }
+            } else {
+                // Zooming out - always zoom from center
+                self.zoom *= zoom_factor;
+            }
+
             self.view_changed_by_keyboard = true; // Reuse same flag
         }
     }
