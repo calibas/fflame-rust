@@ -212,24 +212,14 @@ impl FlameBuffers {
         let (temp_samples_texture, temp_samples_view) = create_accum_texture("Temp Samples Texture");
 
         // Create palette texture (1D, 256 samples)
-        // Use Rgba16Float instead of Rgba32Float for guaranteed filterability
+        // Use Rgba8Unorm for efficient, standard color storage
         let default_palette = Palette::fire(); // Default palette
         let palette_data = default_palette.generate_texture_data(256);
 
-        // Convert f32 to f16 for Rgba16Float
-        let palette_data_f16: Vec<u8> = palette_data.chunks(4)
-            .flat_map(|chunk| {
-                let r = half::f16::from_f32(chunk[0]);
-                let g = half::f16::from_f32(chunk[1]);
-                let b = half::f16::from_f32(chunk[2]);
-                let a = half::f16::from_f32(chunk[3]);
-                [
-                    r.to_bits().to_le_bytes(),
-                    g.to_bits().to_le_bytes(),
-                    b.to_bits().to_le_bytes(),
-                    a.to_bits().to_le_bytes(),
-                ].concat()
-            })
+        // Convert f32 [0.0, 1.0] to u8 [0, 255] for Rgba8Unorm
+        let palette_data_u8: Vec<u8> = palette_data
+            .iter()
+            .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
             .collect();
 
         let palette_texture = device.create_texture(&TextureDescriptor {
@@ -242,7 +232,7 @@ impl FlameBuffers {
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D1,
-            format: TextureFormat::Rgba16Float,
+            format: TextureFormat::Rgba8Unorm,
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -255,10 +245,10 @@ impl FlameBuffers {
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
-            &palette_data_f16,
+            &palette_data_u8,
             ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(256 * 4 * 2), // 256 pixels * 4 components * 2 bytes (f16)
+                bytes_per_row: Some(256 * 4), // 256 pixels * 4 components * 1 byte
                 rows_per_image: None,
             },
             Extent3d {
@@ -389,20 +379,10 @@ impl FlameBuffers {
     pub fn update_palette(&self, queue: &Queue, palette: &Palette) {
         let palette_data = palette.generate_texture_data(256);
 
-        // Convert f32 to f16 for Rgba16Float
-        let palette_data_f16: Vec<u8> = palette_data.chunks(4)
-            .flat_map(|chunk| {
-                let r = half::f16::from_f32(chunk[0]);
-                let g = half::f16::from_f32(chunk[1]);
-                let b = half::f16::from_f32(chunk[2]);
-                let a = half::f16::from_f32(chunk[3]);
-                [
-                    r.to_bits().to_le_bytes(),
-                    g.to_bits().to_le_bytes(),
-                    b.to_bits().to_le_bytes(),
-                    a.to_bits().to_le_bytes(),
-                ].concat()
-            })
+        // Convert f32 [0.0, 1.0] to u8 [0, 255] for Rgba8Unorm
+        let palette_data_u8: Vec<u8> = palette_data
+            .iter()
+            .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
             .collect();
 
         queue.write_texture(
@@ -412,10 +392,10 @@ impl FlameBuffers {
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
-            &palette_data_f16,
+            &palette_data_u8,
             ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(256 * 4 * 2), // 256 pixels * 4 components * 2 bytes (f16)
+                bytes_per_row: Some(256 * 4), // 256 pixels * 4 components * 1 byte
                 rows_per_image: None,
             },
             Extent3d {
