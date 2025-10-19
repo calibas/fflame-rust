@@ -4,6 +4,7 @@ mod ui;
 mod util;
 mod scene;
 mod renderer;
+mod config;
 
 use app::App;
 use winit::dpi::PhysicalSize;
