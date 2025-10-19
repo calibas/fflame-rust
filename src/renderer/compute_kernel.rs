@@ -85,14 +85,14 @@ impl FlameRenderer {
             zoom,
             pan_x,
             pan_y,
-            _pad0: 0.0,
+            speed_factor: 0.5,
         };
 
         self.buffers.update_params(queue, &params);
     }
 
     /// Run compute pass to generate flame samples
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, speed_factor: f32) {
         // Update seed for new random samples each frame
         let params = GpuParams {
             num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
@@ -106,7 +106,7 @@ impl FlameRenderer {
             zoom,
             pan_x,
             pan_y,
-            _pad0: 0.0,
+            speed_factor,
         };
         self.buffers.update_params(queue, &params);
 
@@ -195,7 +195,7 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
+    pub fn update_flame(&mut self, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, speed_factor: f32) {
         self.buffers.update_transforms(queue, flame);
 
         let params = GpuParams {
@@ -210,7 +210,7 @@ impl FlameRenderer {
             zoom,
             pan_x,
             pan_y,
-            _pad0: 0.0,
+            speed_factor,
         };
 
         self.buffers.update_params(queue, &params);
@@ -238,7 +238,7 @@ impl FlameRenderer {
     }
 
     /// Update iterations per thread
-    pub fn update_iterations(&self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
+    pub fn update_iterations(&self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, speed_factor: f32) {
         let params = GpuParams {
             num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
             iterations_per_thread,
@@ -251,7 +251,7 @@ impl FlameRenderer {
             zoom,
             pan_x,
             pan_y,
-            _pad0: 0.0,
+            speed_factor,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -275,7 +275,7 @@ impl FlameRenderer {
     }
 
     /// Set color mode
-    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
+    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, speed_factor: f32) {
         self.color_mode = color_mode;
         // Update params to reflect new color mode
         let params = GpuParams {
@@ -290,7 +290,7 @@ impl FlameRenderer {
             zoom,
             pan_x,
             pan_y,
-            _pad0: 0.0,
+            speed_factor,
         };
         self.buffers.update_params(queue, &params);
     }
