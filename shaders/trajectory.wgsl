@@ -40,7 +40,10 @@ struct Params {
     zoom: f32,
     pan_x: f32,
     pan_y: f32,
+    rotation: f32,  // Rotation in radians
     speed_factor: f32,  // Blend factor for speed-based coloring
+    _pad1: f32,
+    _pad2: f32,
 }
 
 // Bindings
@@ -304,8 +307,19 @@ fn select_transform(rand_val: f32) -> u32 {
 
 // Convert fractal space coords to pixel coords
 fn world_to_pixel(p: vec2<f32>) -> vec2<i32> {
-    // Apply view transform: pan and zoom
-    let transformed = (p - vec2<f32>(params.pan_x, params.pan_y)) * params.zoom;
+    // Apply view transform: pan, rotation, and zoom
+    var transformed = p - vec2<f32>(params.pan_x, params.pan_y);
+
+    // Apply rotation
+    let cos_r = cos(params.rotation);
+    let sin_r = sin(params.rotation);
+    transformed = vec2<f32>(
+        transformed.x * cos_r - transformed.y * sin_r,
+        transformed.x * sin_r + transformed.y * cos_r
+    );
+
+    // Apply zoom
+    transformed = transformed * params.zoom;
 
     // Map from fractal space (typically -2 to 2) to pixel space
     let scale = f32(min(params.width, params.height)) * 0.25;

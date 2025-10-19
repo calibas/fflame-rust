@@ -58,7 +58,10 @@ pub struct GpuParams {
     pub zoom: f32,
     pub pan_x: f32,
     pub pan_y: f32,
+    pub rotation: f32, // Rotation in radians
     pub speed_factor: f32, // Blend factor for speed-based coloring
+    pub _pad1: f32,
+    pub _pad2: f32,
 }
 
 /// Tonemap parameters
@@ -148,7 +151,10 @@ impl FlameBuffers {
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
+            rotation: 0.0,
             speed_factor: 0.5,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
