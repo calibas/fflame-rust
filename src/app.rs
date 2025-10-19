@@ -66,7 +66,7 @@ impl App {
             current_palette_index: 1, // Start with Fire palette
             color_mode: ColorMode::Transform,
             paused: false,
-            max_iterations: None,
+            max_iterations: Some(1_000_000_000),
             speed_factor: 0.5,
         };
 
