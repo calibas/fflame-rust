@@ -316,6 +316,44 @@ impl App {
             }
         }
 
+        // Handle config save to file
+        if ui_response.config_save_file_requested {
+            let config = self.export_config();
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Desktop: synchronous file dialog
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Fractal Flame", &["flame"])
+                    .set_file_name("fractal.flame")
+                    .save_file()
+                {
+                    if let Err(e) = config.save_to_file(&path) {
+                        eprintln!("Failed to save config: {}", e);
+                    } else {
+                        println!("Config saved to: {}", path.display());
+                    }
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // WASM: async file dialog
+                if let Ok(json) = config.to_json() {
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if let Some(file_handle) = rfd::AsyncFileDialog::new()
+                            .add_filter("Fractal Flame", &["flame"])
+                            .set_file_name("fractal.flame")
+                            .save_file()
+                            .await
+                        {
+                            let _ = file_handle.write(json.as_bytes()).await;
+                        }
+                    });
+                }
+            }
+        }
+
         // Handle config import
         if let Some(json) = ui_response.config_import_requested {
             match FractalConfig::from_json(&json) {
@@ -325,6 +363,48 @@ impl App {
                 Err(e) => {
                     eprintln!("Failed to import config: {}", e);
                 }
+            }
+        }
+
+        // Handle config load from file
+        if ui_response.config_load_file_requested {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Desktop: synchronous file dialog
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Fractal Flame", &["flame"])
+                    .pick_file()
+                {
+                    match FractalConfig::load_from_file(&path) {
+                        Ok(config) => {
+                            self.import_config(config);
+                            println!("Config loaded from: {}", path.display());
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to load config: {}", e);
+                        }
+                    }
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // WASM: async file dialog - we'll spawn the dialog and handle the result
+                // Note: We can't directly import_config from async, so we'll just load to buffer
+                let ctx = self.egui_layer.ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Some(file_handle) = rfd::AsyncFileDialog::new()
+                        .add_filter("Fractal Flame", &["flame"])
+                        .pick_file()
+                        .await
+                    {
+                        let contents = file_handle.read().await;
+                        let json = String::from_utf8_lossy(&contents).to_string();
+                        // Copy to clipboard so user can paste it
+                        ctx.copy_text(json);
+                        log::info!("Config loaded to clipboard - paste to import");
+                    }
+                });
             }
         }
 

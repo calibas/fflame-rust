@@ -29,6 +29,8 @@ pub struct UiResponse {
     pub pause_changed: bool,
     pub config_export_requested: Option<String>,
     pub config_import_requested: Option<String>,
+    pub config_save_file_requested: bool,
+    pub config_load_file_requested: bool,
 }
 
 pub struct EguiLayer {
@@ -96,6 +98,8 @@ impl EguiLayer {
         // Config import/export window
         let mut config_export_json = None;
         let mut config_import_json = None;
+        let mut config_save_file = false;
+        let mut config_load_file = false;
 
 
         let full_output = self.ctx.run(raw_input, |ctx| {
@@ -411,9 +415,15 @@ impl EguiLayer {
                         ui.label("Export/import all settings except iterations and max iterations.");
                         ui.separator();
 
-                        if ui.button("📋 Export to Clipboard").clicked() {
-                            config_export_json = Some(String::new()); // Will be filled in app.rs
-                        }
+                        ui.horizontal(|ui| {
+                            if ui.button("📋 Export to Clipboard").clicked() {
+                                config_export_json = Some(String::new()); // Will be filled in app.rs
+                            }
+
+                            if ui.button("💾 Save as .flame").clicked() {
+                                config_save_file = true;
+                            }
+                        });
 
                         ui.separator();
                         ui.label("Import from JSON:");
@@ -431,6 +441,10 @@ impl EguiLayer {
 
                             if ui.button("🗑 Clear").clicked() {
                                 self.config_json_buffer.clear();
+                            }
+
+                            if ui.button("📁 Load .flame").clicked() {
+                                config_load_file = true;
                             }
                         });
 
@@ -497,6 +511,8 @@ impl EguiLayer {
             pause_changed,
             config_export_requested: config_export_json,
             config_import_requested: config_import_json,
+            config_save_file_requested: config_save_file,
+            config_load_file_requested: config_load_file,
         }
     }
 }
