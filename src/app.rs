@@ -103,7 +103,7 @@ impl App {
                             app.update();
                             match app.render(&window) {
                                 Ok(_) => {},
-                                Err(SurfaceError::Lost) => app.gpu.resize(app.gpu.size),
+                                Err(SurfaceError::Lost | SurfaceError::Outdated) => app.gpu.resize(app.gpu.size),
                                 Err(SurfaceError::OutOfMemory) => elwt.exit(),
                                 Err(e) => eprintln!("Render error: {:?}", e),
                             }
