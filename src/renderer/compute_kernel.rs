@@ -13,6 +13,7 @@ pub struct FlameRenderer {
     width: u32,
     height: u32,
     samples_accumulated: u32,
+    total_iterations: u64,
     color_mode: ColorMode,
 }
 
@@ -41,6 +42,7 @@ impl FlameRenderer {
             width,
             height,
             samples_accumulated: 0,
+            total_iterations: 0,
             color_mode: ColorMode::Transform,
         }
     }
@@ -65,6 +67,7 @@ impl FlameRenderer {
     /// Reset accumulation buffer and sample count
     pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
         self.samples_accumulated = 0;
+        self.total_iterations = 0;
 
         // Clear accumulation buffers
         self.buffers.clear_all(encoder);
@@ -106,6 +109,11 @@ impl FlameRenderer {
             _pad0: 0.0,
         };
         self.buffers.update_params(queue, &params);
+
+        // Track total iterations: workgroups * threads_per_workgroup * iterations_per_thread
+        // Each workgroup has 64 threads (8x8)
+        let threads_per_workgroup = 64u64;
+        self.total_iterations += num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
 
         // Clear temp samples texture before rendering new samples
         self.buffers.clear_temp(encoder);
@@ -207,6 +215,7 @@ impl FlameRenderer {
 
         self.buffers.update_params(queue, &params);
         self.samples_accumulated = 0;
+        self.total_iterations = 0;
     }
 
     /// Update tonemap parameters (exposure, gamma)
@@ -222,6 +231,10 @@ impl FlameRenderer {
 
     pub fn samples_accumulated(&self) -> u32 {
         self.samples_accumulated
+    }
+
+    pub fn total_iterations(&self) -> u64 {
+        self.total_iterations
     }
 
     /// Update iterations per thread
