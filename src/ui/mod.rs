@@ -27,12 +27,16 @@ pub struct UiResponse {
     pub palette_changed: bool,
     pub color_mode_changed: bool,
     pub pause_changed: bool,
+    pub config_export_requested: Option<String>,
+    pub config_import_requested: Option<String>,
 }
 
 pub struct EguiLayer {
     state: EguiWinitState,
-    ctx: egui::Context,
+    pub ctx: egui::Context,
     renderer: EguiRenderer,
+    config_json_buffer: String,
+    show_config_window: bool,
 }
 
 impl EguiLayer {
@@ -45,6 +49,8 @@ impl EguiLayer {
             state,
             ctx,
             renderer,
+            config_json_buffer: String::new(),
+            show_config_window: false,
         }
     }
 
@@ -87,6 +93,10 @@ impl EguiLayer {
         let mut palette_changed = false;
         let mut color_mode_changed = false;
         let mut pause_changed = false;
+        // Config import/export window
+        let mut config_export_json = None;
+        let mut config_import_json = None;
+
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Performance window
@@ -103,6 +113,12 @@ impl EguiLayer {
                 ui.separator();
                 ui.label(format!("Total Frames: {}", metrics.frame_count()));
                 ui.label(format!("Resolution: {}x{}", window_size.width, window_size.height));
+
+                // Config import/export button
+                ui.separator();
+                if ui.button("⚙ Import/Export Config").clicked() {
+                    self.show_config_window = !self.show_config_window;
+                }
 
                 // Accumulation controls
                 if let Some(renderer) = &flame_renderer {
@@ -386,6 +402,44 @@ impl EguiLayer {
                     }
                 });
             });
+
+            if self.show_config_window {
+                egui::Window::new("Import/Export Configuration")
+                    .collapsible(false)
+                    .show(ctx, |ui| {
+                        ui.heading("Fractal Configuration");
+                        ui.label("Export/import all settings except iterations and max iterations.");
+                        ui.separator();
+
+                        if ui.button("📋 Export to Clipboard").clicked() {
+                            config_export_json = Some(String::new()); // Will be filled in app.rs
+                        }
+
+                        ui.separator();
+                        ui.label("Import from JSON:");
+
+                        egui::ScrollArea::vertical()
+                            .max_height(300.0)
+                            .show(ui, |ui| {
+                                ui.text_edit_multiline(&mut self.config_json_buffer);
+                            });
+
+                        ui.horizontal(|ui| {
+                            if ui.button("✅ Import").clicked() && !self.config_json_buffer.is_empty() {
+                                config_import_json = Some(self.config_json_buffer.clone());
+                            }
+
+                            if ui.button("🗑 Clear").clicked() {
+                                self.config_json_buffer.clear();
+                            }
+                        });
+
+                        ui.separator();
+                        if ui.button("Close").clicked() {
+                            self.show_config_window = false;
+                        }
+                    });
+            }
         });
 
         self.state.handle_platform_output(window, full_output.platform_output);
@@ -441,6 +495,8 @@ impl EguiLayer {
             palette_changed,
             color_mode_changed,
             pause_changed,
+            config_export_requested: config_export_json,
+            config_import_requested: config_import_json,
         }
     }
 }

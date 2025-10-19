@@ -7,6 +7,7 @@ use crate::renderer::FlameRenderer;
 use crate::scene::{presets, transforms::Flame};
 use crate::scene::palette::{PaletteLibrary, ColorMode};
 use crate::util::PerformanceMetrics;
+use crate::config::FractalConfig;
 
 pub struct App {
     gpu: GpuContext,
@@ -306,6 +307,27 @@ impl App {
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
+        // Handle config export
+        if ui_response.config_export_requested.is_some() {
+            let config = self.export_config();
+            if let Ok(json) = config.to_json() {
+                // Copy to clipboard using egui's built-in clipboard
+                self.egui_layer.ctx.copy_text(json);
+            }
+        }
+
+        // Handle config import
+        if let Some(json) = ui_response.config_import_requested {
+            match FractalConfig::from_json(&json) {
+                Ok(config) => {
+                    self.import_config(config);
+                }
+                Err(e) => {
+                    eprintln!("Failed to import config: {}", e);
+                }
+            }
+        }
+
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard;
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
@@ -353,5 +375,54 @@ impl App {
         frame.present();
 
         Ok(())
+    }
+
+    /// Export current configuration to FractalConfig
+    pub fn export_config(&self) -> FractalConfig {
+        FractalConfig {
+            flame: self.flame.clone(),
+            zoom: self.zoom,
+            pan_x: self.pan_x,
+            pan_y: self.pan_y,
+            rotation: self.rotation,
+            density_scale: self.density_scale,
+            speed_factor: self.speed_factor,
+            color_mode: self.color_mode,
+            palette_index: self.current_palette_index,
+        }
+    }
+
+    /// Import configuration from FractalConfig
+    pub fn import_config(&mut self, config: FractalConfig) {
+        self.flame = config.flame;
+        self.zoom = config.zoom;
+        self.pan_x = config.pan_x;
+        self.pan_y = config.pan_y;
+        self.rotation = config.rotation;
+        self.density_scale = config.density_scale;
+        self.speed_factor = config.speed_factor;
+        self.color_mode = config.color_mode;
+        self.current_palette_index = config.palette_index;
+
+        // Update renderer with new flame and settings
+        if let Some(ref mut renderer) = self.flame_renderer {
+            renderer.update_flame(&self.gpu.queue, &self.flame, self.iterations_per_thread,
+                self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
+            renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread,
+                self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
+            renderer.update_density_scale(&self.gpu.queue, self.density_scale);
+
+            if let Some(palette) = self.palette_library.get(self.current_palette_index) {
+                renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
+            }
+
+            // Reset accumulation with new settings
+            let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Config Import Encoder"),
+            });
+            renderer.reset(&mut encoder, &self.gpu.queue, self.iterations_per_thread,
+                self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
+            self.gpu.queue.submit(std::iter::once(encoder.finish()));
+        }
     }
 }
