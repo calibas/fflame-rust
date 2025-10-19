@@ -5,6 +5,7 @@ use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
 use crate::renderer::FlameRenderer;
 use crate::scene::{presets, transforms::Flame};
+use crate::scene::palette::{PaletteLibrary, ColorMode};
 use crate::util::PerformanceMetrics;
 
 pub struct App {
@@ -21,6 +22,9 @@ pub struct App {
     mouse_dragging: bool,
     last_mouse_pos: Option<(f32, f32)>,
     metrics: PerformanceMetrics,
+    palette_library: PaletteLibrary,
+    current_palette_index: usize,
+    color_mode: ColorMode,
 }
 
 impl App {
@@ -32,11 +36,14 @@ impl App {
         let flame = presets::create_simple_flame();
         let flame_renderer = FlameRenderer::new(
             &gpu.device,
+            &gpu.queue,
             gpu.config.format,
             gpu.size.width,
             gpu.size.height,
             &flame,
         );
+
+        let palette_library = PaletteLibrary::new();
 
         let mut app = Self {
             gpu,
@@ -52,6 +59,9 @@ impl App {
             mouse_dragging: false,
             last_mouse_pos: None,
             metrics: PerformanceMetrics::new(),
+            palette_library,
+            current_palette_index: 1, // Start with Fire palette
+            color_mode: ColorMode::Transform,
         };
 
         #[allow(deprecated)]
@@ -93,6 +103,17 @@ impl App {
                             }
                         }
                         _ => {}
+                    }
+                }
+                Event::Resumed => {
+                    // On WASM, request a resize to ensure proper canvas dimensions
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        let size = window.inner_size();
+                        if size.width > 0 && size.height > 0 {
+                            log::info!("Resumed event - resizing to {}x{}", size.width, size.height);
+                            app.gpu.resize(size);
+                        }
                     }
                 }
                 Event::AboutToWait => {
@@ -254,13 +275,19 @@ impl App {
             &mut self.pan_x,
             &mut self.pan_y,
             &mut self.density_scale,
+            &self.palette_library,
+            &mut self.current_palette_index,
+            &mut self.color_mode,
         );
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard;
-        if ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed || view_changed || ui_response.density_changed {
+        let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
+            || view_changed || ui_response.density_changed || ui_response.palette_changed || ui_response.color_mode_changed;
+
+        if needs_update {
             if let Some(ref mut renderer) = self.flame_renderer {
                 let mut update_encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Update Encoder"),
@@ -278,8 +305,18 @@ impl App {
                     renderer.update_density_scale(&self.gpu.queue, self.density_scale);
                 }
 
-                // Reset accumulation when view changes or user requests it
-                if ui_response.reset_requested || view_changed {
+                if ui_response.color_mode_changed {
+                    renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y);
+                }
+
+                if ui_response.palette_changed {
+                    if let Some(palette) = self.palette_library.get(self.current_palette_index) {
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
+                    }
+                }
+
+                // Reset accumulation when view changes, palette changes, color mode changes, or user requests it
+                if ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y);
                 }
 
