@@ -127,7 +127,7 @@ impl EguiLayer {
                     let mut max_enabled = max_iterations.is_some();
                     if ui.checkbox(&mut max_enabled, "Enable max iterations").changed() {
                         if max_enabled {
-                            *max_iterations = Some(1_000_000);
+                            *max_iterations = Some(1_000_000_000);
                         } else {
                             *max_iterations = None;
                         }
@@ -137,7 +137,6 @@ impl EguiLayer {
                         // Use a logarithmic slider for better control across large ranges
                         let mut log_value = (*max as f64).log10();
                         if ui.add(egui::Slider::new(&mut log_value, 3.0..=12.0)
-                            .text("Max (10^)")
                             .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64)))
                         ).changed() {
                             *max = 10f64.powf(log_value) as u64;
@@ -146,7 +145,7 @@ impl EguiLayer {
                         // Show progress if enabled
                         let current = renderer.total_iterations();
                         if current >= *max {
-                            ui.label("✓ Max iterations reached");
+                            ui.label("* Max iterations reached");
                         } else {
                             let progress = current as f64 / *max as f64;
                             ui.label(format!("Progress: {} / {} ({:.1}%)",
