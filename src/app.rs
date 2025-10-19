@@ -25,6 +25,8 @@ pub struct App {
     palette_library: PaletteLibrary,
     current_palette_index: usize,
     color_mode: ColorMode,
+    paused: bool,
+    max_iterations: Option<u64>,
 }
 
 impl App {
@@ -62,6 +64,8 @@ impl App {
             palette_library,
             current_palette_index: 1, // Start with Fire palette
             color_mode: ColorMode::Transform,
+            paused: false,
+            max_iterations: None,
         };
 
         #[allow(deprecated)]
@@ -249,13 +253,19 @@ impl App {
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
-            // 1. Compute new samples with fresh random seed
-            renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y);
+            // Check if we should continue iterating
+            let should_iterate = !self.paused &&
+                self.max_iterations.map_or(true, |max| renderer.total_iterations() < max);
 
-            // 2. Accumulate samples (blend with previous frames)
-            renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device);
+            if should_iterate {
+                // 1. Compute new samples with fresh random seed
+                renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y);
 
-            // 3. Tonemap and render to screen
+                // 2. Accumulate samples (blend with previous frames)
+                renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device);
+            }
+
+            // 3. Tonemap and render to screen (always render)
             renderer.tonemap_pass(&mut encoder, &view);
         }
 
@@ -278,6 +288,8 @@ impl App {
             &self.palette_library,
             &mut self.current_palette_index,
             &mut self.color_mode,
+            &mut self.paused,
+            &mut self.max_iterations,
         );
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -285,7 +297,7 @@ impl App {
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard;
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
-            || view_changed || ui_response.density_changed || ui_response.palette_changed || ui_response.color_mode_changed;
+            || view_changed || ui_response.density_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed;
 
         if needs_update {
             if let Some(ref mut renderer) = self.flame_renderer {

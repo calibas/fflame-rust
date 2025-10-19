@@ -3,6 +3,21 @@ use egui_winit::State as EguiWinitState;
 use wgpu::*;
 use winit::{event::WindowEvent, window::Window};
 
+/// Format large iteration counts with appropriate suffixes (K, M, B, T)
+fn format_iterations(n: u64) -> String {
+    if n >= 1_000_000_000_000 {
+        format!("{:.2}T", n as f64 / 1_000_000_000_000.0)
+    } else if n >= 1_000_000_000 {
+        format!("{:.2}B", n as f64 / 1_000_000_000.0)
+    } else if n >= 1_000_000 {
+        format!("{:.2}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.2}K", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
 pub struct UiResponse {
     pub reset_requested: bool,
     pub flame_changed: bool,
@@ -11,6 +26,7 @@ pub struct UiResponse {
     pub density_changed: bool,
     pub palette_changed: bool,
     pub color_mode_changed: bool,
+    pub pause_changed: bool,
 }
 
 pub struct EguiLayer {
@@ -56,6 +72,8 @@ impl EguiLayer {
         palette_library: &crate::scene::palette::PaletteLibrary,
         current_palette_index: &mut usize,
         color_mode: &mut crate::scene::palette::ColorMode,
+        paused: &mut bool,
+        max_iterations: &mut Option<u64>,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -66,6 +84,7 @@ impl EguiLayer {
         let mut density_changed = false;
         let mut palette_changed = false;
         let mut color_mode_changed = false;
+        let mut pause_changed = false;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Performance window
@@ -86,10 +105,55 @@ impl EguiLayer {
                 // Accumulation controls
                 if let Some(renderer) = &flame_renderer {
                     ui.separator();
-                    ui.label(format!("Samples Accumulated: {}", renderer.samples_accumulated()));
+                    ui.label(format!("Frames: {}", renderer.samples_accumulated()));
+                    ui.label(format!("Total Iterations: {}", format_iterations(renderer.total_iterations())));
+
+                    // Pause/Resume button
+                    let button_text = if *paused { "▶ Resume" } else { "⏸ Pause" };
+                    if ui.button(button_text).clicked() {
+                        *paused = !*paused;
+                        pause_changed = true;
+                    }
 
                     if ui.button("Reset Accumulation").clicked() {
                         reset_requested = true;
+                    }
+
+                    // Max iterations control
+                    ui.separator();
+                    ui.label("Max Iterations");
+
+                    let mut max_enabled = max_iterations.is_some();
+                    if ui.checkbox(&mut max_enabled, "Enable max iterations").changed() {
+                        if max_enabled {
+                            *max_iterations = Some(1_000_000);
+                        } else {
+                            *max_iterations = None;
+                        }
+                    }
+
+                    if let Some(max) = max_iterations {
+                        // Use a logarithmic slider for better control across large ranges
+                        let mut log_value = (*max as f64).log10();
+                        if ui.add(egui::Slider::new(&mut log_value, 3.0..=12.0)
+                            .text("Max (10^)")
+                            .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64)))
+                        ).changed() {
+                            *max = 10f64.powf(log_value) as u64;
+                        }
+
+                        // Show progress if enabled
+                        let current = renderer.total_iterations();
+                        if current >= *max {
+                            ui.label("✓ Max iterations reached");
+                        } else {
+                            let progress = current as f64 / *max as f64;
+                            ui.label(format!("Progress: {} / {} ({:.1}%)",
+                                format_iterations(current),
+                                format_iterations(*max),
+                                progress * 100.0
+                            ));
+                        }
                     }
                 }
 
@@ -354,6 +418,7 @@ impl EguiLayer {
             density_changed,
             palette_changed,
             color_mode_changed,
+            pause_changed,
         }
     }
 }
