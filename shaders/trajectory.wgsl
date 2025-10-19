@@ -35,12 +35,12 @@ struct Params {
     width: u32,
     height: u32,
     seed: u32,
-    color_mode: u32,  // 0 = transform colors, 1 = palette
+    color_mode: u32,  // 0 = transform colors, 1 = palette, 2 = speed
     splat_size: f32,
     zoom: f32,
     pan_x: f32,
     pan_y: f32,
-    _pad0: f32,
+    speed_factor: f32,  // Blend factor for speed-based coloring
 }
 
 // Bindings
@@ -314,6 +314,16 @@ fn world_to_pixel(p: vec2<f32>) -> vec2<i32> {
     return vec2<i32>(i32(pixel.x), i32(pixel.y));
 }
 
+// Convert speed to color using palette lookup
+fn speed_to_color(speed: f32) -> vec3<f32> {
+    // Normalize speed to [0, 1] range
+    // Use logarithmic scale for better visualization
+    let normalized_speed = clamp(log(speed * 10.0 + 1.0) / 3.0, 0.0, 1.0);
+
+    // Sample from palette texture
+    return textureSampleLevel(palette_texture, palette_sampler, normalized_speed, 0.0).rgb;
+}
+
 // Main compute shader
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -333,6 +343,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
+        // Save old position for speed calculation
+        let old_pos = current;
+
         // Select random transform
         let rand_val = rng_nextf(&rng);
         let xform_idx = select_transform(rand_val);
@@ -342,14 +355,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let affine_p = apply_affine(xform, current);
         current = apply_variations(xform, affine_p, &rng);
 
+        // Calculate speed (distance traveled)
+        let speed = length(current - old_pos);
+
         // Update color based on color mode
         if (params.color_mode == 0u) {
             // Transform color mode: blend with transform color
             color = mix(color, xform.color, xform.color_speed);
-        } else {
+        } else if (params.color_mode == 1u) {
             // Palette mode: blend color index
             let xform_color_value = (xform.color.r + xform.color.g + xform.color.b) / 3.0;
             color_index = mix(color_index, xform_color_value, xform.color_speed);
+        } else {
+            // Speed mode: blend with speed-based color
+            let speed_color = speed_to_color(speed);
+            color = mix(color, speed_color, params.speed_factor);
         }
 
         // Skip burn-in iterations
@@ -365,9 +385,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 var final_color: vec3<f32>;
                 if (params.color_mode == 0u) {
                     final_color = color;
-                } else {
+                } else if (params.color_mode == 1u) {
                     // Sample from palette texture
                     final_color = textureSampleLevel(palette_texture, palette_sampler, color_index, 0.0).rgb;
+                } else {
+                    // Speed mode uses accumulated color
+                    final_color = color;
                 }
 
                 // Write to texture with small alpha for density accumulation

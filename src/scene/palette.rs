@@ -7,6 +7,8 @@ pub enum ColorMode {
     Transform,
     /// Use 1D palette texture lookup
     Palette,
+    /// Use speed-based coloring (distance traveled per iteration)
+    Speed,
 }
 
 impl Default for ColorMode {

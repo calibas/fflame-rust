@@ -27,6 +27,7 @@ pub struct App {
     color_mode: ColorMode,
     paused: bool,
     max_iterations: Option<u64>,
+    speed_factor: f32,
 }
 
 impl App {
@@ -66,6 +67,7 @@ impl App {
             color_mode: ColorMode::Transform,
             paused: false,
             max_iterations: None,
+            speed_factor: 0.5,
         };
 
         #[allow(deprecated)]
@@ -259,7 +261,7 @@ impl App {
 
             if should_iterate {
                 // 1. Compute new samples with fresh random seed
-                renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y);
+                renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.speed_factor);
 
                 // 2. Accumulate samples (blend with previous frames)
                 renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device);
@@ -290,6 +292,7 @@ impl App {
             &mut self.color_mode,
             &mut self.paused,
             &mut self.max_iterations,
+            &mut self.speed_factor,
         );
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -306,11 +309,11 @@ impl App {
                 });
 
                 if ui_response.flame_changed {
-                    renderer.update_flame(&self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y);
+                    renderer.update_flame(&self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.speed_factor);
                 }
 
                 if ui_response.iterations_changed || view_changed {
-                    renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y);
+                    renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.speed_factor);
                 }
 
                 if ui_response.density_changed {
@@ -318,7 +321,7 @@ impl App {
                 }
 
                 if ui_response.color_mode_changed {
-                    renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y);
+                    renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.speed_factor);
                 }
 
                 if ui_response.palette_changed {

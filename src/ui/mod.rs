@@ -74,6 +74,7 @@ impl EguiLayer {
         color_mode: &mut crate::scene::palette::ColorMode,
         paused: &mut bool,
         max_iterations: &mut Option<u64>,
+        speed_factor: &mut f32,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -176,6 +177,7 @@ impl EguiLayer {
                 let selected_text = match current_mode {
                     ColorMode::Transform => "Transform Colors",
                     ColorMode::Palette => "Palette",
+                    ColorMode::Speed => "Speed",
                 };
 
                 egui::ComboBox::from_label("Color Mode")
@@ -187,10 +189,13 @@ impl EguiLayer {
                         if ui.selectable_value(color_mode, ColorMode::Palette, "Palette").changed() {
                             color_mode_changed = true;
                         }
+                        if ui.selectable_value(color_mode, ColorMode::Speed, "Speed").changed() {
+                            color_mode_changed = true;
+                        }
                     });
 
-                // Show palette selector only in Palette mode
-                if matches!(*color_mode, ColorMode::Palette) {
+                // Show palette selector for Palette and Speed modes
+                if matches!(*color_mode, ColorMode::Palette | ColorMode::Speed) {
                     let palettes = palette_library.palettes();
                     let current_palette_name = palettes.get(*current_palette_index)
                         .map(|p| p.name.as_str())
@@ -205,6 +210,13 @@ impl EguiLayer {
                                 }
                             }
                         });
+                }
+
+                // Show speed factor slider in Speed mode
+                if matches!(*color_mode, ColorMode::Speed) {
+                    if ui.add(egui::Slider::new(speed_factor, 0.0..=1.0).text("Speed Blend Factor")).changed() {
+                        color_mode_changed = true;
+                    }
                 }
 
                 // View settings
