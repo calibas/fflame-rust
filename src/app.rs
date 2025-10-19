@@ -366,6 +366,22 @@ impl App {
             }
         }
 
+        // Handle custom palette from editor
+        if let Some(custom_pal) = ui_response.custom_palette {
+            // Add to library if not already there
+            let palette_lib = &mut self.palette_library;
+            palette_lib.add(custom_pal);
+            // Set to the newly added palette (last in list)
+            self.current_palette_index = palette_lib.palettes().len() - 1;
+
+            // Update renderer
+            if let Some(ref mut renderer) = self.flame_renderer {
+                if let Some(palette) = palette_lib.get(self.current_palette_index) {
+                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
+                }
+            }
+        }
+
         // Handle config load from file
         if ui_response.config_load_file_requested {
             #[cfg(not(target_arch = "wasm32"))]
