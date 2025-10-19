@@ -90,8 +90,10 @@ impl App {
                             // Handle keyboard input only if egui didn't consume it
                             app.handle_keyboard(&key_event);
                         }
-                        WindowEvent::MouseInput { state, button, .. } if !consumed => {
-                            app.handle_mouse_button(state, button);
+                        WindowEvent::MouseInput { state, button, .. } => {
+                            // Always handle mouse releases to clear dragging state,
+                            // but only handle presses if egui didn't consume them
+                            app.handle_mouse_button(state, button, consumed);
                         }
                         WindowEvent::CursorMoved { position, .. } if !consumed => {
                             app.handle_mouse_move(position.x as f32, position.y as f32);
@@ -176,15 +178,19 @@ impl App {
         }
     }
 
-    fn handle_mouse_button(&mut self, state: winit::event::ElementState, button: winit::event::MouseButton) {
+    fn handle_mouse_button(&mut self, state: winit::event::ElementState, button: winit::event::MouseButton, consumed: bool) {
         use winit::event::{ElementState, MouseButton};
 
         if button == MouseButton::Left {
             match state {
                 ElementState::Pressed => {
-                    self.mouse_dragging = true;
+                    // Only start dragging if egui didn't consume the event
+                    if !consumed {
+                        self.mouse_dragging = true;
+                    }
                 }
                 ElementState::Released => {
+                    // Always clear dragging state on release, even if egui consumed it
                     self.mouse_dragging = false;
                     self.last_mouse_pos = None;
                 }
