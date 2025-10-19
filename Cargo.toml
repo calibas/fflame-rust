@@ -20,6 +20,7 @@ bytemuck = { version = "1.14", features = ["derive"] }
 half = "2.4"
 rand = { version = "0.8", features = ["getrandom"] }
 web-time = "1.1"
+rfd = "0.15"
 
 # Optional
 image = "0.25"
