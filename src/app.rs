@@ -17,6 +17,7 @@ pub struct App {
     zoom: f32,
     pan_x: f32,
     pan_y: f32,
+    rotation: f32,
     density_scale: f32,
     view_changed_by_keyboard: bool,
     mouse_dragging: bool,
@@ -57,6 +58,7 @@ impl App {
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
+            rotation: 0.0,
             density_scale: 1.0,
             view_changed_by_keyboard: false,
             mouse_dragging: false,
@@ -267,7 +269,7 @@ impl App {
 
             if should_iterate {
                 // 1. Compute new samples with fresh random seed
-                renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.speed_factor);
+                renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
 
                 // 2. Accumulate samples (blend with previous frames)
                 renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device);
@@ -292,6 +294,7 @@ impl App {
             &mut self.zoom,
             &mut self.pan_x,
             &mut self.pan_y,
+            &mut self.rotation,
             &mut self.density_scale,
             &self.palette_library,
             &mut self.current_palette_index,
@@ -315,11 +318,11 @@ impl App {
                 });
 
                 if ui_response.flame_changed {
-                    renderer.update_flame(&self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.speed_factor);
+                    renderer.update_flame(&self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
                 }
 
                 if ui_response.iterations_changed || view_changed {
-                    renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.speed_factor);
+                    renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
                 }
 
                 if ui_response.density_changed {
@@ -327,7 +330,7 @@ impl App {
                 }
 
                 if ui_response.color_mode_changed {
-                    renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.speed_factor);
+                    renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
                 }
 
                 if ui_response.palette_changed {
@@ -338,7 +341,7 @@ impl App {
 
                 // Reset accumulation when view changes, palette changes, color mode changes, or user requests it
                 if ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed {
-                    renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y);
+                    renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));

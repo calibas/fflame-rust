@@ -68,6 +68,7 @@ impl EguiLayer {
         zoom: &mut f32,
         pan_x: &mut f32,
         pan_y: &mut f32,
+        rotation: &mut f32,
         density_scale: &mut f32,
         palette_library: &crate::scene::palette::PaletteLibrary,
         current_palette_index: &mut usize,
@@ -250,6 +251,15 @@ impl EguiLayer {
                         view_changed = true;
                     }
                 });
+                ui.horizontal(|ui| {
+                    ui.label("Rotation:");
+                    // Convert radians to degrees for display
+                    let mut degrees = rotation.to_degrees();
+                    if ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°")).changed() {
+                        *rotation = degrees.to_radians();
+                        view_changed = true;
+                    }
+                });
 
                 // Pan step size depends on zoom (more zoomed in = smaller steps)
                 let pan_step = 0.1 / *zoom;
@@ -281,6 +291,7 @@ impl EguiLayer {
                     *zoom = 1.0;
                     *pan_x = 0.0;
                     *pan_y = 0.0;
+                    *rotation = 0.0;
                     view_changed = true;
                 }
             });

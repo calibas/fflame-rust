@@ -48,7 +48,7 @@ impl FlameRenderer {
     }
 
     /// Resize the accumulation buffer
-    pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
+    pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
         self.width = width;
         self.height = height;
 
@@ -61,11 +61,11 @@ impl FlameRenderer {
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
 
         // Clear accumulation counter
-        self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y);
+        self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, speed_factor);
     }
 
     /// Reset accumulation buffer and sample count
-    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
+    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
 
@@ -85,14 +85,17 @@ impl FlameRenderer {
             zoom,
             pan_x,
             pan_y,
-            speed_factor: 0.5,
+            rotation,
+            speed_factor,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         self.buffers.update_params(queue, &params);
     }
 
     /// Run compute pass to generate flame samples
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, speed_factor: f32) {
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
         // Update seed for new random samples each frame
         let params = GpuParams {
             num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
@@ -106,7 +109,10 @@ impl FlameRenderer {
             zoom,
             pan_x,
             pan_y,
+            rotation,
             speed_factor,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         self.buffers.update_params(queue, &params);
 
@@ -195,7 +201,7 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, speed_factor: f32) {
+    pub fn update_flame(&mut self, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
         self.buffers.update_transforms(queue, flame);
 
         let params = GpuParams {
@@ -210,7 +216,10 @@ impl FlameRenderer {
             zoom,
             pan_x,
             pan_y,
+            rotation,
             speed_factor,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         self.buffers.update_params(queue, &params);
@@ -238,7 +247,7 @@ impl FlameRenderer {
     }
 
     /// Update iterations per thread
-    pub fn update_iterations(&self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, speed_factor: f32) {
+    pub fn update_iterations(&self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
         let params = GpuParams {
             num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
             iterations_per_thread,
@@ -251,7 +260,10 @@ impl FlameRenderer {
             zoom,
             pan_x,
             pan_y,
+            rotation,
             speed_factor,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -275,7 +287,7 @@ impl FlameRenderer {
     }
 
     /// Set color mode
-    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, speed_factor: f32) {
+    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
         self.color_mode = color_mode;
         // Update params to reflect new color mode
         let params = GpuParams {
@@ -290,7 +302,10 @@ impl FlameRenderer {
             zoom,
             pan_x,
             pan_y,
+            rotation,
             speed_factor,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }
