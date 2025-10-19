@@ -9,6 +9,8 @@ pub struct UiResponse {
     pub iterations_changed: bool,
     pub view_changed: bool,
     pub density_changed: bool,
+    pub palette_changed: bool,
+    pub color_mode_changed: bool,
 }
 
 pub struct EguiLayer {
@@ -51,6 +53,9 @@ impl EguiLayer {
         pan_x: &mut f32,
         pan_y: &mut f32,
         density_scale: &mut f32,
+        palette_library: &crate::scene::palette::PaletteLibrary,
+        current_palette_index: &mut usize,
+        color_mode: &mut crate::scene::palette::ColorMode,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -59,6 +64,8 @@ impl EguiLayer {
         let mut iterations_changed = false;
         let mut view_changed = false;
         let mut density_changed = false;
+        let mut palette_changed = false;
+        let mut color_mode_changed = false;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Performance window
@@ -94,6 +101,46 @@ impl EguiLayer {
                 }
                 if ui.add(egui::Slider::new(density_scale, 0.01..=10.0).text("Density Scale")).changed() {
                     density_changed = true;
+                }
+
+                // Color settings
+                ui.separator();
+                ui.label("Color Settings");
+
+                use crate::scene::palette::ColorMode;
+                let current_mode = *color_mode;
+                let selected_text = match current_mode {
+                    ColorMode::Transform => "Transform Colors",
+                    ColorMode::Palette => "Palette",
+                };
+
+                egui::ComboBox::from_label("Color Mode")
+                    .selected_text(selected_text)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(color_mode, ColorMode::Transform, "Transform Colors").changed() {
+                            color_mode_changed = true;
+                        }
+                        if ui.selectable_value(color_mode, ColorMode::Palette, "Palette").changed() {
+                            color_mode_changed = true;
+                        }
+                    });
+
+                // Show palette selector only in Palette mode
+                if matches!(*color_mode, ColorMode::Palette) {
+                    let palettes = palette_library.palettes();
+                    let current_palette_name = palettes.get(*current_palette_index)
+                        .map(|p| p.name.as_str())
+                        .unwrap_or("Unknown");
+
+                    egui::ComboBox::from_label("Palette")
+                        .selected_text(current_palette_name)
+                        .show_ui(ui, |ui| {
+                            for (idx, palette) in palettes.iter().enumerate() {
+                                if ui.selectable_value(current_palette_index, idx, &palette.name).changed() {
+                                    palette_changed = true;
+                                }
+                            }
+                        });
                 }
 
                 // View settings
@@ -305,6 +352,8 @@ impl EguiLayer {
             iterations_changed,
             view_changed,
             density_changed,
+            palette_changed,
+            color_mode_changed,
         }
     }
 }

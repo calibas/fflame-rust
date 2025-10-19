@@ -1,6 +1,7 @@
 use wgpu::*;
 use wgpu::util::DeviceExt;
 use crate::scene::transforms::{Transform, Flame};
+use crate::scene::palette::Palette;
 
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
@@ -52,12 +53,12 @@ pub struct GpuParams {
     pub width: u32,
     pub height: u32,
     pub seed: u32,
+    pub color_mode: u32, // 0 = transform colors, 1 = palette
     pub splat_size: f32,
     pub zoom: f32,
     pub pan_x: f32,
     pub pan_y: f32,
     pub _pad0: f32,
-    pub _pad1: f32,
 }
 
 /// Tonemap parameters
@@ -108,6 +109,10 @@ pub struct FlameBuffers {
     pub temp_samples_texture: Texture,
     pub temp_samples_view: TextureView,
 
+    // Palette texture (1D)
+    pub palette_texture: Texture,
+    pub palette_view: TextureView,
+
     pub sampler: Sampler,
 
     // Track which texture is current for display
@@ -115,7 +120,7 @@ pub struct FlameBuffers {
 }
 
 impl FlameBuffers {
-    pub fn new(device: &Device, width: u32, height: u32, flame: &Flame) -> Self {
+    pub fn new(device: &Device, queue: &Queue, width: u32, height: u32, flame: &Flame) -> Self {
         // Convert transforms to GPU format
         let gpu_transforms: Vec<GpuTransform> = flame
             .transforms
@@ -138,12 +143,12 @@ impl FlameBuffers {
             width,
             height,
             seed: 12345,
+            color_mode: 0, // Default to transform colors
             splat_size: 1.0,
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -200,6 +205,65 @@ impl FlameBuffers {
         // Create temp samples texture (written by trajectory shader)
         let (temp_samples_texture, temp_samples_view) = create_accum_texture("Temp Samples Texture");
 
+        // Create palette texture (1D, 256 samples)
+        // Use Rgba16Float instead of Rgba32Float for guaranteed filterability
+        let default_palette = Palette::fire(); // Default palette
+        let palette_data = default_palette.generate_texture_data(256);
+
+        // Convert f32 to f16 for Rgba16Float
+        let palette_data_f16: Vec<u8> = palette_data.chunks(4)
+            .flat_map(|chunk| {
+                let r = half::f16::from_f32(chunk[0]);
+                let g = half::f16::from_f32(chunk[1]);
+                let b = half::f16::from_f32(chunk[2]);
+                let a = half::f16::from_f32(chunk[3]);
+                [
+                    r.to_bits().to_le_bytes(),
+                    g.to_bits().to_le_bytes(),
+                    b.to_bits().to_le_bytes(),
+                    a.to_bits().to_le_bytes(),
+                ].concat()
+            })
+            .collect();
+
+        let palette_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Palette Texture"),
+            size: Extent3d {
+                width: 256,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D1,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        // Upload palette data
+        queue.write_texture(
+            ImageCopyTexture {
+                texture: &palette_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &palette_data_f16,
+            ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(256 * 4 * 2), // 256 pixels * 4 components * 2 bytes (f16)
+                rows_per_image: None,
+            },
+            Extent3d {
+                width: 256,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let palette_view = palette_texture.create_view(&TextureViewDescriptor::default());
+
         // Create sampler for tonemap shader
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Accumulation Sampler"),
@@ -223,6 +287,8 @@ impl FlameBuffers {
             accumulation_view_b,
             temp_samples_texture,
             temp_samples_view,
+            palette_texture,
+            palette_view,
             sampler,
             current_is_a: true,
         }
@@ -311,5 +377,46 @@ impl FlameBuffers {
             .map(|xform| xform.into())
             .collect();
         queue.write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
+    }
+
+    /// Update palette texture
+    pub fn update_palette(&self, queue: &Queue, palette: &Palette) {
+        let palette_data = palette.generate_texture_data(256);
+
+        // Convert f32 to f16 for Rgba16Float
+        let palette_data_f16: Vec<u8> = palette_data.chunks(4)
+            .flat_map(|chunk| {
+                let r = half::f16::from_f32(chunk[0]);
+                let g = half::f16::from_f32(chunk[1]);
+                let b = half::f16::from_f32(chunk[2]);
+                let a = half::f16::from_f32(chunk[3]);
+                [
+                    r.to_bits().to_le_bytes(),
+                    g.to_bits().to_le_bytes(),
+                    b.to_bits().to_le_bytes(),
+                    a.to_bits().to_le_bytes(),
+                ].concat()
+            })
+            .collect();
+
+        queue.write_texture(
+            ImageCopyTexture {
+                texture: &self.palette_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &palette_data_f16,
+            ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(256 * 4 * 2), // 256 pixels * 4 components * 2 bytes (f16)
+                rows_per_image: None,
+            },
+            Extent3d {
+                width: 256,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 }

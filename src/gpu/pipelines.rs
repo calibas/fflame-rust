@@ -64,6 +64,24 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Palette texture (1D)
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D1,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Palette sampler
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
 
@@ -260,6 +278,14 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 2,
                     resource: BindingResource::TextureView(&buffers.temp_samples_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(&buffers.palette_view),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::Sampler(&buffers.sampler),
                 },
             ],
         })

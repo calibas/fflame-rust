@@ -35,18 +35,20 @@ struct Params {
     width: u32,
     height: u32,
     seed: u32,
+    color_mode: u32,  // 0 = transform colors, 1 = palette
     splat_size: f32,
     zoom: f32,
     pan_x: f32,
     pan_y: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 // Bindings
 @group(0) @binding(0) var<storage, read> transforms: array<Transform>;
 @group(0) @binding(1) var<uniform> params: Params;
 @group(0) @binding(2) var output_texture: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var palette_texture: texture_1d<f32>;
+@group(0) @binding(4) var palette_sampler: sampler;
 
 // PCG random number generator state
 struct RngState {
@@ -327,6 +329,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     );
 
     var color = vec3<f32>(1.0, 1.0, 1.0);
+    var color_index = 0.0;  // For palette mode
 
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
@@ -339,8 +342,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let affine_p = apply_affine(xform, current);
         current = apply_variations(xform, affine_p, &rng);
 
-        // Update color (simple lerp for now)
-        color = mix(color, xform.color, xform.color_speed);
+        // Update color based on color mode
+        if (params.color_mode == 0u) {
+            // Transform color mode: blend with transform color
+            color = mix(color, xform.color, xform.color_speed);
+        } else {
+            // Palette mode: blend color index
+            let xform_color_value = (xform.color.r + xform.color.g + xform.color.b) / 3.0;
+            color_index = mix(color_index, xform_color_value, xform.color_speed);
+        }
 
         // Skip burn-in iterations
         if (i >= params.burn_in) {
@@ -351,10 +361,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (pixel.x >= 0 && pixel.x < i32(params.width) &&
                 pixel.y >= 0 && pixel.y < i32(params.height)) {
 
+                // Determine final color based on mode
+                var final_color: vec3<f32>;
+                if (params.color_mode == 0u) {
+                    final_color = color;
+                } else {
+                    // Sample from palette texture
+                    final_color = textureSampleLevel(palette_texture, palette_sampler, color_index, 0.0).rgb;
+                }
+
                 // Write to texture with small alpha for density accumulation
                 // Each hit contributes a small amount to density
                 // The accumulation pass will sum these up
-                textureStore(output_texture, pixel, vec4<f32>(color, 0.01));
+                textureStore(output_texture, pixel, vec4<f32>(final_color, 0.01));
             }
         }
     }

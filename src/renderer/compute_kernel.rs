@@ -1,6 +1,7 @@
 use wgpu::*;
 use crate::gpu::{buffers::*, pipelines::FlamePipelines};
 use crate::scene::transforms::Flame;
+use crate::scene::palette::{Palette, ColorMode};
 
 /// Manages fractal flame rendering via GPU compute shaders
 pub struct FlameRenderer {
@@ -12,18 +13,20 @@ pub struct FlameRenderer {
     width: u32,
     height: u32,
     samples_accumulated: u32,
+    color_mode: ColorMode,
 }
 
 impl FlameRenderer {
     pub fn new(
         device: &Device,
+        queue: &Queue,
         surface_format: TextureFormat,
         width: u32,
         height: u32,
         flame: &Flame,
     ) -> Self {
         let pipelines = FlamePipelines::new(device, surface_format);
-        let buffers = FlameBuffers::new(device, width, height, flame);
+        let buffers = FlameBuffers::new(device, queue, width, height, flame);
 
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
         let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
@@ -38,6 +41,7 @@ impl FlameRenderer {
             width,
             height,
             samples_accumulated: 0,
+            color_mode: ColorMode::Transform,
         }
     }
 
@@ -47,7 +51,7 @@ impl FlameRenderer {
         self.height = height;
 
         // Recreate buffers with new size
-        self.buffers = FlameBuffers::new(device, width, height, flame);
+        self.buffers = FlameBuffers::new(device, queue, width, height, flame);
 
         // Recreate bind groups
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
@@ -73,12 +77,12 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             seed: rand::random::<u32>(),
+            color_mode: self.color_mode as u32,
             splat_size: 1.0,
             zoom,
             pan_x,
             pan_y,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         self.buffers.update_params(queue, &params);
@@ -94,12 +98,12 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             seed: rand::random::<u32>(),
+            color_mode: self.color_mode as u32,
             splat_size: 1.0,
             zoom,
             pan_x,
             pan_y,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
         self.buffers.update_params(queue, &params);
 
@@ -193,12 +197,12 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             seed: rand::random::<u32>(),
+            color_mode: self.color_mode as u32,
             splat_size: 1.0,
             zoom,
             pan_x,
             pan_y,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         self.buffers.update_params(queue, &params);
@@ -229,12 +233,12 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             seed: rand::random::<u32>(),
+            color_mode: self.color_mode as u32,
             splat_size: 1.0,
             zoom,
             pan_x,
             pan_y,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -248,5 +252,38 @@ impl FlameRenderer {
             _pad0: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
+    }
+
+    /// Update palette texture
+    pub fn update_palette(&mut self, device: &Device, queue: &Queue, palette: &Palette) {
+        self.buffers.update_palette(queue, palette);
+        // Recreate compute bind group to ensure palette texture is bound
+        self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+    }
+
+    /// Set color mode
+    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32) {
+        self.color_mode = color_mode;
+        // Update params to reflect new color mode
+        let params = GpuParams {
+            num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
+            iterations_per_thread,
+            burn_in: 20,
+            width: self.width,
+            height: self.height,
+            seed: rand::random::<u32>(),
+            color_mode: self.color_mode as u32,
+            splat_size: 1.0,
+            zoom,
+            pan_x,
+            pan_y,
+            _pad0: 0.0,
+        };
+        self.buffers.update_params(queue, &params);
+    }
+
+    /// Get current color mode
+    pub fn color_mode(&self) -> ColorMode {
+        self.color_mode
     }
 }

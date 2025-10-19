@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fractal Flame Renderer - WASM</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #1a1a1a;
+            color: #fff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        h1 {
+            margin: 20px 0;
+            font-size: 2rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+        }
+
+        #canvas {
+            display: block;
+            touch-action: none;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 10;
+        }
+
+        #loading.hidden {
+            display: none;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            margin: 0 auto 20px;
+            border: 5px solid #333;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-size: 0.9rem;
+            max-width: 300px;
+        }
+
+        .info h3 {
+            margin-bottom: 5px;
+            color: #667eea;
+        }
+
+        .info ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .info li {
+            margin: 3px 0;
+        }
+
+        .info code {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container">
+        <canvas id="canvas"></canvas>
+
+        <div id="loading">
+            <div class="spinner"></div>
+            <p>Loading Fractal Flame Renderer...</p>
+        </div>
+
+        <div class="info">
+            <h3>Controls</h3>
+            <ul>
+                <li>🖱️ <strong>Drag</strong>: Pan view</li>
+                <li>🔍 <strong>Scroll</strong>: Zoom in/out</li>
+                <li>⌨️ <strong>Arrow keys</strong>: Pan</li>
+                <li>⌨️ <strong>+/-</strong>: Zoom</li>
+                <li>📊 Check the UI panels for settings</li>
+            </ul>
+        </div>
+    </div>
+
+    <script type="module">
+        import init from './pkg/fractal_flame_wgpu.js';
+
+        async function run() {
+            try {
+                // Initialize the WASM module
+                await init();
+
+                // Hide loading screen
+                document.getElementById('loading').classList.add('hidden');
+
+                console.log('Fractal Flame Renderer initialized successfully!');
+            } catch (error) {
+                console.error('Failed to initialize:', error);
+                document.getElementById('loading').innerHTML =
+                    '<h2 style="color: #f44;">Error Loading</h2>' +
+                    '<p>Failed to initialize WebGPU. Please ensure you are using a browser that supports WebGPU.</p>' +
+                    '<p style="margin-top: 10px; font-size: 0.85rem; color: #aaa;">' + error.message + '</p>';
+            }
+        }
+
+        run();
+    </script>
+</body>
+</html>

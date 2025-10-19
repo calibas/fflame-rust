@@ -1,4 +1,5 @@
-use std::time::{Duration, Instant};
+// Use web-time for WASM compatibility (provides Instant on all platforms)
+use web_time::{Duration, Instant};
 
 /// Performance metrics tracker
 pub struct PerformanceMetrics {
