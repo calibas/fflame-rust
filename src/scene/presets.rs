@@ -185,11 +185,9 @@ impl Default for PresetLibrary {
 
 impl PresetLibrary {
     pub fn new() -> Self {
-        let mut presets = vec![
-            Self::flame_to_config(create_simple_flame()),
-        ];
+        let mut presets = vec![];
 
-        // Load presets from assets folder
+        // Load presets from assets folder (desktop only)
         #[cfg(not(target_arch = "wasm32"))]
         {
             let assets_configs = super::assets::load_configs_from_dir(
@@ -198,10 +196,11 @@ impl PresetLibrary {
             presets.extend(assets_configs);
         }
 
-        // WASM: only use built-in presets (no file system access)
+        // WASM: use built-in presets (no file system access)
         #[cfg(target_arch = "wasm32")]
         {
             presets.extend(vec![
+                Self::flame_to_config(create_simple_flame()),
                 Self::flame_to_config(create_spherical_flame()),
                 Self::flame_to_config(create_spiral_flame()),
                 Self::flame_to_config(create_julia_flame()),
