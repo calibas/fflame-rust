@@ -8,6 +8,7 @@ use crate::scene::{presets, transforms::Flame};
 use crate::scene::palette::{PaletteLibrary, ColorMode};
 use crate::util::PerformanceMetrics;
 use crate::config::FractalConfig;
+use crate::undo::UndoHistory;
 
 pub struct App {
     gpu: GpuContext,
@@ -30,6 +31,8 @@ pub struct App {
     paused: bool,
     max_iterations: Option<u64>,
     speed_factor: f32,
+    undo_history: UndoHistory,
+    modifiers: winit::keyboard::ModifiersState,
 }
 
 impl App {
@@ -49,6 +52,19 @@ impl App {
         );
 
         let palette_library = PaletteLibrary::new();
+
+        // Create initial config for undo history
+        let initial_config = FractalConfig {
+            flame: flame.clone(),
+            zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+            rotation: 0.0,
+            density_scale: 1.0,
+            speed_factor: 0.5,
+            color_mode: ColorMode::Transform,
+            palette_index: 1,
+        };
 
         let mut app = Self {
             gpu,
@@ -71,6 +87,8 @@ impl App {
             paused: false,
             max_iterations: Some(1_000_000_000),
             speed_factor: 0.5,
+            undo_history: UndoHistory::new(initial_config),
+            modifiers: winit::keyboard::ModifiersState::default(),
         };
 
         #[allow(deprecated)]
@@ -103,6 +121,9 @@ impl App {
                         }
                         WindowEvent::MouseWheel { delta, .. } if !consumed => {
                             app.handle_mouse_wheel(delta);
+                        }
+                        WindowEvent::ModifiersChanged(new_modifiers) => {
+                            app.modifiers = new_modifiers.state();
                         }
                         WindowEvent::RedrawRequested => {
                             app.update();
@@ -148,6 +169,29 @@ impl App {
         // Only handle key press (not release)
         if !event.state.is_pressed() {
             return;
+        }
+
+        // Check for Ctrl/Cmd modifier
+        let ctrl_or_cmd = {
+            #[cfg(target_os = "macos")]
+            { self.modifiers.super_key() }
+            #[cfg(not(target_os = "macos"))]
+            { self.modifiers.control_key() }
+        };
+
+        // Handle undo/redo with logical key
+        use winit::keyboard::Key;
+        if ctrl_or_cmd {
+            if let Key::Character(ref c) = event.logical_key {
+                let c_lower = c.to_lowercase().to_string();
+                if c_lower == "z" {
+                    self.undo();
+                    return;
+                } else if c_lower == "y" {
+                    self.redo();
+                    return;
+                }
+            }
         }
 
         let pan_step = 0.1 / self.zoom;
@@ -322,6 +366,8 @@ impl App {
         }
 
         // Render UI on top and handle updates
+        let can_undo = self.can_undo();
+        let can_redo = self.can_redo();
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -344,6 +390,8 @@ impl App {
             &mut self.paused,
             &mut self.max_iterations,
             &mut self.speed_factor,
+            can_undo,
+            can_redo,
         );
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -399,6 +447,7 @@ impl App {
         if let Some(json) = ui_response.config_import_requested {
             match FractalConfig::from_json(&json) {
                 Ok(config) => {
+                    self.capture_state();
                     self.import_config(config);
                 }
                 Err(e) => {
@@ -434,6 +483,7 @@ impl App {
                 {
                     match FractalConfig::load_from_file(&path) {
                         Ok(config) => {
+                            self.capture_state();
                             self.import_config(config);
                             println!("Config loaded from: {}", path.display());
                         }
@@ -465,10 +515,25 @@ impl App {
             }
         }
 
+        // Handle undo/redo from UI buttons
+        if ui_response.undo_requested {
+            self.undo();
+        }
+        if ui_response.redo_requested {
+            self.redo();
+        }
+
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard;
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
             || view_changed || ui_response.density_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed;
+
+        // Capture state before applying meaningful changes
+        let should_capture = ui_response.flame_changed || view_changed || ui_response.palette_changed
+            || ui_response.color_mode_changed || ui_response.density_changed;
+        if should_capture {
+            self.capture_state();
+        }
 
         if needs_update {
             if let Some(ref mut renderer) = self.flame_renderer {
@@ -561,5 +626,35 @@ impl App {
                 self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
             self.gpu.queue.submit(std::iter::once(encoder.finish()));
         }
+    }
+
+    /// Capture current state to undo history before making a change
+    fn capture_state(&mut self) {
+        let config = self.export_config();
+        self.undo_history.push(config);
+    }
+
+    /// Undo to previous state
+    pub fn undo(&mut self) {
+        let config = self.undo_history.undo().cloned();
+        if let Some(config) = config {
+            self.import_config(config);
+        }
+    }
+
+    /// Redo to next state
+    pub fn redo(&mut self) {
+        let config = self.undo_history.redo().cloned();
+        if let Some(config) = config {
+            self.import_config(config);
+        }
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.undo_history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.undo_history.can_redo()
     }
 }
