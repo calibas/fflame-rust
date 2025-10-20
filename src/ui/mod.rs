@@ -37,6 +37,11 @@ pub struct UiResponse {
     pub background_color_changed: bool,
     pub png_export_with_background: bool,
     pub png_export_transparent: bool,
+    pub palette_export_json: Option<crate::scene::palette::Palette>,
+    pub palette_save_file: Option<crate::scene::palette::Palette>,
+    pub palette_import_json: Option<String>,
+    pub palette_load_file: bool,
+    pub palette_imported: Option<crate::scene::palette::Palette>,
 }
 
 pub struct EguiLayer {
@@ -52,6 +57,7 @@ pub struct EguiLayer {
 struct PaletteEditor {
     current_palette: crate::scene::palette::Palette,
     selected_stop_index: Option<usize>,
+    json_buffer: String,
 }
 
 impl EguiLayer {
@@ -70,6 +76,7 @@ impl EguiLayer {
             palette_editor: PaletteEditor {
                 current_palette: crate::scene::palette::Palette::fire(),
                 selected_stop_index: None,
+                json_buffer: String::new(),
             },
         }
     }
@@ -77,6 +84,10 @@ impl EguiLayer {
     pub fn handle_event(&mut self, event: &WindowEvent, window: &Window) -> bool {
         let response = self.state.on_window_event(window, event);
         response.consumed
+    }
+
+    pub fn update_palette_editor(&mut self, palette: crate::scene::palette::Palette) {
+        self.palette_editor.current_palette = palette;
     }
 
     pub fn render_ui(
@@ -127,6 +138,11 @@ impl EguiLayer {
         let mut background_color_changed = false;
         let mut png_export_with_background = false;
         let mut png_export_transparent = false;
+        // Palette import/export
+        let mut palette_export_json = None;
+        let mut palette_save_file = None;
+        let mut palette_import_json = None;
+        let mut palette_load_file = false;
 
 
         let full_output = self.ctx.run(raw_input, |ctx| {
@@ -583,6 +599,44 @@ impl EguiLayer {
 
                         ui.separator();
 
+                        // Import/Export section
+                        ui.collapsing("Import/Export Palette", |ui| {
+                            ui.horizontal(|ui| {
+                                if ui.button("📋 Export to Clipboard").clicked() {
+                                    palette_export_json = Some(self.palette_editor.current_palette.clone());
+                                }
+
+                                if ui.button("💾 Save as .palette").clicked() {
+                                    palette_save_file = Some(self.palette_editor.current_palette.clone());
+                                }
+                            });
+
+                            ui.separator();
+                            ui.label("Import from JSON:");
+
+                            egui::ScrollArea::vertical()
+                                .max_height(150.0)
+                                .show(ui, |ui| {
+                                    ui.text_edit_multiline(&mut self.palette_editor.json_buffer);
+                                });
+
+                            ui.horizontal(|ui| {
+                                if ui.button("✅ Import").clicked() && !self.palette_editor.json_buffer.is_empty() {
+                                    palette_import_json = Some(self.palette_editor.json_buffer.clone());
+                                }
+
+                                if ui.button("🗑 Clear").clicked() {
+                                    self.palette_editor.json_buffer.clear();
+                                }
+
+                                if ui.button("📂 Load .palette").clicked() {
+                                    palette_load_file = true;
+                                }
+                            });
+                        });
+
+                        ui.separator();
+
                         ui.horizontal(|ui| {
                             if ui.button("✅ Apply").clicked() {
                                 custom_palette = Some(self.palette_editor.current_palette.clone());
@@ -708,6 +762,11 @@ impl EguiLayer {
             background_color_changed,
             png_export_with_background,
             png_export_transparent,
+            palette_export_json,
+            palette_save_file,
+            palette_import_json,
+            palette_load_file,
+            palette_imported: None,
         }
     }
 }

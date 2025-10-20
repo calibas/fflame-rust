@@ -58,7 +58,8 @@ Implemented in [src/scene/palette.rs](src/scene/palette.rs)
 - ✅ CPU-side palette editor
 - ✅ Color stop system with gradient interpolation
 - ✅ Built-in palettes: Grayscale, Fire, Cool, Rainbow, Purple Pink
-- ➕ **Extra:** Full palette editor UI in [src/ui/mod.rs:483-597](src/ui/mod.rs#L483-L597)
+- ➕ **Extra:** Full palette editor UI in [src/ui/mod.rs:497-644](src/ui/mod.rs#L497-L644)
+- ➕ **Extra:** Palette import/export (JSON, .palette files) - Added 2025-10-20
 
 #### 4.3 Accumulation Buffer ✅
 Implemented in [src/gpu/buffers.rs](src/gpu/buffers.rs)
@@ -104,7 +105,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 **Implemented Panels:**
 - ✅ **Performance window** - FPS, frame time, resolution, sample count, iterations
 - ✅ **Transforms list** - Add/edit transforms, matrix editor, weight, variations, color
-- ✅ **Palette editor** - Gradient stops, color pickers, preview
+- ✅ **Palette editor** - Gradient stops, color pickers, preview, import/export
 - ✅ **Global params** - Iterations per thread, density scale, exposure
 - ✅ **View controls** - Zoom, pan, rotation with buttons and sliders
 - ✅ **Color settings** - Mode selector (Transform/Palette/Speed), palette library
@@ -112,6 +113,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 - ➕ **Max iterations limit** - Auto-stop at target
 - ➕ **Undo/Redo** - Full history system (Ctrl+Z, Ctrl+Y)
 - ➕ **Config import/export** - JSON clipboard or .flame files
+- ➕ **Palette import/export** - JSON clipboard or .palette files (Added 2025-10-20)
 - ➕ **PNG export** - Save with/without background
 
 **Viewport Interaction:**
@@ -176,7 +178,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 
 ### Architecture Changes
 1. **No RON, using JSON** - Serialization uses serde_json instead of RON
-2. **No assets directory** - Palettes and presets are code-based, not file-based
+2. **No assets directory** - Palettes and presets are code-based, not file-based (palette import/export added as first step)
 3. **Config system added** - Import/export for full fractal state (not in outline)
 4. **Undo/redo system** - 50-state history with keyboard shortcuts
 5. **Three-pass rendering** - Compute → Accumulate → Tonemap (outline mentioned reduce pass)
@@ -189,6 +191,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 - ✅ Pause/resume rendering
 - ✅ Max iterations limit with auto-stop
 - ✅ PNG export with transparency option
+- ✅ Palette import/export (.palette files, JSON) - Added 2025-10-20
 - ✅ Full WASM web build support
 - ✅ Performance metrics display
 - ✅ Keyboard shortcuts (arrows, +/-, Ctrl+Z/Y)
@@ -247,10 +250,10 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 | CPU Orchestration | ✅ 100% | Progressive rendering working |
 | UI Panels | ✅ 90% | Missing preset browser, randomize |
 | Viewport Interaction | ✅ 100% | Mouse + keyboard working |
-| Import/Export | ⚠️ 70% | Config ✅, PNG ✅, High-res ❌, EXR ❌ |
+| Import/Export | ✅ 75% | Config ✅, Palette ✅, PNG ✅, High-res ❌, EXR ❌ |
 | Testing | ⚠️ 40% | Unit tests ✅, Visual tests ❌ |
 | WASM Support | ✅ 100% | Fully working including PNG export |
-| **Overall** | **✅ 88%** | **Fully functional, missing advanced features** |
+| **Overall** | **✅ 89%** | **Fully functional, missing advanced features** |
 
 ---
 
@@ -260,14 +263,15 @@ These features were added beyond the original outline:
 
 1. **Undo/Redo System** ([src/undo.rs](src/undo.rs)) - 50-state history
 2. **Config Import/Export** ([src/config.rs](src/config.rs)) - Save/load .flame files
-3. **Speed-based Coloring** - Color by iteration velocity
-4. **Background Color Picker** - Custom background colors
-5. **Pause/Resume** - Control rendering without reset
-6. **Max Iterations Limit** - Auto-stop feature
-7. **PNG Export** - Save current frame
-8. **Color Speed** - Per-transform color blending factor
-9. **Rotation View Transform** - View-level rotation control
-10. **Performance Metrics** - FPS, frame time, sample counting
+3. **Palette Import/Export** ([src/ui/mod.rs](src/ui/mod.rs), [src/app.rs](src/app.rs)) - Save/load .palette files, JSON clipboard
+4. **Speed-based Coloring** - Color by iteration velocity
+5. **Background Color Picker** - Custom background colors
+6. **Pause/Resume** - Control rendering without reset
+7. **Max Iterations Limit** - Auto-stop feature
+8. **PNG Export** - Save current frame
+9. **Color Speed** - Per-transform color blending factor
+10. **Rotation View Transform** - View-level rotation control
+11. **Performance Metrics** - FPS, frame time, sample counting
 
 ---
 

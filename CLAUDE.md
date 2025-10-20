@@ -38,6 +38,7 @@ See @outline.md for original design goals
 - No UI for adding/removing transforms (can only edit existing)
 - No preset browser (presets are code-based)
 - No randomize button
+- Palettes can be imported/exported but not auto-loaded from assets folder yet
 
 ### Build Commands
 ```bash
@@ -88,9 +89,16 @@ cargo test
 5. Add to UI variation list in `src/ui/mod.rs`
 
 ### Adding a New Palette
+**Option 1: Code-based (built-in)**
 1. Add function in `src/scene/palette.rs` (follow `Palette::fire()` pattern)
 2. Add to `PaletteLibrary::new()` constructor
 3. Palette auto-appears in UI dropdown
+
+**Option 2: Import/Export (user palettes)**
+1. Use Palette Editor → Import/Export Palette section
+2. Export to clipboard or save as `.palette` file
+3. Import from JSON text or load `.palette` file
+4. Imported palettes automatically added to library
 
 ### Modifying Tone Mapping
 1. Edit `shaders/tonemap.wgsl`
@@ -113,10 +121,39 @@ Key dependencies:
 - **image** - PNG export
 - **bytemuck** - GPU data layout
 
+## File Formats
+
+### Palette Files (.palette)
+JSON format with name and color stops:
+```json
+{
+  "name": "My Palette",
+  "stops": [
+    {
+      "position": 0.0,
+      "color": [1.0, 0.0, 0.0]
+    },
+    {
+      "position": 0.5,
+      "color": [0.0, 1.0, 0.0]
+    },
+    {
+      "position": 1.0,
+      "color": [0.0, 0.0, 1.0]
+    }
+  ]
+}
+```
+- `position`: 0.0 to 1.0 (gradient stop position)
+- `color`: RGB array with values 0.0 to 1.0
+
+### Config Files (.flame)
+JSON format containing full fractal state (see [src/config.rs](src/config.rs))
+
 ## Known Issues
 - Julia variation uses CPU `rand::random()` which doesn't work on GPU (needs RNG passed in)
 - WASM PNG export uses `unsafe` lifetime extension (safe in practice, GPU resources live for program lifetime)
-- No error handling for invalid .flame file imports
+- No error handling for invalid .flame or .palette file imports
 - Background color changes don't trigger undo capture in all cases
 - Transparent PNG export reads from accumulation buffer (Rgba16Float) and applies tone mapping on CPU
   - This is necessary because tonemap shader blends RGB with background before alpha is applied
