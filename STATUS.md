@@ -33,10 +33,12 @@ This document compares the current implementation against [outline.md](outline.m
 - ➕ [src/config.rs](src/config.rs) - Configuration import/export
 - ➕ [src/undo.rs](src/undo.rs) - Undo/redo history system
 - ➕ [src/ui/panels.rs](src/ui/panels.rs) - Panel definitions (unused/empty)
+- ➕ [src/scene/assets.rs](src/scene/assets.rs) - Asset loading from filesystem (added 2025-10-20)
+- ➕ [assets/palettes/](assets/palettes/) - Palette files (fire.palette, cool.palette, rainbow.palette)
+- ➕ [assets/presets/](assets/presets/) - Preset FractalConfig files (.flame JSON)
+- ➕ [examples/export_presets.rs](examples/export_presets.rs) - Export built-in presets to files
 
 **Missing from outline:**
-- ❌ `assets/palettes/` - No separate palette files (built-in only)
-- ❌ `assets/presets/` - No saved preset files (code-based only)
 - ❌ `docs/design_notes.md` - No docs folder
 - ❌ `examples/headless_export.rs` - No headless export example
 - ❌ `io/export.rs` - Export is in renderer module
@@ -104,6 +106,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 
 **Implemented Panels:**
 - ✅ **Performance window** - FPS, frame time, resolution, sample count, iterations
+- ✅ **Preset selector** - Dropdown to load presets from assets/presets/ (Added 2025-10-20)
 - ✅ **Transforms list** - Add/edit transforms, matrix editor, weight, variations, color
 - ✅ **Palette editor** - Gradient stops, color pickers, preview, import/export
 - ✅ **Global params** - Iterations per thread, density scale, exposure
@@ -123,7 +126,6 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 - ✅ Keyboard +/- for zoom
 
 **Missing from outline:**
-- ❌ Preset browser UI (presets exist but no UI selector)
 - ❌ Randomize button with seeded generation
 - ❌ Async high-res export progress UI
 
@@ -192,6 +194,15 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 - ✅ Max iterations limit with auto-stop
 - ✅ PNG export with transparency option
 - ✅ Palette import/export (.palette files, JSON) - Added 2025-10-20
+- ✅ Preset system with assets folder - Added 2025-10-20
+  - Auto-load presets from assets/presets/
+  - UI dropdown selector with instant loading
+  - Full FractalConfig support (view, color, rendering settings)
+  - Export tool to generate preset files
+- ✅ Asset loading system - Added 2025-10-20
+  - Load palettes from assets/palettes/
+  - Load presets from assets/presets/
+  - Desktop-only (WASM uses built-in assets)
 - ✅ Full WASM web build support
 - ✅ Performance metrics display
 - ✅ Keyboard shortcuts (arrows, +/-, Ctrl+Z/Y)
@@ -208,9 +219,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 
 ### High Priority
 - [ ] **Tiled high-resolution export** - Only exports current viewport size
-- [ ] **Preset save/load UI** - Can only use code-based presets
 - [ ] **Randomize button** - No random flame generation
-- [ ] **Assets directory** - No external palette/preset files
 - [ ] **Async export progress** - Export blocks UI
 
 ### Medium Priority
@@ -318,6 +327,6 @@ Config/State
 
 ---
 
-**Last Updated:** 2025-10-19
+**Last Updated:** 2025-10-20
 **Project:** fflame-rust
 **Outline Version:** outline.md (original)
