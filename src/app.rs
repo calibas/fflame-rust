@@ -33,6 +33,7 @@ pub struct App {
     speed_factor: f32,
     undo_history: UndoHistory,
     modifiers: winit::keyboard::ModifiersState,
+    background_color: [f32; 3],
 }
 
 impl App {
@@ -64,6 +65,7 @@ impl App {
             speed_factor: 0.5,
             color_mode: ColorMode::Transform,
             palette_index: 1,
+            background_color: [0.0, 0.0, 0.0],
         };
 
         let mut app = Self {
@@ -89,6 +91,7 @@ impl App {
             speed_factor: 0.5,
             undo_history: UndoHistory::new(initial_config),
             modifiers: winit::keyboard::ModifiersState::default(),
+            background_color: [0.0, 0.0, 0.0], // Default to black
         };
 
         #[allow(deprecated)]
@@ -349,6 +352,10 @@ impl App {
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
+            // Ensure tonemap parameters are synced with current app state before rendering
+            renderer.update_density_scale(&self.gpu.queue, self.density_scale);
+            renderer.update_background_color(&self.gpu.queue, self.background_color);
+
             // Check if we should continue iterating
             let should_iterate = !self.paused &&
                 self.max_iterations.map_or(true, |max| renderer.total_iterations() < max);
@@ -368,6 +375,7 @@ impl App {
         // Render UI on top and handle updates
         let can_undo = self.can_undo();
         let can_redo = self.can_redo();
+
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -392,6 +400,7 @@ impl App {
             &mut self.speed_factor,
             can_undo,
             can_redo,
+            &mut self.background_color,
         );
 
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -526,11 +535,14 @@ impl App {
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard;
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
-            || view_changed || ui_response.density_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed;
+            || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed;
+
+        // Note: density_changed and background_color_changed don't need encoder updates,
+        // they're handled every frame before tonemap pass
 
         // Capture state before applying meaningful changes
         let should_capture = ui_response.flame_changed || view_changed || ui_response.palette_changed
-            || ui_response.color_mode_changed || ui_response.density_changed;
+            || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed;
         if should_capture {
             self.capture_state();
         }
@@ -549,9 +561,8 @@ impl App {
                     renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
                 }
 
-                if ui_response.density_changed {
-                    renderer.update_density_scale(&self.gpu.queue, self.density_scale);
-                }
+                // Note: density_scale and background_color are updated every frame before tonemap pass
+                // so we don't need to update them here
 
                 if ui_response.color_mode_changed {
                     renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
@@ -563,8 +574,9 @@ impl App {
                     }
                 }
 
-                // Reset accumulation when view changes, palette changes, color mode changes, or user requests it
-                if ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed {
+                // Reset accumulation when view changes, palette changes, color mode changes, background color changes, flame changes, or user requests it
+                if ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
+                    || ui_response.background_color_changed || ui_response.flame_changed {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
                 }
 
@@ -591,6 +603,7 @@ impl App {
             speed_factor: self.speed_factor,
             color_mode: self.color_mode,
             palette_index: self.current_palette_index,
+            background_color: self.background_color,
         }
     }
 
@@ -605,6 +618,7 @@ impl App {
         self.speed_factor = config.speed_factor;
         self.color_mode = config.color_mode;
         self.current_palette_index = config.palette_index;
+        self.background_color = config.background_color;
 
         // Update renderer with new flame and settings
         if let Some(ref mut renderer) = self.flame_renderer {
@@ -613,6 +627,7 @@ impl App {
             renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread,
                 self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
             renderer.update_density_scale(&self.gpu.queue, self.density_scale);
+            renderer.update_background_color(&self.gpu.queue, self.background_color);
 
             if let Some(palette) = self.palette_library.get(self.current_palette_index) {
                 renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);

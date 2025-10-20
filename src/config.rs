@@ -21,6 +21,7 @@ pub struct FractalConfig {
     /// Color settings
     pub color_mode: ColorMode,
     pub palette_index: usize,
+    pub background_color: [f32; 3],
 }
 
 impl FractalConfig {

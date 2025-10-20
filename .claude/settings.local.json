@@ -5,7 +5,9 @@
       "Bash(cargo test:*)",
       "Bash(cargo run:*)",
       "Bash(cargo check:*)",
-      "Bash(wasm-bindgen:*)"
+      "Bash(wasm-bindgen:*)",
+      "Bash(tasklist)",
+      "Bash(findstr:*)"
     ],
     "deny": [],
     "ask": []

@@ -15,6 +15,8 @@ pub struct FlameRenderer {
     samples_accumulated: u32,
     total_iterations: u64,
     color_mode: ColorMode,
+    density_scale: f32,
+    background_color: [f32; 3],
 }
 
 impl FlameRenderer {
@@ -44,6 +46,8 @@ impl FlameRenderer {
             samples_accumulated: 0,
             total_iterations: 0,
             color_mode: ColorMode::Transform,
+            density_scale: 1.0,
+            background_color: [0.0, 0.0, 0.0],
         }
     }
 
@@ -234,6 +238,8 @@ impl FlameRenderer {
             gamma,
             density_scale: 1.0,
             _pad0: 0.0,
+            background_color: [0.0, 0.0, 0.0],
+            _pad1: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -268,15 +274,29 @@ impl FlameRenderer {
         self.buffers.update_params(queue, &params);
     }
 
-    /// Update density scale for alpha blending
-    pub fn update_density_scale(&self, queue: &Queue, density_scale: f32) {
+    /// Helper method to update tonemap parameters with current state
+    fn update_tonemap_state(&self, queue: &Queue) {
         let params = TonemapParams {
             exposure: 1.0,
             gamma: 2.2,
-            density_scale,
+            density_scale: self.density_scale,
             _pad0: 0.0,
+            background_color: self.background_color,
+            _pad1: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
+    }
+
+    /// Update density scale for alpha blending
+    pub fn update_density_scale(&mut self, queue: &Queue, density_scale: f32) {
+        self.density_scale = density_scale;
+        self.update_tonemap_state(queue);
+    }
+
+    /// Update background color
+    pub fn update_background_color(&mut self, queue: &Queue, background_color: [f32; 3]) {
+        self.background_color = background_color;
+        self.update_tonemap_state(queue);
     }
 
     /// Update palette texture
