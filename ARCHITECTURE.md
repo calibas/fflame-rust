@@ -43,18 +43,25 @@ fractal_flame_wgpu/
 │       │                       - Transform struct (affine + variations)
 │       │                       - Point calculations (r, θ, φ)
 │       │                       - 16 Variation functions (CPU reference)
-│       │                       - Flame struct (transform collection)
+│       │                       - Flame struct (transform collection + name)
 │       │                       - CPU iteration reference
 │       │
-│       ├── presets.rs          Built-in flame presets
-│       │                       - create_simple_flame()
-│       │                       - More presets defined here
+│       ├── presets.rs          Preset system
+│       │                       - PresetLibrary (stores Vec<FractalConfig>)
+│       │                       - Built-in preset creation functions
+│       │                       - Auto-loads from assets/presets/ (desktop)
+│       │                       - flame_to_config() helper
+│       │
+│       ├── assets.rs           Asset loading (desktop only)
+│       │                       - load_palettes_from_dir()
+│       │                       - load_configs_from_dir()
+│       │                       - Filesystem-based asset discovery
 │       │
 │       └── palette.rs          Color system
 │                               - ColorMode enum (Transform/Palette/Speed)
 │                               - ColorStop gradient system
 │                               - Palette with interpolation
-│                               - PaletteLibrary (Fire, Cool, Rainbow, etc.)
+│                               - PaletteLibrary (auto-loads from assets/)
 │
 ├── GPU Layer
 │   └── gpu/
@@ -93,7 +100,10 @@ fractal_flame_wgpu/
 │                               - PNG capture (dual path):
 │                                 • Transparent: Read Rgba16Float accumulation buffer
 │                                 • Opaque: Render with tonemap shader
-│                               - Parameter updates
+│                               - Parameter updates:
+│                                 • update_flame() - individual flame updates
+│                                 • load_config() - atomic FractalConfig loading
+│                                 • reset() - clear accumulation only (no params)
 │
 ├── State Management
 │   ├── config.rs               FractalConfig

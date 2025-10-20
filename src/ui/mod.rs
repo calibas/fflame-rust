@@ -172,16 +172,6 @@ impl EguiLayer {
                         }
                     });
 
-                if preset_changed {
-                    println!("UI: preset_changed flag is TRUE");
-                }
-
-                // Debug: Manual load button
-                if ui.button("🔄 Load Selected Preset").clicked() {
-                    println!("UI: Manual load button clicked");
-                    preset_changed = true;
-                }
-
                 ui.separator();
 
                 ui.label(format!("FPS: {:.1}", metrics.fps()));

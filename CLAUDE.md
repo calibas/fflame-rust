@@ -3,6 +3,7 @@
 ## Overview
 See @STATUS.md for implementation status vs original design
 See @ARCHITECTURE.md for code organization and data flow
+See @CHANGELOG.md for recent changes and release notes
 See @outline.md for original design goals
 
 ## Quick Reference
@@ -36,9 +37,7 @@ See @outline.md for original design goals
 ### Current Limitations
 - PNG export only at current viewport resolution (no tiled high-res export)
 - No UI for adding/removing transforms (can only edit existing)
-- No preset browser (presets are code-based)
 - No randomize button
-- Palettes can be imported/exported but not auto-loaded from assets folder yet
 
 ### Build Commands
 ```bash
@@ -94,11 +93,33 @@ cargo test
 2. Add to `PaletteLibrary::new()` constructor
 3. Palette auto-appears in UI dropdown
 
-**Option 2: Import/Export (user palettes)**
+**Option 2: File-based (auto-loaded from assets/)**
+1. Create a `.palette` file in `assets/palettes/` directory
+2. File is auto-loaded on desktop builds (see `PaletteLibrary::new()`)
+3. WASM builds use built-in palettes only
+
+**Option 3: Import/Export (user palettes)**
 1. Use Palette Editor → Import/Export Palette section
 2. Export to clipboard or save as `.palette` file
 3. Import from JSON text or load `.palette` file
 4. Imported palettes automatically added to library
+
+### Adding a New Preset
+**Option 1: Code-based (built-in)**
+1. Add function in `src/scene/presets.rs` (follow existing patterns)
+2. Add to `PresetLibrary::new()` constructor (wrap in `flame_to_config()`)
+3. Preset auto-appears in UI dropdown
+
+**Option 2: File-based (auto-loaded from assets/)**
+1. Create a `.flame` file in `assets/presets/` directory (FractalConfig JSON)
+2. File is auto-loaded on desktop builds (see `PresetLibrary::new()`)
+3. WASM builds use built-in presets only
+4. Use `cargo run --example export_presets` to generate preset files from code
+
+**Option 3: Export current state as preset**
+1. Use Config Import/Export → Save Config
+2. Save as `.flame` file in `assets/presets/`
+3. Restart app to see it in preset dropdown (desktop only)
 
 ### Modifying Tone Mapping
 1. Edit `shaders/tonemap.wgsl`
@@ -149,6 +170,33 @@ JSON format with name and color stops:
 
 ### Config Files (.flame)
 JSON format containing full fractal state (see [src/config.rs](src/config.rs))
+
+## Important Implementation Notes
+
+### Preset System (Added 2025-10-20)
+The preset system stores **complete FractalConfig** (not just Flame):
+- Includes flame definition (transforms, variations, colors)
+- Includes view state (zoom, pan, rotation)
+- Includes rendering settings (density_scale, speed_factor)
+- Includes color settings (color_mode, palette_index, background_color)
+
+**Key Implementation Details:**
+1. **Transform Buffer Sizing** - Pre-allocated for `MAX_TRANSFORMS` (32) to support any preset
+2. **Zero Padding** - When writing N transforms, remaining slots are zeroed to prevent residual data
+3. **Atomic Loading** - `FlameRenderer::load_config()` ensures all GPU state is synchronized atomically
+4. **Reset Behavior** - `reset()` only clears accumulation buffers, never overwrites GPU params
+
+**Critical Bug Fixes (2025-10-20):**
+- Fixed buffer overrun when loading presets with more transforms than initial flame
+- Fixed residual transforms appearing when switching from larger to smaller preset
+- Fixed `reset()` overwriting `num_transforms` after it was correctly set
+- Fixed frame presentation timeout when switching presets multiple times
+
+### Asset Loading System (Added 2025-10-20)
+Desktop builds auto-load from filesystem:
+- `assets/palettes/*.palette` → PaletteLibrary
+- `assets/presets/*.flame` → PresetLibrary
+WASM builds use built-in assets only (no filesystem access)
 
 ## Known Issues
 - Julia variation uses CPU `rand::random()` which doesn't work on GPU (needs RNG passed in)

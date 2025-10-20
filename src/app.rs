@@ -849,7 +849,8 @@ impl App {
 
     /// Import configuration from FractalConfig
     pub fn import_config(&mut self, config: FractalConfig) {
-        self.flame = config.flame;
+        // Update app-level state
+        self.flame = config.flame.clone();
         self.zoom = config.zoom;
         self.pan_x = config.pan_x;
         self.pan_y = config.pan_y;
@@ -860,25 +861,16 @@ impl App {
         self.current_palette_index = config.palette_index;
         self.background_color = config.background_color;
 
-        // Update renderer with new flame and settings
+        // Use the comprehensive load_config function to ensure all GPU state is synchronized
         if let Some(ref mut renderer) = self.flame_renderer {
-            renderer.update_flame(&self.gpu.queue, &self.flame, self.iterations_per_thread,
-                self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
-            renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread,
-                self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
-            renderer.update_density_scale(&self.gpu.queue, self.density_scale);
-            renderer.update_background_color(&self.gpu.queue, self.background_color);
-
-            if let Some(palette) = self.palette_library.get(self.current_palette_index) {
-                renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
-            }
-
-            // Reset accumulation with new settings
             let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Config Import Encoder"),
             });
-            renderer.reset(&mut encoder, &self.gpu.queue, self.iterations_per_thread,
-                self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
+
+            if let Some(palette) = self.palette_library.get(self.current_palette_index) {
+                renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, self.iterations_per_thread);
+            }
+
             self.gpu.queue.submit(std::iter::once(encoder.finish()));
         }
     }

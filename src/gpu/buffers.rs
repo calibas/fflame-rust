@@ -3,6 +3,9 @@ use wgpu::util::DeviceExt;
 use crate::scene::transforms::{Transform, Flame};
 use crate::scene::palette::Palette;
 
+/// Maximum number of transforms supported (buffer is pre-allocated for this many)
+pub const MAX_TRANSFORMS: usize = 32;
+
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -128,19 +131,23 @@ pub struct FlameBuffers {
 
 impl FlameBuffers {
     pub fn new(device: &Device, queue: &Queue, width: u32, height: u32, flame: &Flame) -> Self {
-        // Convert transforms to GPU format
+        // Create transform storage buffer sized for MAX_TRANSFORMS
+        // This allows loading presets with different numbers of transforms without recreating the buffer
+        let buffer_size = (MAX_TRANSFORMS * std::mem::size_of::<GpuTransform>()) as u64;
+        let transform_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Transform Buffer"),
+            size: buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Upload initial transforms
         let gpu_transforms: Vec<GpuTransform> = flame
             .transforms
             .iter()
             .map(|xform| xform.into())
             .collect();
-
-        // Create transform storage buffer
-        let transform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("Transform Buffer"),
-            contents: bytemuck::cast_slice(&gpu_transforms),
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-        });
+        queue.write_buffer(&transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
 
         // Create params uniform buffer
         let params = GpuParams {
@@ -380,11 +387,23 @@ impl FlameBuffers {
 
     /// Update transforms
     pub fn update_transforms(&self, queue: &Queue, flame: &Flame) {
-        let gpu_transforms: Vec<GpuTransform> = flame
+        if flame.transforms.len() > MAX_TRANSFORMS {
+            panic!("Flame has {} transforms but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
+        }
+
+        // Create a fixed-size array with all transforms, padding with zeroes
+        let mut gpu_transforms: Vec<GpuTransform> = flame
             .transforms
             .iter()
             .map(|xform| xform.into())
             .collect();
+
+        // Pad with zeroed transforms to fill the buffer
+        // This ensures old transforms don't remain in GPU memory when switching to fewer transforms
+        while gpu_transforms.len() < MAX_TRANSFORMS {
+            gpu_transforms.push(bytemuck::Zeroable::zeroed());
+        }
+
         queue.write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
     }
 

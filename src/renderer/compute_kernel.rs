@@ -2,6 +2,7 @@ use wgpu::*;
 use crate::gpu::{buffers::*, pipelines::FlamePipelines};
 use crate::scene::transforms::Flame;
 use crate::scene::palette::{Palette, ColorMode};
+use crate::config::FractalConfig;
 
 /// Manages fractal flame rendering via GPU compute shaders
 pub struct FlameRenderer {
@@ -69,33 +70,15 @@ impl FlameRenderer {
     }
 
     /// Reset accumulation buffer and sample count
-    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
+    pub fn reset(&mut self, encoder: &mut CommandEncoder, _queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _speed_factor: f32) {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
 
         // Clear accumulation buffers
         self.buffers.clear_all(encoder);
 
-        // Update seed to generate different random samples
-        let params = GpuParams {
-            num_transforms: 2, // Will be updated when flame changes
-            iterations_per_thread,
-            burn_in: 20,
-            width: self.width,
-            height: self.height,
-            seed: rand::random::<u32>(),
-            color_mode: self.color_mode as u32,
-            splat_size: 1.0,
-            zoom,
-            pan_x,
-            pan_y,
-            rotation,
-            speed_factor,
-            _pad1: 0.0,
-            _pad2: 0.0,
-        };
-
-        self.buffers.update_params(queue, &params);
+        // Note: We don't update params here because update_flame() already set them correctly.
+        // Updating params here would overwrite num_transforms which was just set by update_flame().
     }
 
     /// Run compute pass to generate flame samples
@@ -202,6 +185,48 @@ impl FlameRenderer {
         render_pass.draw(0..3, 0..1); // Fullscreen triangle
 
         drop(render_pass);
+    }
+
+    /// Load a complete FractalConfig (preset or imported config)
+    /// This ensures all GPU state is properly synchronized
+    pub fn load_config(&mut self, _device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32) {
+        // 1. Update transforms in GPU buffer
+        self.buffers.update_transforms(queue, &config.flame);
+
+        // 2. Update color mode
+        self.color_mode = config.color_mode;
+
+        // 3. Update density and background
+        self.density_scale = config.density_scale;
+        self.background_color = config.background_color;
+
+        // 4. Update palette
+        self.buffers.update_palette(queue, palette);
+
+        // 5. Update ALL GPU params with correct num_transforms
+        let params = GpuParams {
+            num_transforms: config.flame.transforms.len() as u32,
+            iterations_per_thread,
+            burn_in: 20,
+            width: self.width,
+            height: self.height,
+            seed: rand::random::<u32>(),
+            color_mode: config.color_mode as u32,
+            splat_size: 1.0,
+            zoom: config.zoom,
+            pan_x: config.pan_x,
+            pan_y: config.pan_y,
+            rotation: config.rotation,
+            speed_factor: config.speed_factor,
+            _pad1: 0.0,
+            _pad2: 0.0,
+        };
+        self.buffers.update_params(queue, &params);
+
+        // 6. Clear accumulation buffers
+        self.buffers.clear_all(encoder);
+        self.samples_accumulated = 0;
+        self.total_iterations = 0;
     }
 
     /// Update the flame being rendered
