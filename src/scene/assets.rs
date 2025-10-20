@@ -1,5 +1,5 @@
 use super::palette::Palette;
-use super::transforms::Flame;
+use crate::config::FractalConfig;
 use std::path::Path;
 
 /// Load all palettes from a directory
@@ -46,13 +46,13 @@ pub fn load_palette(path: &Path) -> Result<Palette, Box<dyn std::error::Error>> 
     Ok(palette)
 }
 
-/// Load all flame presets from a directory
-pub fn load_presets_from_dir(dir: &Path) -> Vec<Flame> {
-    let mut flames = Vec::new();
+/// Load all fractal config presets from a directory
+pub fn load_configs_from_dir(dir: &Path) -> Vec<FractalConfig> {
+    let mut configs = Vec::new();
 
     if !dir.exists() {
         log::warn!("Presets directory does not exist: {}", dir.display());
-        return flames;
+        return configs;
     }
 
     match std::fs::read_dir(dir) {
@@ -60,10 +60,10 @@ pub fn load_presets_from_dir(dir: &Path) -> Vec<Flame> {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|s| s.to_str()) == Some("flame") {
-                    match load_preset(&path) {
-                        Ok(flame) => {
-                            log::info!("Loaded preset: {} from {}", flame.name, path.display());
-                            flames.push(flame);
+                    match load_config(&path) {
+                        Ok(config) => {
+                            log::info!("Loaded preset: {} from {}", config.flame.name, path.display());
+                            configs.push(config);
                         }
                         Err(e) => {
                             log::error!("Failed to load preset from {}: {}", path.display(), e);
@@ -77,17 +77,17 @@ pub fn load_presets_from_dir(dir: &Path) -> Vec<Flame> {
         }
     }
 
-    // Sort by name for consistent ordering
-    flames.sort_by(|a, b| a.name.cmp(&b.name));
+    // Sort by flame name for consistent ordering
+    configs.sort_by(|a, b| a.flame.name.cmp(&b.flame.name));
 
-    flames
+    configs
 }
 
-/// Load a single flame preset from a file
-pub fn load_preset(path: &Path) -> Result<Flame, Box<dyn std::error::Error>> {
+/// Load a single fractal config preset from a file
+pub fn load_config(path: &Path) -> Result<FractalConfig, Box<dyn std::error::Error>> {
     let json = std::fs::read_to_string(path)?;
-    let flame = serde_json::from_str(&json)?;
-    Ok(flame)
+    let config = serde_json::from_str(&json)?;
+    Ok(config)
 }
 
 #[cfg(test)]
@@ -105,7 +105,7 @@ mod tests {
     #[test]
     fn test_load_presets() {
         // This test will only pass if assets/presets exists
-        let presets = load_presets_from_dir(Path::new("assets/presets"));
+        let presets = load_configs_from_dir(Path::new("assets/presets"));
         // Should have at least the default presets
         assert!(presets.is_empty() || !presets.is_empty()); // Always passes, just exercising the code
     }

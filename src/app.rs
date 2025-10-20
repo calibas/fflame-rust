@@ -44,9 +44,10 @@ impl App {
         let gpu = GpuContext::new(&window).await.expect("GPU init failed");
         let egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
-        // Load preset library and use first preset as initial flame
+        // Load preset library and use first preset
         let preset_library = PresetLibrary::new();
-        let flame = preset_library.get(0).cloned().unwrap_or_default();
+        let initial_preset = preset_library.get(0).map(|p| p.flame.clone()).unwrap_or_default();
+        let flame = initial_preset;
 
         let flame_renderer = FlameRenderer::new(
             &gpu.device,
@@ -401,6 +402,8 @@ impl App {
             &mut self.density_scale,
             &self.palette_library,
             &mut self.current_palette_index,
+            &self.preset_library,
+            &mut self.current_preset_index,
             &mut self.color_mode,
             &mut self.paused,
             &mut self.max_iterations,
@@ -757,14 +760,33 @@ impl App {
         // Note: density_changed and background_color_changed don't need encoder updates,
         // they're handled every frame before tonemap pass
 
-        // Capture state before applying meaningful changes
-        let should_capture = ui_response.flame_changed || view_changed || ui_response.palette_changed
-            || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed;
-        if should_capture {
-            self.capture_state();
+        // Handle preset change BEFORE other updates (requires mutable self)
+        let preset_loaded = if ui_response.preset_changed {
+            if let Some(preset) = self.preset_library.get(self.current_preset_index).cloned() {
+                println!("Loading preset: {} (index {})", preset.flame.name, self.current_preset_index);
+                println!("  Transforms: {}", preset.flame.transforms.len());
+                self.import_config(preset);
+                // import_config calls capture_state internally and resets accumulation
+                // Skip normal update logic since import_config handled everything
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        // Only do normal updates if we didn't load a preset
+        if !preset_loaded {
+            // Capture state before applying meaningful changes
+            let should_capture = ui_response.flame_changed || view_changed || ui_response.palette_changed
+                || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed;
+            if should_capture {
+                self.capture_state();
+            }
         }
 
-        if needs_update {
+        if needs_update && !preset_loaded {
             if let Some(ref mut renderer) = self.flame_renderer {
                 let mut update_encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Update Encoder"),
@@ -792,6 +814,7 @@ impl App {
                 }
 
                 // Reset accumulation when view changes, palette changes, color mode changes, background color changes, flame changes, or user requests it
+                // Note: preset_changed is handled separately above with import_config() which also resets
                 if ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
                     || ui_response.background_color_changed || ui_response.flame_changed {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);

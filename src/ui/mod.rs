@@ -110,6 +110,8 @@ impl EguiLayer {
         density_scale: &mut f32,
         palette_library: &crate::scene::palette::PaletteLibrary,
         current_palette_index: &mut usize,
+        preset_library: &crate::scene::presets::PresetLibrary,
+        current_preset_index: &mut usize,
         color_mode: &mut crate::scene::palette::ColorMode,
         paused: &mut bool,
         max_iterations: &mut Option<u64>,
@@ -128,6 +130,7 @@ impl EguiLayer {
         let mut palette_changed = false;
         let mut color_mode_changed = false;
         let mut pause_changed = false;
+        let mut preset_changed = false;
         // Config import/export window
         let mut config_export_json = None;
         let mut config_import_json = None;
@@ -150,6 +153,35 @@ impl EguiLayer {
             // Performance window
             egui::Window::new("Performance").show(ctx, |ui| {
                 ui.heading("Fractal Flame Renderer");
+                ui.separator();
+
+                // Preset selector
+                let presets = preset_library.presets();
+                let current_preset_name = presets.get(*current_preset_index)
+                    .map(|p| p.flame.name.as_str())
+                    .unwrap_or("Unknown");
+
+                egui::ComboBox::from_label("Preset")
+                    .selected_text(current_preset_name)
+                    .show_ui(ui, |ui| {
+                        for (idx, preset) in presets.iter().enumerate() {
+                            if ui.selectable_value(current_preset_index, idx, &preset.flame.name).changed() {
+                                println!("UI: Preset changed to {} ({})", preset.flame.name, idx);
+                                preset_changed = true;
+                            }
+                        }
+                    });
+
+                if preset_changed {
+                    println!("UI: preset_changed flag is TRUE");
+                }
+
+                // Debug: Manual load button
+                if ui.button("🔄 Load Selected Preset").clicked() {
+                    println!("UI: Manual load button clicked");
+                    preset_changed = true;
+                }
+
                 ui.separator();
 
                 ui.label(format!("FPS: {:.1}", metrics.fps()));
@@ -768,7 +800,7 @@ impl EguiLayer {
             palette_import_json,
             palette_load_file,
             palette_imported: None,
-            preset_changed: false,
+            preset_changed,
         }
     }
 }
