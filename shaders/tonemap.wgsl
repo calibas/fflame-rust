@@ -11,6 +11,8 @@ struct TonemapParams {
     gamma: f32,
     density_scale: f32,
     _pad0: f32,
+    background_color: vec3<f32>,
+    _pad1: f32,
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -58,5 +60,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Higher density = more opaque, lower density = more transparent
     let alpha = clamp(density * tonemap_params.density_scale, 0.0, 1.0);
 
-    return vec4<f32>(color, alpha);
+    // Blend with background color based on alpha
+    let final_color = mix(tonemap_params.background_color, color, alpha);
+
+    return vec4<f32>(final_color, 1.0);
 }

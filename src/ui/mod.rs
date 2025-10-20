@@ -34,6 +34,7 @@ pub struct UiResponse {
     pub custom_palette: Option<crate::scene::palette::Palette>,
     pub undo_requested: bool,
     pub redo_requested: bool,
+    pub background_color_changed: bool,
 }
 
 pub struct EguiLayer {
@@ -101,6 +102,7 @@ impl EguiLayer {
         speed_factor: &mut f32,
         can_undo: bool,
         can_redo: bool,
+        background_color: &mut [f32; 3],
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -120,6 +122,7 @@ impl EguiLayer {
         let mut custom_palette = None;
         let mut undo_requested = false;
         let mut redo_requested = false;
+        let mut background_color_changed = false;
 
 
         let full_output = self.ctx.run(raw_input, |ctx| {
@@ -221,6 +224,13 @@ impl EguiLayer {
                 }
                 if ui.add(egui::Slider::new(density_scale, 0.01..=10.0).text("Density Scale")).changed() {
                     density_changed = true;
+                }
+
+                // Background color picker
+                ui.separator();
+                ui.label("Background Color");
+                if ui.color_edit_button_rgb(background_color).changed() {
+                    background_color_changed = true;
                 }
 
                 // Color settings
@@ -679,6 +689,7 @@ impl EguiLayer {
             custom_palette,
             undo_requested,
             redo_requested,
+            background_color_changed,
         }
     }
 }

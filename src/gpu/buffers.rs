@@ -72,6 +72,8 @@ pub struct TonemapParams {
     pub gamma: f32,
     pub density_scale: f32, // Controls how density maps to alpha
     pub _pad0: f32,
+    pub background_color: [f32; 3],
+    pub _pad1: f32,
 }
 
 impl Default for TonemapParams {
@@ -81,6 +83,8 @@ impl Default for TonemapParams {
             gamma: 2.2,
             density_scale: 1.0,
             _pad0: 0.0,
+            background_color: [0.0, 0.0, 0.0],
+            _pad1: 0.0,
         }
     }
 }
