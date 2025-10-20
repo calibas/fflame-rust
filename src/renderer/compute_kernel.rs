@@ -337,6 +337,17 @@ impl FlameRenderer {
 
     /// Capture raw RGBA pixel data from the current frame
     /// Returns (width, height, rgba_bytes) where rgba_bytes is in standard RGBA format
+    ///
+    /// # Implementation Note
+    /// Uses two different paths based on transparency requirement:
+    /// - **Transparent**: Reads Rgba16Float accumulation buffer and applies CPU tone mapping
+    ///   to preserve true alpha values (density × density_scale)
+    /// - **Opaque**: Renders via tonemap shader which blends with background color
+    ///
+    /// Why? The tonemap shader performs `mix(background_color, fractal_color, alpha)` which
+    /// blends RGB channels with the background before outputting. Even though it outputs
+    /// the alpha channel, the RGB values are already pre-multiplied/blended, making the
+    /// alpha useless for compositing. For transparency, we must read raw accumulation data.
     pub async fn capture_pixels(&self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<(u32, u32, Vec<u8>), String> {
         if transparent {
             // For transparent export, read directly from accumulation buffer
@@ -349,7 +360,14 @@ impl FlameRenderer {
     }
 
     /// Capture pixels from accumulation buffer (for transparent PNG export)
-    /// This preserves true alpha values by reading raw accumulation data
+    ///
+    /// This preserves true alpha values by reading raw Rgba16Float accumulation data
+    /// and applying tone mapping on the CPU. The accumulation buffer stores:
+    /// - RGB: averaged fractal colors (no background blending)
+    /// - A: accumulated density (sum across all frames)
+    ///
+    /// We apply the same tone mapping as the GPU shader (exposure → log → gamma)
+    /// but calculate alpha directly from density without any background blending.
     async fn capture_from_accumulation_buffer(&self, device: &Device, queue: &Queue) -> Result<(u32, u32, Vec<u8>), String> {
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Accumulation Capture Encoder"),

@@ -270,7 +270,10 @@ Implemented in `ui/mod.rs` using egui (floating windows):
 **Current Implementation:**
 - ✅ PNG export at current viewport resolution (implemented in `compute_kernel.rs`)
 - ✅ GPU readback via buffer mapping with async await
-- ✅ Transparent background option (preserves alpha channel)
+- ✅ Transparent background option with proper alpha preservation
+  - **Transparent export**: Reads from Rgba16Float accumulation buffer, applies CPU tone mapping
+  - **Opaque export**: Renders with tonemap shader, reads from Rgba8 render target
+  - Necessary because tonemap shader blends RGB with background before outputting
 - ✅ Automatic BGRA ↔ RGBA conversion for format compatibility
 - ✅ Vertical flip (GPU textures are upside down)
 - ✅ Desktop: blocking export with file dialog

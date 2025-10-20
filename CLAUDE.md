@@ -118,3 +118,6 @@ Key dependencies:
 - WASM PNG export uses `unsafe` lifetime extension (safe in practice, GPU resources live for program lifetime)
 - No error handling for invalid .flame file imports
 - Background color changes don't trigger undo capture in all cases
+- Transparent PNG export reads from accumulation buffer (Rgba16Float) and applies tone mapping on CPU
+  - This is necessary because tonemap shader blends RGB with background before alpha is applied
+  - Accumulation buffer stores raw fractal colors with separate density channel

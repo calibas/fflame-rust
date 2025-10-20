@@ -128,8 +128,11 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 ### Export & High-Resolution Rendering (Section 8) ⚠️
 
 **Implemented:**
-- ✅ PNG export at current resolution ([src/renderer/compute_kernel.rs:338-513](src/renderer/compute_kernel.rs#L338-L513))
-- ✅ Transparent background option
+- ✅ PNG export at current resolution ([src/renderer/compute_kernel.rs:338-543](src/renderer/compute_kernel.rs#L338-L543))
+- ✅ Transparent background option with proper alpha preservation
+  - Transparent export reads directly from accumulation buffer (Rgba16Float)
+  - CPU-side tone mapping preserves true alpha values (density × density_scale)
+  - Opaque export uses standard tonemap shader path
 - ✅ GPU readback via buffer mapping
 - ✅ Desktop: Full PNG export with file dialog (uses `pollster::block_on`)
 - ✅ WASM: Full PNG export with async file dialog (uses `wasm_bindgen_futures::spawn_local` with `unsafe` lifetime extension)

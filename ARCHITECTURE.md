@@ -90,7 +90,9 @@ fractal_flame_wgpu/
 │                                 2. accumulate_pass() - blend samples
 │                                 3. tonemap_pass() - display
 │                               - Tracks samples/iterations
-│                               - PNG capture
+│                               - PNG capture (dual path):
+│                                 • Transparent: Read Rgba16Float accumulation buffer
+│                                 • Opaque: Render with tonemap shader
 │                               - Parameter updates
 │
 ├── State Management
@@ -431,8 +433,24 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 ### Configuration Path
 1. [config.rs:29-36](config.rs#L29-L36) - Serialize to JSON
 2. [app.rs:630-644](app.rs#L630-L644) - Export config
-3. [app.rs:647-680](app.rs#L647-L680) - Import config
+3. [app.rs:647-680](app.rs#L647-680) - Import config
 4. [undo.rs:19-31](undo.rs#L19-L31) - Push to undo stack
+
+### PNG Export Path
+**Transparent Export** (preserves alpha):
+1. [compute_kernel.rs:351-453](src/renderer/compute_kernel.rs#L351-L453) - `capture_from_accumulation_buffer()`
+2. Copy Rgba16Float accumulation buffer → CPU buffer
+3. CPU reads f16 values, applies tone mapping (log + gamma)
+4. Calculate alpha = density × density_scale
+5. Convert to Rgba8 → PNG encoder
+
+**Opaque Export** (background blended):
+1. [compute_kernel.rs:455-543](src/renderer/compute_kernel.rs#L455-L543) - `capture_from_tonemap_render()`
+2. Render via tonemap_pass() → temp Rgba8 texture
+3. Copy texture → CPU buffer
+4. PNG encoder
+
+**Why dual paths?** The tonemap shader mixes RGB with background_color before outputting, so even though it outputs alpha, the RGB channels are already blended. For transparency, we need the raw accumulation buffer colors.
 
 ---
 
