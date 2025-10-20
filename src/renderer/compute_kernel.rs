@@ -334,4 +334,139 @@ impl FlameRenderer {
     pub fn color_mode(&self) -> ColorMode {
         self.color_mode
     }
+
+    /// Capture the current rendered frame as PNG data
+    /// If transparent is true, renders without background blending (alpha channel preserved)
+    pub async fn capture_png(&self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<Vec<u8>, String> {
+        // Create a temporary texture to render to (use same format as surface)
+        let texture_desc = TextureDescriptor {
+            label: Some("Screenshot Texture"),
+            size: Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: surface_format,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        };
+        let texture = device.create_texture(&texture_desc);
+        let view = texture.create_view(&TextureViewDescriptor::default());
+
+        // Temporarily modify tonemap params if transparent export
+        let original_bg = self.background_color;
+        if transparent {
+            // Set background to black and we'll preserve alpha
+            let params = TonemapParams {
+                exposure: 1.0,
+                gamma: 2.2,
+                density_scale: self.density_scale,
+                _pad0: 0.0,
+                background_color: [0.0, 0.0, 0.0],
+                _pad1: 0.0,
+            };
+            self.buffers.update_tonemap_params(queue, &params);
+        }
+
+        // Render to the texture
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Screenshot Encoder"),
+        });
+        self.tonemap_pass(&mut encoder, &view);
+
+        // Create buffer to copy texture data to
+        let buffer_size = (self.width * self.height * 4) as u64;
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Screenshot Buffer"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Copy texture to buffer
+        encoder.copy_texture_to_buffer(
+            ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            ImageCopyBuffer {
+                buffer: &buffer,
+                layout: ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.width * 4),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(Some(encoder.finish()));
+
+        // Restore original background color if it was changed
+        if transparent {
+            let params = TonemapParams {
+                exposure: 1.0,
+                gamma: 2.2,
+                density_scale: self.density_scale,
+                _pad0: 0.0,
+                background_color: original_bg,
+                _pad1: 0.0,
+            };
+            self.buffers.update_tonemap_params(queue, &params);
+        }
+
+        // Map buffer and read data
+        let buffer_slice = buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        device.poll(Maintain::Wait);
+
+        rx.await.map_err(|_| "Failed to map buffer".to_string())?
+            .map_err(|e| format!("Buffer map error: {:?}", e))?;
+
+        let data = buffer_slice.get_mapped_range();
+        let rgba_data: Vec<u8> = data.to_vec();
+        drop(data);
+        buffer.unmap();
+
+        // Convert BGRA to RGBA if needed
+        let rgba_data = if surface_format == TextureFormat::Bgra8UnormSrgb || surface_format == TextureFormat::Bgra8Unorm {
+            // Swap B and R channels
+            rgba_data.chunks_exact(4)
+                .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]])
+                .collect()
+        } else {
+            rgba_data
+        };
+
+        // Encode as PNG
+        let mut png_data = Vec::new();
+        {
+            use image::{ImageBuffer, Rgba};
+            let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
+                self.width,
+                self.height,
+                rgba_data,
+            ).ok_or("Failed to create image buffer")?;
+
+            // Flip vertically (GPU textures are upside down)
+            let img = image::imageops::flip_vertical(&img);
+
+            img.write_to(&mut std::io::Cursor::new(&mut png_data), image::ImageFormat::Png)
+                .map_err(|e| format!("Failed to encode PNG: {}", e))?;
+        }
+
+        Ok(png_data)
+    }
 }

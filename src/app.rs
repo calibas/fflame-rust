@@ -532,6 +532,42 @@ impl App {
             self.redo();
         }
 
+        // Handle PNG export
+        if ui_response.png_export_with_background || ui_response.png_export_transparent {
+            let transparent = ui_response.png_export_transparent;
+
+            if let Some(ref renderer) = self.flame_renderer {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    // Desktop: use blocking task
+                    match pollster::block_on(renderer.capture_png(&self.gpu.device, &self.gpu.queue, transparent, self.gpu.config.format)) {
+                        Ok(png_data) => {
+                            // Open file dialog
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("PNG Image", &["png"])
+                                .set_file_name("fractal.png")
+                                .save_file()
+                            {
+                                if let Err(e) = std::fs::write(&path, png_data) {
+                                    eprintln!("Failed to save PNG: {}", e);
+                                } else {
+                                    println!("PNG saved to: {}", path.display());
+                                }
+                            }
+                        }
+                        Err(e) => eprintln!("Failed to capture PNG: {}", e),
+                    }
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // WASM: For now, just show a message
+                    // Full async implementation would require restructuring
+                    log::warn!("PNG export on WASM not yet implemented");
+                }
+            }
+        }
+
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard;
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed

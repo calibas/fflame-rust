@@ -60,8 +60,18 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Higher density = more opaque, lower density = more transparent
     let alpha = clamp(density * tonemap_params.density_scale, 0.0, 1.0);
 
-    // Blend with background color based on alpha
-    let final_color = mix(tonemap_params.background_color, color, alpha);
+    // Check if background is black (transparent export mode)
+    let bg_sum = tonemap_params.background_color.r + tonemap_params.background_color.g + tonemap_params.background_color.b;
+    let is_transparent_mode = bg_sum < 0.001;
 
-    return vec4<f32>(final_color, 1.0);
+    // In transparent mode, output fractal color with alpha
+    // In normal mode, blend with background and output opaque
+    let final_color = select(
+        mix(tonemap_params.background_color, color, alpha),  // Normal mode: blend with background
+        color,                                                 // Transparent mode: just the color
+        is_transparent_mode
+    );
+    let output_alpha = select(1.0, alpha, is_transparent_mode);
+
+    return vec4<f32>(final_color, output_alpha);
 }
