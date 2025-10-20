@@ -5,6 +5,7 @@ mod util;
 mod scene;
 mod renderer;
 mod config;
+mod undo;
 
 use app::App;
 use winit::dpi::PhysicalSize;

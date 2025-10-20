@@ -32,6 +32,8 @@ pub struct UiResponse {
     pub config_save_file_requested: bool,
     pub config_load_file_requested: bool,
     pub custom_palette: Option<crate::scene::palette::Palette>,
+    pub undo_requested: bool,
+    pub redo_requested: bool,
 }
 
 pub struct EguiLayer {
@@ -97,6 +99,8 @@ impl EguiLayer {
         paused: &mut bool,
         max_iterations: &mut Option<u64>,
         speed_factor: &mut f32,
+        can_undo: bool,
+        can_redo: bool,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -114,6 +118,8 @@ impl EguiLayer {
         let mut config_save_file = false;
         let mut config_load_file = false;
         let mut custom_palette = None;
+        let mut undo_requested = false;
+        let mut redo_requested = false;
 
 
         let full_output = self.ctx.run(raw_input, |ctx| {
@@ -137,6 +143,21 @@ impl EguiLayer {
                 if ui.button("⚙ Import/Export Config").clicked() {
                     self.show_config_window = !self.show_config_window;
                 }
+
+                // Undo/Redo buttons
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(can_undo, |ui| {
+                        if ui.button("⮪ Undo (Ctrl+Z)").clicked() {
+                            undo_requested = true;
+                        }
+                    });
+                    ui.add_enabled_ui(can_redo, |ui| {
+                        if ui.button("⮬ Redo (Ctrl+Y)").clicked() {
+                            redo_requested = true;
+                        }
+                    });
+                });
 
                 // Accumulation controls
                 if let Some(renderer) = &flame_renderer {
@@ -656,6 +677,8 @@ impl EguiLayer {
             config_save_file_requested: config_save_file,
             config_load_file_requested: config_load_file,
             custom_palette,
+            undo_requested,
+            redo_requested,
         }
     }
 }
