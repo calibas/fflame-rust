@@ -283,10 +283,21 @@ pub fn apply_transform(transform: &Transform, p: Point) -> Point {
 }
 
 /// Flame system - collection of transforms
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flame {
+    pub name: String,
     pub transforms: Vec<Transform>,
     pub final_transform: Option<Transform>,
+}
+
+impl Default for Flame {
+    fn default() -> Self {
+        Self {
+            name: "Untitled".to_string(),
+            transforms: Vec::new(),
+            final_transform: None,
+        }
+    }
 }
 
 impl Flame {

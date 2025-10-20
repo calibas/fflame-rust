@@ -4,6 +4,7 @@ use super::transforms::{Flame, Transform, VariationType};
 #[allow(dead_code)]
 pub fn create_simple_flame() -> Flame {
     let mut flame = Flame::new();
+    flame.name = "Simple".to_string();
 
     // Transform 1: mostly linear with slight sinusoidal
     let mut xform1 = Transform::new();
@@ -35,6 +36,7 @@ pub fn create_simple_flame() -> Flame {
 #[allow(dead_code)]
 pub fn create_spherical_flame() -> Flame {
     let mut flame = Flame::new();
+    flame.name = "Spherical".to_string();
 
     let mut xform1 = Transform::new();
     xform1.a = 0.9;
@@ -61,6 +63,7 @@ pub fn create_spherical_flame() -> Flame {
 #[allow(dead_code)]
 pub fn create_spiral_flame() -> Flame {
     let mut flame = Flame::new();
+    flame.name = "Spiral".to_string();
 
     let mut xform1 = Transform::new();
     xform1.a = 0.7;
@@ -89,6 +92,7 @@ pub fn create_spiral_flame() -> Flame {
 #[allow(dead_code)]
 pub fn create_julia_flame() -> Flame {
     let mut flame = Flame::new();
+    flame.name = "Julia".to_string();
 
     let mut xform1 = Transform::new();
     xform1.a = 0.8;
@@ -105,6 +109,7 @@ pub fn create_julia_flame() -> Flame {
 #[allow(dead_code)]
 pub fn create_complex_flame() -> Flame {
     let mut flame = Flame::new();
+    flame.name = "Complex".to_string();
 
     // Transform 1: Linear base
     let mut xform1 = Transform::new();
@@ -163,4 +168,61 @@ pub fn get_all_presets() -> Vec<(&'static str, Flame)> {
         ("Julia", create_julia_flame()),
         ("Complex", create_complex_flame()),
     ]
+}
+
+/// Collection of available flame presets
+pub struct PresetLibrary {
+    presets: Vec<Flame>,
+}
+
+impl Default for PresetLibrary {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PresetLibrary {
+    pub fn new() -> Self {
+        let mut presets = vec![
+            create_simple_flame(),
+        ];
+
+        // Load presets from assets folder
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let assets_presets = super::assets::load_presets_from_dir(
+                std::path::Path::new("assets/presets")
+            );
+            presets.extend(assets_presets);
+        }
+
+        // WASM: only use built-in presets (no file system access)
+        #[cfg(target_arch = "wasm32")]
+        {
+            presets.extend(vec![
+                create_spherical_flame(),
+                create_spiral_flame(),
+                create_julia_flame(),
+                create_complex_flame(),
+            ]);
+        }
+
+        Self { presets }
+    }
+
+    pub fn presets(&self) -> &[Flame] {
+        &self.presets
+    }
+
+    pub fn get(&self, index: usize) -> Option<&Flame> {
+        self.presets.get(index)
+    }
+
+    pub fn len(&self) -> usize {
+        self.presets.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.presets.is_empty()
+    }
 }
