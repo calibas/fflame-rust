@@ -24,6 +24,7 @@ rfd = "0.15"
 
 # Optional
 image = "0.25"
+futures = "0.3"
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]

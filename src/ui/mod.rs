@@ -35,6 +35,8 @@ pub struct UiResponse {
     pub undo_requested: bool,
     pub redo_requested: bool,
     pub background_color_changed: bool,
+    pub png_export_with_background: bool,
+    pub png_export_transparent: bool,
 }
 
 pub struct EguiLayer {
@@ -123,6 +125,8 @@ impl EguiLayer {
         let mut undo_requested = false;
         let mut redo_requested = false;
         let mut background_color_changed = false;
+        let mut png_export_with_background = false;
+        let mut png_export_transparent = false;
 
 
         let full_output = self.ctx.run(raw_input, |ctx| {
@@ -160,6 +164,18 @@ impl EguiLayer {
                             redo_requested = true;
                         }
                     });
+                });
+
+                // PNG export buttons
+                ui.separator();
+                ui.label("Export Image");
+                ui.horizontal(|ui| {
+                    if ui.button("💾 Save PNG (with BG)").clicked() {
+                        png_export_with_background = true;
+                    }
+                    if ui.button("💾 Save PNG (transparent)").clicked() {
+                        png_export_transparent = true;
+                    }
                 });
 
                 // Accumulation controls
@@ -690,6 +706,8 @@ impl EguiLayer {
             undo_requested,
             redo_requested,
             background_color_changed,
+            png_export_with_background,
+            png_export_transparent,
         }
     }
 }
