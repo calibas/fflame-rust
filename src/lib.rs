@@ -4,7 +4,7 @@ mod ui;
 mod util;
 pub mod scene;
 mod renderer;
-mod config;
+pub mod config;
 mod undo;
 
 use app::App;

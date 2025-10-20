@@ -1,4 +1,6 @@
 use super::transforms::{Flame, Transform, VariationType};
+use super::palette::ColorMode;
+use crate::config::FractalConfig;
 
 /// Create a simple two-transform flame with linear and sinusoidal variations
 #[allow(dead_code)]
@@ -170,9 +172,9 @@ pub fn get_all_presets() -> Vec<(&'static str, Flame)> {
     ]
 }
 
-/// Collection of available flame presets
+/// Collection of available fractal presets
 pub struct PresetLibrary {
-    presets: Vec<Flame>,
+    presets: Vec<FractalConfig>,
 }
 
 impl Default for PresetLibrary {
@@ -184,37 +186,53 @@ impl Default for PresetLibrary {
 impl PresetLibrary {
     pub fn new() -> Self {
         let mut presets = vec![
-            create_simple_flame(),
+            Self::flame_to_config(create_simple_flame()),
         ];
 
         // Load presets from assets folder
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let assets_presets = super::assets::load_presets_from_dir(
+            let assets_configs = super::assets::load_configs_from_dir(
                 std::path::Path::new("assets/presets")
             );
-            presets.extend(assets_presets);
+            presets.extend(assets_configs);
         }
 
         // WASM: only use built-in presets (no file system access)
         #[cfg(target_arch = "wasm32")]
         {
             presets.extend(vec![
-                create_spherical_flame(),
-                create_spiral_flame(),
-                create_julia_flame(),
-                create_complex_flame(),
+                Self::flame_to_config(create_spherical_flame()),
+                Self::flame_to_config(create_spiral_flame()),
+                Self::flame_to_config(create_julia_flame()),
+                Self::flame_to_config(create_complex_flame()),
             ]);
         }
 
         Self { presets }
     }
 
-    pub fn presets(&self) -> &[Flame] {
+    /// Helper to convert old Flame to FractalConfig with sensible defaults
+    fn flame_to_config(flame: Flame) -> FractalConfig {
+        FractalConfig {
+            flame,
+            zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+            rotation: 0.0,
+            density_scale: 1.0,
+            speed_factor: 0.5,
+            color_mode: ColorMode::Transform,
+            palette_index: 1,
+            background_color: [0.0, 0.0, 0.0],
+        }
+    }
+
+    pub fn presets(&self) -> &[FractalConfig] {
         &self.presets
     }
 
-    pub fn get(&self, index: usize) -> Option<&Flame> {
+    pub fn get(&self, index: usize) -> Option<&FractalConfig> {
         self.presets.get(index)
     }
 
