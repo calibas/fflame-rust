@@ -335,9 +335,9 @@ impl FlameRenderer {
         self.color_mode
     }
 
-    /// Capture the current rendered frame as PNG data
-    /// If transparent is true, renders without background blending (alpha channel preserved)
-    pub async fn capture_png(&self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<Vec<u8>, String> {
+    /// Capture raw RGBA pixel data from the current frame
+    /// Returns (width, height, rgba_bytes) where rgba_bytes is in standard RGBA format
+    pub async fn capture_pixels(&self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<(u32, u32, Vec<u8>), String> {
         // Create a temporary texture to render to (use same format as surface)
         let texture_desc = TextureDescriptor {
             label: Some("Screenshot Texture"),
@@ -450,23 +450,37 @@ impl FlameRenderer {
             rgba_data
         };
 
-        // Encode as PNG
-        let mut png_data = Vec::new();
-        {
-            use image::{ImageBuffer, Rgba};
-            let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
-                self.width,
-                self.height,
-                rgba_data,
-            ).ok_or("Failed to create image buffer")?;
-
-            // Flip vertically (GPU textures are upside down)
-            let img = image::imageops::flip_vertical(&img);
-
-            img.write_to(&mut std::io::Cursor::new(&mut png_data), image::ImageFormat::Png)
-                .map_err(|e| format!("Failed to encode PNG: {}", e))?;
-        }
-
-        Ok(png_data)
+        // Return raw pixel data (width, height, rgba_bytes)
+        Ok((self.width, self.height, rgba_data))
     }
+
+    /// Capture the current rendered frame as PNG data (convenience wrapper)
+    /// If transparent is true, renders without background blending (alpha channel preserved)
+    pub async fn capture_png(&self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<Vec<u8>, String> {
+        let (width, height, rgba_data) = self.capture_pixels(device, queue, transparent, surface_format).await?;
+
+        // Encode as PNG
+        encode_png_from_rgba(width, height, rgba_data)
+    }
+}
+
+/// Standalone function to encode RGBA pixel data as PNG
+/// This doesn't borrow anything and can be moved into async contexts
+pub fn encode_png_from_rgba(width: u32, height: u32, rgba_data: Vec<u8>) -> Result<Vec<u8>, String> {
+    use image::{ImageBuffer, Rgba};
+
+    let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(
+        width,
+        height,
+        rgba_data,
+    ).ok_or("Failed to create image buffer")?;
+
+    // Flip vertically (GPU textures are upside down)
+    let img = image::imageops::flip_vertical(&img);
+
+    let mut png_data = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png_data), image::ImageFormat::Png)
+        .map_err(|e| format!("Failed to encode PNG: {}", e))?;
+
+    Ok(png_data)
 }

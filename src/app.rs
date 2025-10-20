@@ -536,34 +536,80 @@ impl App {
         if ui_response.png_export_with_background || ui_response.png_export_transparent {
             let transparent = ui_response.png_export_transparent;
 
-            if let Some(ref renderer) = self.flame_renderer {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    // Desktop: use blocking task
-                    match pollster::block_on(renderer.capture_png(&self.gpu.device, &self.gpu.queue, transparent, self.gpu.config.format)) {
-                        Ok(png_data) => {
-                            // Open file dialog
-                            if let Some(path) = rfd::FileDialog::new()
-                                .add_filter("PNG Image", &["png"])
-                                .set_file_name("fractal.png")
-                                .save_file()
-                            {
-                                if let Err(e) = std::fs::write(&path, png_data) {
-                                    eprintln!("Failed to save PNG: {}", e);
-                                } else {
-                                    println!("PNG saved to: {}", path.display());
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Desktop: use blocking task for both capture and save
+                if let Some(ref renderer) = self.flame_renderer {
+                    let pixels_future = renderer.capture_pixels(&self.gpu.device, &self.gpu.queue, transparent, self.gpu.config.format);
+
+                    match pollster::block_on(pixels_future) {
+                        Ok((width, height, rgba_data)) => {
+                            // Encode PNG
+                            match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data) {
+                                Ok(png_data) => {
+                                    // Open file dialog
+                                    if let Some(path) = rfd::FileDialog::new()
+                                        .add_filter("PNG Image", &["png"])
+                                        .set_file_name("fractal.png")
+                                        .save_file()
+                                    {
+                                        if let Err(e) = std::fs::write(&path, png_data) {
+                                            eprintln!("Failed to save PNG: {}", e);
+                                        } else {
+                                            println!("PNG saved to: {}", path.display());
+                                        }
+                                    }
                                 }
+                                Err(e) => eprintln!("Failed to encode PNG: {}", e),
                             }
                         }
-                        Err(e) => eprintln!("Failed to capture PNG: {}", e),
+                        Err(e) => eprintln!("Failed to capture pixels: {}", e),
                     }
                 }
+            }
 
-                #[cfg(target_arch = "wasm32")]
-                {
-                    // WASM: For now, just show a message
-                    // Full async implementation would require restructuring
-                    log::warn!("PNG export on WASM not yet implemented");
+            #[cfg(target_arch = "wasm32")]
+            {
+                // WASM: Use unsafe lifetime extension
+                // SAFETY: The Device, Queue, and FlameRenderer live in App which persists
+                // for the entire program lifetime. The GPU resources won't be dropped
+                // until the app exits, so extending their lifetime to 'static is safe.
+                use wasm_bindgen_futures::spawn_local;
+
+                if let Some(ref renderer) = self.flame_renderer {
+                    let device: &'static wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
+                    let queue: &'static wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
+                    let renderer: &'static crate::renderer::compute_kernel::FlameRenderer =
+                        unsafe { std::mem::transmute(renderer) };
+                    let format = self.gpu.config.format;
+
+                    spawn_local(async move {
+                        // Await pixel capture
+                        match renderer.capture_pixels(device, queue, transparent, format).await {
+                            Ok((width, height, rgba_data)) => {
+                                // Encode PNG (owned data, no borrowing)
+                                match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data) {
+                                    Ok(png_data) => {
+                                        // Open file dialog and save
+                                        if let Some(file_handle) = rfd::AsyncFileDialog::new()
+                                            .add_filter("PNG Image", &["png"])
+                                            .set_file_name("fractal.png")
+                                            .save_file()
+                                            .await
+                                        {
+                                            if let Err(e) = file_handle.write(&png_data).await {
+                                                log::error!("Failed to save PNG: {:?}", e);
+                                            } else {
+                                                log::info!("PNG saved successfully!");
+                                            }
+                                        }
+                                    }
+                                    Err(e) => log::error!("Failed to encode PNG: {}", e),
+                                }
+                            }
+                            Err(e) => log::error!("Failed to capture pixels: {}", e),
+                        }
+                    });
                 }
             }
         }

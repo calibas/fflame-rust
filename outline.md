@@ -3,7 +3,7 @@
 **Purpose:**
 A project-scoped architecture document describing the design, file layout, data formats, pipeline, and development milestones for a GPU-accelerated fractal-flame renderer implemented in **Rust** using **wgpu** (WebGPU). The target is an interactive desktop application with optional WebAssembly (browser) demo.
 
-**Status:** ~85% complete, fully functional. See [STATUS.md](STATUS.md) for detailed comparison.
+**Status:** ~88% complete, fully functional. See [STATUS.md](STATUS.md) for detailed comparison.
 
 **Key Implementation Decisions:**
 - ✅ Using **ping-pong accumulation** (not atomics) for better performance and compatibility
@@ -274,7 +274,7 @@ Implemented in `ui/mod.rs` using egui (floating windows):
 - ✅ Automatic BGRA ↔ RGBA conversion for format compatibility
 - ✅ Vertical flip (GPU textures are upside down)
 - ✅ Desktop: blocking export with file dialog
-- ❌ WASM: PNG export not async-compatible yet
+- ✅ WASM: async export with `spawn_local` and `unsafe` lifetime extension
 
 **Not Implemented (from outline):**
 - ❌ Tiled high-resolution rendering (would allow 4K+ exports)
@@ -304,7 +304,7 @@ Implemented in `ui/mod.rs` using egui (floating windows):
 - ✅ Windows (DX12/Vulkan) - fully working
 - ✅ macOS (Metal) - fully working
 - ✅ Linux (Vulkan) - fully working
-- ✅ WASM (WebGPU/WebGL2) - 95% working (PNG export pending)
+- ✅ WASM (WebGPU/WebGL2) - 100% working (including PNG export)
 
 ---
 
@@ -357,9 +357,9 @@ Implemented in `ui/mod.rs` using egui (floating windows):
 3. ✅ **Minimal GPU point plot:** Compute shader generates samples, writes to temp texture
 4. ✅ **Accumulation pass:** Ping-pong accumulation with progressive refinement
 5. ✅ **UI integration:** Full transforms UI, palette editor, color modes, view controls
-6. ⚠️ **Export:** PNG export at viewport resolution (tiled high-res pending)
+6. ✅ **Export:** PNG export at viewport resolution (desktop + WASM, tiled high-res pending)
 7. ⚠️ **Performance tuning:** Fast on modern GPUs, no systematic profiling done
-8. ✅ **Cross-platform:** Works on Windows, macOS, Linux, WASM (95%)
+8. ✅ **Cross-platform:** Works on Windows, macOS, Linux, WASM (100%)
 
 **Added Beyond Original Milestones:**
 - ✅ Undo/redo system with 50-state history

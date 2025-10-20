@@ -30,7 +30,7 @@ See @outline.md for original design goals
 - Using **ping-pong accumulation** (not atomic) for better performance
 - Using **JSON** for serialization (not RON as in outline)
 - **Undo/redo** system with 50-state history
-- **WASM support** for web builds (95% complete)
+- **Full WASM support** for web builds (100% complete including PNG export)
 - All GPU params use **std140 layout** for cross-platform compatibility
 
 ### Current Limitations
@@ -38,7 +38,6 @@ See @outline.md for original design goals
 - No UI for adding/removing transforms (can only edit existing)
 - No preset browser (presets are code-based)
 - No randomize button
-- WASM PNG export not implemented
 
 ### Build Commands
 ```bash
@@ -116,6 +115,6 @@ Key dependencies:
 
 ## Known Issues
 - Julia variation uses CPU `rand::random()` which doesn't work on GPU (needs RNG passed in)
-- WASM PNG export not async-compatible yet
+- WASM PNG export uses `unsafe` lifetime extension (safe in practice, GPU resources live for program lifetime)
 - No error handling for invalid .flame file imports
 - Background color changes don't trigger undo capture in all cases
