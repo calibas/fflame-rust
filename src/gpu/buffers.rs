@@ -201,7 +201,7 @@ impl FlameBuffers {
                 sample_count: 1,
                 dimension: TextureDimension::D2,
                 format: TextureFormat::Rgba16Float,
-                usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let view = texture.create_view(&TextureViewDescriptor::default());
@@ -328,6 +328,15 @@ impl FlameBuffers {
             &self.accumulation_view_a
         } else {
             &self.accumulation_view_b
+        }
+    }
+
+    /// Get the current accumulation texture (for copy operations)
+    pub fn current_accumulation_texture(&self) -> &Texture {
+        if self.current_is_a {
+            &self.accumulation_texture_a
+        } else {
+            &self.accumulation_texture_b
         }
     }
 

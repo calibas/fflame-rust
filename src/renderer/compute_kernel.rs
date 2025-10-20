@@ -338,6 +338,122 @@ impl FlameRenderer {
     /// Capture raw RGBA pixel data from the current frame
     /// Returns (width, height, rgba_bytes) where rgba_bytes is in standard RGBA format
     pub async fn capture_pixels(&self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<(u32, u32, Vec<u8>), String> {
+        if transparent {
+            // For transparent export, read directly from accumulation buffer
+            // and apply tone mapping on CPU to preserve true alpha values
+            self.capture_from_accumulation_buffer(device, queue).await
+        } else {
+            // For opaque export, use the normal tonemapped render path
+            self.capture_from_tonemap_render(device, queue, surface_format).await
+        }
+    }
+
+    /// Capture pixels from accumulation buffer (for transparent PNG export)
+    /// This preserves true alpha values by reading raw accumulation data
+    async fn capture_from_accumulation_buffer(&self, device: &Device, queue: &Queue) -> Result<(u32, u32, Vec<u8>), String> {
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Accumulation Capture Encoder"),
+        });
+
+        // Create buffer to copy accumulation texture data (Rgba16Float format)
+        let bytes_per_pixel = 8; // Rgba16Float = 4 channels × 2 bytes each
+        let buffer_size = (self.width * self.height * bytes_per_pixel) as u64;
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Accumulation Capture Buffer"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Copy accumulation texture to buffer
+        encoder.copy_texture_to_buffer(
+            ImageCopyTexture {
+                texture: self.buffers.current_accumulation_texture(),
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            ImageCopyBuffer {
+                buffer: &buffer,
+                layout: ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.width * bytes_per_pixel),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(Some(encoder.finish()));
+
+        // Map buffer and read Rgba16Float data
+        let buffer_slice = buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        device.poll(Maintain::Wait);
+
+        rx.await.map_err(|_| "Failed to map buffer".to_string())?
+            .map_err(|e| format!("Buffer map error: {:?}", e))?;
+
+        let data = buffer_slice.get_mapped_range();
+
+        // Convert Rgba16Float to Rgba8 with CPU tone mapping
+        let mut rgba_data = Vec::with_capacity((self.width * self.height * 4) as usize);
+
+        for chunk in data.chunks_exact(8) {
+            // Read f16 values and convert to f32
+            let r = half::f16::from_le_bytes([chunk[0], chunk[1]]).to_f32();
+            let g = half::f16::from_le_bytes([chunk[2], chunk[3]]).to_f32();
+            let b = half::f16::from_le_bytes([chunk[4], chunk[5]]).to_f32();
+            let density = half::f16::from_le_bytes([chunk[6], chunk[7]]).to_f32();
+
+            // Apply same tone mapping as shader (exposure + log + gamma)
+            let exposure = 1.0f32;
+            let gamma = 2.2f32;
+
+            let mut color_r = r * exposure;
+            let mut color_g = g * exposure;
+            let mut color_b = b * exposure;
+
+            // Log tone mapping
+            color_r = (color_r + 1.0).log10();
+            color_g = (color_g + 1.0).log10();
+            color_b = (color_b + 1.0).log10();
+
+            // Gamma correction
+            color_r = color_r.powf(1.0 / gamma);
+            color_g = color_g.powf(1.0 / gamma);
+            color_b = color_b.powf(1.0 / gamma);
+
+            // Clamp to [0, 1]
+            color_r = color_r.clamp(0.0, 1.0);
+            color_g = color_g.clamp(0.0, 1.0);
+            color_b = color_b.clamp(0.0, 1.0);
+
+            // Calculate alpha from density (same as shader)
+            let alpha = (density * self.density_scale).clamp(0.0, 1.0);
+
+            // Convert to u8
+            rgba_data.push((color_r * 255.0) as u8);
+            rgba_data.push((color_g * 255.0) as u8);
+            rgba_data.push((color_b * 255.0) as u8);
+            rgba_data.push((alpha * 255.0) as u8);
+        }
+
+        drop(data);
+        buffer.unmap();
+
+        Ok((self.width, self.height, rgba_data))
+    }
+
+    /// Capture pixels from tonemapped render (for opaque PNG export)
+    async fn capture_from_tonemap_render(&self, device: &Device, queue: &Queue, surface_format: TextureFormat) -> Result<(u32, u32, Vec<u8>), String> {
         // Create a temporary texture to render to (use same format as surface)
         let texture_desc = TextureDescriptor {
             label: Some("Screenshot Texture"),
@@ -355,21 +471,6 @@ impl FlameRenderer {
         };
         let texture = device.create_texture(&texture_desc);
         let view = texture.create_view(&TextureViewDescriptor::default());
-
-        // Temporarily modify tonemap params if transparent export
-        let original_bg = self.background_color;
-        if transparent {
-            // Set background to black and we'll preserve alpha
-            let params = TonemapParams {
-                exposure: 1.0,
-                gamma: 2.2,
-                density_scale: self.density_scale,
-                _pad0: 0.0,
-                background_color: [0.0, 0.0, 0.0],
-                _pad1: 0.0,
-            };
-            self.buffers.update_tonemap_params(queue, &params);
-        }
 
         // Render to the texture
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
@@ -410,19 +511,6 @@ impl FlameRenderer {
         );
 
         queue.submit(Some(encoder.finish()));
-
-        // Restore original background color if it was changed
-        if transparent {
-            let params = TonemapParams {
-                exposure: 1.0,
-                gamma: 2.2,
-                density_scale: self.density_scale,
-                _pad0: 0.0,
-                background_color: original_bg,
-                _pad1: 0.0,
-            };
-            self.buffers.update_tonemap_params(queue, &params);
-        }
 
         // Map buffer and read data
         let buffer_slice = buffer.slice(..);
