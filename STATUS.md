@@ -128,9 +128,11 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 ### Export & High-Resolution Rendering (Section 8) ⚠️
 
 **Implemented:**
-- ✅ PNG export at current resolution ([src/renderer/compute_kernel.rs:340-471](src/renderer/compute_kernel.rs#L340-L471))
+- ✅ PNG export at current resolution ([src/renderer/compute_kernel.rs:338-513](src/renderer/compute_kernel.rs#L338-L513))
 - ✅ Transparent background option
 - ✅ GPU readback via buffer mapping
+- ✅ Desktop: Full PNG export with file dialog (uses `pollster::block_on`)
+- ✅ WASM: Full PNG export with async file dialog (uses `wasm_bindgen_futures::spawn_local` with `unsafe` lifetime extension)
 
 **Missing:**
 - ❌ Tiled rendering for high-resolution export
@@ -224,9 +226,9 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 ### Known Limitations
 - No GPU feature fallbacks (assumes modern GPU)
 - No multi-resolution progressive rendering
-- WASM PNG export not implemented (desktop only)
 - No per-pixel sample count tracking
 - No adaptive sampling or denoising
+- WASM PNG export uses `unsafe` lifetime extension (safe in practice as GPU resources live for program lifetime)
 
 ---
 
@@ -242,10 +244,10 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 | CPU Orchestration | ✅ 100% | Progressive rendering working |
 | UI Panels | ✅ 90% | Missing preset browser, randomize |
 | Viewport Interaction | ✅ 100% | Mouse + keyboard working |
-| Import/Export | ⚠️ 60% | Config ✅, High-res ❌, EXR ❌ |
+| Import/Export | ⚠️ 70% | Config ✅, PNG ✅, High-res ❌, EXR ❌ |
 | Testing | ⚠️ 40% | Unit tests ✅, Visual tests ❌ |
-| WASM Support | ✅ 95% | Working except PNG export |
-| **Overall** | **✅ 85%** | **Fully functional, missing advanced features** |
+| WASM Support | ✅ 100% | Fully working including PNG export |
+| **Overall** | **✅ 88%** | **Fully functional, missing advanced features** |
 
 ---
 
