@@ -250,15 +250,31 @@ impl Default for PaletteLibrary {
 
 impl PaletteLibrary {
     pub fn new() -> Self {
-        Self {
-            palettes: vec![
-                Palette::grayscale(),
+        let mut palettes = vec![
+            Palette::grayscale(),
+        ];
+
+        // Load palettes from assets folder
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let assets_palettes = super::assets::load_palettes_from_dir(
+                std::path::Path::new("assets/palettes")
+            );
+            palettes.extend(assets_palettes);
+        }
+
+        // WASM: only use built-in palettes (no file system access)
+        #[cfg(target_arch = "wasm32")]
+        {
+            palettes.extend(vec![
                 Palette::fire(),
                 Palette::cool(),
                 Palette::rainbow(),
                 Palette::purple_pink(),
-            ],
+            ]);
         }
+
+        Self { palettes }
     }
 
     pub fn palettes(&self) -> &[Palette] {

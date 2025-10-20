@@ -4,8 +4,9 @@ use wgpu::SurfaceError;
 use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
 use crate::renderer::FlameRenderer;
-use crate::scene::{presets, transforms::Flame};
+use crate::scene::transforms::Flame;
 use crate::scene::palette::{PaletteLibrary, ColorMode};
+use crate::scene::presets::PresetLibrary;
 use crate::util::PerformanceMetrics;
 use crate::config::FractalConfig;
 use crate::undo::UndoHistory;
@@ -27,6 +28,8 @@ pub struct App {
     metrics: PerformanceMetrics,
     palette_library: PaletteLibrary,
     current_palette_index: usize,
+    preset_library: PresetLibrary,
+    current_preset_index: usize,
     color_mode: ColorMode,
     paused: bool,
     max_iterations: Option<u64>,
@@ -41,8 +44,10 @@ impl App {
         let gpu = GpuContext::new(&window).await.expect("GPU init failed");
         let egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
-        // Create initial flame (use simple preset)
-        let flame = presets::create_simple_flame();
+        // Load preset library and use first preset as initial flame
+        let preset_library = PresetLibrary::new();
+        let flame = preset_library.get(0).cloned().unwrap_or_default();
+
         let flame_renderer = FlameRenderer::new(
             &gpu.device,
             &gpu.queue,
@@ -85,6 +90,8 @@ impl App {
             metrics: PerformanceMetrics::new(),
             palette_library,
             current_palette_index: 1, // Start with Fire palette
+            preset_library,
+            current_preset_index: 0, // Start with first preset
             color_mode: ColorMode::Transform,
             paused: false,
             max_iterations: Some(1_000_000_000),

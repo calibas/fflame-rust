@@ -2,7 +2,7 @@ mod app;
 mod gpu;
 mod ui;
 mod util;
-mod scene;
+pub mod scene;
 mod renderer;
 mod config;
 mod undo;

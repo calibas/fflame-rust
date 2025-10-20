@@ -42,6 +42,7 @@ pub struct UiResponse {
     pub palette_import_json: Option<String>,
     pub palette_load_file: bool,
     pub palette_imported: Option<crate::scene::palette::Palette>,
+    pub preset_changed: bool,
 }
 
 pub struct EguiLayer {
@@ -767,6 +768,7 @@ impl EguiLayer {
             palette_import_json,
             palette_load_file,
             palette_imported: None,
+            preset_changed: false,
         }
     }
 }
