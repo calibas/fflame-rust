@@ -524,6 +524,134 @@ impl App {
             }
         }
 
+        // Handle palette export to clipboard
+        if let Some(palette) = ui_response.palette_export_json {
+            if let Ok(json) = serde_json::to_string_pretty(&palette) {
+                self.egui_layer.ctx.copy_text(json);
+            }
+        }
+
+        // Handle palette save to file
+        if let Some(palette) = ui_response.palette_save_file {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Desktop: synchronous file dialog
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Palette", &["palette"])
+                    .set_file_name("palette.palette")
+                    .save_file()
+                {
+                    if let Ok(json) = serde_json::to_string_pretty(&palette) {
+                        if let Err(e) = std::fs::write(&path, json) {
+                            eprintln!("Failed to save palette: {}", e);
+                        } else {
+                            println!("Palette saved to: {}", path.display());
+                        }
+                    }
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // WASM: async file dialog
+                if let Ok(json) = serde_json::to_string_pretty(&palette) {
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if let Some(file_handle) = rfd::AsyncFileDialog::new()
+                            .add_filter("Palette", &["palette"])
+                            .set_file_name("palette.palette")
+                            .save_file()
+                            .await
+                        {
+                            let _ = file_handle.write(json.as_bytes()).await;
+                        }
+                    });
+                }
+            }
+        }
+
+        // Handle palette import from JSON
+        if let Some(json) = ui_response.palette_import_json {
+            match serde_json::from_str::<crate::scene::palette::Palette>(&json) {
+                Ok(palette) => {
+                    // Update palette editor
+                    self.egui_layer.update_palette_editor(palette.clone());
+
+                    // Add to library
+                    self.palette_library.add(palette.clone());
+                    // Set to the newly added palette (last in list)
+                    self.current_palette_index = self.palette_library.palettes().len() - 1;
+
+                    // Update renderer
+                    if let Some(ref mut renderer) = self.flame_renderer {
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to import palette: {}", e);
+                }
+            }
+        }
+
+        // Handle palette load from file
+        if ui_response.palette_load_file {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Desktop: synchronous file dialog
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Palette", &["palette"])
+                    .pick_file()
+                {
+                    match std::fs::read_to_string(&path) {
+                        Ok(json) => {
+                            match serde_json::from_str::<crate::scene::palette::Palette>(&json) {
+                                Ok(palette) => {
+                                    // Update palette editor
+                                    self.egui_layer.update_palette_editor(palette.clone());
+
+                                    // Add to library
+                                    self.palette_library.add(palette.clone());
+                                    // Set to the newly added palette (last in list)
+                                    self.current_palette_index = self.palette_library.palettes().len() - 1;
+
+                                    // Update renderer
+                                    if let Some(ref mut renderer) = self.flame_renderer {
+                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette);
+                                    }
+
+                                    println!("Palette loaded from: {}", path.display());
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to parse palette file: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to read palette file: {}", e);
+                        }
+                    }
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // WASM: async file dialog
+                let ctx = self.egui_layer.ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Some(file_handle) = rfd::AsyncFileDialog::new()
+                        .add_filter("Palette", &["palette"])
+                        .pick_file()
+                        .await
+                    {
+                        let contents = file_handle.read().await;
+                        let json = String::from_utf8_lossy(&contents).to_string();
+                        // Copy to clipboard so user can paste it
+                        ctx.copy_text(json);
+                        log::info!("Palette loaded to clipboard - paste to import");
+                    }
+                });
+            }
+        }
+
         // Handle undo/redo from UI buttons
         if ui_response.undo_requested {
             self.undo();

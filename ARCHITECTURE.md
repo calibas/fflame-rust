@@ -196,6 +196,10 @@ WindowEvent::RedrawRequested
       - If palette_changed → update_palette()
       - If reset_requested → reset()
       - If undo/redo → import_config()
+      - If config_export → save .flame file
+      - If config_import → load .flame file
+      - If palette_export → save .palette file
+      - If palette_import → load .palette file
       - If export → capture_png()
 ```
 
@@ -467,9 +471,10 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 | Add export format | [compute_kernel.rs](src/renderer/compute_kernel.rs) |
 | Modify GPU params | [buffers.rs](src/gpu/buffers.rs), corresponding shader |
 | Add keyboard shortcut | [app.rs](src/app.rs) handle_keyboard() |
-| Add palette | [palette.rs](src/scene/palette.rs) |
+| Add built-in palette | [palette.rs](src/scene/palette.rs) |
+| Import/export palette | Use Palette Editor UI (Added 2025-10-20) |
 
 ---
 
-**Last Updated:** 2025-10-19
+**Last Updated:** 2025-10-20
 **Project:** fflame-rust
