@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 ### Added - 2025-10-20
 
+#### Transform Add/Delete Functionality
+- **"➕ Add Transform" Button**
+  - Located at top of Transforms window
+  - Creates new transform with sensible defaults:
+    - 0.5 scale affine matrix (a=0.5, d=0.5, others=0)
+    - Weight 1.0
+    - 0.5 Linear variation, all others 0
+    - Gray color (0.5, 0.5, 0.5)
+    - Color speed 0.5
+  - Full undo support via `capture_state()`
+  - Automatic renderer update and accumulation reset
+
+- **"🗑 Delete Transform" Button**
+  - Located inside each transform's collapsible header
+  - Only visible when more than 1 transform exists (prevents deleting last transform)
+  - Full undo support via `capture_state()`
+  - Automatic renderer update and accumulation reset
+  - Bounds checking to prevent out-of-range deletions
+
+- **UI Improvements**
+  - Transform count displayed in window header: "Transforms (N)"
+  - Transform count also shown next to Add button
+  - Cached `num_transforms` variable to avoid borrow conflicts during iteration
+
 #### Preset System with Asset Loading
 - **Preset Selector UI**
   - Dropdown selector in Performance window
@@ -95,6 +119,21 @@ All notable changes to this project will be documented in this file.
 - Removed debug console logging for preset changes
 
 ### Implementation Details
+
+#### Transform Add/Delete
+- Files modified:
+  - `src/ui/mod.rs`:
+    - Added `add_transform: bool` and `delete_transform: Option<usize>` to UiResponse
+    - Added "➕ Add Transform" button with `flame_changed = true`
+    - Added "🗑 Delete Transform" button with `flame_changed = true`
+    - Cached `num_transforms` to avoid borrow conflicts
+  - `src/app.rs`:
+    - Handler for `ui_response.add_transform` - creates default Transform, pushes to flame
+    - Handler for `ui_response.delete_transform` - removes transform by index
+    - Both handlers call `capture_state()` for undo support
+    - Both trigger `ui_response.flame_changed` which updates renderer
+
+#### Preset and Palette Systems
 - Files modified:
   - `src/scene/transforms.rs` - Added name field to Flame
   - `src/scene/presets.rs` - Changed to FractalConfig storage

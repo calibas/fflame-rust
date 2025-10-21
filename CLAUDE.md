@@ -36,7 +36,7 @@ See @outline.md for original design goals
 
 ### Current Limitations
 - PNG export only at current viewport resolution (no tiled high-res export)
-- No UI for adding/removing transforms (can only edit existing)
+- No transform clone/duplicate button
 - No randomize button
 
 ### Build Commands
