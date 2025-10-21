@@ -418,7 +418,9 @@ impl App {
             }
 
             let t2 = Instant::now();
-            // 3. Tonemap and render to screen (always render)
+            // 3. Update tonemap parameters and render to screen
+            renderer.update_density_scale(&self.gpu.queue, self.density_scale);
+            renderer.update_background_color(&self.gpu.queue, self.background_color);
             renderer.tonemap_pass(&mut encoder, &view);
             self.metrics.tonemap_time_ms = t2.elapsed().as_secs_f64() * 1000.0;
         }
