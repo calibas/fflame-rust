@@ -475,6 +475,35 @@ impl App {
             }
         }
 
+        // Handle add transform
+        if ui_response.add_transform {
+            self.capture_state();
+
+            // Create a new default transform
+            let new_transform = crate::scene::transforms::Transform {
+                a: 0.5,
+                b: 0.0,
+                c: 0.0,
+                d: 0.5,
+                e: 0.0,
+                f: 0.0,
+                weight: 1.0,
+                variations: [0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                color: [0.5, 0.5, 0.5],
+                color_speed: 0.5,
+            };
+
+            self.flame.transforms.push(new_transform);
+        }
+
+        // Handle delete transform
+        if let Some(idx) = ui_response.delete_transform {
+            if self.flame.transforms.len() > 1 && idx < self.flame.transforms.len() {
+                self.capture_state();
+                self.flame.transforms.remove(idx);
+            }
+        }
+
         // Handle custom palette from editor
         if let Some(custom_pal) = ui_response.custom_palette {
             // Add to library if not already there

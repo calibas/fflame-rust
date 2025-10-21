@@ -43,6 +43,8 @@ pub struct UiResponse {
     pub palette_load_file: bool,
     pub palette_imported: Option<crate::scene::palette::Palette>,
     pub preset_changed: bool,
+    pub add_transform: bool,
+    pub delete_transform: Option<usize>, // Index of transform to delete
 }
 
 pub struct EguiLayer {
@@ -131,6 +133,8 @@ impl EguiLayer {
         let mut color_mode_changed = false;
         let mut pause_changed = false;
         let mut preset_changed = false;
+        let mut add_transform = false;
+        let mut delete_transform = None;
         // Config import/export window
         let mut config_export_json = None;
         let mut config_import_json = None;
@@ -430,8 +434,20 @@ impl EguiLayer {
             // Transforms window
             egui::Window::new("Transforms").show(ctx, |ui| {
                 ui.heading(format!("Transforms ({})", flame.transforms.len()));
+
+                // Add/Delete transform buttons
+                ui.horizontal(|ui| {
+                    if ui.button("➕ Add Transform").clicked() {
+                        add_transform = true;
+                        flame_changed = true;
+                    }
+                    ui.label(format!("({} transforms)", flame.transforms.len()));
+                });
+
                 ui.separator();
 
+                let mut delete_index = None;
+                let num_transforms = flame.transforms.len();
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for (i, transform) in flame.transforms.iter_mut().enumerate() {
                         ui.push_id(i, |ui| {
@@ -512,10 +528,25 @@ impl EguiLayer {
                                             flame_changed = true;
                                         }
                                     }
+
+                                    ui.separator();
+
+                                    // Delete button (only show if more than 1 transform exists)
+                                    if num_transforms > 1 {
+                                        if ui.button("🗑 Delete Transform").clicked() {
+                                            delete_index = Some(i);
+                                            flame_changed = true;
+                                        }
+                                    }
                                 });
                         });
                     }
                 });
+
+                // Set delete_transform if a transform was marked for deletion
+                if let Some(idx) = delete_index {
+                    delete_transform = Some(idx);
+                }
             });
 
             // Palette Editor window
@@ -791,6 +822,8 @@ impl EguiLayer {
             palette_load_file,
             palette_imported: None,
             preset_changed,
+            add_transform,
+            delete_transform,
         }
     }
 }

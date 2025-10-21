@@ -201,6 +201,8 @@ WindowEvent::RedrawRequested
     └─────────────────────────────────────────────────┘
               ↓
     Handle UI responses
+      - If add_transform → create default transform, push to flame
+      - If delete_transform → remove transform by index
       - If flame_changed → update_flame()
       - If view_changed → update_iterations()
       - If palette_changed → update_palette()
@@ -210,6 +212,7 @@ WindowEvent::RedrawRequested
       - If config_import → load .flame file
       - If palette_export → save .palette file
       - If palette_import → load .palette file
+      - If preset_changed → load_config()
       - If export → capture_png()
 ```
 
@@ -483,6 +486,7 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 | Add keyboard shortcut | [app.rs](src/app.rs) handle_keyboard() |
 | Add built-in palette | [palette.rs](src/scene/palette.rs) |
 | Import/export palette | Use Palette Editor UI (Added 2025-10-20) |
+| Add/delete transforms | Use "➕ Add Transform" / "🗑 Delete Transform" buttons (Added 2025-10-20) |
 
 ---
 

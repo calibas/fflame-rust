@@ -107,7 +107,8 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 **Implemented Panels:**
 - ✅ **Performance window** - FPS, frame time, resolution, sample count, iterations
 - ✅ **Preset selector** - Dropdown to load presets from assets/presets/ (Added 2025-10-20)
-- ✅ **Transforms list** - Add/edit transforms, matrix editor, weight, variations, color
+- ✅ **Transforms list** - Add/edit/delete transforms, matrix editor, weight, variations, color
+- ✅ **Transform add/delete** - Add new transforms, delete existing (with undo support) (Added 2025-10-20)
 - ✅ **Palette editor** - Gradient stops, color pickers, preview, import/export
 - ✅ **Global params** - Iterations per thread, density scale, exposure
 - ✅ **View controls** - Zoom, pan, rotation with buttons and sliders
@@ -203,6 +204,11 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
   - Load palettes from assets/palettes/
   - Load presets from assets/presets/
   - Desktop-only (WASM uses built-in assets)
+- ✅ Transform add/delete UI - Added 2025-10-20
+  - "➕ Add Transform" button creates new default transform
+  - "🗑 Delete Transform" button (only when > 1 transform)
+  - Full undo/redo support for add/delete operations
+  - Automatic renderer updates
 - ✅ Full WASM web build support
 - ✅ Performance metrics display
 - ✅ Keyboard shortcuts (arrows, +/-, Ctrl+Z/Y)
@@ -224,7 +230,6 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 
 ### Medium Priority
 - [ ] **Final transform support** - Code exists but no UI
-- [ ] **Transform add/remove in UI** - Can only edit existing transforms
 - [ ] **Transform clone/duplicate** - No UI for this
 - [ ] **EXR/HDR export** - Only PNG supported
 - [ ] **Visual regression tests**
