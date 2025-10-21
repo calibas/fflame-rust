@@ -18,6 +18,8 @@ pub struct FlameRenderer {
     color_mode: ColorMode,
     density_scale: f32,
     background_color: [f32; 3],
+    current_render_mode: crate::scene::transforms::RenderMode,
+    current_projection: crate::scene::transforms::ProjectionType,
 }
 
 impl FlameRenderer {
@@ -49,11 +51,13 @@ impl FlameRenderer {
             color_mode: ColorMode::Transform,
             density_scale: 1.0,
             background_color: [0.0, 0.0, 0.0],
+            current_render_mode: flame.render_mode,
+            current_projection: flame.projection,
         }
     }
 
     /// Resize the accumulation buffer
-    pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
+    pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
         self.width = width;
         self.height = height;
 
@@ -66,11 +70,11 @@ impl FlameRenderer {
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
 
         // Clear accumulation counter
-        self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, speed_factor);
+        self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, speed_factor);
     }
 
     /// Reset accumulation buffer and sample count
-    pub fn reset(&mut self, encoder: &mut CommandEncoder, _queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _speed_factor: f32) {
+    pub fn reset(&mut self, encoder: &mut CommandEncoder, _queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _speed_factor: f32) {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
 
@@ -82,8 +86,13 @@ impl FlameRenderer {
     }
 
     /// Run compute pass to generate flame samples
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
         // Update seed for new random samples each frame
+        let (projection_type, perspective_strength) = match self.current_projection {
+            crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
+            crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
+        };
+
         let params = GpuParams {
             num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
             iterations_per_thread,
@@ -92,14 +101,22 @@ impl FlameRenderer {
             height: self.height,
             seed: rand::random::<u32>(),
             color_mode: self.color_mode as u32,
+            render_mode: match self.current_render_mode {
+                crate::scene::transforms::RenderMode::TwoD => 0,
+                crate::scene::transforms::RenderMode::ThreeD => 1,
+            },
+            projection_type,
             splat_size: 1.0,
             zoom,
             pan_x,
             pan_y,
             rotation,
             speed_factor,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            perspective_strength,
+            camera_rotation_x,
+            camera_rotation_y,
+            _pad3: 0.0,
+            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
 
@@ -116,7 +133,13 @@ impl FlameRenderer {
             timestamp_writes: None,
         });
 
-        compute_pass.set_pipeline(&self.pipelines.compute_pipeline);
+        // Select pipeline based on render mode
+        let pipeline = match self.current_render_mode {
+            crate::scene::transforms::RenderMode::TwoD => &self.pipelines.compute_pipeline,
+            crate::scene::transforms::RenderMode::ThreeD => &self.pipelines.compute_pipeline_3d,
+        };
+
+        compute_pass.set_pipeline(pipeline);
         compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
         compute_pass.dispatch_workgroups(num_workgroups, 1, 1);
 
@@ -200,10 +223,19 @@ impl FlameRenderer {
         self.density_scale = config.density_scale;
         self.background_color = config.background_color;
 
-        // 4. Update palette
+        // 4. Update render mode and projection
+        self.current_render_mode = config.flame.render_mode;
+        self.current_projection = config.flame.projection;
+
+        // 5. Update palette
         self.buffers.update_palette(queue, palette);
 
-        // 5. Update ALL GPU params with correct num_transforms
+        // 6. Update ALL GPU params with correct num_transforms, render_mode, projection
+        let (projection_type, perspective_strength) = match self.current_projection {
+            crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
+            crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
+        };
+
         let params = GpuParams {
             num_transforms: config.flame.transforms.len() as u32,
             iterations_per_thread,
@@ -212,26 +244,43 @@ impl FlameRenderer {
             height: self.height,
             seed: rand::random::<u32>(),
             color_mode: config.color_mode as u32,
+            render_mode: match self.current_render_mode {
+                crate::scene::transforms::RenderMode::TwoD => 0,
+                crate::scene::transforms::RenderMode::ThreeD => 1,
+            },
+            projection_type,
             splat_size: 1.0,
             zoom: config.zoom,
             pan_x: config.pan_x,
             pan_y: config.pan_y,
             rotation: config.rotation,
             speed_factor: config.speed_factor,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            perspective_strength,
+            camera_rotation_x: 0.0, // TODO: Get from config
+            camera_rotation_y: 0.0, // TODO: Get from config
+            _pad3: 0.0,
+            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
 
-        // 6. Clear accumulation buffers
+        // 7. Clear accumulation buffers
         self.buffers.clear_all(encoder);
         self.samples_accumulated = 0;
         self.total_iterations = 0;
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
+    pub fn update_flame(&mut self, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
         self.buffers.update_transforms(queue, flame);
+
+        // Update render mode and projection
+        self.current_render_mode = flame.render_mode;
+        self.current_projection = flame.projection;
+
+        let (projection_type, perspective_strength) = match self.current_projection {
+            crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
+            crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
+        };
 
         let params = GpuParams {
             num_transforms: flame.transforms.len() as u32,
@@ -241,14 +290,22 @@ impl FlameRenderer {
             height: self.height,
             seed: rand::random::<u32>(),
             color_mode: self.color_mode as u32,
+            render_mode: match self.current_render_mode {
+                crate::scene::transforms::RenderMode::TwoD => 0,
+                crate::scene::transforms::RenderMode::ThreeD => 1,
+            },
+            projection_type,
             splat_size: 1.0,
             zoom,
             pan_x,
             pan_y,
             rotation,
             speed_factor,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            perspective_strength,
+            camera_rotation_x,
+            camera_rotation_y,
+            _pad3: 0.0,
+            _pad4: 0.0,
         };
 
         self.buffers.update_params(queue, &params);
@@ -278,7 +335,12 @@ impl FlameRenderer {
     }
 
     /// Update iterations per thread
-    pub fn update_iterations(&self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
+    pub fn update_iterations(&self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
+        let (projection_type, perspective_strength) = match self.current_projection {
+            crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
+            crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
+        };
+
         let params = GpuParams {
             num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
             iterations_per_thread,
@@ -293,8 +355,16 @@ impl FlameRenderer {
             pan_y,
             rotation,
             speed_factor,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            render_mode: match self.current_render_mode {
+                crate::scene::transforms::RenderMode::TwoD => 0,
+                crate::scene::transforms::RenderMode::ThreeD => 1,
+            },
+            projection_type,
+            perspective_strength,
+            camera_rotation_x,
+            camera_rotation_y,
+            _pad3: 0.0,
+            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -332,8 +402,14 @@ impl FlameRenderer {
     }
 
     /// Set color mode
-    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, speed_factor: f32) {
+    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
         self.color_mode = color_mode;
+
+        let (projection_type, perspective_strength) = match self.current_projection {
+            crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
+            crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
+        };
+
         // Update params to reflect new color mode
         let params = GpuParams {
             num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
@@ -349,8 +425,16 @@ impl FlameRenderer {
             pan_y,
             rotation,
             speed_factor,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            render_mode: match self.current_render_mode {
+                crate::scene::transforms::RenderMode::TwoD => 0,
+                crate::scene::transforms::RenderMode::ThreeD => 1,
+            },
+            projection_type,
+            perspective_strength,
+            camera_rotation_x,
+            camera_rotation_y,
+            _pad3: 0.0,
+            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }

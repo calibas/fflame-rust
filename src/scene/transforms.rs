@@ -1,7 +1,37 @@
 use serde::{Deserialize, Serialize};
 
 /// Maximum number of variation types supported
-pub const MAX_VARIATIONS: usize = 16;
+pub const MAX_VARIATIONS: usize = 24; // 16 2D + 8 3D variations
+
+/// Rendering mode for the fractal flame
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RenderMode {
+    /// 2D rendering (traditional fractal flames)
+    TwoD,
+    /// 3D rendering with pseudo-3D projection
+    ThreeD,
+}
+
+impl Default for RenderMode {
+    fn default() -> Self {
+        Self::TwoD
+    }
+}
+
+/// Projection type for 3D rendering
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum ProjectionType {
+    /// Orthographic projection (no perspective distortion)
+    Orthographic,
+    /// Perspective projection with configurable strength
+    Perspective { strength: f32 },
+}
+
+impl Default for ProjectionType {
+    fn default() -> Self {
+        Self::Orthographic
+    }
+}
 
 /// A 2D point in fractal space
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -41,7 +71,7 @@ impl Point {
 }
 
 /// IFS Transform with affine matrix and variation weights
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Transform {
     // Affine transformation matrix: x' = ax + by + e, y' = cx + dy + f
     pub a: f32,
@@ -51,10 +81,15 @@ pub struct Transform {
     pub e: f32,
     pub f: f32,
 
+    /// Z offset for 3D mode (z' = z + g)
+    #[serde(default)]
+    pub g: f32,
+
     /// Probability weight for selecting this transform
     pub weight: f32,
 
     /// Weights for each variation function (indexed by VariationType)
+    #[serde(deserialize_with = "deserialize_variations")]
     pub variations: [f32; MAX_VARIATIONS],
 
     /// Color contribution (RGB)
@@ -62,6 +97,194 @@ pub struct Transform {
 
     /// Color speed (0.0 = parent color, 1.0 = transform color)
     pub color_speed: f32,
+}
+
+/// Custom deserializer for variations array that handles backward compatibility
+/// Accepts arrays of length 16 (old format) or 24 (new format)
+fn deserialize_variations<'de, D>(deserializer: D) -> Result<[f32; MAX_VARIATIONS], D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    let v: Vec<f32> = Vec::deserialize(deserializer)?;
+
+    match v.len() {
+        16 => {
+            // Old format: pad with zeros to reach 24
+            let mut result = [0.0; MAX_VARIATIONS];
+            result[..16].copy_from_slice(&v);
+            Ok(result)
+        }
+        24 => {
+            // New format: convert directly
+            let mut result = [0.0; MAX_VARIATIONS];
+            result.copy_from_slice(&v);
+            Ok(result)
+        }
+        other => Err(D::Error::custom(format!(
+            "invalid variations array length {}, expected 16 (old format) or 24 (new format)",
+            other
+        ))),
+    }
+}
+
+// Manual Deserialize implementation to use custom deserializer
+impl<'de> serde::Deserialize<'de> for Transform {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            A, B, C, D, E, F, G, Weight, Variations, Color, ColorSpeed,
+        }
+
+        struct TransformVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for TransformVisitor {
+            type Value = Transform;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("struct Transform")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<Transform, V::Error>
+            where
+                V: serde::de::MapAccess<'de>,
+            {
+                let mut a = None;
+                let mut b = None;
+                let mut c = None;
+                let mut d = None;
+                let mut e = None;
+                let mut f = None;
+                let mut g = None;
+                let mut weight = None;
+                let mut variations = None;
+                let mut color = None;
+                let mut color_speed = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::A => {
+                            if a.is_some() {
+                                return Err(serde::de::Error::duplicate_field("a"));
+                            }
+                            a = Some(map.next_value()?);
+                        }
+                        Field::B => {
+                            if b.is_some() {
+                                return Err(serde::de::Error::duplicate_field("b"));
+                            }
+                            b = Some(map.next_value()?);
+                        }
+                        Field::C => {
+                            if c.is_some() {
+                                return Err(serde::de::Error::duplicate_field("c"));
+                            }
+                            c = Some(map.next_value()?);
+                        }
+                        Field::D => {
+                            if d.is_some() {
+                                return Err(serde::de::Error::duplicate_field("d"));
+                            }
+                            d = Some(map.next_value()?);
+                        }
+                        Field::E => {
+                            if e.is_some() {
+                                return Err(serde::de::Error::duplicate_field("e"));
+                            }
+                            e = Some(map.next_value()?);
+                        }
+                        Field::F => {
+                            if f.is_some() {
+                                return Err(serde::de::Error::duplicate_field("f"));
+                            }
+                            f = Some(map.next_value()?);
+                        }
+                        Field::G => {
+                            if g.is_some() {
+                                return Err(serde::de::Error::duplicate_field("g"));
+                            }
+                            g = Some(map.next_value()?);
+                        }
+                        Field::Weight => {
+                            if weight.is_some() {
+                                return Err(serde::de::Error::duplicate_field("weight"));
+                            }
+                            weight = Some(map.next_value()?);
+                        }
+                        Field::Variations => {
+                            if variations.is_some() {
+                                return Err(serde::de::Error::duplicate_field("variations"));
+                            }
+                            // Use custom deserializer for variations
+                            let v: Vec<f32> = map.next_value()?;
+                            let mut result = [0.0; MAX_VARIATIONS];
+                            match v.len() {
+                                16 => {
+                                    result[..16].copy_from_slice(&v);
+                                }
+                                24 => {
+                                    result.copy_from_slice(&v);
+                                }
+                                other => {
+                                    return Err(serde::de::Error::custom(format!(
+                                        "invalid variations array length {}, expected 16 or 24",
+                                        other
+                                    )));
+                                }
+                            }
+                            variations = Some(result);
+                        }
+                        Field::Color => {
+                            if color.is_some() {
+                                return Err(serde::de::Error::duplicate_field("color"));
+                            }
+                            color = Some(map.next_value()?);
+                        }
+                        Field::ColorSpeed => {
+                            if color_speed.is_some() {
+                                return Err(serde::de::Error::duplicate_field("color_speed"));
+                            }
+                            color_speed = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                let a = a.ok_or_else(|| serde::de::Error::missing_field("a"))?;
+                let b = b.ok_or_else(|| serde::de::Error::missing_field("b"))?;
+                let c = c.ok_or_else(|| serde::de::Error::missing_field("c"))?;
+                let d = d.ok_or_else(|| serde::de::Error::missing_field("d"))?;
+                let e = e.ok_or_else(|| serde::de::Error::missing_field("e"))?;
+                let f = f.ok_or_else(|| serde::de::Error::missing_field("f"))?;
+                let g = g.unwrap_or(0.0); // Default for backward compatibility
+                let weight = weight.ok_or_else(|| serde::de::Error::missing_field("weight"))?;
+                let variations = variations.ok_or_else(|| serde::de::Error::missing_field("variations"))?;
+                let color = color.ok_or_else(|| serde::de::Error::missing_field("color"))?;
+                let color_speed = color_speed.ok_or_else(|| serde::de::Error::missing_field("color_speed"))?;
+
+                Ok(Transform {
+                    a,
+                    b,
+                    c,
+                    d,
+                    e,
+                    f,
+                    g,
+                    weight,
+                    variations,
+                    color,
+                    color_speed,
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "color", "color_speed"];
+        deserializer.deserialize_struct("Transform", FIELDS, TransformVisitor)
+    }
 }
 
 impl Default for Transform {
@@ -73,6 +296,7 @@ impl Default for Transform {
             d: 1.0,
             e: 0.0,
             f: 0.0,
+            g: 0.0, // Z offset defaults to 0
             weight: 1.0,
             variations: [0.0; MAX_VARIATIONS],
             color: [1.0, 1.0, 1.0],
@@ -117,6 +341,7 @@ impl Transform {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum VariationType {
+    // 2D Variations (0-15)
     Linear = 0,
     Sinusoidal = 1,
     Spherical = 2,
@@ -133,6 +358,15 @@ pub enum VariationType {
     Julia = 13,
     Bent = 14,
     Waves = 15,
+    // 3D Variations (16-23)
+    Zcone = 16,
+    Flatten = 17,
+    Hemisphere = 18,
+    PreRotateX = 19,
+    PreRotateY = 20,
+    PostRotateX = 21,
+    PostRotateY = 22,
+    ZScale = 23,
 }
 
 impl VariationType {
@@ -155,6 +389,14 @@ impl VariationType {
             13 => Self::Julia,
             14 => Self::Bent,
             15 => Self::Waves,
+            16 => Self::Zcone,
+            17 => Self::Flatten,
+            18 => Self::Hemisphere,
+            19 => Self::PreRotateX,
+            20 => Self::PreRotateY,
+            21 => Self::PostRotateX,
+            22 => Self::PostRotateY,
+            23 => Self::ZScale,
             _ => Self::Linear,
         }
     }
@@ -272,6 +514,17 @@ impl VariationType {
                 let f = 0.5;
                 Point::new(p.x + b * (p.y / (c * c + 1e-6)).sin(), p.y + e * (p.x / (f * f + 1e-6)).sin())
             }
+
+            // 3D Variations (16-23) - CPU side only affects XY, Z is handled in GPU shader
+            // These return XY unchanged on CPU; GPU shader handles full 3D behavior
+            Self::Zcone => p,
+            Self::Flatten => p,
+            Self::Hemisphere => p,
+            Self::PreRotateX => p,
+            Self::PreRotateY => p,
+            Self::PostRotateX => p,
+            Self::PostRotateY => p,
+            Self::ZScale => p,
         }
     }
 }
@@ -288,6 +541,14 @@ pub struct Flame {
     pub name: String,
     pub transforms: Vec<Transform>,
     pub final_transform: Option<Transform>,
+
+    /// Rendering mode (2D or 3D)
+    #[serde(default)]
+    pub render_mode: RenderMode,
+
+    /// Projection type for 3D rendering
+    #[serde(default)]
+    pub projection: ProjectionType,
 }
 
 impl Default for Flame {
@@ -296,6 +557,8 @@ impl Default for Flame {
             name: "Untitled".to_string(),
             transforms: Vec::new(),
             final_transform: None,
+            render_mode: RenderMode::default(),
+            projection: ProjectionType::default(),
         }
     }
 }

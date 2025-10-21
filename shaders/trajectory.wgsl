@@ -11,14 +11,14 @@ struct Transform {
     e: f32,
     f: f32,
 
+    // Z offset for 3D mode
+    g: f32,
+
     // Probability weight
     weight: f32,
 
-    // Padding for alignment
-    _pad0: f32,
-
-    // Variation weights (16 variations)
-    variations: array<f32, 16>,
+    // Variation weights (24 variations: 16 2D + 8 3D, but 2D shader only uses first 16)
+    variations: array<f32, 24>,
 
     // Color (RGB)
     color: vec3<f32>,
@@ -36,14 +36,15 @@ struct Params {
     height: u32,
     seed: u32,
     color_mode: u32,  // 0 = transform colors, 1 = palette, 2 = speed
+    render_mode: u32,  // 0 = 2D, 1 = 3D
+    projection_type: u32,  // 0 = orthographic, 1 = perspective
     splat_size: f32,
     zoom: f32,
     pan_x: f32,
     pan_y: f32,
     rotation: f32,  // Rotation in radians
     speed_factor: f32,  // Blend factor for speed-based coloring
-    _pad1: f32,
-    _pad2: f32,
+    perspective_strength: f32,  // Strength for perspective projection
 }
 
 // Bindings

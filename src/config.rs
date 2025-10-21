@@ -12,7 +12,13 @@ pub struct FractalConfig {
     pub zoom: f32,
     pub pan_x: f32,
     pub pan_y: f32,
-    pub rotation: f32,
+    pub rotation: f32,  // 2D rotation (around Z axis)
+
+    /// 3D Camera rotation (for 3D mode)
+    #[serde(default)]
+    pub camera_rotation_x: f32,  // Pitch (rotation around X axis)
+    #[serde(default)]
+    pub camera_rotation_y: f32,  // Yaw (rotation around Y axis)
 
     /// Rendering settings
     pub density_scale: f32,
