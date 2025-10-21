@@ -110,8 +110,6 @@ impl App {
 
         #[allow(deprecated)]
         event_loop.run(move |event, elwt| {
-            elwt.set_control_flow(ControlFlow::Poll);
-
             match event {
                 Event::WindowEvent { event, window_id } if window_id == window.id() => {
                     // Let egui handle events first
@@ -166,6 +164,8 @@ impl App {
                     }
                 }
                 Event::AboutToWait => {
+                    // Use Wait instead of Poll to let the browser control frame timing
+                    elwt.set_control_flow(ControlFlow::Wait);
                     window.request_redraw();
                 }
                 _ => {}
@@ -357,6 +357,10 @@ impl App {
     }
 
     fn render(&mut self, window: &Window) -> Result<(), SurfaceError> {
+        use web_time::Instant;
+
+        let render_start = Instant::now();
+
         let frame = self.gpu.surface.get_current_texture()?;
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -366,27 +370,36 @@ impl App {
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
-            // Ensure tonemap parameters are synced with current app state before rendering
-            renderer.update_density_scale(&self.gpu.queue, self.density_scale);
-            renderer.update_background_color(&self.gpu.queue, self.background_color);
+            // Note: tonemap parameters are updated when they actually change (via ui_response handlers)
+            // No need to update every frame
 
             // Check if we should continue iterating
             let should_iterate = !self.paused &&
                 self.max_iterations.map_or(true, |max| renderer.total_iterations() < max);
 
             if should_iterate {
+                let t0 = Instant::now();
                 // 1. Compute new samples with fresh random seed
                 renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                self.metrics.compute_time_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
+                let t1 = Instant::now();
                 // 2. Accumulate samples (blend with previous frames)
                 renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device);
+                self.metrics.accumulate_time_ms = t1.elapsed().as_secs_f64() * 1000.0;
+            } else {
+                self.metrics.compute_time_ms = 0.0;
+                self.metrics.accumulate_time_ms = 0.0;
             }
 
+            let t2 = Instant::now();
             // 3. Tonemap and render to screen (always render)
             renderer.tonemap_pass(&mut encoder, &view);
+            self.metrics.tonemap_time_ms = t2.elapsed().as_secs_f64() * 1000.0;
         }
 
         // Render UI on top and handle updates
+        let t3 = Instant::now();
         let can_undo = self.can_undo();
         let can_redo = self.can_redo();
 
@@ -420,8 +433,11 @@ impl App {
             can_redo,
             &mut self.background_color,
         );
+        self.metrics.ui_time_ms = t3.elapsed().as_secs_f64() * 1000.0;
 
+        let t4 = Instant::now();
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
+        self.metrics.submit_time_ms = t4.elapsed().as_secs_f64() * 1000.0;
 
         // Handle config export
         if ui_response.config_export_requested.is_some() {
@@ -864,7 +880,12 @@ impl App {
 
         // Clear keyboard flag for next frame
         self.view_changed_by_keyboard = false;
+
+        let t5 = Instant::now();
         frame.present();
+        self.metrics.present_time_ms = t5.elapsed().as_secs_f64() * 1000.0;
+
+        self.metrics.render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
 
         Ok(())
     }
