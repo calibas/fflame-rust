@@ -21,6 +21,8 @@ pub struct App {
     pan_x: f32,
     pan_y: f32,
     rotation: f32,
+    camera_rotation_x: f32, // 3D camera pitch
+    camera_rotation_y: f32, // 3D camera yaw
     density_scale: f32,
     view_changed_by_keyboard: bool,
     mouse_dragging: bool,
@@ -67,6 +69,8 @@ impl App {
             pan_x: 0.0,
             pan_y: 0.0,
             rotation: 0.0,
+            camera_rotation_x: 0.0,
+            camera_rotation_y: 0.0,
             density_scale: 1.0,
             speed_factor: 0.5,
             color_mode: ColorMode::Transform,
@@ -84,6 +88,8 @@ impl App {
             pan_x: 0.0,
             pan_y: 0.0,
             rotation: 0.0,
+            camera_rotation_x: 0.0,
+            camera_rotation_y: 0.0,
             density_scale: 1.0,
             view_changed_by_keyboard: false,
             mouse_dragging: false,
@@ -370,7 +376,7 @@ impl App {
 
             if should_iterate {
                 // 1. Compute new samples with fresh random seed
-                renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
+                renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
 
                 // 2. Accumulate samples (blend with previous frames)
                 renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device);
@@ -399,6 +405,8 @@ impl App {
             &mut self.pan_x,
             &mut self.pan_y,
             &mut self.rotation,
+            &mut self.camera_rotation_x,
+            &mut self.camera_rotation_y,
             &mut self.density_scale,
             &self.palette_library,
             &mut self.current_palette_index,
@@ -487,8 +495,9 @@ impl App {
                 d: 0.5,
                 e: 0.0,
                 f: 0.0,
+                g: 0.0, // Z offset
                 weight: 1.0,
-                variations: [0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                variations: [0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
                 color: [0.5, 0.5, 0.5],
                 color_speed: 0.5,
             };
@@ -782,7 +791,7 @@ impl App {
         }
 
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
-        let view_changed = ui_response.view_changed || self.view_changed_by_keyboard;
+        let view_changed = ui_response.view_changed || self.view_changed_by_keyboard || ui_response.camera_rotation_changed;
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
             || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed;
 
@@ -822,18 +831,18 @@ impl App {
                 });
 
                 if ui_response.flame_changed {
-                    renderer.update_flame(&self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
+                    renderer.update_flame(&self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
                 if ui_response.iterations_changed || view_changed {
-                    renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
+                    renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
                 // Note: density_scale and background_color are updated every frame before tonemap pass
                 // so we don't need to update them here
 
                 if ui_response.color_mode_changed {
-                    renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
+                    renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
                 if ui_response.palette_changed {
@@ -846,7 +855,7 @@ impl App {
                 // Note: preset_changed is handled separately above with import_config() which also resets
                 if ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
                     || ui_response.background_color_changed || ui_response.flame_changed {
-                    renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.speed_factor);
+                    renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
@@ -868,6 +877,8 @@ impl App {
             pan_x: self.pan_x,
             pan_y: self.pan_y,
             rotation: self.rotation,
+            camera_rotation_x: self.camera_rotation_x,
+            camera_rotation_y: self.camera_rotation_y,
             density_scale: self.density_scale,
             speed_factor: self.speed_factor,
             color_mode: self.color_mode,
@@ -884,6 +895,8 @@ impl App {
         self.pan_x = config.pan_x;
         self.pan_y = config.pan_y;
         self.rotation = config.rotation;
+        self.camera_rotation_x = config.camera_rotation_x;
+        self.camera_rotation_y = config.camera_rotation_y;
         self.density_scale = config.density_scale;
         self.speed_factor = config.speed_factor;
         self.color_mode = config.color_mode;

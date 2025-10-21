@@ -17,11 +17,11 @@ pub struct GpuTransform {
     pub d: f32,
     pub e: f32,
     pub f: f32,
+    pub g: f32, // Z offset for 3D mode
     pub weight: f32,
-    pub _pad0: f32,
 
-    // Variations (16 floats)
-    pub variations: [f32; 16],
+    // Variations (24 floats: 16 2D + 8 3D)
+    pub variations: [f32; 24],
 
     // Color
     pub color: [f32; 3],
@@ -37,8 +37,8 @@ impl From<&Transform> for GpuTransform {
             d: xform.d,
             e: xform.e,
             f: xform.f,
+            g: xform.g,
             weight: xform.weight,
-            _pad0: 0.0,
             variations: xform.variations,
             color: xform.color,
             color_speed: xform.color_speed,
@@ -57,14 +57,19 @@ pub struct GpuParams {
     pub height: u32,
     pub seed: u32,
     pub color_mode: u32, // 0 = transform colors, 1 = palette, 2 = speed
+    pub render_mode: u32, // 0 = 2D, 1 = 3D
+    pub projection_type: u32, // 0 = orthographic, 1 = perspective
     pub splat_size: f32,
     pub zoom: f32,
     pub pan_x: f32,
     pub pan_y: f32,
-    pub rotation: f32, // Rotation in radians
+    pub rotation: f32, // Rotation in radians (2D rotation around Z)
     pub speed_factor: f32, // Blend factor for speed-based coloring
-    pub _pad1: f32,
-    pub _pad2: f32,
+    pub perspective_strength: f32, // Strength for perspective projection
+    pub camera_rotation_x: f32, // 3D camera pitch (rotation around X axis)
+    pub camera_rotation_y: f32, // 3D camera yaw (rotation around Y axis)
+    pub _pad3: f32,
+    pub _pad4: f32,
 }
 
 /// Tonemap parameters
@@ -158,14 +163,19 @@ impl FlameBuffers {
             height,
             seed: 12345,
             color_mode: 0, // Default to transform colors
+            render_mode: 0, // Default to 2D
+            projection_type: 0, // Default to orthographic
             splat_size: 1.0,
             zoom: 1.0,
             pan_x: 0.0,
             pan_y: 0.0,
             rotation: 0.0,
             speed_factor: 0.5,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            perspective_strength: 2.0,
+            camera_rotation_x: 0.0,
+            camera_rotation_y: 0.0,
+            _pad3: 0.0,
+            _pad4: 0.0,
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {

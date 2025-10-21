@@ -1,7 +1,8 @@
 use wgpu::*;
 
 pub struct FlamePipelines {
-    pub compute_pipeline: ComputePipeline,
+    pub compute_pipeline: ComputePipeline,       // 2D trajectory pipeline
+    pub compute_pipeline_3d: ComputePipeline,    // 3D trajectory pipeline
     pub compute_bind_group_layout: BindGroupLayout,
     pub accumulate_pipeline: ComputePipeline,
     pub accumulate_bind_group_layout: BindGroupLayout,
@@ -13,8 +14,13 @@ impl FlamePipelines {
     pub fn new(device: &Device, surface_format: TextureFormat) -> Self {
         // Load shaders
         let trajectory_shader = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("Trajectory Shader"),
+            label: Some("Trajectory Shader 2D"),
             source: ShaderSource::Wgsl(include_str!("../../shaders/trajectory.wgsl").into()),
+        });
+
+        let trajectory_shader_3d = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Trajectory Shader 3D"),
+            source: ShaderSource::Wgsl(include_str!("../../shaders/trajectory_3d.wgsl").into()),
         });
 
         let accumulate_shader = device.create_shader_module(ShaderModuleDescriptor {
@@ -128,9 +134,19 @@ impl FlamePipelines {
         });
 
         let compute_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: Some("Trajectory Compute Pipeline"),
+            label: Some("Trajectory Compute Pipeline 2D"),
             layout: Some(&compute_pipeline_layout),
             module: &trajectory_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // Create 3D compute pipeline (same layout as 2D)
+        let compute_pipeline_3d = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Trajectory Compute Pipeline 3D"),
+            layout: Some(&compute_pipeline_layout),
+            module: &trajectory_shader_3d,
             entry_point: Some("main"),
             compilation_options: Default::default(),
             cache: None,
@@ -249,6 +265,7 @@ impl FlamePipelines {
 
         Self {
             compute_pipeline,
+            compute_pipeline_3d,
             compute_bind_group_layout,
             accumulate_pipeline,
             accumulate_bind_group_layout,
