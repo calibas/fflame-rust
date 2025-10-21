@@ -4,6 +4,139 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added - 2025-10-21
+
+#### 3D Rendering System
+Complete pseudo-3D rendering implementation inspired by Apophysis 7X:
+
+- **Dual Shader Architecture**
+  - `shaders/trajectory_3d.wgsl` - New 3D compute shader tracking vec3 throughout iteration
+  - `shaders/trajectory.wgsl` - Existing 2D shader (vec2 only)
+  - Runtime selection based on `flame.render_mode` (TwoD or ThreeD)
+  - No performance difference between 2D and 3D modes
+
+- **3D Variations (8 new variations)**
+  - **Zcone** (16): Z = distance from origin in XY plane (creates cone shape)
+  - **Flatten** (17): Compress Z toward zero (depth control)
+  - **Hemisphere** (18): Project onto sphere surface (full 3D structure)
+  - **PreRotateX** (19): Rotate around X-axis before variations
+  - **PreRotateY** (20): Rotate around Y-axis before variations
+  - **PostRotateX** (21): Rotate around X-axis after variations
+  - **PostRotateY** (22): Rotate around Y-axis after variations
+  - **ZScale** (23): Scale Z coordinate up or down
+  - Z-only variations (Zcone, Flatten, ZScale) modify `result.z` directly to avoid affecting XY
+  - Full 3D variations (rotations, Hemisphere) use standard `result += weight * variation(p)`
+
+- **Camera System**
+  - Camera Pitch (X-axis rotation): Up/down orbit around fractal
+  - Camera Yaw (Y-axis rotation): Left/right orbit around fractal
+  - UI sliders in Performance window for real-time camera control
+  - Applied before projection in `world_to_pixel()` function
+
+- **Projection Types**
+  - **Orthographic**: Flat projection (no depth perspective)
+  - **Perspective**: Depth-aware projection with configurable strength (1.0-10.0)
+  - Formula: `screen_pos = p.xy / (1.0 + p.z * strength)`
+  - UI toggle and slider in Performance window
+
+- **3D Transform Enhancements**
+  - Added `g` field to Transform struct (Z offset for 3D mode)
+  - Affine applies to XY, Z gets offset: `p'.z = p.z + transform.g`
+  - CPU reference returns point unchanged for 3D variations (CPU is 2D only)
+
+- **3D Preset**
+  - "3D Spiral Tower" preset demonstrating clear 3D structure
+  - Uses Zcone, Spherical, PostRotateY, and Hemisphere variations
+  - Different Z offsets per transform to create depth layers
+  - Perspective projection with strength 3.0
+
+- **Backward Compatibility**
+  - Custom deserializer accepts both 16 and 24-element variation arrays
+  - Old preset files (16 variations) auto-padded with zeros for new variations
+  - 2D shader updated to use 24-element variation array (ignores last 8)
+  - `Transform.g` field defaults to 0.0 for old presets
+
+- **UI Enhancements**
+  - Render Mode selector (2D/3D) in Performance window
+  - Projection Type selector with Perspective strength slider
+  - Camera Pitch and Yaw sliders (-180° to 180°)
+  - 3D Variations section in Transforms window (only visible in 3D mode)
+  - Separated "2D Variations" and "3D Variations" UI sections
+  - Z Offset slider in each transform (3D mode only)
+
+### Changed - 2025-10-21
+
+#### Variation System Expansion
+- **MAX_VARIATIONS** increased from 16 to 24 (16 2D + 8 3D)
+- **GpuTransform.variations** changed from `[f32; 16]` to `[f32; 24]`
+- Both `trajectory.wgsl` and `trajectory_3d.wgsl` use 24-element variation arrays
+- 2D shader only uses first 16 variations, ignoring the last 8
+
+#### Transform Structure
+- Added `g: f32` field for Z offset in 3D mode (defaults to 0.0)
+- Added `render_mode: RenderMode` to Flame (TwoD or ThreeD)
+- Added `projection: ProjectionType` to Flame (Orthographic or Perspective)
+- Added `camera_pitch: f32` and `camera_yaw: f32` to Flame
+- Manual `Default` implementation for Flame (needed custom default name)
+
+#### GPU Parameters
+- **GpuParams** expanded with 3D fields:
+  - `camera_pitch: f32` - Camera X-axis rotation
+  - `camera_yaw: f32` - Camera Y-axis rotation
+  - `projection_type: u32` - 0=Ortho, 1=Perspective
+  - `perspective_strength: f32` - Perspective intensity
+
+#### Pipeline Management
+- **FlamePipelines** now creates two trajectory compute pipelines:
+  - `trajectory_pipeline` - 2D mode (trajectory.wgsl)
+  - `trajectory_pipeline_3d` - 3D mode (trajectory_3d.wgsl)
+- Runtime selection in `compute_pass()` based on `flame.render_mode`
+
+### Fixed - 2025-10-21
+
+#### 3D Variation Application
+- **Fixed Z-only variations affecting XY coordinates**
+  - Root cause: Using `result += weight * variation(p)` added p.x and p.y to result
+  - Solution: Z-only variations (Zcone, Flatten, ZScale) now modify `result.z` directly
+  - Example: `result.z *= (1.0 - xform.variations[17] * 0.5)` for Flatten
+
+#### Backward Compatibility
+- **Fixed old preset loading errors**
+  - Root cause: Old presets had 16-element variation arrays, code expected 24
+  - Solution: Custom `Deserialize` implementation for Transform
+  - Visitor pattern accepts both 16 and 24-element arrays
+  - 16-element arrays auto-padded with 8 zeros
+  - Also fixed missing `g` field with `#[serde(default)]`
+
+#### UI and Rendering
+- **Fixed missing 3D variation controls in UI**
+  - Added "3D Variations" section (only visible in 3D mode)
+  - Split variation list into 2D (0-15) and 3D (16-23) sections
+- **Fixed struct layout mismatch**
+  - Updated 2D shader to use 24-element variation array
+  - Ensures GPU struct matches CPU layout exactly
+
+### Implementation Details - 2025-10-21
+
+#### 3D Rendering System Files
+- **New files:**
+  - `shaders/trajectory_3d.wgsl` - 3D compute shader
+  - `src/scene/presets.rs::create_3d_flame()` - 3D preset creation
+
+- **Modified files:**
+  - `src/scene/transforms.rs` - RenderMode, ProjectionType, Transform.g, 8 new VariationType enums, custom Deserialize
+  - `src/gpu/buffers.rs` - GpuTransform.g, GpuTransform.variations[24], GpuParams 3D fields
+  - `src/gpu/pipelines.rs` - trajectory_pipeline_3d creation, runtime selection
+  - `src/renderer/compute_kernel.rs` - Pipeline selection logic, 3D param updates
+  - `src/ui/mod.rs` - Render mode selector, projection controls, camera sliders, 3D variation UI, Z offset slider
+  - `src/app.rs` - Default transform with 24 variations, 3D field handlers
+  - `shaders/trajectory.wgsl` - Updated to 24-element variation array
+
+- **Variation implementation pattern:**
+  - **2D variations (0-15):** Implemented in both trajectory.wgsl and trajectory_3d.wgsl (pass Z through)
+  - **3D variations (16-23):** Only implemented in trajectory_3d.wgsl
+  - **CPU reference:** All 3D variations return `p` unchanged (CPU is 2D only)
+
 ### Added - 2025-10-20
 
 #### Transform Add/Delete Functionality

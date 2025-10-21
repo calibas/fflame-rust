@@ -1,5 +1,5 @@
-// Trajectory compute shader for fractal flame rendering
-// Generates points via iterated function system (IFS)
+// Trajectory compute shader for fractal flame rendering (3D MODE)
+// Generates 3D points via iterated function system (IFS) with projection to 2D
 
 // Transform structure (matching CPU-side Transform)
 struct Transform {
@@ -17,7 +17,7 @@ struct Transform {
     // Probability weight
     weight: f32,
 
-    // Variation weights (24 variations: 16 2D + 8 3D, but 2D shader only uses first 16)
+    // Variation weights (24 variations: 16 2D + 8 3D)
     variations: array<f32, 24>,
 
     // Color (RGB)
@@ -42,9 +42,13 @@ struct Params {
     zoom: f32,
     pan_x: f32,
     pan_y: f32,
-    rotation: f32,  // Rotation in radians
+    rotation: f32,  // Rotation in radians (2D, around Z)
     speed_factor: f32,  // Blend factor for speed-based coloring
     perspective_strength: f32,  // Strength for perspective projection
+    camera_rotation_x: f32,  // 3D camera pitch (rotation around X)
+    camera_rotation_y: f32,  // 3D camera yaw (rotation around Y)
+    _pad3: f32,
+    _pad4: f32,
 }
 
 // Bindings
@@ -86,96 +90,99 @@ fn rng_nextf(rng: ptr<function, RngState>) -> f32 {
     return f32(rng_next(rng)) / 4294967296.0;
 }
 
-// Apply affine transformation
-fn apply_affine(xform: Transform, p: vec2<f32>) -> vec2<f32> {
-    return vec2<f32>(
+// Apply affine transformation (3D: XY are transformed, Z gets offset)
+fn apply_affine(xform: Transform, p: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
         xform.a * p.x + xform.b * p.y + xform.e,
-        xform.c * p.x + xform.d * p.y + xform.f
+        xform.c * p.x + xform.d * p.y + xform.f,
+        p.z + xform.g  // Z is just offset
     );
 }
 
-// Variation functions
-fn variation_linear(p: vec2<f32>) -> vec2<f32> {
+// Variation functions (3D versions - most pass Z through unchanged)
+fn variation_linear(p: vec3<f32>) -> vec3<f32> {
     return p;
 }
 
-fn variation_sinusoidal(p: vec2<f32>) -> vec2<f32> {
-    return vec2<f32>(sin(p.x), sin(p.y));
+fn variation_sinusoidal(p: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(sin(p.x), sin(p.y), p.z);
 }
 
-fn variation_spherical(p: vec2<f32>) -> vec2<f32> {
-    let r2 = dot(p, p) + 1e-6;
-    return p / r2;
+fn variation_spherical(p: vec3<f32>) -> vec3<f32> {
+    let r2 = dot(p.xy, p.xy) + 1e-6;
+    return vec3<f32>((p.xy / r2), p.z);
 }
 
-fn variation_swirl(p: vec2<f32>) -> vec2<f32> {
-    let r2 = dot(p, p);
+fn variation_swirl(p: vec3<f32>) -> vec3<f32> {
+    let r2 = dot(p.xy, p.xy);
     let s = sin(r2);
     let c = cos(r2);
-    return vec2<f32>(p.x * s - p.y * c, p.x * c + p.y * s);
+    return vec3<f32>(p.x * s - p.y * c, p.x * c + p.y * s, p.z);
 }
 
-fn variation_horseshoe(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p) + 1e-6;
+fn variation_horseshoe(p: vec3<f32>) -> vec3<f32> {
+    let r = length(p.xy) + 1e-6;
     let r_inv = 1.0 / r;
-    return vec2<f32>(
+    return vec3<f32>(
         (p.x - p.y) * (p.x + p.y) * r_inv,
-        2.0 * p.x * p.y * r_inv
+        2.0 * p.x * p.y * r_inv,
+        p.z
     );
 }
 
-fn variation_polar(p: vec2<f32>) -> vec2<f32> {
+fn variation_polar(p: vec3<f32>) -> vec3<f32> {
     let theta = atan2(p.y, p.x);
-    let r = length(p);
-    return vec2<f32>(theta / 3.14159265359, r - 1.0);
+    let r = length(p.xy);
+    return vec3<f32>(theta / 3.14159265359, r - 1.0, p.z);
 }
 
-fn variation_handkerchief(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p);
+fn variation_handkerchief(p: vec3<f32>) -> vec3<f32> {
+    let r = length(p.xy);
     let theta = atan2(p.y, p.x);
     let theta_r = theta + r;
-    return vec2<f32>(r * sin(theta_r), r * cos(theta_r));
+    return vec3<f32>(r * sin(theta_r), r * cos(theta_r), p.z);
 }
 
-fn variation_heart(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p);
+fn variation_heart(p: vec3<f32>) -> vec3<f32> {
+    let r = length(p.xy);
     let theta = atan2(p.y, p.x);
     let r_theta = r * theta;
-    return vec2<f32>(r * sin(r_theta), -r * cos(r_theta));
+    return vec3<f32>(r * sin(r_theta), -r * cos(r_theta), p.z);
 }
 
-fn variation_disc(p: vec2<f32>) -> vec2<f32> {
+fn variation_disc(p: vec3<f32>) -> vec3<f32> {
     let theta = atan2(p.y, p.x);
-    let r = length(p);
+    let r = length(p.xy);
     let theta_pi = theta / 3.14159265359;
     let pi_r = 3.14159265359 * r;
-    return vec2<f32>(theta_pi * sin(pi_r), theta_pi * cos(pi_r));
+    return vec3<f32>(theta_pi * sin(pi_r), theta_pi * cos(pi_r), p.z);
 }
 
-fn variation_spiral(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p) + 1e-6;
+fn variation_spiral(p: vec3<f32>) -> vec3<f32> {
+    let r = length(p.xy) + 1e-6;
     let theta = atan2(p.y, p.x);
     let r_inv = 1.0 / r;
-    return vec2<f32>(
+    return vec3<f32>(
         r_inv * (cos(theta) + sin(theta)),
-        r_inv * (cos(theta) - sin(theta))
+        r_inv * (cos(theta) - sin(theta)),
+        p.z
     );
 }
 
-fn variation_hyperbolic(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p) + 1e-6;
+fn variation_hyperbolic(p: vec3<f32>) -> vec3<f32> {
+    let r = length(p.xy) + 1e-6;
     let theta = atan2(p.y, p.x);
-    return vec2<f32>(sin(theta) / r, r * cos(theta));
+    return vec3<f32>(sin(theta) / r, r * cos(theta), p.z);
 }
 
-fn variation_diamond(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p);
+fn variation_diamond(p: vec3<f32>) -> vec3<f32> {
+    let r = length(p.xy);
     let theta = atan2(p.y, p.x);
-    return vec2<f32>(sin(theta) * cos(r), cos(theta) * sin(r));
+    return vec3<f32>(sin(theta) * cos(r), cos(theta) * sin(r), p.z);
 }
 
-fn variation_ex(p: vec2<f32>) -> vec2<f32> {
-    let r = length(p);
+fn variation_ex(p: vec3<f32>) -> vec3<f32> {
+    let r = length(p.xy);
     let theta = atan2(p.y, p.x);
     let p0 = theta + r;
     let p1 = theta - r;
@@ -183,38 +190,132 @@ fn variation_ex(p: vec2<f32>) -> vec2<f32> {
     let p1_sin = sin(p1);
     let p0_cubed = p0_sin * p0_sin * p0_sin;
     let p1_cubed = p1_sin * p1_sin * p1_sin;
-    return vec2<f32>(r * (p0_cubed + p1_cubed), r * (p0_cubed - p1_cubed));
+    return vec3<f32>(r * (p0_cubed + p1_cubed), r * (p0_cubed - p1_cubed), p.z);
 }
 
-fn variation_julia(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
-    let r = length(p);
+fn variation_julia(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+    let r = length(p.xy);
     let theta = atan2(p.y, p.x);
     let sqrt_r = sqrt(r);
     let omega = select(0.0, 3.14159265359, rng_nextf(rng) < 0.5);
     let half_theta = theta / 2.0 + omega;
-    return vec2<f32>(sqrt_r * cos(half_theta), sqrt_r * sin(half_theta));
+    return vec3<f32>(sqrt_r * cos(half_theta), sqrt_r * sin(half_theta), p.z);
 }
 
-fn variation_bent(p: vec2<f32>) -> vec2<f32> {
+fn variation_bent(p: vec3<f32>) -> vec3<f32> {
     let nx = select(2.0 * p.x, p.x, p.x >= 0.0);
     let ny = select(p.y / 2.0, p.y, p.y >= 0.0);
-    return vec2<f32>(nx, ny);
+    return vec3<f32>(nx, ny, p.z);
 }
 
-fn variation_waves(p: vec2<f32>) -> vec2<f32> {
+fn variation_waves(p: vec3<f32>) -> vec3<f32> {
     let b = 0.5;
     let c = 0.5;
     let e = 0.5;
     let f = 0.5;
-    return vec2<f32>(
+    return vec3<f32>(
         p.x + b * sin(p.y / (c * c + 1e-6)),
-        p.y + e * sin(p.x / (f * f + 1e-6))
+        p.y + e * sin(p.x / (f * f + 1e-6)),
+        p.z
     );
 }
 
-// Apply all variations with weights
-fn apply_variations(xform: Transform, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
-    var result = vec2<f32>(0.0, 0.0);
+// ========================================
+// 3D-SPECIFIC VARIATIONS (beyond index 15)
+// ========================================
+// Note: These would need additional variation indices beyond 16
+// For now, we can add them as helper functions that could be called
+// or add more variation slots in the future
+
+// Rotate around X axis (affects Y and Z)
+fn rotate_x(p: vec3<f32>, angle: f32) -> vec3<f32> {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec3<f32>(
+        p.x,
+        p.y * c - p.z * s,
+        p.y * s + p.z * c
+    );
+}
+
+// Rotate around Y axis (affects X and Z)
+fn rotate_y(p: vec3<f32>, angle: f32) -> vec3<f32> {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec3<f32>(
+        p.x * c + p.z * s,
+        p.y,
+        -p.x * s + p.z * c
+    );
+}
+
+// Rotate around Z axis (affects X and Y)
+fn rotate_z(p: vec3<f32>, angle: f32) -> vec3<f32> {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec3<f32>(
+        p.x * c - p.y * s,
+        p.x * s + p.y * c,
+        p.z
+    );
+}
+
+// Z-scale variation
+fn variation_zscale(p: vec3<f32>, scale: f32) -> vec3<f32> {
+    return vec3<f32>(p.x, p.y, p.z * scale);
+}
+
+// Z-translate variation
+fn variation_ztranslate(p: vec3<f32>, offset: f32) -> vec3<f32> {
+    return vec3<f32>(p.x, p.y, p.z + offset);
+}
+
+// Flatten - compress Z toward zero
+fn variation_flatten(p: vec3<f32>, amount: f32) -> vec3<f32> {
+    return vec3<f32>(p.x, p.y, p.z * (1.0 - amount));
+}
+
+// Z-cone - cone-shaped Z distortion based on XY distance from origin
+fn variation_zcone(p: vec3<f32>) -> vec3<f32> {
+    let r = length(p.xy);
+    return vec3<f32>(p.x, p.y, r);
+}
+
+// 3D Blur - random point on sphere
+fn variation_blur3d(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Generate random point on unit sphere
+    let theta = rng_nextf(rng) * 6.28318;  // 0 to 2π
+    let phi = acos(2.0 * rng_nextf(rng) - 1.0);  // 0 to π
+    let r = rng_nextf(rng);  // 0 to 1
+
+    return vec3<f32>(
+        r * sin(phi) * cos(theta),
+        r * sin(phi) * sin(theta),
+        r * cos(phi)
+    );
+}
+
+// Z-blur - blur only in Z direction
+fn variation_zblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+    let z_offset = (rng_nextf(rng) - 0.5) * 2.0;  // -1 to 1
+    return vec3<f32>(p.x, p.y, p.z + z_offset);
+}
+
+// Hemisphere - project onto hemisphere
+fn variation_hemisphere(p: vec3<f32>) -> vec3<f32> {
+    let r2 = dot(p, p);
+    let r = sqrt(r2);
+    if (r < 1e-6) {
+        return vec3<f32>(0.0, 0.0, 1.0);
+    }
+    let scale = 1.0 / r;
+    let z = max(0.0, sqrt(1.0 - min(1.0, r2)));
+    return vec3<f32>(p.x * scale, p.y * scale, z);
+}
+
+// Apply all variations with weights (3D version)
+fn apply_variations(xform: Transform, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+    var result = vec3<f32>(0.0, 0.0, 0.0);
 
     // Variation 0: Linear
     if (xform.variations[0] != 0.0) {
@@ -281,6 +382,50 @@ fn apply_variations(xform: Transform, p: vec2<f32>, rng: ptr<function, RngState>
         result += xform.variations[15] * variation_waves(p);
     }
 
+    // === 3D Variations (16-23) ===
+    // Note: Z-only variations modify result.z directly instead of adding to result
+
+    // Variation 16: Zcone - Z becomes distance from origin in XY
+    if (xform.variations[16] != 0.0) {
+        let r = length(p.xy);
+        result.z += xform.variations[16] * r;
+    }
+
+    // Variation 17: Flatten - compress Z toward zero
+    if (xform.variations[17] != 0.0) {
+        result.z *= (1.0 - xform.variations[17] * 0.5);
+    }
+
+    // Variation 18: Hemisphere - project onto hemisphere (affects all axes)
+    if (xform.variations[18] != 0.0) {
+        result += xform.variations[18] * variation_hemisphere(p);
+    }
+
+    // Variation 19: PreRotateX - rotate around X before other variations
+    if (xform.variations[19] != 0.0) {
+        result = rotate_x(result, xform.variations[19]);
+    }
+
+    // Variation 20: PreRotateY - rotate around Y before other variations
+    if (xform.variations[20] != 0.0) {
+        result = rotate_y(result, xform.variations[20]);
+    }
+
+    // Variation 21: PostRotateX - rotate around X after other variations
+    if (xform.variations[21] != 0.0) {
+        result = rotate_x(result, xform.variations[21]);
+    }
+
+    // Variation 22: PostRotateY - rotate around Y after other variations
+    if (xform.variations[22] != 0.0) {
+        result = rotate_y(result, xform.variations[22]);
+    }
+
+    // Variation 23: ZScale - scale Z coordinate
+    if (xform.variations[23] != 0.0) {
+        result.z *= (1.0 + xform.variations[23]);
+    }
+
     return result;
 }
 
@@ -306,10 +451,57 @@ fn select_transform(rand_val: f32) -> u32 {
     return params.num_transforms - 1u;
 }
 
-// Convert fractal space coords to pixel coords
-fn world_to_pixel(p: vec2<f32>) -> vec2<i32> {
+// Projection functions for 3D → 2D
+fn project_orthographic(p: vec3<f32>) -> vec2<f32> {
+    // Simple: just drop Z coordinate
+    return p.xy;
+}
+
+fn project_perspective(p: vec3<f32>, strength: f32) -> vec2<f32> {
+    // Perspective projection: scale by (strength / (strength + z))
+    let scale = strength / (strength + p.z);
+    return p.xy * scale;
+}
+
+fn project_to_2d(p: vec3<f32>) -> vec2<f32> {
+    if (params.projection_type == 0u) {
+        return project_orthographic(p);
+    } else {
+        return project_perspective(p, params.perspective_strength);
+    }
+}
+
+// Convert fractal space coords to pixel coords (updated for 3D input)
+fn world_to_pixel(p: vec3<f32>) -> vec2<i32> {
+    // First, apply 3D camera rotation (rotate the 3D point in space)
+    var rotated = p;
+
+    // Rotate around Y axis (yaw - left/right orbit)
+    if (params.camera_rotation_y != 0.0) {
+        let cy = cos(params.camera_rotation_y);
+        let sy = sin(params.camera_rotation_y);
+        rotated = vec3<f32>(
+            rotated.x * cy + rotated.z * sy,
+            rotated.y,
+            -rotated.x * sy + rotated.z * cy
+        );
+    }
+
+    // Rotate around X axis (pitch - up/down orbit)
+    if (params.camera_rotation_x != 0.0) {
+        let cx = cos(params.camera_rotation_x);
+        let sx = sin(params.camera_rotation_x);
+        rotated = vec3<f32>(
+            rotated.x,
+            rotated.y * cx - rotated.z * sx,
+            rotated.y * sx + rotated.z * cx
+        );
+    }
+
+    // Then, project 3D → 2D
+    let p2d = project_to_2d(rotated);
     // Apply view transform: pan, rotation, and zoom
-    var transformed = p - vec2<f32>(params.pan_x, params.pan_y);
+    var transformed = p2d - vec2<f32>(params.pan_x, params.pan_y);
 
     // Apply rotation
     let cos_r = cos(params.rotation);
@@ -347,8 +539,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Initialize RNG
     var rng = rng_init(thread_id, params.seed);
 
-    // Starting point (random in [-1, 1])
-    var current = vec2<f32>(
+    // Starting point (random in [-1, 1], including Z for 3D)
+    var current = vec3<f32>(
+        rng_nextf(&rng) * 2.0 - 1.0,
         rng_nextf(&rng) * 2.0 - 1.0,
         rng_nextf(&rng) * 2.0 - 1.0
     );

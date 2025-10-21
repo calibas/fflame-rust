@@ -160,6 +160,54 @@ pub fn create_complex_flame() -> Flame {
     flame
 }
 
+/// Create a 3D flame using z-manipulating variations
+#[allow(dead_code)]
+pub fn create_3d_flame() -> Flame {
+    use super::transforms::{RenderMode, ProjectionType};
+
+    let mut flame = Flame::new();
+    flame.name = "3D Spiral Tower".to_string();
+    flame.render_mode = RenderMode::ThreeD;
+    flame.projection = ProjectionType::Perspective { strength: 3.0 };
+
+    // Transform 1: Linear with Zcone - creates a cone in Z
+    let mut xform1 = Transform::new();
+    xform1.a = 0.7;
+    xform1.d = 0.7;
+    xform1.e = 0.1;
+    xform1.g = -0.3; // Z offset
+    xform1.variations[VariationType::Linear as usize] = 0.5;
+    xform1.variations[VariationType::Zcone as usize] = 0.5;
+    xform1.color = [1.0, 0.3, 0.3]; // Red
+    xform1.weight = 1.0;
+    flame.add_transform(xform1);
+
+    // Transform 2: Spherical with PostRotateY - twist in 3D
+    let mut xform2 = Transform::new();
+    xform2.a = 0.6;
+    xform2.b = -0.3;
+    xform2.c = 0.3;
+    xform2.d = 0.6;
+    xform2.g = 0.2; // Z offset
+    xform2.variations[VariationType::Spherical as usize] = 0.7;
+    xform2.variations[VariationType::PostRotateY as usize] = 0.3;
+    xform2.color = [0.3, 0.3, 1.0]; // Blue
+    xform2.weight = 1.0;
+    flame.add_transform(xform2);
+
+    // Transform 3: Hemisphere - creates 3D sphere structure
+    let mut xform3 = Transform::new();
+    xform3.a = 0.5;
+    xform3.d = 0.5;
+    xform3.g = 0.1;
+    xform3.variations[VariationType::Hemisphere as usize] = 1.0;
+    xform3.color = [0.3, 1.0, 0.3]; // Green
+    xform3.weight = 0.8;
+    flame.add_transform(xform3);
+
+    flame
+}
+
 /// Get all preset flames
 #[allow(dead_code)]
 pub fn get_all_presets() -> Vec<(&'static str, Flame)> {
@@ -205,7 +253,16 @@ impl PresetLibrary {
                 Self::flame_to_config(create_spiral_flame()),
                 Self::flame_to_config(create_julia_flame()),
                 Self::flame_to_config(create_complex_flame()),
+                Self::flame_to_config(create_3d_flame()),
             ]);
+        }
+
+        // Desktop: add built-in 3D preset if not already loaded from assets
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !presets.iter().any(|p| p.flame.name == "3D Spiral Tower") {
+                presets.push(Self::flame_to_config(create_3d_flame()));
+            }
         }
 
         Self { presets }
@@ -219,6 +276,8 @@ impl PresetLibrary {
             pan_x: 0.0,
             pan_y: 0.0,
             rotation: 0.0,
+            camera_rotation_x: 0.0,
+            camera_rotation_y: 0.0,
             density_scale: 1.0,
             speed_factor: 0.5,
             color_mode: ColorMode::Transform,

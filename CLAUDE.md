@@ -10,7 +10,8 @@ See @outline.md for original design goals
 
 ### Project Structure
 - **Shaders**: All WGSL shaders in `shaders/` directory
-  - `trajectory.wgsl` - Flame iteration compute shader
+  - `trajectory.wgsl` - 2D flame iteration compute shader
+  - `trajectory_3d.wgsl` - 3D flame iteration compute shader (with camera rotation)
   - `accumulate.wgsl` - Temporal blending
   - `tonemap.wgsl` - Display rendering
 
@@ -22,10 +23,15 @@ See @outline.md for original design goals
 
 ### Key Concepts
 - **Fractal Flames**: IFS (Iterated Function System) with variations
-- **16 Variations**: Linear, Sinusoidal, Spherical, Swirl, Horseshoe, Polar, Handkerchief, Heart, Disc, Spiral, Hyperbolic, Diamond, Ex, Julia, Bent, Waves
+- **Render Modes**: 2D (classic) and 3D (pseudo-3D with depth)
+- **24 Variations**: 16 2D + 8 3D
+  - **2D (0-15)**: Linear, Sinusoidal, Spherical, Swirl, Horseshoe, Polar, Handkerchief, Heart, Disc, Spiral, Hyperbolic, Diamond, Ex, Julia, Bent, Waves
+  - **3D (16-23)**: Zcone, Flatten, Hemisphere, PreRotateX, PreRotateY, PostRotateX, PostRotateY, ZScale
 - **3-Pass Rendering**: Compute samples → Accumulate temporally → Tonemap for display
 - **Ping-Pong Accumulation**: Two textures swapped each frame for progressive refinement
 - **Color Modes**: Transform colors, Palette lookup, Speed-based coloring
+- **Projection Types**: Orthographic (flat) and Perspective (depth-aware)
+- **Camera Control**: Full 3D camera rotation (pitch and yaw) for viewing from any angle
 
 ### Important Implementation Details
 - Using **ping-pong accumulation** (not atomic) for better performance
@@ -81,11 +87,24 @@ cargo test
 ## Common Tasks
 
 ### Adding a New Variation
+
+#### 2D Variation (affects XY only)
 1. Add to `VariationType` enum in `src/scene/transforms.rs`
-2. Implement CPU version in `VariationType::apply()`
-3. Add GPU version in `shaders/trajectory.wgsl` `apply_variation()` function
-4. Update `MAX_VARIATIONS` if needed
-5. Add to UI variation list in `src/ui/mod.rs`
+2. Implement CPU version in `VariationType::apply()` (returns modified XY)
+3. Add GPU version to both shaders:
+   - `shaders/trajectory.wgsl` (2D shader)
+   - `shaders/trajectory_3d.wgsl` (3D shader - make it return `vec3(new_x, new_y, p.z)`)
+4. Update `MAX_VARIATIONS` if expanding beyond 24
+5. Add to UI variation list in `src/ui/mod.rs` under "2D Variations"
+
+#### 3D Variation (affects Z or rotates)
+1. Add to `VariationType` enum in `src/scene/transforms.rs` (indices 16-23 reserved for 3D)
+2. Implement CPU version in `VariationType::apply()` (can return p unchanged - CPU is 2D only)
+3. Add GPU version to `shaders/trajectory_3d.wgsl`:
+   - **Z-only variations**: Modify `result.z` directly (e.g., `result.z *= scale`)
+   - **Rotation variations**: Apply rotation matrix to full `result` vector
+   - **Full 3D variations**: Use `result += weight * variation(p)`
+4. Add to UI variation list in `src/ui/mod.rs` under "3D Variations" (only visible in 3D mode)
 
 ### Adding a New Palette
 **Option 1: Code-based (built-in)**
@@ -130,6 +149,28 @@ cargo test
 - All UI is in `src/ui/mod.rs` `render_ui()` function
 - Return changes via `UiResponse` struct
 - Handle responses in `src/app.rs` `render()` function
+
+### Creating 3D Presets
+1. Set `flame.render_mode = RenderMode::ThreeD`
+2. Set projection: `flame.projection = ProjectionType::Perspective { strength: 2.0-5.0 }`
+3. Use 3D variations (indices 16-23) for Z manipulation:
+   - **Zcone**: Creates cone shape in Z (Z = distance from origin)
+   - **Flatten**: Compresses Z toward zero (good for controlling depth)
+   - **Hemisphere**: Projects onto sphere surface (full 3D structure)
+   - **PreRotateY/PostRotateY**: Add spiral/twist in 3D space
+   - **ZScale**: Scale Z depth up or down
+4. Set different `g` (Z offset) values per transform to create layers
+5. Test with camera rotation (Camera Pitch/Yaw sliders) to verify 3D structure
+6. Save as `.flame` file with 24-element variation arrays
+
+**Example 3D Transform:**
+```rust
+let mut xform = Transform::new();
+xform.a = 0.7; xform.d = 0.7;  // Affine (affects XY)
+xform.g = 0.3;                  // Z offset
+xform.variations[0] = 0.5;      // Linear (2D base)
+xform.variations[16] = 0.5;     // Zcone (3D depth)
+```
 
 ## Dependencies
 See @Cargo.toml for full dependency list
@@ -198,6 +239,37 @@ Desktop builds auto-load from filesystem:
 - `assets/presets/*.flame` → PresetLibrary
 WASM builds use built-in assets only (no filesystem access)
 
+### 3D Rendering System (Added 2025-10-21)
+Full pseudo-3D rendering inspired by Apophysis 7X:
+
+**Architecture:**
+- **Dual Shaders**: `trajectory.wgsl` (2D) and `trajectory_3d.wgsl` (3D) - selected at runtime
+- **Variation System**: 24 total variations (16 2D + 8 3D)
+- **Z Tracking**: 3D shader tracks `vec3<f32>` throughout iteration, 2D uses `vec2<f32>`
+- **Camera System**: Full 3D camera rotation (pitch/yaw) applied before projection
+- **Projection**: Orthographic (flat) or Perspective (depth-aware with configurable strength)
+
+**Key Implementation:**
+1. **Affine Transform**: 2D affine (a,b,c,d,e,f) + Z offset (g)
+2. **Variation Blending**:
+   - 2D variations (0-15): Pass Z through unchanged `vec3(new_x, new_y, p.z)`
+   - Z-only variations (16,17,23): Modify `result.z` directly to avoid affecting XY
+   - Full 3D variations (18-22): Use standard `result += weight * variation(p)`
+3. **Camera Rotation**: Applied in `world_to_pixel()` before projection
+   - Yaw (Y-axis): Left/right orbit
+   - Pitch (X-axis): Up/down orbit
+4. **Projection**: Applied after camera rotation to convert vec3 → vec2 for display
+
+**Backward Compatibility:**
+- Old preset files (16 variations) auto-padded with zeros for 3D variations (17-24)
+- 2D shader updated to 24-element arrays (ignores indices 16-23)
+- Custom deserializer handles both 16 and 24-element variation arrays
+
+**Performance:**
+- No measurable difference between 2D and 3D modes
+- Pipeline selected at runtime based on `flame.render_mode`
+- Same accumulation/tonemap passes for both modes
+
 ## Known Issues
 - Julia variation uses CPU `rand::random()` which doesn't work on GPU (needs RNG passed in)
 - WASM PNG export uses `unsafe` lifetime extension (safe in practice, GPU resources live for program lifetime)
@@ -206,3 +278,43 @@ WASM builds use built-in assets only (no filesystem access)
 - Transparent PNG export reads from accumulation buffer (Rgba16Float) and applies tone mapping on CPU
   - This is necessary because tonemap shader blends RGB with background before alpha is applied
   - Accumulation buffer stores raw fractal colors with separate density channel
+
+## Optional/Future Features
+
+Features that could be added in future development (see [STATUS.md](STATUS.md) for detailed priority breakdown):
+
+### High Priority
+- **Tiled high-resolution export** - Currently only exports at viewport resolution; tiled rendering would enable 4K+ exports
+- **Randomize button** - Generate random flames with seeded generation for exploration
+- **Async export progress UI** - Currently export blocks the UI during rendering
+- **Depth effects for 3D mode** - Optional visual enhancements:
+  - Depth-based coloring (Z → color heat map)
+  - Depth of field blur (focus plane + bokeh)
+  - Z-fog/atmospheric depth
+  - Depth buffer visualization
+
+### Medium Priority
+- **Final transform support** - Code exists but no UI controls (post-processing transform applied after all iterations)
+- **Transform clone/duplicate** - UI button to duplicate existing transforms
+- **EXR/HDR export** - High dynamic range output formats for compositing
+- **Visual regression tests** - Automated testing with image checksums
+- **Performance profiling/optimization** - Systematic GPU profiling and tuning
+- **More 3D variations** - Additional depth-manipulating variations (curl_3d, splits_3d, etc.)
+
+### Low Priority / Future Expansions
+- **CLI interface** - Headless rendering from command line (clap already in deps)
+- **Headless export example** - Render without window for batch processing
+- **Animation system** - Keyframe timeline, transform morphing, parameter interpolation
+- **CUDA backend** - NVIDIA-specific acceleration (desktop only)
+- **Layered compositing** - Multiple flames blended together
+- **Adaptive sampling** - Focus iterations on high-detail areas
+- **Denoising** - AI or traditional denoising for faster convergence
+
+### Nice to Have
+- **Preset browser UI** - Visual grid of preset thumbnails instead of dropdown
+- **Palette library management** - Save/organize custom palettes permanently
+- **Transform presets** - Save/load individual transform configurations
+- **Batch export** - Render multiple configurations automatically
+- **Video export** - Animate parameters over time and render to video
+
+See [outline.md](outline.md) Section 14 for more ambitious future expansion ideas.
