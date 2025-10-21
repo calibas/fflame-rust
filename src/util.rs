@@ -1,7 +1,8 @@
 // Use web-time for WASM compatibility (provides Instant on all platforms)
 use web_time::{Duration, Instant};
 
-/// Performance metrics tracker
+
+/// Performance metrics tracker with detailed component timing
 pub struct PerformanceMetrics {
     last_frame_time: Instant,
     frame_times: Vec<Duration>,
@@ -9,6 +10,15 @@ pub struct PerformanceMetrics {
     fps: f64,
     frame_time_ms: f64,
     frame_count: u64,
+
+    // Component timing
+    pub compute_time_ms: f64,
+    pub accumulate_time_ms: f64,
+    pub tonemap_time_ms: f64,
+    pub ui_time_ms: f64,
+    pub submit_time_ms: f64,
+    pub present_time_ms: f64,
+    pub render_time_ms: f64,  // Total time spent in render() function
 }
 
 impl PerformanceMetrics {
@@ -20,6 +30,13 @@ impl PerformanceMetrics {
             fps: 0.0,
             frame_time_ms: 0.0,
             frame_count: 0,
+            compute_time_ms: 0.0,
+            accumulate_time_ms: 0.0,
+            tonemap_time_ms: 0.0,
+            ui_time_ms: 0.0,
+            submit_time_ms: 0.0,
+            present_time_ms: 0.0,
+            render_time_ms: 0.0,
         }
     }
 

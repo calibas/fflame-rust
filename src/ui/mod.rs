@@ -237,8 +237,26 @@ impl EguiLayer {
                 ui.label(format!("Frame Time Range: {:.2} - {:.2} ms", min, max));
 
                 ui.separator();
+                ui.label("Component Timings:");
+                ui.label(format!("  Compute: {:.2} ms", metrics.compute_time_ms));
+                ui.label(format!("  Accumulate: {:.2} ms", metrics.accumulate_time_ms));
+                ui.label(format!("  Tonemap: {:.2} ms", metrics.tonemap_time_ms));
+                ui.label(format!("  UI: {:.2} ms", metrics.ui_time_ms));
+                ui.label(format!("  Submit: {:.2} ms", metrics.submit_time_ms));
+                ui.label(format!("  Present: {:.2} ms", metrics.present_time_ms));
+
+                let total_measured = metrics.compute_time_ms + metrics.accumulate_time_ms +
+                metrics.tonemap_time_ms + metrics.ui_time_ms + metrics.submit_time_ms + metrics.present_time_ms;
+                ui.label(format!("  Total Measured: {:.2} ms", total_measured));
+                ui.label(format!("  Render Function: {:.2} ms", metrics.render_time_ms));
+
+                let overhead = metrics.frame_time_ms() - metrics.render_time_ms;
+                ui.label(format!("  Overhead (event loop): {:.2} ms", overhead));
+
+                ui.separator();
                 ui.label(format!("Total Frames: {}", metrics.frame_count()));
                 ui.label(format!("Resolution: {}x{}", window_size.width, window_size.height));
+
 
                 // Config import/export button
                 ui.separator();
