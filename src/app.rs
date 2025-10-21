@@ -117,10 +117,35 @@ impl App {
 
                     match event {
                         WindowEvent::CloseRequested => elwt.exit(),
-                        WindowEvent::Resized(size) => app.gpu.resize(size),
-                        WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                            // Handle scale factor changes if needed
-                            let _ = scale_factor;
+                        WindowEvent::Resized(size) => {
+                            app.gpu.resize(size);
+                            // Also resize renderer buffers to match
+                            if let Some(ref mut renderer) = app.flame_renderer {
+                                let mut encoder = app.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("Resize Encoder"),
+                                });
+                                renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, size.width, size.height,
+                                    &app.flame, app.iterations_per_thread, app.zoom, app.pan_x, app.pan_y, app.rotation,
+                                    app.camera_rotation_x, app.camera_rotation_y, app.speed_factor);
+                                app.gpu.queue.submit(std::iter::once(encoder.finish()));
+                            }
+                        },
+                        WindowEvent::ScaleFactorChanged { .. } => {
+                            // Handle DPI/zoom changes - resize canvas to match new scale
+                            let new_size = window.inner_size();
+                            if new_size.width > 0 && new_size.height > 0 {
+                                app.gpu.resize(new_size);
+                                if let Some(ref mut renderer) = app.flame_renderer {
+                                    let mut encoder = app.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                        label: Some("Scale Factor Resize Encoder"),
+                                    });
+                                    renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, new_size.width, new_size.height,
+                                        &app.flame, app.iterations_per_thread, app.zoom, app.pan_x, app.pan_y, app.rotation,
+                                        app.camera_rotation_x, app.camera_rotation_y, app.speed_factor);
+                                    app.gpu.queue.submit(std::iter::once(encoder.finish()));
+                                }
+                                window.request_redraw();
+                            }
                         },
                         WindowEvent::KeyboardInput { event: key_event, .. } if !consumed => {
                             // Handle keyboard input only if egui didn't consume it

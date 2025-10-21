@@ -11,8 +11,8 @@ pub struct FlameRenderer {
     compute_bind_group: BindGroup,
     accumulate_bind_group: BindGroup,
     tonemap_bind_group: BindGroup,
-    width: u32,
-    height: u32,
+    pub width: u32,
+    pub height: u32,
     samples_accumulated: u32,
     total_iterations: u64,
     color_mode: ColorMode,
@@ -37,6 +37,16 @@ impl FlameRenderer {
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
         let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
+
+        // DEBUG: Log renderer initialization
+        #[cfg(target_arch = "wasm32")]
+        log::info!("=== FlameRenderer Created ===");
+        #[cfg(target_arch = "wasm32")]
+        log::info!("  Render resolution: {}x{}", width, height);
+        #[cfg(target_arch = "wasm32")]
+        log::info!("  Surface format: {:?}", surface_format);
+        #[cfg(target_arch = "wasm32")]
+        log::info!("==============================");
 
         Self {
             pipelines,
