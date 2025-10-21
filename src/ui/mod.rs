@@ -45,6 +45,9 @@ pub struct UiResponse {
     pub preset_changed: bool,
     pub add_transform: bool,
     pub delete_transform: Option<usize>, // Index of transform to delete
+    pub render_mode_changed: bool,
+    pub projection_changed: bool,
+    pub camera_rotation_changed: bool,
 }
 
 pub struct EguiLayer {
@@ -109,6 +112,8 @@ impl EguiLayer {
         pan_x: &mut f32,
         pan_y: &mut f32,
         rotation: &mut f32,
+        camera_rotation_x: &mut f32,
+        camera_rotation_y: &mut f32,
         density_scale: &mut f32,
         palette_library: &crate::scene::palette::PaletteLibrary,
         current_palette_index: &mut usize,
@@ -135,6 +140,9 @@ impl EguiLayer {
         let mut preset_changed = false;
         let mut add_transform = false;
         let mut delete_transform = None;
+        let mut render_mode_changed = false;
+        let mut projection_changed = false;
+        let mut camera_rotation_changed = false;
         // Config import/export window
         let mut config_export_json = None;
         let mut config_import_json = None;
@@ -175,6 +183,50 @@ impl EguiLayer {
                             }
                         }
                     });
+
+                ui.separator();
+
+                // 3D Rendering Controls
+                ui.label("Render Mode");
+                ui.horizontal(|ui| {
+                    let was_2d = matches!(flame.render_mode, crate::scene::transforms::RenderMode::TwoD);
+                    if ui.selectable_label(was_2d, "2D").clicked() {
+                        flame.render_mode = crate::scene::transforms::RenderMode::TwoD;
+                        render_mode_changed = true;
+                        flame_changed = true;
+                    }
+                    if ui.selectable_label(!was_2d, "3D").clicked() {
+                        flame.render_mode = crate::scene::transforms::RenderMode::ThreeD;
+                        render_mode_changed = true;
+                        flame_changed = true;
+                    }
+                });
+
+                // Show projection controls only in 3D mode
+                if matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
+                    ui.label("Projection");
+                    ui.horizontal(|ui| {
+                        let is_ortho = matches!(flame.projection, crate::scene::transforms::ProjectionType::Orthographic);
+                        if ui.selectable_label(is_ortho, "Orthographic").clicked() {
+                            flame.projection = crate::scene::transforms::ProjectionType::Orthographic;
+                            projection_changed = true;
+                            flame_changed = true;
+                        }
+                        if ui.selectable_label(!is_ortho, "Perspective").clicked() {
+                            flame.projection = crate::scene::transforms::ProjectionType::Perspective { strength: 2.0 };
+                            projection_changed = true;
+                            flame_changed = true;
+                        }
+                    });
+
+                    // Perspective strength slider
+                    if let crate::scene::transforms::ProjectionType::Perspective { strength } = &mut flame.projection {
+                        if ui.add(egui::Slider::new(strength, 0.5..=10.0).text("Perspective Strength")).changed() {
+                            projection_changed = true;
+                            flame_changed = true;
+                        }
+                    }
+                }
 
                 ui.separator();
 
@@ -396,6 +448,30 @@ impl EguiLayer {
                     }
                 });
 
+                // 3D Camera rotation controls (only visible in 3D mode)
+                if matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
+                    ui.separator();
+                    ui.label("3D Camera Rotation");
+
+                    ui.horizontal(|ui| {
+                        ui.label("Camera Pitch (X):");
+                        let mut degrees_x = camera_rotation_x.to_degrees();
+                        if ui.add(egui::Slider::new(&mut degrees_x, -180.0..=180.0).suffix("°")).changed() {
+                            *camera_rotation_x = degrees_x.to_radians();
+                            camera_rotation_changed = true;
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Camera Yaw (Y):");
+                        let mut degrees_y = camera_rotation_y.to_degrees();
+                        if ui.add(egui::Slider::new(&mut degrees_y, -180.0..=180.0).suffix("°")).changed() {
+                            *camera_rotation_y = degrees_y.to_radians();
+                            camera_rotation_changed = true;
+                        }
+                    });
+                }
+
                 // Pan step size depends on zoom (more zoomed in = smaller steps)
                 let pan_step = 0.1 / *zoom;
 
@@ -427,7 +503,10 @@ impl EguiLayer {
                     *pan_x = 0.0;
                     *pan_y = 0.0;
                     *rotation = 0.0;
+                    *camera_rotation_x = 0.0;
+                    *camera_rotation_y = 0.0;
                     view_changed = true;
+                    camera_rotation_changed = true;
                 }
             });
 
@@ -489,6 +568,16 @@ impl EguiLayer {
                                         }
                                     });
 
+                                    // Z offset (only show in 3D mode)
+                                    if matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
+                                        ui.horizontal(|ui| {
+                                            ui.label("g (Z offset):");
+                                            if ui.add(egui::DragValue::new(&mut transform.g).speed(0.01)).changed() {
+                                                flame_changed = true;
+                                            }
+                                        });
+                                    }
+
                                     ui.separator();
                                     ui.label("Weight");
                                     if ui.add(egui::Slider::new(&mut transform.weight, 0.0..=2.0)).changed() {
@@ -514,18 +603,37 @@ impl EguiLayer {
                                     }
 
                                     ui.separator();
-                                    ui.label("Variations");
+                                    ui.label("2D Variations");
 
-                                    let variation_names = [
+                                    let variation_names_2d = [
                                         "Linear", "Sinusoidal", "Spherical", "Swirl",
                                         "Horseshoe", "Polar", "Handkerchief", "Heart",
                                         "Disc", "Spiral", "Hyperbolic", "Diamond",
                                         "Ex", "Julia", "Bent", "Waves"
                                     ];
 
-                                    for (idx, name) in variation_names.iter().enumerate() {
+                                    for (idx, name) in variation_names_2d.iter().enumerate() {
                                         if ui.add(egui::Slider::new(&mut transform.variations[idx], 0.0..=2.0).text(*name)).changed() {
                                             flame_changed = true;
+                                        }
+                                    }
+
+                                    // Show 3D variations only in 3D mode
+                                    if matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
+                                        ui.separator();
+                                        ui.label("3D Variations");
+
+                                        let variation_names_3d = [
+                                            "Zcone", "Flatten", "Hemisphere",
+                                            "PreRotateX", "PreRotateY", "PostRotateX", "PostRotateY",
+                                            "ZScale"
+                                        ];
+
+                                        for (i, name) in variation_names_3d.iter().enumerate() {
+                                            let idx = 16 + i; // 3D variations start at index 16
+                                            if ui.add(egui::Slider::new(&mut transform.variations[idx], 0.0..=2.0).text(*name)).changed() {
+                                                flame_changed = true;
+                                            }
                                         }
                                     }
 
@@ -824,6 +932,9 @@ impl EguiLayer {
             preset_changed,
             add_transform,
             delete_transform,
+            render_mode_changed,
+            projection_changed,
+            camera_rotation_changed,
         }
     }
 }
