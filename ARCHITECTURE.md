@@ -40,11 +40,12 @@ fractal_flame_wgpu/
 │       ├── mod.rs              Module exports
 │       │
 │       ├── transforms.rs       🔥 CORE ALGORITHM
-│       │                       - Transform struct (affine + variations)
+│       │                       - Transform struct (affine + variations + g field)
+│       │                       - RenderMode (2D/3D) and ProjectionType
 │       │                       - Point calculations (r, θ, φ)
-│       │                       - 16 Variation functions (CPU reference)
-│       │                       - Flame struct (transform collection + name)
-│       │                       - CPU iteration reference
+│       │                       - 24 Variation functions (16 2D + 8 3D, CPU reference)
+│       │                       - Flame struct (transform collection + name + 3D settings)
+│       │                       - CPU iteration reference (2D only)
 │       │
 │       ├── presets.rs          Preset system
 │       │                       - PresetLibrary (stores Vec<FractalConfig>)
@@ -72,10 +73,12 @@ fractal_flame_wgpu/
 │       │                       - Window resize handling
 │       │
 │       ├── pipelines.rs        FlamePipelines
-│       │                       - Compute pipeline (trajectory)
+│       │                       - Compute pipeline (trajectory 2D)
+│       │                       - Compute pipeline (trajectory 3D)
 │       │                       - Compute pipeline (accumulate)
 │       │                       - Render pipeline (tonemap)
 │       │                       - Bind group layouts
+│       │                       - Runtime pipeline selection based on render mode
 │       │
 │       └── buffers.rs          FlameBuffers + GPU data structures
 │                               - Transform buffer (storage)
@@ -93,7 +96,7 @@ fractal_flame_wgpu/
 │                               FlameRenderer
 │                               - Manages rendering state
 │                               - Orchestrates GPU passes:
-│                                 1. compute_pass() - generate samples
+│                                 1. compute_pass() - generate samples (2D or 3D shader)
 │                                 2. accumulate_pass() - blend samples
 │                                 3. tonemap_pass() - display
 │                               - Tracks samples/iterations
@@ -116,13 +119,21 @@ fractal_flame_wgpu/
 │                               - Undo/redo tracking
 │
 └── Shaders (WGSL)
-    ├── trajectory.wgsl         🔥 COMPUTE: Flame iteration
+    ├── trajectory.wgsl         🔥 COMPUTE: Flame iteration (2D mode)
     │                           - PCG random number generator
     │                           - Transform selection (weighted)
-    │                           - Affine transformation
-    │                           - 16 Variation functions (GPU)
+    │                           - Affine transformation (2D)
+    │                           - 16 2D Variation functions (GPU)
     │                           - Color accumulation (3 modes)
     │                           - Write to temp texture
+    │
+    ├── trajectory_3d.wgsl      🔥 COMPUTE: Flame iteration (3D mode)
+    │                           - Same as 2D plus:
+    │                           - Affine transformation with Z (g field)
+    │                           - 24 Variation functions (16 2D + 8 3D)
+    │                           - Camera rotation (pitch/yaw)
+    │                           - Projection (orthographic/perspective)
+    │                           - Z tracking through iteration
     │
     ├── accumulate.wgsl         🔥 COMPUTE: Temporal blending
     │                           - Read temp samples
@@ -294,8 +305,9 @@ In render():
 struct GpuTransform {
     affine: mat2x2<f32>,    // 2x2 linear transform
     offset: vec2<f32>,      // Translation (e, f)
+    g: f32,                 // Z offset (3D mode only)
     weight: f32,            // Selection probability
-    variations: [f32; 16],  // Variation weights
+    variations: [f32; 24],  // Variation weights (16 2D + 8 3D)
     color: vec3<f32>,       // RGB color
     color_speed: f32,       // Color blend factor
 }
@@ -315,8 +327,13 @@ struct GpuParams {
     zoom: f32,               // View transform
     pan_x: f32,
     pan_y: f32,
-    rotation: f32,
+    rotation: f32,           // 2D rotation
     speed_factor: f32,       // Speed color blend
+    // 3D mode fields (added 2025-10-21)
+    camera_pitch: f32,       // Camera X-axis rotation (up/down)
+    camera_yaw: f32,         // Camera Y-axis rotation (left/right)
+    projection_type: u32,    // 0=Orthographic, 1=Perspective
+    perspective_strength: f32, // Perspective intensity
 }
 ```
 
@@ -334,13 +351,13 @@ struct TonemapParams {
 
 ## 🔥 Flame Algorithm (GPU Implementation)
 
-### Trajectory Shader Logic
+### Trajectory Shader Logic (2D Mode)
 ```
 1. Initialize RNG with unique seed:
    seed = params.seed + global_invocation_id
 
 2. Generate random starting point:
-   p = random_point_in_circle()
+   p = random_point_in_circle()  // vec2
 
 3. Burn-in iterations (discard):
    for i in 0..burn_in:
@@ -351,10 +368,10 @@ struct TonemapParams {
      // Select transform weighted by probability
      transform_idx = select_transform(rng)
 
-     // Apply affine transformation
+     // Apply affine transformation (2D)
      p' = transform.affine * p + transform.offset
 
-     // Apply variation functions
+     // Apply variation functions (16 2D variations)
      p'' = sum(weight[i] * variation[i](p'))
 
      // Update color based on mode:
@@ -368,6 +385,55 @@ struct TonemapParams {
 
      // Project to screen space with view transform
      screen_pos = world_to_screen(p'', zoom, pan, rotation)
+
+     // Write to texture (additive blend)
+     if in_bounds(screen_pos):
+       temp_samples[screen_pos] += vec4(color, 1.0)
+
+     p = p''
+```
+
+### Trajectory Shader Logic (3D Mode)
+```
+1. Initialize RNG with unique seed:
+   seed = params.seed + global_invocation_id
+
+2. Generate random starting point:
+   p = random_point_in_sphere()  // vec3
+
+3. Burn-in iterations (discard):
+   for i in 0..burn_in:
+     p = iterate_flame_3d(p)
+
+4. Accumulation iterations:
+   for i in 0..iterations_per_thread:
+     // Select transform weighted by probability
+     transform_idx = select_transform(rng)
+
+     // Apply affine transformation (2D XY, with Z offset)
+     p'.xy = transform.affine * p.xy + transform.offset
+     p'.z = p.z + transform.g  // Z offset
+
+     // Apply variation functions (24 total: 16 2D + 8 3D)
+     // - 2D variations (0-15): Pass Z through unchanged
+     // - Z-only variations (16,17,23): Modify result.z directly
+     // - Full 3D variations (18-22): Modify all axes
+     p'' = apply_all_variations(p', transform.variations)
+
+     // Update color (same as 2D)
+     color = update_color(color, transform, p', p'')
+
+     // Apply camera rotation (pitch, yaw)
+     p_rotated = rotate_camera(p'', camera_pitch, camera_yaw)
+
+     // Apply projection (orthographic or perspective)
+     if projection_type == Orthographic:
+       screen_pos_2d = p_rotated.xy
+     else:  // Perspective
+       screen_pos_2d = p_rotated.xy / (1.0 + p_rotated.z * perspective_strength)
+
+     // Project to screen space with view transform
+     screen_pos = world_to_screen(screen_pos_2d, zoom, pan, rotation)
 
      // Write to texture (additive blend)
      if in_bounds(screen_pos):
@@ -420,7 +486,7 @@ For each pixel:
 ## 🔢 Key Constants
 
 ```rust
-MAX_VARIATIONS = 16              // Number of variation functions
+MAX_VARIATIONS = 24              // Number of variation functions (16 2D + 8 3D)
 MAX_TRANSFORMS = 32              // Max transforms in a flame (buffer limit)
 PALETTE_SIZE = 256               // 1D palette texture resolution
 WORKGROUP_SIZE = 64              // 8x8 threads per workgroup
@@ -475,7 +541,8 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 
 | Task | Files to Modify |
 |------|-----------------|
-| Add new variation | [transforms.rs](src/scene/transforms.rs), [trajectory.wgsl](shaders/trajectory.wgsl) |
+| Add new 2D variation | [transforms.rs](src/scene/transforms.rs), [trajectory.wgsl](shaders/trajectory.wgsl), [trajectory_3d.wgsl](shaders/trajectory_3d.wgsl) |
+| Add new 3D variation | [transforms.rs](src/scene/transforms.rs), [trajectory_3d.wgsl](shaders/trajectory_3d.wgsl) |
 | Change color algorithm | [trajectory.wgsl](shaders/trajectory.wgsl), [tonemap.wgsl](shaders/tonemap.wgsl) |
 | Add UI panel | [ui/mod.rs](src/ui/mod.rs) |
 | Add preset | [presets.rs](src/scene/presets.rs) |
@@ -490,5 +557,5 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 
 ---
 
-**Last Updated:** 2025-10-20
+**Last Updated:** 2025-10-21
 **Project:** fflame-rust
