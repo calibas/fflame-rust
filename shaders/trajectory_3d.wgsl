@@ -383,18 +383,20 @@ fn apply_variations(xform: Transform, p: vec3<f32>, rng: ptr<function, RngState>
     }
 
     // === 3D Variations (16-23) ===
+    // Note: Z-only variations modify result.z directly instead of adding to result
 
     // Variation 16: Zcone - Z becomes distance from origin in XY
     if (xform.variations[16] != 0.0) {
-        result += xform.variations[16] * variation_zcone(p);
+        let r = length(p.xy);
+        result.z += xform.variations[16] * r;
     }
 
     // Variation 17: Flatten - compress Z toward zero
     if (xform.variations[17] != 0.0) {
-        result += xform.variations[17] * variation_flatten(p, 0.5);
+        result.z *= (1.0 - xform.variations[17] * 0.5);
     }
 
-    // Variation 18: Hemisphere - project onto hemisphere
+    // Variation 18: Hemisphere - project onto hemisphere (affects all axes)
     if (xform.variations[18] != 0.0) {
         result += xform.variations[18] * variation_hemisphere(p);
     }
@@ -421,7 +423,7 @@ fn apply_variations(xform: Transform, p: vec3<f32>, rng: ptr<function, RngState>
 
     // Variation 23: ZScale - scale Z coordinate
     if (xform.variations[23] != 0.0) {
-        result += xform.variations[23] * variation_zscale(p, 2.0);
+        result.z *= (1.0 + xform.variations[23]);
     }
 
     return result;
