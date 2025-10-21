@@ -25,7 +25,8 @@ This document compares the current implementation against [outline.md](outline.m
 - ✅ [src/scene/palette.rs](src/scene/palette.rs) - Palette system
 - ✅ [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs) - Compute dispatch
 - ✅ [src/util.rs](src/util.rs) - Utilities (performance metrics)
-- ✅ [shaders/trajectory.wgsl](shaders/trajectory.wgsl) - Compute kernel
+- ✅ [shaders/trajectory.wgsl](shaders/trajectory.wgsl) - 2D compute kernel
+- ✅ [shaders/trajectory_3d.wgsl](shaders/trajectory_3d.wgsl) - 3D compute kernel (added 2025-10-21)
 - ✅ [shaders/accumulate.wgsl](shaders/accumulate.wgsl) - Accumulation pass
 - ✅ [shaders/tonemap.wgsl](shaders/tonemap.wgsl) - Tonemapping
 
@@ -37,6 +38,7 @@ This document compares the current implementation against [outline.md](outline.m
 - ➕ [assets/palettes/](assets/palettes/) - Palette files (fire.palette, cool.palette, rainbow.palette)
 - ➕ [assets/presets/](assets/presets/) - Preset FractalConfig files (.flame JSON)
 - ➕ [examples/export_presets.rs](examples/export_presets.rs) - Export built-in presets to files
+- ➕ **3D Rendering System** (added 2025-10-21) - Full pseudo-3D with camera rotation
 
 **Missing from outline:**
 - ❌ `docs/design_notes.md` - No docs folder
@@ -47,12 +49,13 @@ This document compares the current implementation against [outline.md](outline.m
 ### Data Structures (Section 4)
 
 #### 4.1 Transform ✅
-Fully implemented in [src/scene/transforms.rs:44-114](src/scene/transforms.rs#L44-L114)
+Fully implemented in [src/scene/transforms.rs](src/scene/transforms.rs)
 - ✅ Affine matrix (a, b, c, d, e, f)
 - ✅ Weight
-- ✅ 16 variation weights array
+- ✅ 24 variation weights array (16 2D + 8 3D) - **Expanded 2025-10-21**
 - ✅ Color [f32; 3]
 - ➕ **Extra:** color_speed field for palette blending
+- ➕ **Extra:** g (Z offset) for 3D mode - **Added 2025-10-21**
 
 #### 4.2 Palette/LUT ✅
 Implemented in [src/scene/palette.rs](src/scene/palette.rs)
@@ -76,12 +79,15 @@ Implemented as `GpuParams` in [src/gpu/buffers.rs](src/gpu/buffers.rs)
 - ✅ Burn-in iterations
 - ✅ Splat size
 - ➕ **Extra:** Color mode, speed factor
+- ➕ **Extra:** Render mode (2D/3D), projection type, perspective strength - **Added 2025-10-21**
+- ➕ **Extra:** Camera rotation (pitch/yaw) for 3D viewing - **Added 2025-10-21**
 
 ### GPU Pipeline (Section 5)
 
 #### 5.1 Pipelines ✅
 All implemented in [src/gpu/pipelines.rs](src/gpu/pipelines.rs)
-- ✅ **Compute pipeline: trajectory** - Generates flame samples
+- ✅ **Compute pipeline: trajectory (2D)** - Generates flame samples in 2D mode
+- ✅ **Compute pipeline: trajectory (3D)** - Generates flame samples in 3D mode (added 2025-10-21)
 - ✅ **Compute pipeline: accumulate** - Blends samples over time
 - ✅ **Render pipeline: tonemap** - Log mapping + palette lookup
 - ❌ **Reduce pipeline** - Not needed (using ping-pong accumulation instead)
@@ -90,8 +96,9 @@ All implemented in [src/gpu/pipelines.rs](src/gpu/pipelines.rs)
 - ✅ WGSL shaders
 - ✅ Single-precision float math
 - ✅ Per-thread RNG (PCG-based in [shaders/trajectory.wgsl:17-23](shaders/trajectory.wgsl#L17-L23))
-- ✅ 16 variation functions implemented in WGSL
+- ✅ 24 variation functions implemented in WGSL (16 2D + 8 3D) - **Expanded 2025-10-21**
 - ✅ CPU-side variation reference in Rust ([src/scene/transforms.rs:163-276](src/scene/transforms.rs#L163-L276))
+- ✅ Dual shader system: trajectory.wgsl (2D) and trajectory_3d.wgsl (3D) - **Added 2025-10-21**
 - ⚠️ Float atomics not used (using additive blending instead)
 
 ### CPU Render Orchestration (Section 6) ✅
@@ -214,10 +221,22 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 - ✅ Keyboard shortcuts (arrows, +/-, Ctrl+Z/Y)
 
 ### Variation Functions
-**All 16 variations implemented:**
+**All 24 variations implemented (16 2D + 8 3D):**
+
+**2D Variations (0-15):**
 0. Linear, 1. Sinusoidal, 2. Spherical, 3. Swirl, 4. Horseshoe, 5. Polar,
 6. Handkerchief, 7. Heart, 8. Disc, 9. Spiral, 10. Hyperbolic, 11. Diamond,
 12. Ex, 13. Julia, 14. Bent, 15. Waves
+
+**3D Variations (16-23) - Added 2025-10-21:**
+16. Zcone (Z = distance from origin in XY)
+17. Flatten (compress Z toward zero)
+18. Hemisphere (project onto sphere surface)
+19. PreRotateX (rotate before variations)
+20. PreRotateY (rotate before variations)
+21. PostRotateX (rotate after variations)
+22. PostRotateY (rotate after variations)
+23. ZScale (scale Z coordinate)
 
 ---
 
@@ -260,7 +279,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 | File Structure | ⚠️ 75% | Missing assets/, docs/, examples/ |
 | Data Structures | ✅ 100% | All implemented + extras |
 | GPU Pipelines | ✅ 95% | Working, using different accumulation strategy |
-| Shaders | ✅ 100% | All 3 shaders complete |
+| Shaders | ✅ 100% | All 4 shaders complete (2D/3D trajectory, accumulate, tonemap) |
 | CPU Orchestration | ✅ 100% | Progressive rendering working |
 | UI Panels | ✅ 90% | Missing preset browser, randomize |
 | Viewport Interaction | ✅ 100% | Mouse + keyboard working |
@@ -321,7 +340,8 @@ UI
 └── src/ui/panels.rs               - (empty/unused)
 
 Shaders
-├── shaders/trajectory.wgsl        - Flame iteration compute
+├── shaders/trajectory.wgsl        - Flame iteration compute (2D mode)
+├── shaders/trajectory_3d.wgsl     - Flame iteration compute (3D mode)
 ├── shaders/accumulate.wgsl        - Temporal accumulation
 └── shaders/tonemap.wgsl           - Tone mapping + display
 
