@@ -48,11 +48,22 @@ See @outline.md for original design goals
 
 ### Build Commands
 ```bash
-# Desktop
+# Desktop (Windows/macOS/Linux)
 cargo run --release
 
-# WASM
+# WASM (Web)
 wasm-pack build --target web --release
+
+# iOS (experimental - requires dependency fixes)
+cargo build --target aarch64-apple-ios
+# Known issues: 'rfd' crate not compatible with iOS
+
+# Android (experimental - requires dependency configuration)
+cargo build --target aarch64-linux-android
+# Known issues: 'android-activity' needs specific features enabled
+
+# Note: Mobile builds are not fully functional yet but may be possible
+# with additional work on platform-specific dependencies
 ```
 
 ### Testing
@@ -279,6 +290,49 @@ Full pseudo-3D rendering inspired by Apophysis 7X:
 - Transparent PNG export reads from accumulation buffer (Rgba16Float) and applies tone mapping on CPU
   - This is necessary because tonemap shader blends RGB with background before alpha is applied
   - Accumulation buffer stores raw fractal colors with separate density channel
+
+## Mobile Platform Support (Experimental)
+
+**Status:** Cross-compilation works, but runtime execution requires dependency fixes.
+
+### iOS (aarch64-apple-ios)
+```bash
+cargo build --target aarch64-apple-ios
+```
+
+**Blockers:**
+- **rfd** (file dialogs) - Not compatible with iOS
+  - Solution: Conditional compilation to disable file dialogs on iOS, or use platform-specific alternatives
+  - Impact: Config import/export, palette import/export, PNG export would need iOS-native file pickers
+
+**Potential Solutions:**
+- Use `#[cfg(not(target_os = "ios"))]` to exclude rfd on iOS
+- Implement iOS-native file picker using `objc` or Swift interop
+- Share via iOS share sheet instead of file dialogs
+
+### Android (aarch64-linux-android)
+```bash
+cargo build --target aarch64-linux-android
+```
+
+**Blockers:**
+- **android-activity** - Requires specific cargo features to be enabled
+  - Needs proper Android app manifest and activity configuration
+  - winit may need Android-specific initialization
+
+**Potential Solutions:**
+- Add `android-activity` with correct features to Cargo.toml
+- Create Android-specific build configuration
+- Use `cargo-apk` or `xbuild` for easier Android packaging
+
+### General Mobile Considerations
+- **Touch controls** - Current UI is mouse/keyboard focused
+- **Performance** - Mobile GPUs may need lower default iteration counts
+- **Screen sizes** - UI scaling for smaller displays and portrait mode
+- **File access** - Platform-specific storage APIs (iOS sandbox, Android storage permissions)
+- **App packaging** - Need proper mobile app bundles (.ipa for iOS, .apk/.aab for Android)
+
+**Feasibility:** Medium to High - The core rendering engine should work on mobile GPUs (wgpu/WebGPU supports mobile), but the surrounding infrastructure (file I/O, UI, windowing) needs platform-specific adaptations.
 
 ## Optional/Future Features
 
