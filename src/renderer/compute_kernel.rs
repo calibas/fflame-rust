@@ -256,8 +256,8 @@ impl FlameRenderer {
             rotation: config.rotation,
             speed_factor: config.speed_factor,
             perspective_strength,
-            camera_rotation_x: 0.0, // TODO: Get from config
-            camera_rotation_y: 0.0, // TODO: Get from config
+            camera_rotation_x: config.camera_rotation_x,
+            camera_rotation_y: config.camera_rotation_y,
             _pad3: 0.0,
             _pad4: 0.0,
         };

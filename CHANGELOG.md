@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed - 2025-10-21
+
+#### WASM Frame Smearing and Performance
+Critical bug fixes for WebAssembly builds:
+
+- **Fixed frame accumulation bug in WASM**
+  - Root cause: Tonemap pipeline used `BlendState::ALPHA_BLENDING`, causing frames to blend instead of replace
+  - Solution: Changed to `blend: None` in tonemap pipeline ([src/gpu/pipelines.rs:257](src/gpu/pipelines.rs#L257))
+  - Shader already handles all color mixing internally, GPU blending was unnecessary
+  - **Side effect: Performance improvement** on all platforms due to eliminated blend operations
+
+- **Fixed "Encoder is invalid" WebGPU error in WASM**
+  - Root cause: Accumulation textures lacked `RENDER_ATTACHMENT` usage, preventing render pass clearing
+  - Solution: Platform-specific texture usage flags ([src/gpu/buffers.rs:212-216](src/gpu/buffers.rs#L212-L216))
+    - Desktop: `STORAGE_BINDING | TEXTURE_BINDING | COPY_DST | COPY_SRC`
+    - WASM: Added `RENDER_ATTACHMENT` for render pass clearing
+  - Created `clear_texture_wasm()` using render passes instead of `clear_texture()` feature
+  - Desktop builds unaffected (all changes use `#[cfg(target_arch = "wasm32")]`)
+
+- **Fixed camera rotation not loading from presets**
+  - Changed hardcoded `0.0` to `config.camera_rotation_x/y` ([src/renderer/compute_kernel.rs:259-260](src/renderer/compute_kernel.rs#L259-L260))
+  - Camera rotation now properly loads when switching presets
+
+**Platform-Specific Implementation:**
+- Desktop: Uses `encoder.clear_texture()` with `CLEAR_TEXTURE` feature (unchanged)
+- WASM: Uses render pass with `LoadOp::Clear` for compatibility
+- Temp samples texture clearing skipped in WASM (compute shader overwrites all pixels anyway)
+- All changes isolated with conditional compilation - zero impact on desktop builds
+
+**Files modified:**
+- [src/gpu/pipelines.rs](src/gpu/pipelines.rs) - Disabled alpha blending
+- [src/gpu/buffers.rs](src/gpu/buffers.rs) - WASM texture clearing
+- [src/gpu/device.rs](src/gpu/device.rs) - Explicit `CompositeAlphaMode::Opaque`
+- [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs) - Camera rotation from config
+
 ### Added - 2025-10-21
 
 #### 3D Rendering System
@@ -49,6 +84,12 @@ Complete pseudo-3D rendering implementation inspired by Apophysis 7X:
   - Uses Zcone, Spherical, PostRotateY, and Hemisphere variations
   - Different Z offsets per transform to create depth layers
   - Perspective projection with strength 3.0
+
+- **Flower of Life Preset**
+  - Sacred geometry pattern with 6-fold rotational symmetry
+  - Central Spiral variation with 6 Linear transforms arranged hexagonally
+  - Rainbow color scheme (hue-shifted per transform)
+  - Created based on user request for Hindu sacred geometry
 
 - **Backward Compatibility**
   - Custom deserializer accepts both 16 and 24-element variation arrays

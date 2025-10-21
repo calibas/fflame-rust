@@ -4,6 +4,7 @@
 See @STATUS.md for implementation status vs original design
 See @ARCHITECTURE.md for code organization and data flow
 See @CHANGELOG.md for recent changes and release notes
+See @WASM-STATUS.md for WebAssembly build status and platform-specific details
 See @outline.md for original design goals
 
 ## Quick Reference
