@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed - 2025-10-21
 
-#### WASM Event Loop Memory Leak and Performance (CRITICAL)
+#### Event Loop Memory Leak and Performance (CRITICAL)
 **Root Cause:** Event loop `set_control_flow()` was being called on **every single event** (mouse moves, keyboard presses, window events) instead of once per frame.
 
 **Symptoms:**
