@@ -54,12 +54,35 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             #[allow(deprecated)]
             let window = event_loop.create_window(attributes)?;
 
-            // Set initial size to fill the browser window
-            let width = web_window.inner_width().unwrap().as_f64().unwrap() as u32;
-            let height = web_window.inner_height().unwrap().as_f64().unwrap() as u32;
-            let _ = window.request_inner_size(PhysicalSize::new(width, height));
+            // Set canvas size to match display size with device pixel ratio
+            // This ensures 1:1 pixel mapping for crisp rendering
+            let dpr = web_window.device_pixel_ratio();
+            let width = web_window.inner_width().unwrap().as_f64().unwrap();
+            let height = web_window.inner_height().unwrap().as_f64().unwrap();
 
-            log::info!("Initial window size: {}x{}", width, height);
+            // Physical pixels = CSS pixels × device pixel ratio
+            let physical_width = (width * dpr) as u32;
+            let physical_height = (height * dpr) as u32;
+
+            let _ = window.request_inner_size(PhysicalSize::new(physical_width, physical_height));
+
+            // DEBUG: Log all size-related information
+            let actual_inner_size = window.inner_size();
+            let canvas_element = document.get_element_by_id("canvas").unwrap();
+            let canvas = canvas_element.dyn_into::<web_sys::HtmlCanvasElement>().unwrap();
+
+            log::info!("=== WASM Canvas Size Debug ===");
+            log::info!("  Browser window (CSS): {}x{}", width as u32, height as u32);
+            log::info!("  Device Pixel Ratio: {}", dpr);
+            log::info!("  Calculated physical: {}x{}", physical_width, physical_height);
+            log::info!("  Window inner_size(): {}x{}", actual_inner_size.width, actual_inner_size.height);
+            log::info!("  Canvas element width: {}", canvas.width());
+            log::info!("  Canvas element height: {}", canvas.height());
+            log::info!("  Canvas clientWidth: {}", canvas.client_width());
+            log::info!("  Canvas clientHeight: {}", canvas.client_height());
+            log::info!("  Canvas offsetWidth: {}", canvas.offset_width());
+            log::info!("  Canvas offsetHeight: {}", canvas.offset_height());
+            log::info!("===============================");
 
             window
         };
