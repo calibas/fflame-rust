@@ -208,6 +208,61 @@ pub fn create_3d_flame() -> Flame {
     flame
 }
 
+/// Create a Flower of Life sacred geometry pattern
+/// Uses central spiral with 6 linear petals arranged in a hexagon
+#[allow(dead_code)]
+pub fn create_flower_of_life() -> Flame {
+    let mut flame = Flame::new();
+    flame.name = "Flower of Life".to_string();
+
+    use std::f32::consts::PI;
+
+    // Center transform with spiral to create the core circle
+    let mut center = Transform::new();
+    center.a = 0.5;
+    center.d = 0.5;
+    center.variations[VariationType::Spiral as usize] = 1.0;
+    center.color = [1.0, 1.0, 1.0]; // White center
+    center.weight = 1.0;
+    flame.add_transform(center);
+
+    // Create 6 transforms arranged in a hexagon (60-degree increments)
+    // Each uses linear variation to create clean circular petals
+    for i in 0..6 {
+        let angle = (i as f32) * PI / 3.0; // 60 degrees in radians
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+
+        let mut xform = Transform::new();
+
+        // Small scale with rotation
+        xform.a = cos_a * 0.4;
+        xform.b = -sin_a * 0.4;
+        xform.c = sin_a * 0.4;
+        xform.d = cos_a * 0.4;
+
+        // Offset to position this petal
+        xform.e = cos_a * 0.35;
+        xform.f = sin_a * 0.35;
+
+        // Use linear variation for clean circles
+        xform.variations[VariationType::Linear as usize] = 1.0;
+
+        // Create rainbow colors around the circle
+        let hue = (i as f32) / 6.0;
+        xform.color = [
+            (hue * PI * 2.0).sin() * 0.5 + 0.5,
+            ((hue + 0.33) * PI * 2.0).sin() * 0.5 + 0.5,
+            ((hue + 0.67) * PI * 2.0).sin() * 0.5 + 0.5,
+        ];
+
+        xform.weight = 1.0;
+        flame.add_transform(xform);
+    }
+
+    flame
+}
+
 /// Get all preset flames
 #[allow(dead_code)]
 pub fn get_all_presets() -> Vec<(&'static str, Flame)> {
@@ -217,6 +272,7 @@ pub fn get_all_presets() -> Vec<(&'static str, Flame)> {
         ("Spiral", create_spiral_flame()),
         ("Julia", create_julia_flame()),
         ("Complex", create_complex_flame()),
+        ("Flower of Life", create_flower_of_life()),
     ]
 }
 
@@ -253,6 +309,7 @@ impl PresetLibrary {
                 Self::flame_to_config(create_spiral_flame()),
                 Self::flame_to_config(create_julia_flame()),
                 Self::flame_to_config(create_complex_flame()),
+                Self::flame_to_config(create_flower_of_life()),
                 Self::flame_to_config(create_3d_flame()),
             ]);
         }
