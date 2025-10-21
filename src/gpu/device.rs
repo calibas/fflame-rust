@@ -57,7 +57,9 @@ impl GpuContext {
             width: size.width,
             height: size.height,
             present_mode: PresentMode::Fifo,
-            alpha_mode: CompositeAlphaMode::Auto,
+            // Use Opaque alpha mode to ensure frames don't accumulate
+            // Auto mode in WASM can cause compositing issues where frames blend together
+            alpha_mode: CompositeAlphaMode::Opaque,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };

@@ -207,6 +207,14 @@ impl FlameBuffers {
 
         // Helper function to create accumulation texture
         let create_accum_texture = |label: &str| {
+            // WASM needs RENDER_ATTACHMENT for clear_texture_wasm() to work
+            // Desktop uses CLEAR_TEXTURE feature instead
+            #[cfg(target_arch = "wasm32")]
+            let usage = TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC | TextureUsages::RENDER_ATTACHMENT;
+
+            #[cfg(not(target_arch = "wasm32"))]
+            let usage = TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC;
+
             let texture = device.create_texture(&TextureDescriptor {
                 label: Some(label),
                 size: Extent3d {
@@ -218,7 +226,7 @@ impl FlameBuffers {
                 sample_count: 1,
                 dimension: TextureDimension::D2,
                 format: TextureFormat::Rgba16Float,
-                usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
+                usage,
                 view_formats: &[],
             });
             let view = texture.create_view(&TextureViewDescriptor::default());
@@ -313,30 +321,80 @@ impl FlameBuffers {
 
     /// Clear all accumulation buffers
     pub fn clear_all(&self, encoder: &mut CommandEncoder) {
-        let range = ImageSubresourceRange {
-            aspect: TextureAspect::All,
-            base_mip_level: 0,
-            mip_level_count: None,
-            base_array_layer: 0,
-            array_layer_count: None,
-        };
-        encoder.clear_texture(&self.accumulation_texture_a, &range);
-        encoder.clear_texture(&self.accumulation_texture_b, &range);
-        encoder.clear_texture(&self.temp_samples_texture, &range);
-    }
-
-    /// Clear temp samples texture only
-    pub fn clear_temp(&self, encoder: &mut CommandEncoder) {
-        encoder.clear_texture(
-            &self.temp_samples_texture,
-            &ImageSubresourceRange {
+        // Use CLEAR_TEXTURE feature if available (desktop usually has it)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let range = ImageSubresourceRange {
                 aspect: TextureAspect::All,
                 base_mip_level: 0,
                 mip_level_count: None,
                 base_array_layer: 0,
                 array_layer_count: None,
-            },
-        );
+            };
+            encoder.clear_texture(&self.accumulation_texture_a, &range);
+            encoder.clear_texture(&self.accumulation_texture_b, &range);
+            encoder.clear_texture(&self.temp_samples_texture, &range);
+        }
+
+        // WASM: Clear textures by rendering black to them
+        // This is more compatible than CLEAR_TEXTURE which may not be supported
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.clear_texture_wasm(encoder, &self.accumulation_view_a);
+            self.clear_texture_wasm(encoder, &self.accumulation_view_b);
+            self.clear_texture_wasm(encoder, &self.temp_samples_view);
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn clear_texture_wasm(&self, encoder: &mut CommandEncoder, texture_view: &TextureView) {
+        // Use a render pass to clear the texture
+        // This is more compatible than clear_texture() which may not work in WebGPU
+        // Clear to all zeros: (0,0,0,0) - zero RGB color and zero alpha (density)
+        let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Clear Texture Pass"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: texture_view,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Clear(Color {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 0.0,
+                    }),
+                    store: StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        drop(render_pass); // End the render pass immediately
+    }
+
+    /// Clear temp samples texture only
+    pub fn clear_temp(&self, encoder: &mut CommandEncoder) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            encoder.clear_texture(
+                &self.temp_samples_texture,
+                &ImageSubresourceRange {
+                    aspect: TextureAspect::All,
+                    base_mip_level: 0,
+                    mip_level_count: None,
+                    base_array_layer: 0,
+                    array_layer_count: None,
+                },
+            );
+        }
+
+        // WASM: Don't clear temp texture - it's a storage texture that can't be cleared with render pass
+        // The trajectory compute shader writes to all pixels anyway, so clearing isn't necessary
+        #[cfg(target_arch = "wasm32")]
+        {
+            // No-op for WASM
+        }
     }
 
     /// Get the current accumulation texture view (for display)
