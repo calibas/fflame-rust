@@ -10,6 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         create_spiral_flame(),
         create_julia_flame(),
         create_complex_flame(),
+        create_flower_of_life(),
     ];
 
     for flame in flames {
@@ -19,6 +20,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             pan_x: 0.0,
             pan_y: 0.0,
             rotation: 0.0,
+            camera_rotation_x: 0.0,
+            camera_rotation_y: 0.0,
             density_scale: 1.0,
             speed_factor: 0.5,
             color_mode: ColorMode::Transform,

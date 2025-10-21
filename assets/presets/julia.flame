@@ -9,6 +9,7 @@
         "d": 0.8,
         "e": 0.0,
         "f": 0.0,
+        "g": 0.0,
         "weight": 1.0,
         "variations": [
           0.0,
@@ -26,6 +27,14 @@
           0.0,
           1.0,
           0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
           0.0
         ],
         "color": [
@@ -36,12 +45,16 @@
         "color_speed": 0.5
       }
     ],
-    "final_transform": null
+    "final_transform": null,
+    "render_mode": "TwoD",
+    "projection": "Orthographic"
   },
   "zoom": 1.0,
   "pan_x": 0.0,
   "pan_y": 0.0,
   "rotation": 0.0,
+  "camera_rotation_x": 0.0,
+  "camera_rotation_y": 0.0,
   "density_scale": 1.0,
   "speed_factor": 0.5,
   "color_mode": "Transform",
