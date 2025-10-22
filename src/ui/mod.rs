@@ -7,6 +7,7 @@ mod performance;
 mod response;
 mod settings;
 mod transforms;
+mod triangle_editor;
 mod view;
 
 pub use palette_editor::PaletteEditor;
@@ -30,6 +31,7 @@ pub struct EguiLayer {
     show_settings: bool,
     show_view: bool,
     show_transforms: bool,
+    show_triangle_editor: bool,
     show_help: bool,
 }
 
@@ -59,6 +61,7 @@ impl EguiLayer {
             show_settings: true,
             show_view: true,
             show_transforms: false,
+            show_triangle_editor: false,
             show_help: false,
         }
     }
@@ -135,6 +138,9 @@ impl EguiLayer {
         let mut palette_save_file = None;
         let mut palette_import_json = None;
         let mut palette_load_file = false;
+        let mut triangle_drag_started = false;
+        let mut triangle_dragging = false;
+        let mut triangle_drag_ended = false;
 
 
         let full_output = self.ctx.run(raw_input, |ctx| {
@@ -145,6 +151,7 @@ impl EguiLayer {
                 &mut self.show_settings,
                 &mut self.show_view,
                 &mut self.show_transforms,
+                &mut self.show_triangle_editor,
                 &mut self.show_help,
                 &mut self.show_palette_editor,
                 &mut self.show_config_window,
@@ -224,6 +231,17 @@ impl EguiLayer {
                 &mut flame_changed,
                 &mut add_transform,
                 &mut delete_transform,
+            );
+
+            // Render Triangle Editor window
+            triangle_editor::render_triangle_editor_window(
+                ctx,
+                &mut self.show_triangle_editor,
+                flame,
+                &mut flame_changed,
+                &mut triangle_drag_started,
+                &mut triangle_dragging,
+                &mut triangle_drag_ended,
             );
 
             // Render Palette Editor window
@@ -325,6 +343,9 @@ impl EguiLayer {
             render_mode_changed,
             projection_changed,
             camera_rotation_changed,
+            triangle_drag_started,
+            triangle_dragging,
+            triangle_drag_ended,
         }
     }
 }
