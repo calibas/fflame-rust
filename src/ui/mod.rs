@@ -149,7 +149,7 @@ impl EguiLayer {
                 &mut self.show_performance,
                 metrics,
                 window_size,
-                flame_renderer,
+                flame_renderer.as_deref(),
             );
 
             // Render Settings window
@@ -171,7 +171,7 @@ impl EguiLayer {
                 &mut render_mode_changed,
                 &mut projection_changed,
                 &mut flame_changed,
-                flame_renderer,
+                flame_renderer.as_deref(),
                 paused,
                 &mut pause_changed,
                 &mut reset_requested,
