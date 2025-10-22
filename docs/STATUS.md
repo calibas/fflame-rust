@@ -407,7 +407,7 @@ Testing/Profiling
 - Full pseudo-3D with camera rotation
 - 24 variations (16 2D + 8 3D)
 - Perspective/orthographic projection
-- See [../CHANGELOG.md](CHANGELOG.md) for details
+- See [../CHANGELOG.md](../CHANGELOG.md) for details
 
 ---
 
