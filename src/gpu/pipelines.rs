@@ -1,8 +1,9 @@
 use wgpu::*;
+use crate::shader_cache::ShaderCache;
+use crate::scene::transforms::Flame;
 
 pub struct FlamePipelines {
-    pub compute_pipeline: ComputePipeline,       // 2D trajectory pipeline
-    pub compute_pipeline_3d: ComputePipeline,    // 3D trajectory pipeline
+    pub shader_cache: ShaderCache,
     pub compute_bind_group_layout: BindGroupLayout,
     pub accumulate_pipeline: ComputePipeline,
     pub accumulate_bind_group_layout: BindGroupLayout,
@@ -11,18 +12,8 @@ pub struct FlamePipelines {
 }
 
 impl FlamePipelines {
-    pub fn new(device: &Device, surface_format: TextureFormat) -> Self {
-        // Load shaders
-        let trajectory_shader = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("Trajectory Shader 2D"),
-            source: ShaderSource::Wgsl(include_str!("../../shaders/trajectory.wgsl").into()),
-        });
-
-        let trajectory_shader_3d = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("Trajectory Shader 3D"),
-            source: ShaderSource::Wgsl(include_str!("../../shaders/trajectory_3d.wgsl").into()),
-        });
-
+    pub fn new(device: &Device, surface_format: TextureFormat, flame: &Flame) -> Self {
+        // Load non-trajectory shaders (these don't need dynamic compilation)
         let accumulate_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Accumulate Shader"),
             source: ShaderSource::Wgsl(include_str!("../../shaders/accumulate.wgsl").into()),
@@ -126,33 +117,10 @@ impl FlamePipelines {
             ],
         });
 
-        // Create compute pipeline
-        let compute_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("Compute Pipeline Layout"),
-            bind_group_layouts: &[&compute_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        // Create shader cache with dynamic trajectory pipelines
+        let shader_cache = ShaderCache::new(device, flame, &compute_bind_group_layout);
 
-        let compute_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: Some("Trajectory Compute Pipeline 2D"),
-            layout: Some(&compute_pipeline_layout),
-            module: &trajectory_shader,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-
-        // Create 3D compute pipeline (same layout as 2D)
-        let compute_pipeline_3d = device.create_compute_pipeline(&ComputePipelineDescriptor {
-            label: Some("Trajectory Compute Pipeline 3D"),
-            layout: Some(&compute_pipeline_layout),
-            module: &trajectory_shader_3d,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-
-        // Create accumulation bind group layout (temporary minimal version)
+        // Create accumulation bind group layout
         let accumulate_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Accumulate Bind Group Layout"),
             entries: &[
@@ -264,13 +232,26 @@ impl FlamePipelines {
         });
 
         Self {
-            compute_pipeline,
-            compute_pipeline_3d,
+            shader_cache,
             compute_bind_group_layout,
             accumulate_pipeline,
             accumulate_bind_group_layout,
             tonemap_pipeline,
             tonemap_bind_group_layout,
+        }
+    }
+
+    /// Ensure shaders are up-to-date with current flame configuration
+    /// Returns true if shaders were recompiled
+    pub fn ensure_shaders_current(&mut self, device: &Device, flame: &Flame) -> bool {
+        self.shader_cache.ensure_current(device, &self.compute_bind_group_layout, flame)
+    }
+
+    /// Get the appropriate compute pipeline for the current render mode
+    pub fn get_trajectory_pipeline(&self, render_mode: crate::scene::transforms::RenderMode) -> &ComputePipeline {
+        match render_mode {
+            crate::scene::transforms::RenderMode::TwoD => self.shader_cache.pipeline_2d(),
+            crate::scene::transforms::RenderMode::ThreeD => self.shader_cache.pipeline_3d(),
         }
     }
 

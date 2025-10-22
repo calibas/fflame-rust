@@ -31,7 +31,7 @@ impl FlameRenderer {
         height: u32,
         flame: &Flame,
     ) -> Self {
-        let pipelines = FlamePipelines::new(device, surface_format);
+        let pipelines = FlamePipelines::new(device, surface_format, flame);
         let buffers = FlameBuffers::new(device, queue, width, height, flame);
 
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
@@ -144,10 +144,7 @@ impl FlameRenderer {
         });
 
         // Select pipeline based on render mode
-        let pipeline = match self.current_render_mode {
-            crate::scene::transforms::RenderMode::TwoD => &self.pipelines.compute_pipeline,
-            crate::scene::transforms::RenderMode::ThreeD => &self.pipelines.compute_pipeline_3d,
-        };
+        let pipeline = self.pipelines.get_trajectory_pipeline(self.current_render_mode);
 
         compute_pass.set_pipeline(pipeline);
         compute_pass.set_bind_group(0, &self.compute_bind_group, &[]);
