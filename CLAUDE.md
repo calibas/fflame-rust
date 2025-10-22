@@ -1,11 +1,11 @@
 # Fractal Flame Renderer - Project Context
 
 ## Overview
-See @STATUS.md for implementation status vs original design
-See @ARCHITECTURE.md for code organization and data flow
-See @CHANGELOG.md for recent changes and release notes
-See @WASM-STATUS.md for WebAssembly build status and platform-specific details
-See @outline.md for original design goals
+See [docs/STATUS.md](docs/STATUS.md) for implementation status vs original design
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for code organization and data flow
+See [CHANGELOG.md](CHANGELOG.md) for recent changes and release notes
+See [docs/WASM-STATUS.md](docs/WASM-STATUS.md) for WebAssembly build status and platform-specific details
+See [docs/outline.md](docs/outline.md) for original design goals
 
 ## Quick Reference
 
@@ -68,7 +68,7 @@ cargo build --target aarch64-linux-android
 
 ### Testing & Profiling
 
-See [TESTING-GUIDE.md](TESTING-GUIDE.md) for complete guide.
+See [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md) for complete guide.
 
 ```bash
 # Unit tests (embedded in source files)
@@ -362,7 +362,7 @@ cargo build --target aarch64-linux-android
 
 ## Optional/Future Features
 
-Features that could be added in future development (see [STATUS.md](STATUS.md) for detailed priority breakdown):
+Features that could be added in future development (see [docs/STATUS.md](docs/STATUS.md) for detailed priority breakdown):
 
 ### High Priority
 - **Tiled high-resolution export** - Currently only exports at viewport resolution; tiled rendering would enable 4K+ exports
@@ -398,4 +398,4 @@ Features that could be added in future development (see [STATUS.md](STATUS.md) f
 - **Batch export** - Render multiple configurations automatically
 - **Video export** - Animate parameters over time and render to video
 
-See [outline.md](outline.md) Section 14 for more ambitious future expansion ideas.
+See [docs/outline.md](docs/outline.md) Section 14 for more ambitious future expansion ideas.

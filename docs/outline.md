@@ -19,7 +19,7 @@ A project-scoped architecture document describing the design, file layout, data 
 **Documentation:**
 - [STATUS.md](STATUS.md) - Implementation status vs this outline
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Code organization and data flow
-- [CLAUDE.md](CLAUDE.md) - Project context for Claude Code
+- [../CLAUDE.md](../CLAUDE.md) - Project context for Claude Code
 - [TESTING-GUIDE.md](TESTING-GUIDE.md) - Complete testing reference
 - [PROFILING.md](PROFILING.md) - Performance profiling guide
 - [VERSION-TRACKING.md](VERSION-TRACKING.md) - Build and version system
