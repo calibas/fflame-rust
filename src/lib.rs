@@ -8,6 +8,9 @@ pub mod config;
 mod undo;
 pub mod profiler;
 pub mod version;
+pub mod variations;
+mod shader_builder;
+mod shader_cache;
 
 use app::App;
 use winit::dpi::PhysicalSize;
