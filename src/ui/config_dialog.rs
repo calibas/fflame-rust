@@ -52,10 +52,5 @@ pub fn render_config_dialog(
                     *config_load_file = true;
                 }
             });
-
-            ui.separator();
-            if ui.button("Close").clicked() {
-                *show_config_window = false;
-            }
         });
 }

@@ -176,10 +176,6 @@ pub fn render_palette_editor_window(
                     *custom_palette = Some(palette_editor.current_palette.clone());
                     *palette_changed = true;
                 }
-
-                if ui.button("Close").clicked() {
-                    *show_palette_editor = false;
-                }
             });
         });
 }
