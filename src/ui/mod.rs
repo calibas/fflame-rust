@@ -36,6 +36,13 @@ pub struct EguiLayer {
 impl EguiLayer {
     pub fn new(window: &Window, device: &Device, format: TextureFormat) -> Self {
         let ctx = egui::Context::default();
+
+        // Configure style to disable window shadows
+        ctx.set_visuals(egui::Visuals {
+            window_shadow: egui::epaint::Shadow::NONE,
+            ..egui::Visuals::dark()
+        });
+
         let viewport_id = ctx.viewport_id();
         let state = EguiWinitState::new(ctx.clone(), viewport_id, window, None, None, None);
         let renderer = EguiRenderer::new(device, format, None, 1, false);
