@@ -4,6 +4,94 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added - 2025-10-21 (Evening)
+
+#### Version Tracking and Build System ✅
+**Complete auto-incrementing build number system with version metadata**
+
+- **Build Script** ([build.rs](build.rs))
+  - Auto-increments build number on every compilation
+  - Captures version, git hash, branch, timestamp, target, rustc version
+  - Currently at **Build #9**
+
+- **Version Module** ([src/version.rs](src/version.rs))
+  - `VersionInfo` struct with complete build metadata
+  - Methods: `full_version()`, `build_id()`, `platform()`, `detailed_info()`
+  - Full JSON serialization support
+  - Global singleton via `get_version_info()`
+
+- **UI Integration**
+  - Version displayed in Performance window
+  - Shows: version, build number, git hash, branch, profile
+
+- **Performance Statistics Integration**
+  - All `PerformanceMetrics` exports include version/build
+  - All `FrameProfile` exports include version/build
+  - `PerformanceSnapshot` with timestamp and version
+  - WASM-compatible console export
+
+- **Files Added:**
+  - [build.rs](build.rs) - Build script
+  - [src/version.rs](src/version.rs) - Version module (230 lines, full test coverage)
+  - [build_number.txt](build_number.txt) - Build counter
+  - [examples/show_version.rs](examples/show_version.rs) - Version display example
+  - [VERSION-TRACKING.md](VERSION-TRACKING.md) - Complete documentation
+
+**Dependencies:** `once_cell = "1.19"`, `chrono = "0.4"` (runtime + build)
+
+#### Profiling and Testing Infrastructure ✅
+**Milestone #7: Complete performance analysis and testing system**
+
+- **GPU Profiling** ([src/profiler.rs](src/profiler.rs))
+  - `GpuProfiler` with timestamp query support
+  - Frame profiling with version metadata
+  - Profile history with statistical analysis (avg, percentiles)
+  - RAII-based CPU scopes
+  - WASM-compatible (async GPU profiling documented)
+
+- **CPU Benchmarking** ([benches/flame_bench.rs](benches/flame_bench.rs))
+  - Criterion-based microbenchmarks
+  - Tests: CPU iteration, all 24 variations, affine transforms, point calculations
+  - Baseline comparison support
+  - Statistical significance analysis
+
+- **Simple Benchmark CLI** ([src/bin/simple_benchmark.rs](src/bin/simple_benchmark.rs))
+  - Quick CPU performance testing
+  - Human-readable output (M ops/sec)
+  - Tests all presets and variations
+
+- **Regression Tests** ([tests/regression.rs](tests/regression.rs))
+  - **12 comprehensive tests:**
+    - CPU reference determinism
+    - All 24 variations (no panics, valid results)
+    - Transform weight validation
+    - Preset config validation
+    - Color blending math
+    - Point calculations (r, θ, φ)
+    - Config serialization round-trip
+  - **All tests passing ✅**
+
+- **Performance Metrics Enhancements** ([src/util.rs](src/util.rs))
+  - `PerformanceSnapshot` with version tracking
+  - `export_json()` - JSON export with version
+  - `log_snapshot()` - Console logging (WASM-compatible)
+  - `export_to_console()` - Browser console export (WASM only)
+
+- **Documentation:**
+  - [PROFILING.md](PROFILING.md) - Complete profiling guide
+  - [WASM-PROFILING.md](WASM-PROFILING.md) - WASM-specific profiling
+  - [TESTING-GUIDE.md](TESTING-GUIDE.md) - All testing methods
+  - [MILESTONE-7-COMPLETE.md](MILESTONE-7-COMPLETE.md) - Milestone summary
+
+**Dependencies:** `criterion = "0.5"` (dev), `rustc_version = "0.4"` (build)
+
+#### Build System Fixes ✅
+
+- **Default Binary** ([Cargo.toml](Cargo.toml))
+  - Added `default-run = "fractal_flame_wgpu"`
+  - Fixes `cargo run` ambiguity with multiple binaries
+  - Now works: `cargo run --release` (no `--bin` needed)
+
 ### Fixed - 2025-10-21
 
 #### Event Loop Memory Leak and Performance (CRITICAL)
