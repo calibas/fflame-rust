@@ -55,9 +55,15 @@ pub struct EguiLayer {
     pub ctx: egui::Context,
     renderer: EguiRenderer,
     config_json_buffer: String,
-    show_config_window: bool,
+    show_config_window: bool,  // For Import/Export Config dialog
     show_palette_editor: bool,
     palette_editor: PaletteEditor,
+    // Window visibility (no persistence between sessions)
+    show_performance: bool,
+    show_settings: bool,
+    show_view: bool,
+    show_transforms: bool,
+    show_help: bool,
 }
 
 struct PaletteEditor {
@@ -84,6 +90,12 @@ impl EguiLayer {
                 selected_stop_index: None,
                 json_buffer: String::new(),
             },
+            // Window visibility - Performance, Transforms, Help minimized by default
+            show_performance: false,
+            show_settings: true,
+            show_view: true,
+            show_transforms: false,
+            show_help: false,
         }
     }
 
@@ -162,24 +174,117 @@ impl EguiLayer {
 
 
         let full_output = self.ctx.run(raw_input, |ctx| {
-            // Performance window
-            egui::Window::new("Performance").show(ctx, |ui| {
-                // Version info at top
-                let version_info = crate::version::get_version_info();
-                ui.heading("Fractal Flame Renderer");
-                ui.label(format!("Version: {}", version_info.full_version()));
-                ui.label(format!("Build: {} ({}) {}",
-                    version_info.git_hash,
-                    version_info.git_branch,
-                    version_info.profile
-                ));
-                ui.separator();
+            // ==================================================
+            // PERFORMANCE WINDOW - Stats + Version Info Only
+            // ==================================================
+            egui::Window::new("Performance")
+                .open(&mut self.show_performance)
+                .show(ctx, |ui| {
+                    // Version info
+                    let version_info = crate::version::get_version_info();
+                    ui.heading("Fractal Flame Renderer");
+                    ui.label(format!("Version: {}", version_info.full_version()));
+                    ui.label(format!("Build: {} ({}) {}",
+                        version_info.git_hash,
+                        version_info.git_branch,
+                        version_info.profile
+                    ));
 
-                // Preset selector
-                let presets = preset_library.presets();
-                let current_preset_name = presets.get(*current_preset_index)
-                    .map(|p| p.flame.name.as_str())
-                    .unwrap_or("Unknown");
+                    ui.separator();
+
+                    // Frame statistics
+                    ui.label(format!("FPS: {:.1}", metrics.fps()));
+                    ui.label(format!("Frame Time: {:.2} ms", metrics.frame_time_ms()));
+
+                    let (min, max) = metrics.frame_time_range();
+                    ui.label(format!("Frame Time Range: {:.2} - {:.2} ms", min, max));
+
+                    ui.separator();
+
+                    // Component timings (collapsible)
+                    egui::CollapsingHeader::new("Component Timings")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.label(format!("  Compute: {:.2} ms", metrics.compute_time_ms));
+                            ui.label(format!("  Accumulate: {:.2} ms", metrics.accumulate_time_ms));
+                            ui.label(format!("  Tonemap: {:.2} ms", metrics.tonemap_time_ms));
+                            ui.label(format!("  UI: {:.2} ms", metrics.ui_time_ms));
+                            ui.label(format!("  Submit: {:.2} ms", metrics.submit_time_ms));
+                            ui.label(format!("  Present: {:.2} ms", metrics.present_time_ms));
+
+                            let total_measured = metrics.compute_time_ms + metrics.accumulate_time_ms +
+                                metrics.tonemap_time_ms + metrics.ui_time_ms + metrics.submit_time_ms + metrics.present_time_ms;
+                            ui.label(format!("  Total Measured: {:.2} ms", total_measured));
+                            ui.label(format!("  Render Function: {:.2} ms", metrics.render_time_ms));
+
+                            let overhead = metrics.frame_time_ms() - metrics.render_time_ms;
+                            ui.label(format!("  Overhead (event loop): {:.2} ms", overhead));
+                        });
+
+                    ui.separator();
+
+                    // Frame and iteration counts
+                    ui.label(format!("Total Frames: {}", metrics.frame_count()));
+                    ui.label(format!("Resolution: {}x{}", window_size.width, window_size.height));
+
+                    if let Some(renderer) = &flame_renderer {
+                        ui.label(format!("Frames Accumulated: {}", renderer.samples_accumulated()));
+                        ui.label(format!("Total Iterations: {}", format_iterations(renderer.total_iterations())));
+                    }
+                });
+
+            // ==================================================
+            // SETTINGS WINDOW - All Controls with Collapsible Sections
+            // ==================================================
+            egui::Window::new("Settings")
+                .open(&mut self.show_settings)
+                .show(ctx, |ui| {
+                    // Section 1: File & Project
+                    egui::CollapsingHeader::new("File & Project")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            // Config import/export button
+                            if ui.button("⚙ Import/Export Config").clicked() {
+                                self.show_config_window = !self.show_config_window;
+                            }
+
+                            // Undo/Redo buttons
+                            ui.horizontal(|ui| {
+                                ui.add_enabled_ui(can_undo, |ui| {
+                                    if ui.button("⮪ Undo (Ctrl+Z)").clicked() {
+                                        undo_requested = true;
+                                    }
+                                });
+                                ui.add_enabled_ui(can_redo, |ui| {
+                                    if ui.button("⮬ Redo (Ctrl+Y)").clicked() {
+                                        redo_requested = true;
+                                    }
+                                });
+                            });
+
+                            ui.separator();
+
+                            // PNG export buttons
+                            ui.label("Export Image");
+                            ui.horizontal(|ui| {
+                                if ui.button("💾 PNG (with BG)").clicked() {
+                                    png_export_with_background = true;
+                                }
+                                if ui.button("💾 PNG (transparent)").clicked() {
+                                    png_export_transparent = true;
+                                }
+                            });
+                        });
+
+                    // Section 2: Preset & Rendering
+                    egui::CollapsingHeader::new("Preset & Rendering")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            // Preset selector
+                            let presets = preset_library.presets();
+                            let current_preset_name = presets.get(*current_preset_index)
+                                .map(|p| p.flame.name.as_str())
+                                .unwrap_or("Unknown");
 
                 egui::ComboBox::from_label("Preset")
                     .selected_text(current_preset_name)
