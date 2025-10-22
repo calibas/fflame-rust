@@ -406,15 +406,15 @@ impl App {
                 let t0 = Instant::now();
                 // 1. Compute new samples with fresh random seed
                 renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
-                self.metrics.compute_time_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                self.metrics.record_compute_time(t0.elapsed().as_secs_f64() * 1000.0);
 
                 let t1 = Instant::now();
                 // 2. Accumulate samples (blend with previous frames)
                 renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device);
-                self.metrics.accumulate_time_ms = t1.elapsed().as_secs_f64() * 1000.0;
+                self.metrics.record_accumulate_time(t1.elapsed().as_secs_f64() * 1000.0);
             } else {
-                self.metrics.compute_time_ms = 0.0;
-                self.metrics.accumulate_time_ms = 0.0;
+                self.metrics.record_compute_time(0.0);
+                self.metrics.record_accumulate_time(0.0);
             }
 
             let t2 = Instant::now();
@@ -422,7 +422,7 @@ impl App {
             renderer.update_density_scale(&self.gpu.queue, self.density_scale);
             renderer.update_background_color(&self.gpu.queue, self.background_color);
             renderer.tonemap_pass(&mut encoder, &view);
-            self.metrics.tonemap_time_ms = t2.elapsed().as_secs_f64() * 1000.0;
+            self.metrics.record_tonemap_time(t2.elapsed().as_secs_f64() * 1000.0);
         }
 
         // Render UI on top and handle updates
@@ -460,11 +460,11 @@ impl App {
             can_redo,
             &mut self.background_color,
         );
-        self.metrics.ui_time_ms = t3.elapsed().as_secs_f64() * 1000.0;
+        self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
 
         let t4 = Instant::now();
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
-        self.metrics.submit_time_ms = t4.elapsed().as_secs_f64() * 1000.0;
+        self.metrics.record_submit_time(t4.elapsed().as_secs_f64() * 1000.0);
 
         // Handle config export
         if ui_response.config_export_requested.is_some() {
@@ -910,9 +910,9 @@ impl App {
 
         let t5 = Instant::now();
         frame.present();
-        self.metrics.present_time_ms = t5.elapsed().as_secs_f64() * 1000.0;
+        self.metrics.record_present_time(t5.elapsed().as_secs_f64() * 1000.0);
 
-        self.metrics.render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+        self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
 
         Ok(())
     }
