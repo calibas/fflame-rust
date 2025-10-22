@@ -44,6 +44,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var color = accum.rgb;
     let density = accum.a;
 
+    // Apply density scale to both color and alpha
+    // This makes denser areas both brighter AND more opaque
+    color *= density * tonemap_params.density_scale;
+
     // Apply exposure
     color *= tonemap_params.exposure;
 
