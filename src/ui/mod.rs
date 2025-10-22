@@ -1,54 +1,21 @@
+mod config_dialog;
+mod formatting;
+mod help;
+mod menu_bar;
+mod palette_editor;
+mod performance;
+mod response;
+mod settings;
+mod transforms;
+mod view;
+
+pub use palette_editor::PaletteEditor;
+pub use response::UiResponse;
+
 use egui_wgpu::Renderer as EguiRenderer;
 use egui_winit::State as EguiWinitState;
 use wgpu::*;
 use winit::{event::WindowEvent, window::Window};
-
-/// Format large iteration counts with appropriate suffixes (K, M, B, T)
-fn format_iterations(n: u64) -> String {
-    if n >= 1_000_000_000_000 {
-        format!("{:.2}T", n as f64 / 1_000_000_000_000.0)
-    } else if n >= 1_000_000_000 {
-        format!("{:.2}B", n as f64 / 1_000_000_000.0)
-    } else if n >= 1_000_000 {
-        format!("{:.2}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.2}K", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
-    }
-}
-
-pub struct UiResponse {
-    pub reset_requested: bool,
-    pub flame_changed: bool,
-    pub iterations_changed: bool,
-    pub view_changed: bool,
-    pub density_changed: bool,
-    pub palette_changed: bool,
-    pub color_mode_changed: bool,
-    pub pause_changed: bool,
-    pub config_export_requested: Option<String>,
-    pub config_import_requested: Option<String>,
-    pub config_save_file_requested: bool,
-    pub config_load_file_requested: bool,
-    pub custom_palette: Option<crate::scene::palette::Palette>,
-    pub undo_requested: bool,
-    pub redo_requested: bool,
-    pub background_color_changed: bool,
-    pub png_export_with_background: bool,
-    pub png_export_transparent: bool,
-    pub palette_export_json: Option<crate::scene::palette::Palette>,
-    pub palette_save_file: Option<crate::scene::palette::Palette>,
-    pub palette_import_json: Option<String>,
-    pub palette_load_file: bool,
-    pub palette_imported: Option<crate::scene::palette::Palette>,
-    pub preset_changed: bool,
-    pub add_transform: bool,
-    pub delete_transform: Option<usize>, // Index of transform to delete
-    pub render_mode_changed: bool,
-    pub projection_changed: bool,
-    pub camera_rotation_changed: bool,
-}
 
 pub struct EguiLayer {
     state: EguiWinitState,
@@ -66,12 +33,6 @@ pub struct EguiLayer {
     show_help: bool,
 }
 
-struct PaletteEditor {
-    current_palette: crate::scene::palette::Palette,
-    selected_stop_index: Option<usize>,
-    json_buffer: String,
-}
-
 impl EguiLayer {
     pub fn new(window: &Window, device: &Device, format: TextureFormat) -> Self {
         let ctx = egui::Context::default();
@@ -85,11 +46,7 @@ impl EguiLayer {
             config_json_buffer: String::new(),
             show_config_window: false,
             show_palette_editor: false,
-            palette_editor: PaletteEditor {
-                current_palette: crate::scene::palette::Palette::fire(),
-                selected_stop_index: None,
-                json_buffer: String::new(),
-            },
+            palette_editor: PaletteEditor::new(),
             // Window visibility - Performance, Transforms, Help minimized by default
             show_performance: false,
             show_settings: true,
@@ -174,23 +131,17 @@ impl EguiLayer {
 
 
         let full_output = self.ctx.run(raw_input, |ctx| {
-            // ==================================================
-            // MENU BAR - Window Visibility Toggles
-            // ==================================================
-            egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-                egui::menu::bar(ui, |ui| {
-                    ui.menu_button("Windows", |ui| {
-                        ui.checkbox(&mut self.show_performance, "📊 Performance");
-                        ui.checkbox(&mut self.show_settings, "⚙ Settings");
-                        ui.checkbox(&mut self.show_view, "🔍 View");
-                        ui.checkbox(&mut self.show_transforms, "🔧 Transforms");
-                        ui.checkbox(&mut self.show_help, "❓ Help");
-                        ui.separator();
-                        ui.checkbox(&mut self.show_palette_editor, "🎨 Palette Editor");
-                        ui.checkbox(&mut self.show_config_window, "📄 Config Import/Export");
-                    });
-                });
-            });
+            // Render menu bar
+            menu_bar::render_menu_bar(
+                ctx,
+                &mut self.show_performance,
+                &mut self.show_settings,
+                &mut self.show_view,
+                &mut self.show_transforms,
+                &mut self.show_help,
+                &mut self.show_palette_editor,
+                &mut self.show_config_window,
+            );
 
             // ==================================================
             // PERFORMANCE WINDOW - Stats + Version Info Only
