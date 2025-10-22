@@ -254,7 +254,7 @@ impl PaletteLibrary {
             Palette::grayscale(),
         ];
 
-        // Load palettes from assets folder
+        // Desktop: Load palettes from assets folder (copied to target/ by build.rs)
         #[cfg(not(target_arch = "wasm32"))]
         {
             let assets_palettes = super::assets::load_palettes_from_dir(
@@ -263,9 +263,8 @@ impl PaletteLibrary {
             palettes.extend(assets_palettes);
         }
 
-        // WASM: only use built-in palettes (no file system access)
-        #[cfg(target_arch = "wasm32")]
-        {
+        // WASM or fallback: Use built-in palettes if no assets were loaded
+        if palettes.len() == 1 {
             palettes.extend(vec![
                 Palette::fire(),
                 Palette::cool(),

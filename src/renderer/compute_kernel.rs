@@ -219,7 +219,15 @@ impl FlameRenderer {
 
     /// Load a complete FractalConfig (preset or imported config)
     /// This ensures all GPU state is properly synchronized
-    pub fn load_config(&mut self, _device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32) {
+    pub fn load_config(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32) {
+        // 0. Check if shaders need to be recompiled (variations changed)
+        let shaders_changed = self.pipelines.ensure_shaders_current(device, &config.flame);
+        if shaders_changed {
+            log::info!("Shaders recompiled during preset load - recreating bind group");
+            // Recreate compute bind group with new pipeline
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        }
+
         // 1. Update transforms in GPU buffer
         self.buffers.update_transforms(queue, &config.flame);
 
@@ -277,7 +285,15 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
+        // Check if shaders need to be recompiled (variations changed)
+        let shaders_changed = self.pipelines.ensure_shaders_current(device, flame);
+        if shaders_changed {
+            log::info!("Shaders recompiled due to variation changes - recreating bind group");
+            // Recreate compute bind group with new pipeline
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        }
+
         self.buffers.update_transforms(queue, flame);
 
         // Update render mode and projection

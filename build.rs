@@ -86,4 +86,62 @@ fn main() {
     println!("cargo:rustc-env=RUSTC_VERSION={}", rustc_version);
 
     println!("cargo:warning=Building version {} (build #{})", version, build_number);
+
+    // Copy assets folder to target directory (for standalone .exe)
+    copy_assets_to_target();
+}
+
+fn copy_assets_to_target() {
+    use std::fs;
+    use std::path::PathBuf;
+
+    // Get target directory
+    let out_dir = env::var("OUT_DIR").unwrap();
+    let target_dir = PathBuf::from(out_dir)
+        .ancestors()
+        .nth(3) // OUT_DIR is usually target/[profile]/build/[crate]/out
+        .unwrap()
+        .to_path_buf();
+
+    let assets_src = Path::new("assets");
+    let assets_dst = target_dir.join("assets");
+
+    // Only copy if assets folder exists
+    if assets_src.exists() {
+        // Remove old assets if they exist
+        if assets_dst.exists() {
+            let _ = fs::remove_dir_all(&assets_dst);
+        }
+
+        // Copy assets recursively
+        if let Err(e) = copy_dir_recursive(assets_src, &assets_dst) {
+            println!("cargo:warning=Failed to copy assets: {}", e);
+        } else {
+            println!("cargo:warning=Copied assets to {:?}", assets_dst);
+        }
+    }
+
+    // Tell cargo to rerun if assets change
+    println!("cargo:rerun-if-changed=assets");
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    use std::fs;
+
+    fs::create_dir_all(dst)?;
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let dst_path = dst.join(&file_name);
+
+        if path.is_dir() {
+            copy_dir_recursive(&path, &dst_path)?;
+        } else {
+            fs::copy(&path, &dst_path)?;
+        }
+    }
+
+    Ok(())
 }

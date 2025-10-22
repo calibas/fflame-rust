@@ -13,8 +13,27 @@ impl ShaderBuilder {
 
     /// Build 2D trajectory shader with active variations
     pub fn build_trajectory_2d(&self, active_variations: &HashMap<String, f32>) -> String {
-        let active_names: Vec<String> = active_variations.keys().cloned().collect();
-        let id_map = self.registry.assign_ids(&active_names);
+        // Filter to only 2D variations (exclude 3D-only variations)
+        use crate::variations::VariationCategory;
+        use std::collections::HashMap;
+
+        // Build a map of variation name -> registry index (0-23)
+        let mut index_map: HashMap<String, u32> = HashMap::new();
+        for (i, name) in self.registry.names().iter().enumerate() {
+            // Only include 2D variations
+            if let Some(info) = self.registry.get(name) {
+                if matches!(info.category, VariationCategory::Basic2D | VariationCategory::Advanced2D) {
+                    index_map.insert(name.clone(), i as u32);
+                }
+            }
+        }
+
+        // Only include active 2D variations
+        let active_2d: Vec<(String, u32)> = index_map
+            .iter()
+            .filter(|(name, _)| active_variations.contains_key(*name))
+            .map(|(name, idx)| (name.clone(), *idx))
+            .collect();
 
         let mut shader = String::new();
 
@@ -34,8 +53,8 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/variations_2d.wgsl"));
         shader.push('\n');
 
-        // 5. Plugin variations
-        for name in &active_names {
+        // 5. Plugin variations (2D only)
+        for (name, _) in &active_2d {
             if let Some(info) = self.registry.get(name) {
                 if !info.is_core {
                     if let Some(source) = &info.wgsl_source {
@@ -46,8 +65,8 @@ impl ShaderBuilder {
             }
         }
 
-        // 6. Generate apply_variations with name->ID mapping
-        shader.push_str(&self.build_apply_variations_2d(&id_map));
+        // 6. Generate apply_variations with fixed registry indices
+        shader.push_str(&self.build_apply_variations_2d(&active_2d));
         shader.push('\n');
 
         // 7. Utilities
@@ -62,8 +81,21 @@ impl ShaderBuilder {
 
     /// Build 3D trajectory shader with active variations
     pub fn build_trajectory_3d(&self, active_variations: &HashMap<String, f32>) -> String {
-        let active_names: Vec<String> = active_variations.keys().cloned().collect();
-        let id_map = self.registry.assign_ids(&active_names);
+        use std::collections::HashMap;
+
+        // Build a map of variation name -> registry index (0-23)
+        // For 3D, include ALL variations (2D and 3D)
+        let mut index_map: HashMap<String, u32> = HashMap::new();
+        for (i, name) in self.registry.names().iter().enumerate() {
+            index_map.insert(name.clone(), i as u32);
+        }
+
+        // Only include active variations
+        let active_3d: Vec<(String, u32)> = index_map
+            .iter()
+            .filter(|(name, _)| active_variations.contains_key(*name))
+            .map(|(name, idx)| (name.clone(), *idx))
+            .collect();
 
         let mut shader = String::new();
 
@@ -80,7 +112,7 @@ impl ShaderBuilder {
         shader.push('\n');
 
         // 4. Plugin variations
-        for name in &active_names {
+        for (name, _) in &active_3d {
             if let Some(info) = self.registry.get(name) {
                 if !info.is_core {
                     if let Some(source) = &info.wgsl_source {
@@ -91,8 +123,8 @@ impl ShaderBuilder {
             }
         }
 
-        // 5. Generate apply_variations with name->ID mapping
-        shader.push_str(&self.build_apply_variations_3d(&id_map));
+        // 5. Generate apply_variations with fixed registry indices
+        shader.push_str(&self.build_apply_variations_3d(&active_3d));
         shader.push('\n');
 
         // 6. Utilities
@@ -106,19 +138,19 @@ impl ShaderBuilder {
     }
 
     /// Build apply_variations function for 2D mode
-    fn build_apply_variations_2d(&self, id_map: &HashMap<String, u32>) -> String {
+    fn build_apply_variations_2d(&self, active_variations: &[(String, u32)]) -> String {
         let mut code = String::from(
             "// Apply all variations with weights\n\
              fn apply_variations(xform: Transform, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {\n\
              \x20   var result = vec2<f32>(0.0, 0.0);\n\n"
         );
 
-        // Sort by ID for deterministic shader generation
-        let mut entries: Vec<_> = id_map.iter().collect();
-        entries.sort_by_key(|(_, id)| *id);
+        // Sort by registry index for deterministic shader generation
+        let mut entries = active_variations.to_vec();
+        entries.sort_by_key(|(_, idx)| *idx);
 
-        for (name, id) in entries {
-            if let Some(info) = self.registry.get(name) {
+        for (name, idx) in entries {
+            if let Some(info) = self.registry.get(&name) {
                 let call = if info.needs_rng {
                     format!("{}(p, rng)", info.wgsl_function)
                 } else {
@@ -130,7 +162,7 @@ impl ShaderBuilder {
                      \x20   if (xform.variations[{}] != 0.0) {{\n\
                      \x20       result += xform.variations[{}] * {};\n\
                      \x20   }}\n",
-                    id, info.display_name, id, id, call
+                    idx, info.display_name, idx, idx, call
                 ));
             }
         }
@@ -140,19 +172,19 @@ impl ShaderBuilder {
     }
 
     /// Build apply_variations function for 3D mode
-    fn build_apply_variations_3d(&self, id_map: &HashMap<String, u32>) -> String {
+    fn build_apply_variations_3d(&self, active_variations: &[(String, u32)]) -> String {
         let mut code = String::from(
             "// Apply all variations with weights (3D)\n\
              fn apply_variations(xform: Transform, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {\n\
              \x20   var result = vec3<f32>(0.0, 0.0, 0.0);\n\n"
         );
 
-        // Sort by ID
-        let mut entries: Vec<_> = id_map.iter().collect();
-        entries.sort_by_key(|(_, id)| *id);
+        // Sort by registry index
+        let mut entries = active_variations.to_vec();
+        entries.sort_by_key(|(_, idx)| *idx);
 
-        for (name, id) in entries {
-            if let Some(info) = self.registry.get(name) {
+        for (name, idx) in entries {
+            if let Some(info) = self.registry.get(&name) {
                 // Special handling for Z-only and rotation variations
                 match name.as_str() {
                     "zcone" => {
@@ -162,7 +194,7 @@ impl ShaderBuilder {
                              \x20       let r = length(p.xy);\n\
                              \x20       result.z += xform.variations[{}] * r;\n\
                              \x20   }}\n",
-                            id, info.display_name, id, id
+                            idx, info.display_name, idx, idx
                         ));
                     }
                     "flatten" => {
@@ -171,7 +203,7 @@ impl ShaderBuilder {
                              \x20   if (xform.variations[{}] != 0.0) {{\n\
                              \x20       result.z *= (1.0 - xform.variations[{}] * 0.5);\n\
                              \x20   }}\n",
-                            id, info.display_name, id, id
+                            idx, info.display_name, idx, idx
                         ));
                     }
                     "zscale" => {
@@ -180,7 +212,7 @@ impl ShaderBuilder {
                              \x20   if (xform.variations[{}] != 0.0) {{\n\
                              \x20       result.z *= (1.0 + xform.variations[{}]);\n\
                              \x20   }}\n",
-                            id, info.display_name, id, id
+                            idx, info.display_name, idx, idx
                         ));
                     }
                     "pre_rotate_x" | "pre_rotate_y" | "post_rotate_x" | "post_rotate_y" => {
@@ -190,7 +222,7 @@ impl ShaderBuilder {
                              \x20   if (xform.variations[{}] != 0.0) {{\n\
                              \x20       result = {}(result, xform.variations[{}]);\n\
                              \x20   }}\n",
-                            id, info.display_name, id, rotate_fn, id
+                            idx, info.display_name, idx, rotate_fn, idx
                         ));
                     }
                     _ => {
@@ -206,7 +238,7 @@ impl ShaderBuilder {
                              \x20   if (xform.variations[{}] != 0.0) {{\n\
                              \x20       result += xform.variations[{}] * {};\n\
                              \x20   }}\n",
-                            id, info.display_name, id, id, call
+                            idx, info.display_name, idx, idx, call
                         ));
                     }
                 }
