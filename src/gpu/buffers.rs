@@ -28,8 +28,9 @@ pub struct GpuTransform {
     pub color_speed: f32,
 }
 
-impl From<&Transform> for GpuTransform {
-    fn from(xform: &Transform) -> Self {
+impl GpuTransform {
+    /// Create from Transform using a VariationRegistry
+    pub fn from_transform(xform: &Transform, registry: &crate::variations::VariationRegistry) -> Self {
         Self {
             a: xform.a,
             b: xform.b,
@@ -39,7 +40,7 @@ impl From<&Transform> for GpuTransform {
             f: xform.f,
             g: xform.g,
             weight: xform.weight,
-            variations: xform.variations,
+            variations: xform.to_fixed_array(registry),
             color: xform.color,
             color_speed: xform.color_speed,
         }
@@ -150,7 +151,7 @@ impl FlameBuffers {
         let gpu_transforms: Vec<GpuTransform> = flame
             .transforms
             .iter()
-            .map(|xform| xform.into())
+            .map(|xform| GpuTransform::from_transform(xform, &flame.variation_registry))
             .collect();
         queue.write_buffer(&transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
 
@@ -463,7 +464,7 @@ impl FlameBuffers {
         let mut gpu_transforms: Vec<GpuTransform> = flame
             .transforms
             .iter()
-            .map(|xform| xform.into())
+            .map(|xform| GpuTransform::from_transform(xform, &flame.variation_registry))
             .collect();
 
         // Pad with zeroed transforms to fill the buffer

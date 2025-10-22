@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::variations::{VariationRegistry, VariationInfo};
+use crate::variations::VariationRegistry;
 
 /// Builds WGSL shaders dynamically using named variations
 pub struct ShaderBuilder {

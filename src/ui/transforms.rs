@@ -103,17 +103,27 @@ pub fn render_transforms_window(
                                 }
 
                                 ui.separator();
-                                ui.label("2D Variations");
+                                ui.label("Basic 2D Variations");
 
-                                let variation_names_2d = [
-                                    "Linear", "Sinusoidal", "Spherical", "Swirl",
-                                    "Horseshoe", "Polar", "Handkerchief", "Heart",
-                                    "Disc", "Spiral", "Hyperbolic", "Diamond",
-                                    "Ex", "Julia", "Bent", "Waves"
-                                ];
+                                // Get basic 2D variations from registry
+                                let basic_2d = flame.variation_registry.by_category(crate::variations::VariationCategory::Basic2D);
+                                for var_info in basic_2d {
+                                    let mut value = transform.get_variation(&var_info.name);
+                                    if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
+                                        transform.set_variation(&var_info.name, value);
+                                        *flame_changed = true;
+                                    }
+                                }
 
-                                for (idx, name) in variation_names_2d.iter().enumerate() {
-                                    if ui.add(egui::Slider::new(&mut transform.variations[idx], 0.0..=2.0).text(*name)).changed() {
+                                ui.separator();
+                                ui.label("Advanced 2D Variations");
+
+                                // Get advanced 2D variations from registry
+                                let advanced_2d = flame.variation_registry.by_category(crate::variations::VariationCategory::Advanced2D);
+                                for var_info in advanced_2d {
+                                    let mut value = transform.get_variation(&var_info.name);
+                                    if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
+                                        transform.set_variation(&var_info.name, value);
                                         *flame_changed = true;
                                     }
                                 }
@@ -121,17 +131,40 @@ pub fn render_transforms_window(
                                 // Show 3D variations only in 3D mode
                                 if matches!(flame.render_mode, RenderMode::ThreeD) {
                                     ui.separator();
-                                    ui.label("3D Variations");
+                                    ui.label("3D Depth Variations");
 
-                                    let variation_names_3d = [
-                                        "Zcone", "Flatten", "Hemisphere",
-                                        "PreRotateX", "PreRotateY", "PostRotateX", "PostRotateY",
-                                        "ZScale"
-                                    ];
+                                    // Get 3D depth variations from registry
+                                    let depth_3d = flame.variation_registry.by_category(crate::variations::VariationCategory::Depth3D);
+                                    for var_info in depth_3d {
+                                        let mut value = transform.get_variation(&var_info.name);
+                                        if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
+                                            transform.set_variation(&var_info.name, value);
+                                            *flame_changed = true;
+                                        }
+                                    }
 
-                                    for (i, name) in variation_names_3d.iter().enumerate() {
-                                        let idx = 16 + i; // 3D variations start at index 16
-                                        if ui.add(egui::Slider::new(&mut transform.variations[idx], 0.0..=2.0).text(*name)).changed() {
+                                    ui.separator();
+                                    ui.label("3D Rotation Variations");
+
+                                    // Get 3D rotation variations from registry
+                                    let rotation_3d = flame.variation_registry.by_category(crate::variations::VariationCategory::Rotation3D);
+                                    for var_info in rotation_3d {
+                                        let mut value = transform.get_variation(&var_info.name);
+                                        if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
+                                            transform.set_variation(&var_info.name, value);
+                                            *flame_changed = true;
+                                        }
+                                    }
+
+                                    ui.separator();
+                                    ui.label("Full 3D Variations");
+
+                                    // Get full 3D variations from registry
+                                    let full_3d = flame.variation_registry.by_category(crate::variations::VariationCategory::Full3D);
+                                    for var_info in full_3d {
+                                        let mut value = transform.get_variation(&var_info.name);
+                                        if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
+                                            transform.set_variation(&var_info.name, value);
                                             *flame_changed = true;
                                         }
                                     }

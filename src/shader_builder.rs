@@ -305,8 +305,10 @@ impl ShaderBuilder {
     pub fn extract_active_variations(flame: &Flame) -> HashSet<u32> {
         let mut active = HashSet::new();
 
+        // Convert named variations to indices using the fixed array mapping
         for transform in &flame.transforms {
-            for (idx, &weight) in transform.variations.iter().enumerate() {
+            let fixed_array = transform.to_fixed_array(&flame.variation_registry);
+            for (idx, &weight) in fixed_array.iter().enumerate() {
                 if weight.abs() > 1e-6 {
                     active.insert(idx as u32);
                 }
