@@ -343,307 +343,298 @@ impl EguiLayer {
 
                 ui.separator();
 
-                ui.label(format!("FPS: {:.1}", metrics.fps()));
-                ui.label(format!("Frame Time: {:.2} ms", metrics.frame_time_ms()));
+                // Pause/Resume button
+                            if let Some(renderer) = &flame_renderer {
+                                let button_text = if *paused { "▶ Resume" } else { "⏸ Pause" };
+                                if ui.button(button_text).clicked() {
+                                    *paused = !*paused;
+                                    pause_changed = true;
+                                }
 
-                let (min, max) = metrics.frame_time_range();
-                ui.label(format!("Frame Time Range: {:.2} - {:.2} ms", min, max));
-
-                ui.separator();
-                ui.label("Component Timings:");
-                ui.label(format!("  Compute: {:.2} ms", metrics.compute_time_ms));
-                ui.label(format!("  Accumulate: {:.2} ms", metrics.accumulate_time_ms));
-                ui.label(format!("  Tonemap: {:.2} ms", metrics.tonemap_time_ms));
-                ui.label(format!("  UI: {:.2} ms", metrics.ui_time_ms));
-                ui.label(format!("  Submit: {:.2} ms", metrics.submit_time_ms));
-                ui.label(format!("  Present: {:.2} ms", metrics.present_time_ms));
-
-                let total_measured = metrics.compute_time_ms + metrics.accumulate_time_ms +
-                metrics.tonemap_time_ms + metrics.ui_time_ms + metrics.submit_time_ms + metrics.present_time_ms;
-                ui.label(format!("  Total Measured: {:.2} ms", total_measured));
-                ui.label(format!("  Render Function: {:.2} ms", metrics.render_time_ms));
-
-                let overhead = metrics.frame_time_ms() - metrics.render_time_ms;
-                ui.label(format!("  Overhead (event loop): {:.2} ms", overhead));
-
-                ui.separator();
-                ui.label(format!("Total Frames: {}", metrics.frame_count()));
-                ui.label(format!("Resolution: {}x{}", window_size.width, window_size.height));
-
-
-                // Config import/export button
-                ui.separator();
-                if ui.button("⚙ Import/Export Config").clicked() {
-                    self.show_config_window = !self.show_config_window;
-                }
-
-                // Undo/Redo buttons
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.add_enabled_ui(can_undo, |ui| {
-                        if ui.button("⮪ Undo (Ctrl+Z)").clicked() {
-                            undo_requested = true;
-                        }
-                    });
-                    ui.add_enabled_ui(can_redo, |ui| {
-                        if ui.button("⮬ Redo (Ctrl+Y)").clicked() {
-                            redo_requested = true;
-                        }
-                    });
-                });
-
-                // PNG export buttons
-                ui.separator();
-                ui.label("Export Image");
-                ui.horizontal(|ui| {
-                    if ui.button("💾 Save PNG (with BG)").clicked() {
-                        png_export_with_background = true;
-                    }
-                    if ui.button("💾 Save PNG (transparent)").clicked() {
-                        png_export_transparent = true;
-                    }
-                });
-
-                // Accumulation controls
-                if let Some(renderer) = &flame_renderer {
-                    ui.separator();
-                    ui.label(format!("Frames: {}", renderer.samples_accumulated()));
-                    ui.label(format!("Total Iterations: {}", format_iterations(renderer.total_iterations())));
-
-                    // Pause/Resume button
-                    let button_text = if *paused { "▶ Resume" } else { "⏸ Pause" };
-                    if ui.button(button_text).clicked() {
-                        *paused = !*paused;
-                        pause_changed = true;
-                    }
-
-                    if ui.button("Reset Accumulation").clicked() {
-                        reset_requested = true;
-                    }
-
-                    // Max iterations control
-                    ui.separator();
-                    ui.label("Max Iterations");
-
-                    let mut max_enabled = max_iterations.is_some();
-                    if ui.checkbox(&mut max_enabled, "Enable max iterations").changed() {
-                        if max_enabled {
-                            *max_iterations = Some(1_000_000_000);
-                        } else {
-                            *max_iterations = None;
-                        }
-                    }
-
-                    if let Some(max) = max_iterations {
-                        // Use a logarithmic slider for better control across large ranges
-                        let mut log_value = (*max as f64).log10();
-                        if ui.add(egui::Slider::new(&mut log_value, 3.0..=12.0)
-                            .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64)))
-                        ).changed() {
-                            *max = 10f64.powf(log_value) as u64;
-                        }
-
-                        // Show progress if enabled
-                        let current = renderer.total_iterations();
-                        if current >= *max {
-                            ui.label("* Max iterations reached");
-                        } else {
-                            let progress = current as f64 / *max as f64;
-                            ui.label(format!("Progress: {} / {} ({:.1}%)",
-                                format_iterations(current),
-                                format_iterations(*max),
-                                progress * 100.0
-                            ));
-                        }
-                    }
-                }
-
-                // Render settings
-                ui.separator();
-                ui.label("Render Settings");
-                if ui.add(egui::Slider::new(iterations_per_thread, 64..=4096).text("Iterations per Thread")).changed() {
-                    iterations_changed = true;
-                }
-                if ui.add(egui::Slider::new(density_scale, 0.01..=10.0).text("Density Scale")).changed() {
-                    density_changed = true;
-                }
-
-                // Background color picker
-                ui.separator();
-                ui.label("Background Color");
-                if ui.color_edit_button_rgb(background_color).changed() {
-                    background_color_changed = true;
-                }
-
-                // Color settings
-                ui.separator();
-                ui.label("Color Settings");
-
-                use crate::scene::palette::ColorMode;
-                let current_mode = *color_mode;
-                let selected_text = match current_mode {
-                    ColorMode::Transform => "Transform Colors",
-                    ColorMode::Palette => "Palette",
-                    ColorMode::Speed => "Speed",
-                };
-
-                egui::ComboBox::from_label("Color Mode")
-                    .selected_text(selected_text)
-                    .show_ui(ui, |ui| {
-                        if ui.selectable_value(color_mode, ColorMode::Transform, "Transform Colors").changed() {
-                            color_mode_changed = true;
-                        }
-                        if ui.selectable_value(color_mode, ColorMode::Palette, "Palette").changed() {
-                            color_mode_changed = true;
-                        }
-                        if ui.selectable_value(color_mode, ColorMode::Speed, "Speed").changed() {
-                            color_mode_changed = true;
-                        }
-                    });
-
-                // Show palette selector for Palette and Speed modes
-                if matches!(*color_mode, ColorMode::Palette | ColorMode::Speed) {
-                    let palettes = palette_library.palettes();
-                    let current_palette_name = palettes.get(*current_palette_index)
-                        .map(|p| p.name.as_str())
-                        .unwrap_or("Unknown");
-
-                    egui::ComboBox::from_label("Palette")
-                        .selected_text(current_palette_name)
-                        .show_ui(ui, |ui| {
-                            for (idx, palette) in palettes.iter().enumerate() {
-                                if ui.selectable_value(current_palette_index, idx, &palette.name).changed() {
-                                    palette_changed = true;
+                                if ui.button("🔄 Reset Accumulation").clicked() {
+                                    reset_requested = true;
                                 }
                             }
+
+                            ui.separator();
+
+                            // Max iterations control
+                            if let Some(renderer) = &flame_renderer {
+                                ui.label("Max Iterations");
+
+                                let mut max_enabled = max_iterations.is_some();
+                                if ui.checkbox(&mut max_enabled, "Enable max iterations").changed() {
+                                    if max_enabled {
+                                        *max_iterations = Some(1_000_000_000);
+                                    } else {
+                                        *max_iterations = None;
+                                    }
+                                }
+
+                                if let Some(max) = max_iterations {
+                                    // Use a logarithmic slider for better control across large ranges
+                                    let mut log_value = (*max as f64).log10();
+                                    if ui.add(egui::Slider::new(&mut log_value, 3.0..=12.0)
+                                        .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64)))
+                                    ).changed() {
+                                        *max = 10f64.powf(log_value) as u64;
+                                    }
+
+                                    // Show progress if enabled
+                                    let current = renderer.total_iterations();
+                                    if current >= *max {
+                                        ui.label("✅ Max iterations reached");
+                                    } else {
+                                        let progress = current as f64 / *max as f64;
+                                        ui.label(format!("Progress: {} / {} ({:.1}%)",
+                                            format_iterations(current),
+                                            format_iterations(*max),
+                                            progress * 100.0
+                                        ));
+                                    }
+                                }
+                            }
+
+                            ui.separator();
+
+                            // Render settings
+                            if ui.add(egui::Slider::new(iterations_per_thread, 64..=4096).text("Iterations per Thread")).changed() {
+                                iterations_changed = true;
+                            }
+                            if ui.add(egui::Slider::new(density_scale, 0.01..=10.0).text("Density Scale")).changed() {
+                                density_changed = true;
+                            }
                         });
-                }
 
-                // Show speed factor slider in Speed mode
-                if matches!(*color_mode, ColorMode::Speed) {
-                    if ui.add(egui::Slider::new(speed_factor, 0.0..=1.0).text("Speed Blend Factor")).changed() {
-                        color_mode_changed = true;
-                    }
-                }
+                    // Section 3: Color & Appearance
+                    egui::CollapsingHeader::new("Color & Appearance")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            use crate::scene::palette::ColorMode;
+                            let current_mode = *color_mode;
+                            let selected_text = match current_mode {
+                                ColorMode::Transform => "Transform Colors",
+                                ColorMode::Palette => "Palette",
+                                ColorMode::Speed => "Speed",
+                            };
 
-                // Palette editor button
-                if matches!(*color_mode, ColorMode::Palette | ColorMode::Speed) {
-                    if ui.button("🎨 Edit Palette").clicked() {
-                        self.show_palette_editor = !self.show_palette_editor;
-                        // Load current palette into editor
-                        if let Some(pal) = palette_library.get(*current_palette_index) {
-                            self.palette_editor.current_palette = pal.clone();
+                            egui::ComboBox::from_label("Color Mode")
+                                .selected_text(selected_text)
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_value(color_mode, ColorMode::Transform, "Transform Colors").changed() {
+                                        color_mode_changed = true;
+                                    }
+                                    if ui.selectable_value(color_mode, ColorMode::Palette, "Palette").changed() {
+                                        color_mode_changed = true;
+                                    }
+                                    if ui.selectable_value(color_mode, ColorMode::Speed, "Speed").changed() {
+                                        color_mode_changed = true;
+                                    }
+                                });
+
+                            // Show palette selector for Palette and Speed modes
+                            if matches!(*color_mode, ColorMode::Palette | ColorMode::Speed) {
+                                let palettes = palette_library.palettes();
+                                let current_palette_name = palettes.get(*current_palette_index)
+                                    .map(|p| p.name.as_str())
+                                    .unwrap_or("Unknown");
+
+                                egui::ComboBox::from_label("Palette")
+                                    .selected_text(current_palette_name)
+                                    .show_ui(ui, |ui| {
+                                        for (idx, palette) in palettes.iter().enumerate() {
+                                            if ui.selectable_value(current_palette_index, idx, &palette.name).changed() {
+                                                palette_changed = true;
+                                            }
+                                        }
+                                    });
+
+                                // Palette editor button
+                                if ui.button("🎨 Edit Palette").clicked() {
+                                    self.show_palette_editor = !self.show_palette_editor;
+                                    // Load current palette into editor
+                                    if let Some(pal) = palette_library.get(*current_palette_index) {
+                                        self.palette_editor.current_palette = pal.clone();
+                                    }
+                                }
+                            }
+
+                            // Show speed factor slider in Speed mode
+                            if matches!(*color_mode, ColorMode::Speed) {
+                                if ui.add(egui::Slider::new(speed_factor, 0.0..=1.0).text("Speed Blend Factor")).changed() {
+                                    color_mode_changed = true;
+                                }
+                            }
+
+                            ui.separator();
+
+                            // Background color picker
+                            ui.label("Background Color");
+                            if ui.color_edit_button_rgb(background_color).changed() {
+                                background_color_changed = true;
+                            }
+                        });
+                });
+
+            // ==================================================
+            // VIEW WINDOW - Navigation Controls
+            // ==================================================
+            egui::Window::new("View")
+                .open(&mut self.show_view)
+                .show(ctx, |ui| {
+                    ui.label("Zoom");
+                    ui.horizontal(|ui| {
+                        if ui.button("➕ Zoom In").clicked() {
+                            *zoom *= 1.5;
+                            view_changed = true;
                         }
-                    }
-                }
+                        if ui.button("➖ Zoom Out").clicked() {
+                            *zoom /= 1.5;
+                            view_changed = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Value:");
+                        if ui.add(egui::DragValue::new(zoom).speed(0.01).range(0.01..=10000.0)).changed() {
+                            view_changed = true;
+                        }
+                    });
 
-                // View settings
-                ui.separator();
-                ui.label("View");
-                ui.horizontal(|ui| {
-                    ui.label("Zoom:");
-                    if ui.add(egui::DragValue::new(zoom).speed(0.01).range(0.01..=10000.0)).changed() {
-                        view_changed = true;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("Zoom In").clicked() {
-                        *zoom *= 1.5;
-                        view_changed = true;
-                    }
-                    if ui.button("Zoom Out").clicked() {
-                        *zoom /= 1.5;
-                        view_changed = true;
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("Pan X:");
-                    if ui.add(egui::DragValue::new(pan_x).speed(0.01)).changed() {
-                        view_changed = true;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Pan Y:");
-                    if ui.add(egui::DragValue::new(pan_y).speed(0.01)).changed() {
-                        view_changed = true;
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Rotation:");
-                    // Convert radians to degrees for display
-                    let mut degrees = rotation.to_degrees();
-                    if ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°")).changed() {
-                        *rotation = degrees.to_radians();
-                        view_changed = true;
-                    }
-                });
-
-                // 3D Camera rotation controls (only visible in 3D mode)
-                if matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
                     ui.separator();
-                    ui.label("3D Camera Rotation");
 
+                    ui.label("Pan");
                     ui.horizontal(|ui| {
-                        ui.label("Camera Pitch (X):");
-                        let mut degrees_x = camera_rotation_x.to_degrees();
-                        if ui.add(egui::Slider::new(&mut degrees_x, -180.0..=180.0).suffix("°")).changed() {
-                            *camera_rotation_x = degrees_x.to_radians();
-                            camera_rotation_changed = true;
+                        ui.label("X:");
+                        if ui.add(egui::DragValue::new(pan_x).speed(0.01)).changed() {
+                            view_changed = true;
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Y:");
+                        if ui.add(egui::DragValue::new(pan_y).speed(0.01)).changed() {
+                            view_changed = true;
                         }
                     });
 
+                    // Pan step size depends on zoom (more zoomed in = smaller steps)
+                    let pan_step = 0.1 / *zoom;
+
+                    ui.separator();
+                    ui.label("Arrow Controls");
+
+                    // Arrow keys layout
                     ui.horizontal(|ui| {
-                        ui.label("Camera Yaw (Y):");
-                        let mut degrees_y = camera_rotation_y.to_degrees();
-                        if ui.add(egui::Slider::new(&mut degrees_y, -180.0..=180.0).suffix("°")).changed() {
-                            *camera_rotation_y = degrees_y.to_radians();
-                            camera_rotation_changed = true;
+                        ui.add_space(30.0);
+                        if ui.button("  ^  ").clicked() {
+                            *pan_y -= pan_step;
+                            view_changed = true;
                         }
                     });
-                }
+                    ui.horizontal(|ui| {
+                        if ui.button("  <  ").clicked() {
+                            *pan_x -= pan_step;
+                            view_changed = true;
+                        }
+                        if ui.button("  v  ").clicked() {
+                            *pan_y += pan_step;
+                            view_changed = true;
+                        }
+                        if ui.button("  >  ").clicked() {
+                            *pan_x += pan_step;
+                            view_changed = true;
+                        }
+                    });
 
-                // Pan step size depends on zoom (more zoomed in = smaller steps)
-                let pan_step = 0.1 / *zoom;
+                    ui.separator();
 
-                // Arrow keys layout
-                ui.horizontal(|ui| {
-                    ui.add_space(30.0);
-                    if ui.button("  ^  ").clicked() {
-                        *pan_y -= pan_step;
+                    ui.label("Rotation");
+                    ui.horizontal(|ui| {
+                        // Convert radians to degrees for display
+                        let mut degrees = rotation.to_degrees();
+                        if ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°")).changed() {
+                            *rotation = degrees.to_radians();
+                            view_changed = true;
+                        }
+                    });
+
+                    // 3D Camera rotation controls (only visible in 3D mode)
+                    if matches!(flame.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
+                        ui.separator();
+                        ui.label("3D Camera Rotation");
+
+                        ui.horizontal(|ui| {
+                            ui.label("Pitch (X):");
+                            let mut degrees_x = camera_rotation_x.to_degrees();
+                            if ui.add(egui::Slider::new(&mut degrees_x, -180.0..=180.0).suffix("°")).changed() {
+                                *camera_rotation_x = degrees_x.to_radians();
+                                camera_rotation_changed = true;
+                            }
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("Yaw (Y):");
+                            let mut degrees_y = camera_rotation_y.to_degrees();
+                            if ui.add(egui::Slider::new(&mut degrees_y, -180.0..=180.0).suffix("°")).changed() {
+                                *camera_rotation_y = degrees_y.to_radians();
+                                camera_rotation_changed = true;
+                            }
+                        });
+                    }
+
+                    ui.separator();
+
+                    if ui.button("🔄 Reset View").clicked() {
+                        *zoom = 1.0;
+                        *pan_x = 0.0;
+                        *pan_y = 0.0;
+                        *rotation = 0.0;
+                        *camera_rotation_x = 0.0;
+                        *camera_rotation_y = 0.0;
                         view_changed = true;
+                        camera_rotation_changed = true;
                     }
                 });
-                ui.horizontal(|ui| {
-                    if ui.button("  <  ").clicked() {
-                        *pan_x -= pan_step;
-                        view_changed = true;
-                    }
-                    if ui.button("  v  ").clicked() {
-                        *pan_y += pan_step;
-                        view_changed = true;
-                    }
-                    if ui.button("  >  ").clicked() {
-                        *pan_x += pan_step;
-                        view_changed = true;
-                    }
+
+            // ==================================================
+            // HELP WINDOW - Keyboard Shortcuts and Documentation
+            // ==================================================
+            egui::Window::new("Help")
+                .open(&mut self.show_help)
+                .show(ctx, |ui| {
+                    ui.heading("Keyboard Shortcuts");
+                    ui.separator();
+
+                    ui.label("View Navigation:");
+                    ui.label("  ← ↑ ↓ →  - Pan view");
+                    ui.label("  + / -     - Zoom in/out");
+                    ui.label("  Numpad +/- - Zoom in/out");
+
+                    ui.separator();
+                    ui.label("Editing:");
+                    ui.label("  Ctrl+Z   - Undo");
+                    ui.label("  Ctrl+Y   - Redo");
+
+                    ui.separator();
+                    ui.label("Mouse Controls:");
+                    ui.label("  Drag     - Pan view");
+                    ui.label("  Wheel    - Zoom (toward cursor)");
+
+                    ui.separator();
+                    ui.heading("Documentation");
+                    ui.label("Documentation files are in the docs/ folder:");
+                    ui.label("  • STATUS.md - Implementation status");
+                    ui.label("  • ARCHITECTURE.md - Code organization");
+                    ui.label("  • TESTING-GUIDE.md - Testing guide");
+                    ui.label("  • QUICKSTART-WASM.md - WASM build guide");
                 });
 
-                if ui.button("Reset View").clicked() {
-                    *zoom = 1.0;
-                    *pan_x = 0.0;
-                    *pan_y = 0.0;
-                    *rotation = 0.0;
-                    *camera_rotation_x = 0.0;
-                    *camera_rotation_y = 0.0;
-                    view_changed = true;
-                    camera_rotation_changed = true;
-                }
-            });
-
-            // Transforms window
-            egui::Window::new("Transforms").show(ctx, |ui| {
-                ui.heading(format!("Transforms ({})", flame.transforms.len()));
+            // ==================================================
+            // TRANSFORMS WINDOW
+            // ==================================================
+            egui::Window::new("Transforms")
+                .open(&mut self.show_transforms)
+                .show(ctx, |ui| {
+                    ui.heading(format!("Transforms ({})", flame.transforms.len()));
 
                 // Add/Delete transform buttons
                 ui.horizontal(|ui| {
