@@ -3,19 +3,26 @@
 **Purpose:**
 A project-scoped architecture document describing the design, file layout, data formats, pipeline, and development milestones for a GPU-accelerated fractal-flame renderer implemented in **Rust** using **wgpu** (WebGPU). The target is an interactive desktop application with optional WebAssembly (browser) demo.
 
-**Status:** ~88% complete, fully functional. See [STATUS.md](STATUS.md) for detailed comparison.
+**Status:** ~96% complete, fully functional. See [STATUS.md](STATUS.md) for detailed comparison.
 
 **Key Implementation Decisions:**
 - ✅ Using **ping-pong accumulation** (not atomics) for better performance and compatibility
 - ✅ Using **JSON** (not RON) for config serialization
 - ✅ Added **undo/redo system** with 50-state history
 - ✅ Added **three color modes**: Transform, Palette, Speed-based
-- ✅ **No external assets** - palettes and presets are code-based
+- ✅ Added **24 variations** (16 2D + 8 3D) with full 3D rendering support
+- ✅ Added **comprehensive testing** infrastructure (unit, regression, benchmarks)
+- ✅ Added **version tracking** with auto-incrementing build numbers
+- ✅ Added **GPU and CPU profiling** tools
+- ✅ **Asset auto-loading** from filesystem (desktop only)
 
 **Documentation:**
 - [STATUS.md](STATUS.md) - Implementation status vs this outline
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Code organization and data flow
 - [CLAUDE.md](CLAUDE.md) - Project context for Claude Code
+- [TESTING-GUIDE.md](TESTING-GUIDE.md) - Complete testing reference
+- [PROFILING.md](PROFILING.md) - Performance profiling guide
+- [VERSION-TRACKING.md](VERSION-TRACKING.md) - Build and version system
 
 ---
 
@@ -40,6 +47,9 @@ A project-scoped architecture document describing the design, file layout, data 
 - State management: **undo/redo** history with FractalConfig snapshots
 - CLI / app boot: **clap** (for command-line render/export options)
 - Optional: **wasm-bindgen** and **wasm-pack** for browser build
+- Testing: **Criterion** for benchmarks, built-in test framework for unit/regression tests
+- Profiling: **GpuProfiler** with timestamp queries, **web-time** for CPU timing
+- Version tracking: **build.rs** with auto-incrementing build numbers, **chrono** for timestamps
 - Tooling: **cargo**, **rustfmt**, **clippy**, CI (GitHub Actions)
 
 ---
@@ -49,14 +59,21 @@ A project-scoped architecture document describing the design, file layout, data 
 ```
 fractal-flame-wgpu/
 ├── Cargo.toml
+├── build.rs             # build script (version capture, build number increment)
+├── build_number.txt     # auto-incrementing build counter (currently at #9)
 ├── README.md
-├── docs/
-│   └── design_notes.md
 ├── CLAUDE.md            # project context for Claude Code
 ├── STATUS.md            # implementation status vs this outline
 ├── ARCHITECTURE.md      # code organization and data flow guide
+├── TESTING-GUIDE.md     # complete testing reference
+├── PROFILING.md         # performance profiling guide
+├── VERSION-TRACKING.md  # build and version system documentation
+├── WASM-STATUS.md       # WebAssembly build status
+├── WASM-PROFILING.md    # WASM-specific profiling
+├── MILESTONE-7-COMPLETE.md # milestone 7 summary
 ├── src/
 │   ├── main.rs          # entrypoint (app init, event loop)
+│   ├── lib.rs           # library root + WASM entry
 │   ├── app.rs           # App struct, state machine
 │   ├── ui/
 │   │   ├── mod.rs
@@ -68,26 +85,53 @@ fractal-flame-wgpu/
 │   │   └── buffers.rs   # buffer / texture layout & helpers
 │   ├── scene/
 │   │   ├── mod.rs
-│   │   ├── transforms.rs# transform definitions, variations
+│   │   ├── transforms.rs# transform definitions, 24 variations (16 2D + 8 3D)
 │   │   ├── presets.rs   # built-in flame presets
+│   │   ├── assets.rs    # asset loading from filesystem
 │   │   └── palette.rs   # color modes, palettes, gradient system
 │   ├── renderer/
 │   │   ├── mod.rs
 │   │   └── compute_kernel.rs # GPU orchestration, PNG export
 │   ├── config.rs        # FractalConfig serialization (.flame files)
 │   ├── undo.rs          # undo/redo history system
-│   └── util.rs          # performance metrics
+│   ├── util.rs          # performance metrics
+│   ├── profiler.rs      # GPU/CPU profiling tools
+│   ├── version.rs       # version tracking and build info
+│   └── bin/
+│       └── simple_benchmark.rs # CLI benchmark tool
+├── tests/
+│   └── regression.rs    # 12 regression tests (all passing)
+├── benches/
+│   └── flame_bench.rs   # Criterion benchmarks
+├── examples/
+│   ├── show_version.rs  # display version info
+│   └── export_presets.rs # export built-in presets to files
+├── assets/
+│   ├── palettes/        # .palette files (auto-loaded on desktop)
+│   │   ├── fire.palette
+│   │   ├── cool.palette
+│   │   └── rainbow.palette
+│   └── presets/         # .flame config files (auto-loaded on desktop)
+│       ├── simple.flame
+│       ├── complex.flame
+│       ├── spherical.flame
+│       ├── spiral.flame
+│       └── julia.flame
 └── shaders/             # WGSL shader files (compute + fragment)
-    ├── trajectory.wgsl  # flame iteration compute shader
+    ├── trajectory.wgsl  # flame iteration compute shader (2D mode)
+    ├── trajectory_3d.wgsl # flame iteration compute shader (3D mode)
     ├── accumulate.wgsl  # temporal ping-pong accumulation
     └── tonemap.wgsl     # tone mapping + palette lookup
 ```
 
 Notes:
 - Keep `gpu/` focused on wgpu resource management; `renderer/` orchestrates compute + render flow.
-- `scene/transforms.rs` implements transform + variation definitions in pure Rust for CPU-side testing.
-- Palettes and presets are code-based (no external asset files currently).
+- `scene/transforms.rs` implements 24 variation functions (16 2D + 8 3D) in pure Rust for CPU-side testing.
+- Palettes and presets auto-load from `assets/` on desktop (WASM uses built-in only).
 - Config system provides JSON import/export for sharing fractal configurations.
+- Testing infrastructure includes unit tests, regression tests, and Criterion benchmarks.
+- Version tracking with auto-incrementing build numbers via build.rs script.
+- Full 3D rendering with dual shader system (trajectory.wgsl for 2D, trajectory_3d.wgsl for 3D).
 
 ---
 
@@ -106,8 +150,10 @@ Transform {
     e: f32, f: f32,
     // weight (probability)
     weight: f32,
-    // variation weights (vector of 16 variations)
-    variations: [f32; 16],
+    // variation weights (vector of 24 variations: 16 2D + 8 3D)
+    variations: [f32; 24],
+    // Z offset for 3D mode
+    g: f32,
     // color contribution (RGB)
     color: [f32; 3],
     // color blending speed (0.0 = parent color, 1.0 = transform color)
@@ -143,7 +189,7 @@ Three color assignment strategies:
 ### 4.4 Work dispatch parameters
 
 Packed into uniform buffers:
-- **GpuParams**: num_transforms, iterations_per_thread, burn_in, width, height, seed, color_mode, splat_size, zoom, pan_x, pan_y, rotation, speed_factor
+- **GpuParams**: num_transforms, iterations_per_thread, burn_in, width, height, seed, color_mode, splat_size, zoom, pan_x, pan_y, rotation, speed_factor, camera_pitch, camera_yaw, projection_type, perspective_strength
 - **TonemapParams**: exposure, gamma, density_scale, background_color
 - **AccumulateParams**: width, height, blend_factor
 
@@ -155,12 +201,20 @@ Packed into uniform buffers:
 
 Three-pass progressive rendering:
 
-- **Compute pipeline: `trajectory`** (trajectory.wgsl)
+- **Compute pipeline: `trajectory` (2D mode)** (trajectory.wgsl)
   - Input: transforms storage buffer, palette texture, GpuParams UBO
   - Output: temp samples texture (additive write, no atomics)
   - Work: 128 workgroups × 64 threads, each runs 256 iterations (configurable)
-  - Per-thread: PCG RNG, weighted transform selection, affine + variations, color accumulation
+  - Per-thread: PCG RNG, weighted transform selection, affine + 16 2D variations, color accumulation
   - Supports 3 color modes and view transforms (zoom, pan, rotation)
+
+- **Compute pipeline: `trajectory` (3D mode)** (trajectory_3d.wgsl)
+  - Same as 2D plus:
+  - Affine transformation with Z offset (g field)
+  - 24 variation functions (16 2D + 8 3D)
+  - Camera rotation (pitch/yaw)
+  - Projection (orthographic or perspective)
+  - Z tracking through iteration
 
 - **Compute pipeline: `accumulate`** (accumulate.wgsl)
   - Input: temp samples texture, previous accumulation texture, AccumulateParams
@@ -179,9 +233,12 @@ Three-pass progressive rendering:
 - ✅ WGSL for all shaders (wgpu portable)
 - ✅ Single-precision float math throughout
 - ✅ PCG random number generator per thread (seeded with global_invocation_id + frame seed)
-- ✅ 16 variation functions implemented (0-15: Linear, Sinusoidal, Spherical, Swirl, Horseshoe, Polar, Handkerchief, Heart, Disc, Spiral, Hyperbolic, Diamond, Ex, Julia, Bent, Waves)
-- ✅ CPU reference implementations in Rust for validation
+- ✅ 24 variation functions implemented:
+  - **2D (0-15)**: Linear, Sinusoidal, Spherical, Swirl, Horseshoe, Polar, Handkerchief, Heart, Disc, Spiral, Hyperbolic, Diamond, Ex, Julia, Bent, Waves
+  - **3D (16-23)**: Zcone, Flatten, Hemisphere, PreRotateX, PreRotateY, PostRotateX, PostRotateY, ZScale
+- ✅ CPU reference implementations in Rust for validation (2D only)
 - ✅ No atomics used - ping-pong accumulation is faster and more compatible
+- ✅ Dual shader system for 2D and 3D rendering modes
 
 ---
 
@@ -230,8 +287,9 @@ Implemented in `ui/mod.rs` using egui (floating windows):
 - ✅ Weight slider (0-2)
 - ✅ RGB color sliders
 - ✅ Color speed slider (0-1)
-- ✅ 16 variation weight sliders with names
-- ❌ Add/remove transforms (can only edit existing)
+- ✅ Z offset slider (3D mode only)
+- ✅ 24 variation weight sliders with names (split into 2D and 3D sections)
+- ✅ Add/delete transforms buttons
 - ❌ Clone/duplicate transform
 - ❌ Final transform controls
 
@@ -314,19 +372,33 @@ Implemented in `ui/mod.rs` using egui (floating windows):
 ## 10 — Testing & validation
 
 **Current Implementation:**
-- ✅ Unit tests in `scene/transforms.rs`:
+- ✅ **Unit tests** in `scene/transforms.rs`:
   - Point calculations (r, r², θ, φ)
-  - Variation functions (Linear, Spherical, etc.)
+  - 24 variation functions (16 2D + 8 3D)
   - Affine transformations
   - Flame iteration logic
-- ✅ Unit tests in `scene/palette.rs`:
+- ✅ **Unit tests** in `scene/palette.rs`:
   - Color interpolation
   - Texture data generation
+- ✅ **Regression tests** in `tests/regression.rs` (12 tests, all passing):
+  - CPU iteration determinism
+  - All 24 variation functions
+  - Preset validation
+  - Serialization round-trips
+- ✅ **Criterion benchmarks** in `benches/flame_bench.rs`:
+  - CPU iteration performance
+  - Individual variation functions
+  - Affine transformations
+  - Point calculations
+- ✅ **CLI benchmark tool** in `src/bin/simple_benchmark.rs`:
+  - Tests all presets
+  - Tests all variations
+  - Human-readable M ops/sec output
 
 **Not Implemented:**
-- ❌ Visual regression tests with checksums
-- ❌ Performance benchmarks
+- ❌ Visual regression tests with image checksums
 - ❌ GPU vs CPU reference comparison tests
+- ⚠️ GPU profiling (infrastructure exists but not used in CI)
 
 ---
 
@@ -340,12 +412,20 @@ Implemented in `ui/mod.rs` using egui (floating windows):
 
 **Optimization Strategies (in priority order):**
 1. ✅ **Ping-pong accumulation** - Eliminated atomic contention completely
-2. ⚠️ **Configurable iterations-per-thread** - UI slider 64-4096 (reduces dispatch overhead)
+2. ✅ **Configurable iterations-per-thread** - UI slider 64-4096 (reduces dispatch overhead)
 3. ❌ Fixed workgroup size (8×8) - could tune for GPU occupancy
 4. ❌ Multi-resolution progressive rendering
 5. ❌ Adaptive sampling based on density
 
-**Profiling Tools:**
+**Profiling Tools Implemented:**
+- ✅ **GpuProfiler** (src/profiler.rs) - GPU timestamp queries for measuring pass durations
+- ✅ **CPU Scopes** - RAII-based timing for CPU code sections
+- ✅ **PerformanceMetrics** - FPS, frame time, component timing, JSON export
+- ✅ **Version Tracking** - Build numbers, git hash, platform info
+- ✅ **Criterion Benchmarks** - Statistical microbenchmarking for CPU code
+- ✅ **CLI Benchmark** - Simple_benchmark.rs for human-readable performance testing
+
+**External Profiling Tools:**
 - RenderDoc for frame capture
 - NVIDIA Nsight for GPU profiling
 - Xcode GPU frame capture (macOS)
@@ -356,22 +436,29 @@ Implemented in `ui/mod.rs` using egui (floating windows):
 ## 12 — Milestones (project-level)
 
 1. ✅ **Repo skeleton:** wgpu + winit + egui setup, window + swapchain, basic UI panel
-2. ✅ **CPU reference:** Full CPU flame implementation with 16 variations (`scene/transforms.rs`)
+2. ✅ **CPU reference:** Full CPU flame implementation with 24 variations (`scene/transforms.rs`)
 3. ✅ **Minimal GPU point plot:** Compute shader generates samples, writes to temp texture
 4. ✅ **Accumulation pass:** Ping-pong accumulation with progressive refinement
 5. ✅ **UI integration:** Full transforms UI, palette editor, color modes, view controls
 6. ✅ **Export:** PNG export at viewport resolution (desktop + WASM, tiled high-res pending)
-7. ⚠️ **Performance tuning:** Fast on modern GPUs, no systematic profiling done
+7. ✅ **Performance tuning:** Comprehensive profiling tools, version tracking, benchmarks
 8. ✅ **Cross-platform:** Works on Windows, macOS, Linux, WASM (100%)
 
 **Added Beyond Original Milestones:**
 - ✅ Undo/redo system with 50-state history
 - ✅ Config import/export (.flame JSON files)
 - ✅ Three color modes (Transform, Palette, Speed)
+- ✅ 3D rendering with 8 3D variations (total 24 variations)
+- ✅ Camera rotation and projection controls (orthographic/perspective)
+- ✅ Asset auto-loading from filesystem (desktop)
 - ✅ Background color customization
 - ✅ Pause/resume and max iterations limit
 - ✅ Interactive viewport (mouse/keyboard navigation)
-- ✅ Performance metrics display
+- ✅ Performance metrics with JSON export
+- ✅ Version tracking with auto-incrementing build numbers
+- ✅ GPU profiler with timestamp queries
+- ✅ Comprehensive testing (unit, regression, benchmarks)
+- ✅ Transform add/delete UI controls
 
 ---
 

@@ -1,11 +1,13 @@
 mod app;
-mod gpu;
+pub mod gpu;
 mod ui;
 mod util;
 pub mod scene;
 mod renderer;
 pub mod config;
 mod undo;
+pub mod profiler;
+pub mod version;
 
 use app::App;
 use winit::dpi::PhysicalSize;

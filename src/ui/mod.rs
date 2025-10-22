@@ -164,7 +164,15 @@ impl EguiLayer {
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Performance window
             egui::Window::new("Performance").show(ctx, |ui| {
+                // Version info at top
+                let version_info = crate::version::get_version_info();
                 ui.heading("Fractal Flame Renderer");
+                ui.label(format!("Version: {}", version_info.full_version()));
+                ui.label(format!("Build: {} ({}) {}",
+                    version_info.git_hash,
+                    version_info.git_branch,
+                    version_info.profile
+                ));
                 ui.separator();
 
                 // Preset selector

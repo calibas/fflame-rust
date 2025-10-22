@@ -66,10 +66,36 @@ cargo build --target aarch64-linux-android
 # with additional work on platform-specific dependencies
 ```
 
-### Testing
+### Testing & Profiling
+
+See [TESTING-GUIDE.md](TESTING-GUIDE.md) for complete guide.
+
 ```bash
+# Unit tests (embedded in source files)
 cargo test
+
+# Regression tests (integration tests)
+cargo test --test regression
+
+# CPU benchmarks (Criterion - precise microbenchmarks)
+cargo bench
+
+# Simple benchmark (CLI - human-readable)
+cargo run --release --bin simple_benchmark
+
+# Show version info
+cargo run --example show_version
+
+# Main app
+cargo run --release
 ```
+
+**What's Tested:**
+- Unit tests: Transform math, variations, palette interpolation, version info
+- Regression: 12 tests (CPU determinism, all variations, presets, serialization)
+- Benchmarks: CPU iteration, all 24 variations, affine, point calculations
+
+**All tests passing:** ✅ 15+ unit tests, 12 regression tests
 
 ## Coding Guidelines
 

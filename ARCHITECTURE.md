@@ -118,6 +118,37 @@ fractal_flame_wgpu/
 │                               - 50-state circular buffer
 │                               - Undo/redo tracking
 │
+├── Profiling & Version Tracking
+│   ├── profiler.rs             GpuProfiler + CPU timing
+│   │                           - GPU timestamp queries (TIMESTAMP_QUERY feature)
+│   │                           - CPU scope timing with RAII
+│   │                           - FrameProfile with version metadata
+│   │                           - JSON export for performance data
+│   │
+│   └── version.rs              VersionInfo
+│                               - Version from Cargo.toml
+│                               - Auto-incrementing build numbers
+│                               - Git hash, branch, build time
+│                               - Platform and architecture info
+│                               - Global singleton via get_version_info()
+│
+├── Testing & Benchmarking
+│   ├── tests/regression.rs    12 regression tests
+│   │                           - CPU iteration determinism
+│   │                           - All 24 variation functions
+│   │                           - Preset validation
+│   │                           - Serialization round-trips
+│   │
+│   ├── benches/flame_bench.rs Criterion benchmarks
+│   │                           - Statistical microbenchmarking
+│   │                           - CPU iteration performance
+│   │                           - Individual variation functions
+│   │
+│   └── bin/simple_benchmark.rs CLI benchmark tool
+│                               - Human-readable performance testing
+│                               - Tests all presets and variations
+│                               - M ops/sec output
+│
 └── Shaders (WGSL)
     ├── trajectory.wgsl         🔥 COMPUTE: Flame iteration (2D mode)
     │                           - PCG random number generator
@@ -554,8 +585,14 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 | Add built-in palette | [palette.rs](src/scene/palette.rs) |
 | Import/export palette | Use Palette Editor UI (Added 2025-10-20) |
 | Add/delete transforms | Use "➕ Add Transform" / "🗑 Delete Transform" buttons (Added 2025-10-20) |
+| Run unit tests | `cargo test` |
+| Run regression tests | `cargo test --test regression` |
+| Run benchmarks | `cargo bench` |
+| Run CLI benchmark | `cargo run --bin simple_benchmark --release` |
+| Display version info | `cargo run --example show_version` |
+| Export presets | `cargo run --example export_presets` |
 
 ---
 
-**Last Updated:** 2025-10-21
+**Last Updated:** 2025-10-21 (Evening, Build #9)
 **Project:** fflame-rust
