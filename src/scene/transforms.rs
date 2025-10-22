@@ -1,7 +1,373 @@
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use serde::{Deserialize, Serialize, Deserializer, Serializer};
+use serde::de::{self, Visitor, MapAccess};
+use crate::variations::VariationRegistry;
 
-/// Maximum number of variation types supported
-pub const MAX_VARIATIONS: usize = 24; // 16 2D + 8 3D variations
+/// IFS Transform with named variations (V2)
+#[derive(Debug, Clone)]
+pub struct Transform {
+    // Affine transformation matrix: x' = ax + by + e, y' = cx + dy + f
+    pub a: f32,
+    pub b: f32,
+    pub c: f32,
+    pub d: f32,
+    pub e: f32,
+    pub f: f32,
+
+    /// Z offset for 3D mode (z' = z + g)
+    pub g: f32,
+
+    /// Probability weight for selecting this transform
+    pub weight: f32,
+
+    /// Weights for each variation function (named)
+    pub variations: HashMap<String, f32>,
+
+    /// Color contribution (RGB)
+    pub color: [f32; 3],
+
+    /// Color speed (0.0 = parent color, 1.0 = transform color)
+    pub color_speed: f32,
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Self {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            e: 0.0,
+            f: 0.0,
+            g: 0.0,
+            weight: 1.0,
+            variations: HashMap::new(),
+            color: [1.0, 1.0, 1.0],
+            color_speed: 0.5,
+        }
+    }
+}
+
+impl Transform {
+    /// Create a new transform with identity affine matrix
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set a variation weight by name
+    pub fn set_variation(&mut self, name: &str, weight: f32) {
+        if weight.abs() < 1e-6 {
+            self.variations.remove(name);
+        } else {
+            self.variations.insert(name.to_string(), weight);
+        }
+    }
+
+    /// Get a variation weight by name
+    pub fn get_variation(&self, name: &str) -> f32 {
+        self.variations.get(name).copied().unwrap_or(0.0)
+    }
+
+    /// Get all active variation names
+    pub fn active_variations(&self) -> Vec<String> {
+        self.variations.keys().cloned().collect()
+    }
+
+    /// Convert from legacy array format to HashMap
+    pub fn from_array(
+        array: &[f32],
+        registry: &VariationRegistry,
+    ) -> HashMap<String, f32> {
+        let mut map = HashMap::new();
+        let names = registry.names();
+
+        for (i, &weight) in array.iter().enumerate() {
+            if weight.abs() > 1e-6 {
+                if let Some(name) = names.get(i) {
+                    map.insert(name.clone(), weight);
+                }
+            }
+        }
+
+        map
+    }
+
+    /// Convert to GPU array format with runtime ID mapping
+    pub fn to_gpu_array(
+        &self,
+        id_map: &HashMap<String, u32>,
+        max_variations: usize,
+    ) -> Vec<f32> {
+        let mut array = vec![0.0; max_variations];
+
+        for (name, &weight) in &self.variations {
+            if let Some(&id) = id_map.get(name) {
+                if (id as usize) < max_variations {
+                    array[id as usize] = weight;
+                }
+            }
+        }
+
+        array
+    }
+
+    // === COMPATIBILITY METHODS (for gradual migration) ===
+
+    /// COMPATIBILITY: Set variation by index (for old code)
+    pub fn set_variation_by_index(&mut self, index: usize, weight: f32, registry: &VariationRegistry) {
+        if let Some(name) = registry.names().get(index) {
+            self.set_variation(name, weight);
+        }
+    }
+
+    /// COMPATIBILITY: Get variation by index
+    pub fn get_variation_by_index(&self, index: usize, registry: &VariationRegistry) -> f32 {
+        if let Some(name) = registry.names().get(index) {
+            self.get_variation(name)
+        } else {
+            0.0
+        }
+    }
+
+    /// COMPATIBILITY: Convert to fixed 24-element array for GPU
+    pub fn to_fixed_array(&self, registry: &VariationRegistry) -> [f32; 24] {
+        let mut array = [0.0; 24];
+        for (i, name) in registry.names().iter().enumerate().take(24) {
+            array[i] = self.get_variation(name);
+        }
+        array
+    }
+
+    /// COMPATIBILITY: Set from fixed array
+    pub fn from_fixed_array(&mut self, array: [f32; 24], registry: &VariationRegistry) {
+        self.variations.clear();
+        for (i, &weight) in array.iter().enumerate() {
+            if weight.abs() > 1e-6 {
+                if let Some(name) = registry.names().get(i) {
+                    self.set_variation(name, weight);
+                }
+            }
+        }
+    }
+}
+
+/// Custom serialization - saves as HashMap
+impl Serialize for Transform {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("Transform", 11)?;
+        state.serialize_field("a", &self.a)?;
+        state.serialize_field("b", &self.b)?;
+        state.serialize_field("c", &self.c)?;
+        state.serialize_field("d", &self.d)?;
+        state.serialize_field("e", &self.e)?;
+        state.serialize_field("f", &self.f)?;
+        state.serialize_field("g", &self.g)?;
+        state.serialize_field("weight", &self.weight)?;
+        state.serialize_field("variations", &self.variations)?;
+        state.serialize_field("color", &self.color)?;
+        state.serialize_field("color_speed", &self.color_speed)?;
+        state.end()
+    }
+}
+
+/// Custom deserialization - supports both HashMap and array formats
+impl<'de> Deserialize<'de> for Transform {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            A, B, C, D, E, F, G, Weight, Variations, Color, ColorSpeed,
+        }
+
+        struct TransformVisitor;
+
+        impl<'de> Visitor<'de> for TransformVisitor {
+            type Value = Transform;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("struct Transform")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<Transform, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut a = None;
+                let mut b = None;
+                let mut c = None;
+                let mut d = None;
+                let mut e = None;
+                let mut f = None;
+                let mut g = None;
+                let mut weight = None;
+                let mut variations = None;
+                let mut color = None;
+                let mut color_speed = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::A => a = Some(map.next_value()?),
+                        Field::B => b = Some(map.next_value()?),
+                        Field::C => c = Some(map.next_value()?),
+                        Field::D => d = Some(map.next_value()?),
+                        Field::E => e = Some(map.next_value()?),
+                        Field::F => f = Some(map.next_value()?),
+                        Field::G => g = Some(map.next_value()?),
+                        Field::Weight => weight = Some(map.next_value()?),
+                        Field::Variations => {
+                            // Try to deserialize as HashMap first
+                            let value: serde_json::Value = map.next_value()?;
+
+                            let var_map = match value {
+                                // New format: HashMap
+                                serde_json::Value::Object(obj) => {
+                                    let mut map = HashMap::new();
+                                    for (k, v) in obj {
+                                        if let serde_json::Value::Number(num) = v {
+                                            if let Some(f) = num.as_f64() {
+                                                map.insert(k, f as f32);
+                                            }
+                                        }
+                                    }
+                                    map
+                                }
+                                // Old format: Array - convert using default registry
+                                serde_json::Value::Array(arr) => {
+                                    let mut map = HashMap::new();
+                                    let registry = crate::variations::VariationRegistry::new();
+                                    let names = registry.names();
+
+                                    for (i, val) in arr.iter().enumerate() {
+                                        if let serde_json::Value::Number(num) = val {
+                                            if let Some(weight) = num.as_f64() {
+                                                let weight = weight as f32;
+                                                if weight.abs() > 1e-6 {
+                                                    if let Some(name) = names.get(i) {
+                                                        map.insert(name.clone(), weight);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    map
+                                }
+                                _ => {
+                                    return Err(de::Error::custom(
+                                        "variations must be an object (new format) or array (legacy format)"
+                                    ));
+                                }
+                            };
+
+                            variations = Some(var_map);
+                        }
+                        Field::Color => color = Some(map.next_value()?),
+                        Field::ColorSpeed => color_speed = Some(map.next_value()?),
+                    }
+                }
+
+                Ok(Transform {
+                    a: a.ok_or_else(|| de::Error::missing_field("a"))?,
+                    b: b.ok_or_else(|| de::Error::missing_field("b"))?,
+                    c: c.ok_or_else(|| de::Error::missing_field("c"))?,
+                    d: d.ok_or_else(|| de::Error::missing_field("d"))?,
+                    e: e.ok_or_else(|| de::Error::missing_field("e"))?,
+                    f: f.ok_or_else(|| de::Error::missing_field("f"))?,
+                    g: g.unwrap_or(0.0),
+                    weight: weight.ok_or_else(|| de::Error::missing_field("weight"))?,
+                    variations: variations.ok_or_else(|| de::Error::missing_field("variations"))?,
+                    color: color.ok_or_else(|| de::Error::missing_field("color"))?,
+                    color_speed: color_speed.ok_or_else(|| de::Error::missing_field("color_speed"))?,
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "color", "color_speed"];
+        deserializer.deserialize_struct("Transform", FIELDS, TransformVisitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::variations::VariationRegistry;
+
+    #[test]
+    fn test_named_variations() {
+        let mut xform = Transform::new();
+        xform.set_variation("linear", 0.5);
+        xform.set_variation("swirl", 0.3);
+
+        assert_eq!(xform.get_variation("linear"), 0.5);
+        assert_eq!(xform.get_variation("swirl"), 0.3);
+        assert_eq!(xform.get_variation("nonexistent"), 0.0);
+    }
+
+    #[test]
+    fn test_array_conversion() {
+        let array = [0.5, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let registry = VariationRegistry::new();
+
+        let map = Transform::from_array(&array, &registry);
+
+        assert_eq!(map.get("linear"), Some(&0.5));
+        assert_eq!(map.get("swirl"), Some(&0.3));
+    }
+
+    #[test]
+    fn test_gpu_array_conversion() {
+        let mut xform = Transform::new();
+        xform.set_variation("linear", 0.5);
+        xform.set_variation("swirl", 0.3);
+
+        let mut id_map = HashMap::new();
+        id_map.insert("linear".to_string(), 0);
+        id_map.insert("swirl".to_string(), 1);
+
+        let gpu_array = xform.to_gpu_array(&id_map, 10);
+
+        assert_eq!(gpu_array[0], 0.5);
+        assert_eq!(gpu_array[1], 0.3);
+        assert_eq!(gpu_array[2], 0.0);
+    }
+
+    #[test]
+    fn test_serialize_deserialize() {
+        let mut xform = Transform::new();
+        xform.set_variation("linear", 0.5);
+        xform.set_variation("swirl", 0.3);
+
+        let json = serde_json::to_string(&xform).unwrap();
+        let deserialized: Transform = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.get_variation("linear"), 0.5);
+        assert_eq!(deserialized.get_variation("swirl"), 0.3);
+    }
+
+    #[test]
+    fn test_deserialize_legacy_array() {
+        let json = r#"{
+            "a": 1.0, "b": 0.0, "c": 0.0, "d": 1.0, "e": 0.0, "f": 0.0, "g": 0.0,
+            "weight": 1.0,
+            "variations": [0.5, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "color": [1.0, 1.0, 1.0],
+            "color_speed": 0.5
+        }"#;
+
+        let xform: Transform = serde_json::from_str(json).unwrap();
+
+        assert_eq!(xform.get_variation("linear"), 0.5);
+        assert_eq!(xform.get_variation("swirl"), 0.3);
+    }
+}
+// === Additional code from legacy transforms.rs ===
 
 /// Rendering mode for the fractal flame
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,476 +436,15 @@ impl Point {
     }
 }
 
-/// IFS Transform with affine matrix and variation weights
-#[derive(Debug, Clone, Serialize)]
-pub struct Transform {
-    // Affine transformation matrix: x' = ax + by + e, y' = cx + dy + f
-    pub a: f32,
-    pub b: f32,
-    pub c: f32,
-    pub d: f32,
-    pub e: f32,
-    pub f: f32,
-
-    /// Z offset for 3D mode (z' = z + g)
-    #[serde(default)]
-    pub g: f32,
-
-    /// Probability weight for selecting this transform
-    pub weight: f32,
-
-    /// Weights for each variation function (indexed by VariationType)
-    #[serde(deserialize_with = "deserialize_variations")]
-    pub variations: [f32; MAX_VARIATIONS],
-
-    /// Color contribution (RGB)
-    pub color: [f32; 3],
-
-    /// Color speed (0.0 = parent color, 1.0 = transform color)
-    pub color_speed: f32,
-}
-
-/// Custom deserializer for variations array that handles backward compatibility
-/// Accepts arrays of length 16 (old format) or 24 (new format)
-fn deserialize_variations<'de, D>(deserializer: D) -> Result<[f32; MAX_VARIATIONS], D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::Error;
-
-    let v: Vec<f32> = Vec::deserialize(deserializer)?;
-
-    match v.len() {
-        16 => {
-            // Old format: pad with zeros to reach 24
-            let mut result = [0.0; MAX_VARIATIONS];
-            result[..16].copy_from_slice(&v);
-            Ok(result)
-        }
-        24 => {
-            // New format: convert directly
-            let mut result = [0.0; MAX_VARIATIONS];
-            result.copy_from_slice(&v);
-            Ok(result)
-        }
-        other => Err(D::Error::custom(format!(
-            "invalid variations array length {}, expected 16 (old format) or 24 (new format)",
-            other
-        ))),
-    }
-}
-
-// Manual Deserialize implementation to use custom deserializer
-impl<'de> serde::Deserialize<'de> for Transform {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(field_identifier, rename_all = "snake_case")]
-        enum Field {
-            A, B, C, D, E, F, G, Weight, Variations, Color, ColorSpeed,
-        }
-
-        struct TransformVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for TransformVisitor {
-            type Value = Transform;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("struct Transform")
-            }
-
-            fn visit_map<V>(self, mut map: V) -> Result<Transform, V::Error>
-            where
-                V: serde::de::MapAccess<'de>,
-            {
-                let mut a = None;
-                let mut b = None;
-                let mut c = None;
-                let mut d = None;
-                let mut e = None;
-                let mut f = None;
-                let mut g = None;
-                let mut weight = None;
-                let mut variations = None;
-                let mut color = None;
-                let mut color_speed = None;
-
-                while let Some(key) = map.next_key()? {
-                    match key {
-                        Field::A => {
-                            if a.is_some() {
-                                return Err(serde::de::Error::duplicate_field("a"));
-                            }
-                            a = Some(map.next_value()?);
-                        }
-                        Field::B => {
-                            if b.is_some() {
-                                return Err(serde::de::Error::duplicate_field("b"));
-                            }
-                            b = Some(map.next_value()?);
-                        }
-                        Field::C => {
-                            if c.is_some() {
-                                return Err(serde::de::Error::duplicate_field("c"));
-                            }
-                            c = Some(map.next_value()?);
-                        }
-                        Field::D => {
-                            if d.is_some() {
-                                return Err(serde::de::Error::duplicate_field("d"));
-                            }
-                            d = Some(map.next_value()?);
-                        }
-                        Field::E => {
-                            if e.is_some() {
-                                return Err(serde::de::Error::duplicate_field("e"));
-                            }
-                            e = Some(map.next_value()?);
-                        }
-                        Field::F => {
-                            if f.is_some() {
-                                return Err(serde::de::Error::duplicate_field("f"));
-                            }
-                            f = Some(map.next_value()?);
-                        }
-                        Field::G => {
-                            if g.is_some() {
-                                return Err(serde::de::Error::duplicate_field("g"));
-                            }
-                            g = Some(map.next_value()?);
-                        }
-                        Field::Weight => {
-                            if weight.is_some() {
-                                return Err(serde::de::Error::duplicate_field("weight"));
-                            }
-                            weight = Some(map.next_value()?);
-                        }
-                        Field::Variations => {
-                            if variations.is_some() {
-                                return Err(serde::de::Error::duplicate_field("variations"));
-                            }
-                            // Use custom deserializer for variations
-                            let v: Vec<f32> = map.next_value()?;
-                            let mut result = [0.0; MAX_VARIATIONS];
-                            match v.len() {
-                                16 => {
-                                    result[..16].copy_from_slice(&v);
-                                }
-                                24 => {
-                                    result.copy_from_slice(&v);
-                                }
-                                other => {
-                                    return Err(serde::de::Error::custom(format!(
-                                        "invalid variations array length {}, expected 16 or 24",
-                                        other
-                                    )));
-                                }
-                            }
-                            variations = Some(result);
-                        }
-                        Field::Color => {
-                            if color.is_some() {
-                                return Err(serde::de::Error::duplicate_field("color"));
-                            }
-                            color = Some(map.next_value()?);
-                        }
-                        Field::ColorSpeed => {
-                            if color_speed.is_some() {
-                                return Err(serde::de::Error::duplicate_field("color_speed"));
-                            }
-                            color_speed = Some(map.next_value()?);
-                        }
-                    }
-                }
-
-                let a = a.ok_or_else(|| serde::de::Error::missing_field("a"))?;
-                let b = b.ok_or_else(|| serde::de::Error::missing_field("b"))?;
-                let c = c.ok_or_else(|| serde::de::Error::missing_field("c"))?;
-                let d = d.ok_or_else(|| serde::de::Error::missing_field("d"))?;
-                let e = e.ok_or_else(|| serde::de::Error::missing_field("e"))?;
-                let f = f.ok_or_else(|| serde::de::Error::missing_field("f"))?;
-                let g = g.unwrap_or(0.0); // Default for backward compatibility
-                let weight = weight.ok_or_else(|| serde::de::Error::missing_field("weight"))?;
-                let variations = variations.ok_or_else(|| serde::de::Error::missing_field("variations"))?;
-                let color = color.ok_or_else(|| serde::de::Error::missing_field("color"))?;
-                let color_speed = color_speed.ok_or_else(|| serde::de::Error::missing_field("color_speed"))?;
-
-                Ok(Transform {
-                    a,
-                    b,
-                    c,
-                    d,
-                    e,
-                    f,
-                    g,
-                    weight,
-                    variations,
-                    color,
-                    color_speed,
-                })
-            }
-        }
-
-        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "color", "color_speed"];
-        deserializer.deserialize_struct("Transform", FIELDS, TransformVisitor)
-    }
-}
-
-impl Default for Transform {
-    fn default() -> Self {
-        Self {
-            a: 1.0,
-            b: 0.0,
-            c: 0.0,
-            d: 1.0,
-            e: 0.0,
-            f: 0.0,
-            g: 0.0, // Z offset defaults to 0
-            weight: 1.0,
-            variations: [0.0; MAX_VARIATIONS],
-            color: [1.0, 1.0, 1.0],
-            color_speed: 0.5,
-        }
-    }
-}
-
-impl Transform {
-    /// Create a new transform with identity affine matrix
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Apply the affine transformation to a point
-    #[inline]
-    pub fn apply_affine(&self, p: Point) -> Point {
-        Point {
-            x: self.a * p.x + self.b * p.y + self.e,
-            y: self.c * p.x + self.d * p.y + self.f,
-        }
-    }
-
-    /// Apply all variation functions weighted and sum them
-    pub fn apply_variations(&self, p: Point) -> Point {
-        let mut result = Point::new(0.0, 0.0);
-
-        for (i, &weight) in self.variations.iter().enumerate() {
-            if weight != 0.0 {
-                let variation_type = VariationType::from_index(i);
-                let varied = variation_type.apply(p);
-                result.x += weight * varied.x;
-                result.y += weight * varied.y;
-            }
-        }
-
-        result
-    }
-}
-
-/// Enumeration of variation functions
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(usize)]
-pub enum VariationType {
-    // 2D Variations (0-15)
-    Linear = 0,
-    Sinusoidal = 1,
-    Spherical = 2,
-    Swirl = 3,
-    Horseshoe = 4,
-    Polar = 5,
-    Handkerchief = 6,
-    Heart = 7,
-    Disc = 8,
-    Spiral = 9,
-    Hyperbolic = 10,
-    Diamond = 11,
-    Ex = 12,
-    Julia = 13,
-    Bent = 14,
-    Waves = 15,
-    // 3D Variations (16-23)
-    Zcone = 16,
-    Flatten = 17,
-    Hemisphere = 18,
-    PreRotateX = 19,
-    PreRotateY = 20,
-    PostRotateX = 21,
-    PostRotateY = 22,
-    ZScale = 23,
-}
-
-impl VariationType {
-    /// Convert index to variation type
-    pub fn from_index(index: usize) -> Self {
-        match index {
-            0 => Self::Linear,
-            1 => Self::Sinusoidal,
-            2 => Self::Spherical,
-            3 => Self::Swirl,
-            4 => Self::Horseshoe,
-            5 => Self::Polar,
-            6 => Self::Handkerchief,
-            7 => Self::Heart,
-            8 => Self::Disc,
-            9 => Self::Spiral,
-            10 => Self::Hyperbolic,
-            11 => Self::Diamond,
-            12 => Self::Ex,
-            13 => Self::Julia,
-            14 => Self::Bent,
-            15 => Self::Waves,
-            16 => Self::Zcone,
-            17 => Self::Flatten,
-            18 => Self::Hemisphere,
-            19 => Self::PreRotateX,
-            20 => Self::PreRotateY,
-            21 => Self::PostRotateX,
-            22 => Self::PostRotateY,
-            23 => Self::ZScale,
-            _ => Self::Linear,
-        }
-    }
-
-    /// Apply the variation function to a point
-    pub fn apply(self, p: Point) -> Point {
-        use std::f32::consts::PI;
-
-        let r = p.r();
-        let r_sq = p.r_squared();
-        let theta = p.theta();
-        let _phi = p.phi();
-
-        match self {
-            // V0: Linear - identity
-            Self::Linear => p,
-
-            // V1: Sinusoidal
-            Self::Sinusoidal => Point::new(p.x.sin(), p.y.sin()),
-
-            // V2: Spherical - inversion through unit circle
-            Self::Spherical => {
-                let r2 = r_sq + 1e-6; // Avoid division by zero
-                Point::new(p.x / r2, p.y / r2)
-            }
-
-            // V3: Swirl
-            Self::Swirl => {
-                let r2 = r_sq;
-                let sin_r2 = r2.sin();
-                let cos_r2 = r2.cos();
-                Point::new(p.x * sin_r2 - p.y * cos_r2, p.x * cos_r2 + p.y * sin_r2)
-            }
-
-            // V4: Horseshoe
-            Self::Horseshoe => {
-                let r_inv = 1.0 / (r + 1e-6);
-                Point::new((p.x - p.y) * (p.x + p.y) * r_inv, 2.0 * p.x * p.y * r_inv)
-            }
-
-            // V5: Polar - convert to polar coordinates
-            Self::Polar => Point::new(theta / PI, r - 1.0),
-
-            // V6: Handkerchief
-            Self::Handkerchief => {
-                let theta_r = theta + r;
-                Point::new(r * theta_r.sin(), r * theta_r.cos())
-            }
-
-            // V7: Heart
-            Self::Heart => {
-                let r_theta = r * theta;
-                Point::new(r * r_theta.sin(), -r * r_theta.cos())
-            }
-
-            // V8: Disc
-            Self::Disc => {
-                let theta_pi = theta / PI;
-                let pi_r = PI * r;
-                Point::new(theta_pi * pi_r.sin(), theta_pi * pi_r.cos())
-            }
-
-            // V9: Spiral
-            Self::Spiral => {
-                let r_inv = 1.0 / (r + 1e-6);
-                let cos_theta = theta.cos();
-                let sin_theta = theta.sin();
-                Point::new(r_inv * (cos_theta + sin_theta), r_inv * (cos_theta - sin_theta))
-            }
-
-            // V10: Hyperbolic
-            Self::Hyperbolic => {
-                let r_safe = r + 1e-6;
-                Point::new(theta.sin() / r_safe, r_safe * theta.cos())
-            }
-
-            // V11: Diamond
-            Self::Diamond => {
-                let sin_theta = theta.sin();
-                let cos_theta = theta.cos();
-                Point::new(sin_theta * r.cos(), cos_theta * r.sin())
-            }
-
-            // V12: Ex
-            Self::Ex => {
-                let p0 = theta + r;
-                let p1 = theta - r;
-                let p0_sin = p0.sin();
-                let p1_sin = p1.sin();
-                let p0_cubed = p0_sin * p0_sin * p0_sin;
-                let p1_cubed = p1_sin * p1_sin * p1_sin;
-                Point::new(r * (p0_cubed + p1_cubed), r * (p0_cubed - p1_cubed))
-            }
-
-            // V13: Julia - square root with random rotation
-            Self::Julia => {
-                let sqrt_r = r.sqrt();
-                let omega = if rand::random::<f32>() < 0.5 { 0.0 } else { PI };
-                let half_theta = theta / 2.0 + omega;
-                Point::new(sqrt_r * half_theta.cos(), sqrt_r * half_theta.sin())
-            }
-
-            // V14: Bent
-            Self::Bent => {
-                let nx = if p.x >= 0.0 { p.x } else { 2.0 * p.x };
-                let ny = if p.y >= 0.0 { p.y } else { p.y / 2.0 };
-                Point::new(nx, ny)
-            }
-
-            // V15: Waves (simplified version without parameters)
-            Self::Waves => {
-                let b = 0.5; // wave parameter
-                let c = 0.5;
-                let e = 0.5;
-                let f = 0.5;
-                Point::new(p.x + b * (p.y / (c * c + 1e-6)).sin(), p.y + e * (p.x / (f * f + 1e-6)).sin())
-            }
-
-            // 3D Variations (16-23) - CPU side only affects XY, Z is handled in GPU shader
-            // These return XY unchanged on CPU; GPU shader handles full 3D behavior
-            Self::Zcone => p,
-            Self::Flatten => p,
-            Self::Hemisphere => p,
-            Self::PreRotateX => p,
-            Self::PreRotateY => p,
-            Self::PostRotateX => p,
-            Self::PostRotateY => p,
-            Self::ZScale => p,
-        }
-    }
-}
-
-/// Apply a transform (affine + variations) to a point
-pub fn apply_transform(transform: &Transform, p: Point) -> Point {
-    let affine_p = transform.apply_affine(p);
-    transform.apply_variations(affine_p)
-}
-
 /// Flame system - collection of transforms
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flame {
+    #[serde(default = "default_flame_name")]
     pub name: String,
+
     pub transforms: Vec<Transform>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub final_transform: Option<Transform>,
 
     /// Rendering mode (2D or 3D)
@@ -549,6 +454,14 @@ pub struct Flame {
     /// Projection type for 3D rendering
     #[serde(default)]
     pub projection: ProjectionType,
+
+    /// Variation registry (not serialized, created on load)
+    #[serde(skip)]
+    pub variation_registry: VariationRegistry,
+}
+
+fn default_flame_name() -> String {
+    "Untitled".to_string()
 }
 
 impl Default for Flame {
@@ -559,6 +472,7 @@ impl Default for Flame {
             final_transform: None,
             render_mode: RenderMode::default(),
             projection: ProjectionType::default(),
+            variation_registry: VariationRegistry::new(),
         }
     }
 }
@@ -570,6 +484,29 @@ impl Flame {
 
     pub fn add_transform(&mut self, transform: Transform) {
         self.transforms.push(transform);
+    }
+
+    /// Extract all active variation names from all transforms
+    pub fn extract_active_variations(&self) -> HashMap<String, f32> {
+        let mut all_variations = HashMap::new();
+
+        for transform in &self.transforms {
+            for (name, weight) in &transform.variations {
+                // Track max weight if variation used in multiple transforms
+                if weight.abs() > 1e-6 {
+                    let existing = all_variations.entry(name.clone()).or_insert(0.0);
+                    *existing = f32::max(*existing, *weight);
+                }
+            }
+        }
+
+        all_variations
+    }
+
+    /// Get runtime ID mapping for active variations
+    pub fn get_id_mapping(&self) -> HashMap<String, u32> {
+        let active: Vec<String> = self.extract_active_variations().keys().cloned().collect();
+        self.variation_registry.assign_ids(&active)
     }
 
     /// Calculate cumulative weights for transform selection
@@ -594,96 +531,5 @@ impl Flame {
             }
         }
         self.transforms.len().saturating_sub(1)
-    }
-}
-
-/// Run iterations of the flame algorithm (CPU reference)
-pub fn iterate_flame(
-    flame: &Flame,
-    start_point: Point,
-    iterations: usize,
-    burn_in: usize,
-) -> Vec<Point> {
-    if flame.transforms.is_empty() {
-        return Vec::new();
-    }
-
-    let cumulative_weights = flame.cumulative_weights();
-    let mut points = Vec::with_capacity(iterations - burn_in);
-    let mut current = start_point;
-
-    for i in 0..iterations {
-        // Select random transform
-        let rand_val = rand::random::<f32>();
-        let transform_idx = flame.select_transform(&cumulative_weights, rand_val);
-        let transform = &flame.transforms[transform_idx];
-
-        // Apply transform
-        current = apply_transform(transform, current);
-
-        // Skip burn-in iterations
-        if i >= burn_in {
-            points.push(current);
-        }
-    }
-
-    // Apply final transform if present
-    if let Some(ref final_xform) = flame.final_transform {
-        points.iter_mut().for_each(|p| {
-            *p = apply_transform(final_xform, *p);
-        });
-    }
-
-    points
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_point_calculations() {
-        let p = Point::new(3.0, 4.0);
-        assert_eq!(p.r_squared(), 25.0);
-        assert_eq!(p.r(), 5.0);
-    }
-
-    #[test]
-    fn test_linear_variation() {
-        let p = Point::new(2.0, 3.0);
-        let result = VariationType::Linear.apply(p);
-        assert_eq!(result, p);
-    }
-
-    #[test]
-    fn test_spherical_variation() {
-        let p = Point::new(2.0, 0.0);
-        let result = VariationType::Spherical.apply(p);
-        assert!((result.x - 0.5).abs() < 1e-6);
-        assert!((result.y).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_affine_transform() {
-        let mut xform = Transform::new();
-        xform.a = 2.0;
-        xform.e = 1.0;
-
-        let p = Point::new(1.0, 0.0);
-        let result = xform.apply_affine(p);
-        assert_eq!(result.x, 3.0);
-        assert_eq!(result.y, 0.0);
-    }
-
-    #[test]
-    fn test_flame_iteration() {
-        let mut flame = Flame::new();
-        let mut xform = Transform::new();
-        xform.variations[0] = 1.0; // Linear variation
-        flame.add_transform(xform);
-
-        let start = Point::new(0.5, 0.5);
-        let points = iterate_flame(&flame, start, 10, 5);
-        assert_eq!(points.len(), 5);
     }
 }

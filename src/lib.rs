@@ -9,7 +9,8 @@ mod undo;
 pub mod profiler;
 pub mod version;
 pub mod variations;
-mod shader_builder;
+// mod shader_builder; // Legacy - replaced by shader_builder_v2
+mod shader_builder_v2;
 mod shader_cache;
 
 use app::App;

@@ -540,7 +540,11 @@ impl App {
                 f: 0.0,
                 g: 0.0, // Z offset
                 weight: 1.0,
-                variations: [0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                variations: {
+                    let mut v = std::collections::HashMap::new();
+                    v.insert("linear".to_string(), 0.5);
+                    v
+                },
                 color: [0.5, 0.5, 0.5],
                 color_speed: 0.5,
             };

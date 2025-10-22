@@ -1,13 +1,13 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use wgpu::*;
-use crate::shader_builder::ShaderBuilder;
+use crate::shader_builder_v2::ShaderBuilder;
 use crate::scene::transforms::Flame;
 
 /// Manages shader compilation and pipeline caching
 /// Only recompiles shaders when the set of active variations changes
 pub struct ShaderCache {
-    /// Currently active variation indices
-    active_variations: HashSet<u32>,
+    /// Currently active variation names and weights
+    active_variations: HashMap<String, f32>,
 
     /// Compiled shader source (for debugging/inspection)
     pub shader_source_2d: String,
@@ -21,8 +21,8 @@ pub struct ShaderCache {
 impl ShaderCache {
     /// Create a new shader cache with initial flame configuration
     pub fn new(device: &Device, flame: &Flame, bind_group_layout: &BindGroupLayout) -> Self {
-        let builder = ShaderBuilder::new();
-        let active_variations = ShaderBuilder::extract_active_variations(flame);
+        let builder = ShaderBuilder::new(flame.variation_registry.clone());
+        let active_variations = flame.extract_active_variations();
 
         log::info!("Initial shader compilation with {} active variations", active_variations.len());
 
@@ -57,7 +57,7 @@ impl ShaderCache {
     /// Check if shaders need recompilation and rebuild if necessary
     /// Returns true if shaders were recompiled
     pub fn ensure_current(&mut self, device: &Device, bind_group_layout: &BindGroupLayout, flame: &Flame) -> bool {
-        let needed = ShaderBuilder::extract_active_variations(flame);
+        let needed = flame.extract_active_variations();
 
         if needed == self.active_variations {
             return false; // No rebuild needed
@@ -70,7 +70,7 @@ impl ShaderCache {
         );
 
         // Rebuild shaders
-        let builder = ShaderBuilder::new();
+        let builder = ShaderBuilder::new(flame.variation_registry.clone());
         self.shader_source_2d = builder.build_trajectory_2d(&needed);
         self.shader_source_3d = builder.build_trajectory_3d(&needed);
 
@@ -133,7 +133,7 @@ impl ShaderCache {
     }
 
     /// Get the active variation set (for debugging)
-    pub fn active_variations(&self) -> &HashSet<u32> {
+    pub fn active_variations(&self) -> &HashMap<String, f32> {
         &self.active_variations
     }
 }

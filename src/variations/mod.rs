@@ -48,6 +48,7 @@ pub enum VariationCategory {
 }
 
 /// Registry of all available variations
+#[derive(Clone, Debug)]
 pub struct VariationRegistry {
     /// Map of variation name -> info
     variations: HashMap<String, VariationInfo>,
