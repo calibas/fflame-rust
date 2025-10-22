@@ -504,8 +504,18 @@ impl Flame {
     }
 
     /// Get runtime ID mapping for active variations
+    /// Uses registry order to ensure deterministic ID assignment
     pub fn get_id_mapping(&self) -> HashMap<String, u32> {
-        let active: Vec<String> = self.extract_active_variations().keys().cloned().collect();
+        let active_set: std::collections::HashSet<String> =
+            self.extract_active_variations().keys().cloned().collect();
+
+        // Use registry order for deterministic ID assignment
+        let active: Vec<String> = self.variation_registry.names()
+            .iter()
+            .filter(|name| active_set.contains(*name))
+            .cloned()
+            .collect();
+
         self.variation_registry.assign_ids(&active)
     }
 

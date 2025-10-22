@@ -289,36 +289,28 @@ impl Default for PresetLibrary {
 
 impl PresetLibrary {
     pub fn new() -> Self {
-        let mut presets = vec![];
+        // Always start with built-in presets
+        let mut presets = vec![
+            Self::flame_to_config(create_simple_flame()),
+            Self::flame_to_config(create_spherical_flame()),
+            Self::flame_to_config(create_spiral_flame()),
+            Self::flame_to_config(create_julia_flame()),
+            Self::flame_to_config(create_complex_flame()),
+            Self::flame_to_config(create_flower_of_life()),
+            Self::flame_to_config(create_3d_flame()),
+        ];
 
-        // Load presets from assets folder (desktop only)
+        // Desktop: Load additional presets from assets folder (copied to target/ by build.rs)
         #[cfg(not(target_arch = "wasm32"))]
         {
             let assets_configs = super::assets::load_configs_from_dir(
                 std::path::Path::new("assets/presets")
             );
-            presets.extend(assets_configs);
-        }
-
-        // WASM: use built-in presets (no file system access)
-        #[cfg(target_arch = "wasm32")]
-        {
-            presets.extend(vec![
-                Self::flame_to_config(create_simple_flame()),
-                Self::flame_to_config(create_spherical_flame()),
-                Self::flame_to_config(create_spiral_flame()),
-                Self::flame_to_config(create_julia_flame()),
-                Self::flame_to_config(create_complex_flame()),
-                Self::flame_to_config(create_flower_of_life()),
-                Self::flame_to_config(create_3d_flame()),
-            ]);
-        }
-
-        // Desktop: add built-in 3D preset if not already loaded from assets
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if !presets.iter().any(|p| p.flame.name == "3D Spiral Tower") {
-                presets.push(Self::flame_to_config(create_3d_flame()));
+            // Add any presets from assets that aren't already built-in
+            for config in assets_configs {
+                if !presets.iter().any(|p| p.flame.name == config.flame.name) {
+                    presets.push(config);
+                }
             }
         }
 

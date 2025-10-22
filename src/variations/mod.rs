@@ -88,7 +88,9 @@ impl VariationRegistry {
         // Register 3D depth variations
         registry.register_core("zcone", "Z-Cone", VariationCategory::Depth3D, false);
         registry.register_core("flatten", "Flatten", VariationCategory::Depth3D, false);
-        registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, false);
+
+        // Register full 3D variations
+        registry.register_core("hemisphere", "Hemisphere", VariationCategory::Full3D, false);
 
         // Register 3D rotation variations
         registry.register_core("pre_rotate_x", "Pre-Rotate X", VariationCategory::Rotation3D, false);
@@ -96,8 +98,8 @@ impl VariationRegistry {
         registry.register_core("post_rotate_x", "Post-Rotate X", VariationCategory::Rotation3D, false);
         registry.register_core("post_rotate_y", "Post-Rotate Y", VariationCategory::Rotation3D, false);
 
-        // Register full 3D variations
-        registry.register_core("hemisphere", "Hemisphere", VariationCategory::Full3D, false);
+        // Register 3D depth variations (continued)
+        registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, false);
 
         registry
     }
