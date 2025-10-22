@@ -175,6 +175,24 @@ impl EguiLayer {
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             // ==================================================
+            // MENU BAR - Window Visibility Toggles
+            // ==================================================
+            egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    ui.menu_button("Windows", |ui| {
+                        ui.checkbox(&mut self.show_performance, "📊 Performance");
+                        ui.checkbox(&mut self.show_settings, "⚙ Settings");
+                        ui.checkbox(&mut self.show_view, "🔍 View");
+                        ui.checkbox(&mut self.show_transforms, "🔧 Transforms");
+                        ui.checkbox(&mut self.show_help, "❓ Help");
+                        ui.separator();
+                        ui.checkbox(&mut self.show_palette_editor, "🎨 Palette Editor");
+                        ui.checkbox(&mut self.show_config_window, "📄 Config Import/Export");
+                    });
+                });
+            });
+
+            // ==================================================
             // PERFORMANCE WINDOW - Stats + Version Info Only
             // ==================================================
             egui::Window::new("Performance")
