@@ -840,7 +840,8 @@ impl App {
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard || ui_response.camera_rotation_changed;
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
-            || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed;
+            || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed
+            || ui_response.triangle_drag_ended;
 
         // Note: density_changed and background_color_changed don't need encoder updates,
         // they're handled every frame before tonemap pass
@@ -864,8 +865,10 @@ impl App {
         // Only do normal updates if we didn't load a preset
         if !preset_loaded {
             // Capture state before applying meaningful changes
-            let should_capture = ui_response.flame_changed || view_changed || ui_response.palette_changed
-                || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed;
+            // Only capture on drag START, not during continuous dragging
+            let should_capture = ui_response.triangle_drag_started || view_changed || ui_response.palette_changed
+                || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed
+                || (ui_response.flame_changed && !ui_response.triangle_drag_started); // Other flame changes (not dragging)
             if should_capture {
                 self.capture_state();
             }
@@ -900,8 +903,11 @@ impl App {
 
                 // Reset accumulation when view changes, palette changes, color mode changes, background color changes, flame changes, or user requests it
                 // Note: preset_changed is handled separately above with import_config() which also resets
-                if ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
-                    || ui_response.background_color_changed || ui_response.flame_changed {
+                // For triangle dragging: reset on first frame (triangle_drag_started) and when drag ends (triangle_drag_ended), but not during continuous drag
+                let should_reset = ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
+                    || ui_response.background_color_changed || ui_response.triangle_drag_started || ui_response.triangle_drag_ended
+                    || (ui_response.flame_changed && !ui_response.triangle_dragging);
+                if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 

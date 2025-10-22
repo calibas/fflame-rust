@@ -111,6 +111,38 @@ impl Transform {
         array
     }
 
+    // === TRIANGLE EDITOR METHODS ===
+
+    /// Convert affine coefficients to triangle representation (O, X, Y points)
+    /// Returns (Origin, X-axis endpoint, Y-axis endpoint)
+    pub fn to_triangle(&self) -> ([f32; 2], [f32; 2], [f32; 2]) {
+        let o = [self.e, self.f];
+        let x = [self.e + self.a, self.f + self.c];
+        let y = [self.e + self.b, self.f + self.d];
+        (o, x, y)
+    }
+
+    /// Update affine coefficients from triangle representation
+    /// Takes (Origin, X-axis endpoint, Y-axis endpoint)
+    pub fn from_triangle(&mut self, o: [f32; 2], x: [f32; 2], y: [f32; 2]) {
+        self.a = x[0] - o[0];
+        self.c = x[1] - o[1];
+        self.b = y[0] - o[0];
+        self.d = y[1] - o[1];
+        self.e = o[0];
+        self.f = o[1];
+    }
+
+    /// Reset transform to identity (unit triangle at origin)
+    pub fn reset_to_identity(&mut self) {
+        self.a = 1.0;
+        self.b = 0.0;
+        self.c = 0.0;
+        self.d = 1.0;
+        self.e = 0.0;
+        self.f = 0.0;
+    }
+
     // === COMPATIBILITY METHODS (for gradual migration) ===
 
     /// COMPATIBILITY: Set variation by index (for old code)
