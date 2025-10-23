@@ -23,6 +23,10 @@ pub struct Transform {
     /// Weights for each variation function (named)
     pub variations: HashMap<String, f32>,
 
+    /// Variation parameters (key format: "variation_name.param_name")
+    /// Example: "julian.power" -> 3.0
+    pub variation_params: HashMap<String, f32>,
+
     /// Color contribution (RGB)
     pub color: [f32; 3],
 
@@ -42,6 +46,7 @@ impl Default for Transform {
             g: 0.0,
             weight: 1.0,
             variations: HashMap::new(),
+            variation_params: HashMap::new(),
             color: [1.0, 1.0, 1.0],
             color_speed: 0.5,
         }
@@ -71,6 +76,37 @@ impl Transform {
     /// Get all active variation names
     pub fn active_variations(&self) -> Vec<String> {
         self.variations.keys().cloned().collect()
+    }
+
+    // === VARIATION PARAMETER METHODS ===
+
+    /// Set a parameter for a specific variation
+    /// Key format: "variation_name.param_name" (e.g., "julian.power")
+    pub fn set_variation_param(&mut self, variation: &str, param: &str, value: f32) {
+        let key = format!("{}.{}", variation, param);
+        self.variation_params.insert(key, value);
+    }
+
+    /// Get a parameter value for a specific variation
+    /// Returns None if not set
+    pub fn get_variation_param(&self, variation: &str, param: &str) -> Option<f32> {
+        let key = format!("{}.{}", variation, param);
+        self.variation_params.get(&key).copied()
+    }
+
+    /// Get a parameter value with fallback to default from registry
+    pub fn get_variation_param_or_default(
+        &self,
+        variation: &str,
+        param: &str,
+        registry: &VariationRegistry,
+    ) -> f32 {
+        self.get_variation_param(variation, param)
+            .or_else(|| {
+                registry.get(variation)
+                    .and_then(|info| info.get_param_default(param))
+            })
+            .unwrap_or(0.0)
     }
 
     /// Convert from legacy array format to HashMap
@@ -191,7 +227,7 @@ impl Serialize for Transform {
     {
         use serde::ser::SerializeStruct;
 
-        let mut state = serializer.serialize_struct("Transform", 11)?;
+        let mut state = serializer.serialize_struct("Transform", 12)?;
         state.serialize_field("a", &self.a)?;
         state.serialize_field("b", &self.b)?;
         state.serialize_field("c", &self.c)?;
@@ -201,6 +237,7 @@ impl Serialize for Transform {
         state.serialize_field("g", &self.g)?;
         state.serialize_field("weight", &self.weight)?;
         state.serialize_field("variations", &self.variations)?;
+        state.serialize_field("variation_params", &self.variation_params)?;
         state.serialize_field("color", &self.color)?;
         state.serialize_field("color_speed", &self.color_speed)?;
         state.end()
@@ -216,7 +253,7 @@ impl<'de> Deserialize<'de> for Transform {
         #[derive(Deserialize)]
         #[serde(field_identifier, rename_all = "snake_case")]
         enum Field {
-            A, B, C, D, E, F, G, Weight, Variations, Color, ColorSpeed,
+            A, B, C, D, E, F, G, Weight, Variations, VariationParams, Color, ColorSpeed,
         }
 
         struct TransformVisitor;
@@ -241,6 +278,7 @@ impl<'de> Deserialize<'de> for Transform {
                 let mut g = None;
                 let mut weight = None;
                 let mut variations = None;
+                let mut variation_params = None;
                 let mut color = None;
                 let mut color_speed = None;
 
@@ -300,6 +338,9 @@ impl<'de> Deserialize<'de> for Transform {
 
                             variations = Some(var_map);
                         }
+                        Field::VariationParams => {
+                            variation_params = Some(map.next_value()?);
+                        }
                         Field::Color => color = Some(map.next_value()?),
                         Field::ColorSpeed => color_speed = Some(map.next_value()?),
                     }
@@ -315,13 +356,14 @@ impl<'de> Deserialize<'de> for Transform {
                     g: g.unwrap_or(0.0),
                     weight: weight.ok_or_else(|| de::Error::missing_field("weight"))?,
                     variations: variations.ok_or_else(|| de::Error::missing_field("variations"))?,
+                    variation_params: variation_params.unwrap_or_else(HashMap::new), // Default to empty if missing
                     color: color.ok_or_else(|| de::Error::missing_field("color"))?,
                     color_speed: color_speed.ok_or_else(|| de::Error::missing_field("color_speed"))?,
                 })
             }
         }
 
-        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "color", "color_speed"];
+        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "color", "color_speed"];
         deserializer.deserialize_struct("Transform", FIELDS, TransformVisitor)
     }
 }
@@ -397,6 +439,62 @@ mod tests {
 
         assert_eq!(xform.get_variation("linear"), 0.5);
         assert_eq!(xform.get_variation("swirl"), 0.3);
+    }
+
+    #[test]
+    fn test_variation_params_set_get() {
+        let mut xform = Transform::new();
+
+        // Set parameters
+        xform.set_variation_param("julian", "power", 5.0);
+        xform.set_variation_param("julian", "dist", 1.5);
+
+        // Get parameters
+        assert_eq!(xform.get_variation_param("julian", "power"), Some(5.0));
+        assert_eq!(xform.get_variation_param("julian", "dist"), Some(1.5));
+
+        // Non-existent parameter
+        assert_eq!(xform.get_variation_param("julian", "nonexistent"), None);
+        assert_eq!(xform.get_variation_param("nonexistent", "power"), None);
+    }
+
+    #[test]
+    fn test_variation_params_serialize() {
+        let mut xform = Transform::new();
+        xform.set_variation("julian", 0.8);
+        xform.set_variation_param("julian", "power", 3.0);
+        xform.set_variation_param("julian", "dist", 1.0);
+
+        let json = serde_json::to_string(&xform).unwrap();
+        let deserialized: Transform = serde_json::from_str(&json).unwrap();
+
+        // Verify variation weight
+        assert_eq!(deserialized.get_variation("julian"), 0.8);
+
+        // Verify parameters
+        assert_eq!(deserialized.get_variation_param("julian", "power"), Some(3.0));
+        assert_eq!(deserialized.get_variation_param("julian", "dist"), Some(1.0));
+    }
+
+    #[test]
+    fn test_variation_params_backward_compat() {
+        // Old config without variation_params field
+        let json = r#"{
+            "a": 1.0, "b": 0.0, "c": 0.0, "d": 1.0, "e": 0.0, "f": 0.0, "g": 0.0,
+            "weight": 1.0,
+            "variations": {"julian": 0.8},
+            "color": [1.0, 1.0, 1.0],
+            "color_speed": 0.5
+        }"#;
+
+        let xform: Transform = serde_json::from_str(json).unwrap();
+
+        // Should deserialize successfully
+        assert_eq!(xform.get_variation("julian"), 0.8);
+
+        // variation_params should be empty (defaults to empty HashMap)
+        assert_eq!(xform.get_variation_param("julian", "power"), None);
+        assert!(xform.variation_params.is_empty());
     }
 }
 // === Additional code from legacy transforms.rs ===
