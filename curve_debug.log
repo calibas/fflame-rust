@@ -1,0 +1,37 @@
+[2025-10-23T17:01:06Z INFO  wgpu_hal::vulkan::instance] Debug utils not enabled: debug_utils_user_data not passed to Instance::from_raw
+[2025-10-23T17:01:06Z INFO  wgpu_core::instance] Adapter AdapterInfo { name: "NVIDIA GeForce GTX 1660 SUPER", vendor: 4318, device: 8644, device_type: DiscreteGpu, driver: "NVIDIA", driver_info: "566.36", backend: Vulkan }
+[2025-10-23T17:01:06Z WARN  egui_wgpu::renderer] Detected a linear (sRGBA aware) framebuffer Bgra8UnormSrgb. egui prefers Rgba8Unorm or Bgra8Unorm
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::scene::assets] Loaded preset: Complex from assets/presets\complex.flame
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::scene::assets] Loaded preset: Flower of Life from assets/presets\flower_of_life.flame
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::scene::assets] Loaded preset: Julia from assets/presets\julia.flame
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::scene::assets] Loaded preset: Simple from assets/presets\simple.flame
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::scene::assets] Loaded preset: Spherical from assets/presets\spherical.flame
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::scene::assets] Loaded preset: Spiral from assets/presets\spiral.flame
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::shader_cache] Initial shader compilation with 3 active variations
+[2025-10-23T17:01:06Z INFO  naga::back::spv::writer] Skip function Some("get_param")
+[2025-10-23T17:01:06Z INFO  naga::back::spv::writer] Skip function Some("variation_julian")
+[2025-10-23T17:01:06Z INFO  naga::back::spv::writer] Skip function Some("variation_blob")
+[2025-10-23T17:01:06Z INFO  naga::back::spv::writer] Skip function Some("get_param")
+[2025-10-23T17:01:06Z INFO  naga::back::spv::writer] Skip function Some("variation_julian")
+[2025-10-23T17:01:06Z INFO  naga::back::spv::writer] Skip function Some("variation_blob")
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::gpu::buffers] Uploading initial curve LUT, first 10 R values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::scene::assets] Loaded palette: Cool from assets/palettes\cool.palette
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::scene::assets] Loaded palette: Fire from assets/palettes\fire.palette
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::scene::assets] Loaded palette: Rainbow from assets/palettes\rainbow.palette
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::gpu::buffers] Uploading initial curve LUT, first 10 R values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::gpu::buffers] Uploading initial curve LUT, first 10 R values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+[2025-10-23T17:01:06Z INFO  fractal_flame_wgpu::gpu::buffers] Uploading initial curve LUT, first 10 R values: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+[2025-10-23T17:02:49Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 0 -> 1
+[2025-10-23T17:02:55Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 1 -> 0
+[2025-10-23T17:02:56Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 0 -> 1
+[2025-10-23T17:03:06Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 1 -> 0
+[2025-10-23T17:03:07Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 0 -> 1
+[2025-10-23T17:03:08Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 1 -> 0
+[2025-10-23T17:03:26Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 0 -> 1
+[2025-10-23T17:03:26Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 1 -> 0
+[2025-10-23T17:03:27Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 0 -> 1
+[2025-10-23T17:03:27Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 1 -> 0
+[2025-10-23T17:03:28Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 0 -> 1
+[2025-10-23T17:03:28Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 1 -> 0
+[2025-10-23T17:03:33Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 0 -> 1
+[2025-10-23T17:03:35Z INFO  fractal_flame_wgpu::renderer::compute_kernel] use_curve changed: 1 -> 0

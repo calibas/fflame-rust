@@ -70,7 +70,6 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Apply tone curve if enabled
     if (tonemap_params.use_curve != 0u) {
-        // Sample the curve LUT for each channel
         let r = textureSample(curve_lut_texture, curve_lut_sampler, color.r).r;
         let g = textureSample(curve_lut_texture, curve_lut_sampler, color.g).r;
         let b = textureSample(curve_lut_texture, curve_lut_sampler, color.b).r;

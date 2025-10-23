@@ -119,19 +119,21 @@ impl ToneCurve {
     }
 
     /// Generate a 256-sample lookup texture for fast GPU evaluation
-    /// Returns RGBA8 data (R channel = curve value, GBA = 0)
+    /// Returns Rgba16Float data as bytes (R channel = curve value, GBA = 0)
     pub fn generate_lut(&self) -> Vec<u8> {
-        let mut data = Vec::with_capacity(256 * 4);
+        use half::f16;
+        let mut bytes = Vec::with_capacity(256 * 4 * 2); // 256 pixels * 4 components * 2 bytes
         for i in 0..256 {
+            // Generate LUT from curve evaluation
             let x = i as f32 / 255.0;
             let y = self.evaluate(x);
-            let y_u8 = (y * 255.0).clamp(0.0, 255.0) as u8;
-            data.push(y_u8);  // R
-            data.push(0);      // G
-            data.push(0);      // B
-            data.push(255);    // A (unused, but some GPUs need it)
+            // Convert to f16 and write bytes
+            bytes.extend_from_slice(&f16::from_f32(y).to_le_bytes());    // R
+            bytes.extend_from_slice(&f16::from_f32(0.0).to_le_bytes());  // G
+            bytes.extend_from_slice(&f16::from_f32(0.0).to_le_bytes());  // B
+            bytes.extend_from_slice(&f16::from_f32(1.0).to_le_bytes());  // A
         }
-        data
+        bytes
     }
 
     /// Add a control point and maintain sorted order
