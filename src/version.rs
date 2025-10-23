@@ -10,9 +10,6 @@ pub struct VersionInfo {
     /// Semantic version from Cargo.toml (e.g., "0.1.0")
     pub version: &'static str,
 
-    /// Auto-incrementing build number
-    pub build_number: u32,
-
     /// Git commit hash (short)
     pub git_hash: &'static str,
 
@@ -25,7 +22,7 @@ pub struct VersionInfo {
     /// Build profile ("debug" or "release")
     pub profile: &'static str,
 
-    /// Build timestamp (RFC3339 format)
+    /// Build timestamp (RFC3339 format) - used to identify builds
     pub build_time: &'static str,
 
     /// Rust compiler version used
@@ -37,7 +34,6 @@ impl VersionInfo {
     pub fn current() -> Self {
         Self {
             version: env!("APP_VERSION"),
-            build_number: parse_build_number(env!("BUILD_NUMBER")),
             git_hash: env!("GIT_HASH"),
             git_branch: env!("GIT_BRANCH"),
             target: env!("BUILD_TARGET"),
@@ -47,9 +43,9 @@ impl VersionInfo {
         }
     }
 
-    /// Get full version string (e.g., "0.1.0 (build 42)")
+    /// Get full version string (e.g., "0.1.0 (abc1234)")
     pub fn full_version(&self) -> String {
-        format!("{} (build #{})", self.version, self.build_number)
+        format!("{} ({})", self.version, self.git_hash)
     }
 
     /// Get short version string (e.g., "0.1.0")
@@ -57,22 +53,22 @@ impl VersionInfo {
         self.version
     }
 
-    /// Get build identifier (e.g., "42-abc1234")
+    /// Get build identifier (e.g., "abc1234")
     pub fn build_id(&self) -> String {
-        format!("{}-{}", self.build_number, self.git_hash)
+        self.git_hash.to_string()
     }
 
     /// Get full build info string (multi-line)
     pub fn detailed_info(&self) -> String {
         format!(
-            "Version: {} (build #{})\n\
+            "Version: {} ({})\n\
              Git: {} ({})\n\
              Target: {}\n\
              Profile: {}\n\
              Built: {}\n\
              Rustc: {}",
             self.version,
-            self.build_number,
+            self.git_hash,
             self.git_hash,
             self.git_branch,
             self.target,
@@ -85,8 +81,8 @@ impl VersionInfo {
     /// Get compact build info (single line)
     pub fn compact_info(&self) -> String {
         format!(
-            "v{} build #{} ({}) {}",
-            self.version, self.build_number, self.git_hash, self.profile
+            "v{} ({}) {}",
+            self.version, self.git_hash, self.profile
         )
     }
 
@@ -146,11 +142,6 @@ impl std::fmt::Display for VersionInfo {
     }
 }
 
-/// Parse build number from string (with fallback to 0)
-fn parse_build_number(s: &str) -> u32 {
-    s.parse().unwrap_or(0)
-}
-
 /// Get the global version info singleton
 pub fn get_version_info() -> &'static VersionInfo {
     static VERSION: once_cell::sync::Lazy<VersionInfo> = once_cell::sync::Lazy::new(VersionInfo::current);
@@ -168,18 +159,18 @@ mod tests {
         // Check that version is non-empty
         assert!(!info.version.is_empty());
 
-        // Check that build number is reasonable
-        assert!(info.build_number > 0);
+        // Check that git hash is non-empty
+        assert!(!info.git_hash.is_empty());
 
         // Check full version format
         let full = info.full_version();
         assert!(full.contains(info.version));
-        assert!(full.contains("build"));
+        assert!(full.contains(info.git_hash));
 
         // Check compact info
         let compact = info.compact_info();
         assert!(compact.contains(info.version));
-        assert!(compact.contains(&info.build_number.to_string()));
+        assert!(compact.contains(info.git_hash));
     }
 
     #[test]
@@ -218,7 +209,7 @@ mod tests {
         // VersionInfo is only created via current() using compile-time env! macros.
         let json = serde_json::to_string(&info).expect("Failed to serialize");
         assert!(json.contains(env!("CARGO_PKG_VERSION")));
-        assert!(json.contains("build_number"));
         assert!(json.contains("git_hash"));
+        assert!(json.contains("build_time"));
     }
 }

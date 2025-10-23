@@ -16,11 +16,12 @@ pub fn render_performance_window(
             let version_info = crate::version::get_version_info();
             ui.heading("Fractal Flame Renderer");
             ui.label(format!("Version: {}", version_info.full_version()));
-            ui.label(format!("Build: {} ({}) {}",
+            ui.label(format!("Build: {} ({})",
                 version_info.git_hash,
-                version_info.git_branch,
-                version_info.profile
+                version_info.git_branch
             ));
+            ui.label(format!("Built: {}", version_info.build_time));
+            ui.label(format!("Profile: {}", version_info.profile));
 
             ui.separator();
 
