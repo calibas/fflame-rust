@@ -1,5 +1,13 @@
 // Utility functions shared by 2D and 3D shaders
 
+// Get a variation parameter value for a specific transform
+// variation_id: Index of the variation (0-23)
+// param_slot: Parameter slot within the variation (0-7)
+fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {
+    let idx = variation_id * 8u + param_slot;
+    return variation_params[xform_id].params[idx];
+}
+
 // Select transform based on cumulative weights
 fn select_transform(rand_val: f32) -> u32 {
     var cumulative = 0.0;

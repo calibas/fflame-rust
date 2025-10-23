@@ -27,7 +27,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Apply affine + variations
         let affine_p = apply_affine(xform, current);
-        current = apply_variations(xform, affine_p, &rng);
+        current = apply_variations(xform, xform_idx, affine_p, &rng);
 
         // Calculate speed (distance traveled)
         let speed = length(current - old_pos);
