@@ -864,7 +864,7 @@ impl App {
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard || ui_response.camera_rotation_changed;
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
             || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed
-            || ui_response.triangle_drag_ended;
+            || ui_response.triangle_drag_ended || ui_response.tonemap_curve_changed;
 
         // Note: density_changed and background_color_changed don't need encoder updates,
         // they're handled every frame before tonemap pass
