@@ -135,3 +135,18 @@ fn variation_julian(p: vec2<f32>, xform_id: u32, rng: ptr<function, RngState>) -
 
     return vec2<f32>(r * cos(t), r * sin(t));
 }
+
+fn variation_blob(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
+    // Get parameters: p1 = high, p2 = low, p3 = waves
+    let p1 = get_param(xform_id, 17u, 0u);  // high
+    let p2 = get_param(xform_id, 17u, 1u);  // low
+    let p3 = get_param(xform_id, 17u, 2u);  // waves
+
+    let r = length(p);
+    let theta = atan2(p.y, p.x);
+
+    // r · (p2 + ((p1 − p2)/2)(sin(p3θ) + 1))
+    let scale = r * (p2 + ((p1 - p2) / 2.0) * (sin(p3 * theta) + 1.0));
+
+    return vec2<f32>(scale * cos(theta), scale * sin(theta));
+}

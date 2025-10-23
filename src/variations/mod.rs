@@ -136,6 +136,7 @@ impl VariationRegistry {
         registry.register_core("julian", "JuliaN", VariationCategory::Advanced2D, true); // Needs RNG
         registry.register_core("bent", "Bent", VariationCategory::Advanced2D, false);
         registry.register_core("waves", "Waves", VariationCategory::Advanced2D, false);
+        registry.register_core("blob", "Blob", VariationCategory::Advanced2D, false);
 
         // Register 3D depth variations
         registry.register_core("zcone", "Z-Cone", VariationCategory::Depth3D, false);
@@ -170,6 +171,33 @@ impl VariationRegistry {
                 default_value: 1.0,
                 min_value: Some(0.1),
                 max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("blob", vec![
+            VariationParameter {
+                name: "high".to_string(),
+                display_name: "High".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(3.0),
+            },
+            VariationParameter {
+                name: "low".to_string(),
+                display_name: "Low".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(3.0),
+            },
+            VariationParameter {
+                name: "waves".to_string(),
+                display_name: "Waves".to_string(),
+                param_type: ParamType::Float,
+                default_value: 6.0,
+                min_value: Some(1.0),
+                max_value: Some(20.0),
             },
         ]);
 
