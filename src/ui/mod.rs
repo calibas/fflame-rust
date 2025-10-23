@@ -113,6 +113,7 @@ impl EguiLayer {
         use_curve: &mut bool,
         exposure: &mut f32,
         gamma: &mut f32,
+        deterministic_rng: &mut bool,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -207,17 +208,7 @@ impl EguiLayer {
                 max_iterations,
                 iterations_per_thread,
                 &mut iterations_changed,
-                density_scale,
-                &mut density_changed,
-                color_mode,
-                &mut color_mode_changed,
-                palette_library,
-                current_palette_index,
-                &mut palette_changed,
-                &mut self.palette_editor.current_palette,
-                speed_factor,
-                background_color,
-                &mut background_color_changed,
+                deterministic_rng,
             );
 
             // Render View window

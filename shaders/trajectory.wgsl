@@ -42,9 +42,13 @@ struct Params {
     zoom: f32,
     pan_x: f32,
     pan_y: f32,
-    rotation: f32,  // Rotation in radians
+    rotation: f32,  // Rotation in radians (2D, around Z)
     speed_factor: f32,  // Blend factor for speed-based coloring
     perspective_strength: f32,  // Strength for perspective projection
+    camera_rotation_x: f32,  // 3D camera pitch (rotation around X)
+    camera_rotation_y: f32,  // 3D camera yaw (rotation around Y)
+    _pad3: f32,
+    _pad4: f32,
 }
 
 // Bindings
