@@ -184,7 +184,8 @@ impl ToneCurve {
         use half::f16;
         let mut bytes = Vec::with_capacity(256 * 4 * 2); // 256 pixels * 4 components * 2 bytes
         for i in 0..256 {
-            // Generate LUT from curve evaluation
+            // Generate LUT at edge values (i / 255) for proper range coverage
+            // This ensures LUT[0] = f(0.0) and LUT[255] = f(1.0)
             let x = i as f32 / 255.0;
             let y = self.evaluate(x);
             // Convert to f16 and write bytes
