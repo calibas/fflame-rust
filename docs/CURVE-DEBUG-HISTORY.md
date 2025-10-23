@@ -198,10 +198,41 @@ The fact that alpha matches perfectly (0.00% error) is significant:
 ### Conclusion:
 The bug is REAL but SUBTLE. A linear curve should produce 0% difference, but we see ~0.1% average error per channel. This suggests a minor precision or sampling issue in the curve application path.
 
+## Systematic Testing (2025-10-23)
+
+With deterministic RNG and quantitative tools, tested various hypothetical fixes:
+
+### Test 1: Nearest Neighbor Filtering
+**Change**: `FilterMode::Linear` → `FilterMode::Nearest` in curve_lut_sampler
+**Hypothesis**: Linear filtering interpolation might introduce errors
+**Result**: ❌ WORSE
+- Linear: Avg 0.23-0.30 (0.09-0.12%), Max 14-15 (5.49-5.88%)
+- Nearest: Avg 0.25-0.34 (0.10-0.13%), Max 20 (7.84%)
+**Conclusion**: Linear filtering is actually closer to correct
+**Status**: REVERTED
+
+### Test 2: Texel Center LUT Generation
+**Change**: `i / 255.0` → `(i + 0.5) / 256.0` in generate_lut()
+**Hypothesis**: Maybe sampling coordinates don't align with LUT generation
+**Result**: ❌ MUCH WORSE
+- Edge values: Avg 0.23-0.30 (0.09-0.12%), 12.24% pixels affected
+- Texel centers: Avg 13.22-13.28 (5.18-5.21%), 89.59% pixels affected!
+**Conclusion**: Edge values (i/255) are correct for proper range coverage (LUT[0]=f(0.0), LUT[255]=f(1.0))
+**Status**: REVERTED (confirms previous finding from history)
+
+### Test 3: f16 vs u8 Texture Format
+**Status**: PENDING - Need to test
+
+### Test 4: Edge Case Handling
+**Status**: PENDING - Check behavior at 0.0 and 1.0
+
 ## Next Steps (Proposed)
 1. ✅ Create quantifiable test framework (CLI PNG export) - DONE
 2. ✅ Build image comparison tool with per-channel stats - DONE
 3. ✅ Test if RNG is deterministic - DONE
 4. ✅ Get numerical measurements instead of visual assessments - DONE
-5. Investigate why curve path has 0.1% error vs no-curve path
-6. Consider if 0.1% error is acceptable or needs fixing
+5. ✅ Test filtering modes - DONE (Linear is better than Nearest)
+6. ✅ Test LUT coordinate generation - DONE (Edge values i/255 are correct)
+7. Test f16 vs u8 texture format
+8. Investigate shader sampling precision
+9. Consider if 0.1% error is acceptable or needs fixing
