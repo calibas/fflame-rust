@@ -295,6 +295,7 @@ impl FlameRenderer {
         }
 
         self.buffers.update_transforms(queue, flame);
+        self.buffers.update_variation_params(queue, flame);
 
         // Update render mode and projection
         self.current_render_mode = flame.render_mode;

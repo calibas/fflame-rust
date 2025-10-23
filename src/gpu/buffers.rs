@@ -553,6 +553,27 @@ impl FlameBuffers {
         queue.write_buffer(&self.transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
     }
 
+    /// Update variation parameters
+    pub fn update_variation_params(&self, queue: &Queue, flame: &Flame) {
+        if flame.transforms.len() > MAX_TRANSFORMS {
+            panic!("Flame has {} transforms but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
+        }
+
+        // Create a fixed-size array with all variation parameters, padding with zeroes
+        let mut gpu_params: Vec<GpuVariationParams> = flame
+            .transforms
+            .iter()
+            .map(|xform| GpuVariationParams::from_transform(xform, &flame.variation_registry))
+            .collect();
+
+        // Pad with zeroed params to fill the buffer
+        while gpu_params.len() < MAX_TRANSFORMS {
+            gpu_params.push(bytemuck::Zeroable::zeroed());
+        }
+
+        queue.write_buffer(&self.variation_params_buffer, 0, bytemuck::cast_slice(&gpu_params));
+    }
+
     /// Update palette texture
     pub fn update_palette(&self, queue: &Queue, palette: &Palette) {
         let palette_data = palette.generate_texture_data(256);
