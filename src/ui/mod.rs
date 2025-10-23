@@ -6,6 +6,7 @@ mod palette_editor;
 mod performance;
 mod response;
 mod settings;
+mod tone_mapping;
 mod transforms;
 mod triangle_editor;
 mod view;
@@ -32,6 +33,7 @@ pub struct EguiLayer {
     show_view: bool,
     show_transforms: bool,
     show_triangle_editor: bool,
+    show_tone_mapping: bool,
     show_help: bool,
 }
 
@@ -62,6 +64,7 @@ impl EguiLayer {
             show_view: true,
             show_transforms: false,
             show_triangle_editor: false,
+            show_tone_mapping: true,  // Show by default
             show_help: false,
         }
     }

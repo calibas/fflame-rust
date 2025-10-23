@@ -10,14 +10,16 @@ struct TonemapParams {
     exposure: f32,
     gamma: f32,
     density_scale: f32,
-    _pad0: f32,
+    tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic
     background_color: vec3<f32>,
-    _pad1: f32,
+    use_curve: u32,  // 0 = disabled, 1 = enabled
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
 @group(0) @binding(1) var accumulation_sampler: sampler;
 @group(0) @binding(2) var<uniform> tonemap_params: TonemapParams;
+@group(0) @binding(3) var curve_lut_texture: texture_1d<f32>;
+@group(0) @binding(4) var curve_lut_sampler: sampler;
 
 // Vertex shader for fullscreen quad
 @vertex
@@ -57,9 +59,23 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Apply exposure
     color *= tonemap_params.exposure;
 
-    // Logarithmic tone mapping for high dynamic range
-    // This compresses the bright areas while preserving detail
-    color = log(color + 1.0) / log(10.0);
+    // Tone mapping (mode-based)
+    if (tonemap_params.tonemap_mode == 0u) {
+        // Linear tone mapping: simple clamping
+        color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    } else {
+        // Logarithmic tone mapping: compress bright areas
+        color = log(color + 1.0) / log(10.0);
+    }
+
+    // Apply tone curve if enabled
+    if (tonemap_params.use_curve != 0u) {
+        // Sample the curve LUT for each channel
+        let r = textureSample(curve_lut_texture, curve_lut_sampler, color.r).r;
+        let g = textureSample(curve_lut_texture, curve_lut_sampler, color.g).r;
+        let b = textureSample(curve_lut_texture, curve_lut_sampler, color.b).r;
+        color = vec3<f32>(r, g, b);
+    }
 
     // Gamma correction
     color = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));

@@ -1,5 +1,6 @@
 use super::transforms::{Flame, Transform};
 use super::palette::ColorMode;
+use super::tonemap::{ToneMapMode, ToneCurve};
 use crate::config::FractalConfig;
 
 /// Create a simple two-transform flame with linear and sinusoidal variations
@@ -332,6 +333,10 @@ impl PresetLibrary {
             color_mode: ColorMode::Transform,
             palette_index: 1,
             background_color: [0.0, 0.0, 0.0],
+            tonemap_mode: ToneMapMode::Logarithmic,
+            tonemap_curve: ToneCurve::linear(),
+            exposure: 1.0,
+            gamma: 2.2,
         }
     }
 

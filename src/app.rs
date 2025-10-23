@@ -10,6 +10,7 @@ use crate::scene::presets::PresetLibrary;
 use crate::util::PerformanceMetrics;
 use crate::config::FractalConfig;
 use crate::undo::UndoHistory;
+use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 
 pub struct App {
     gpu: GpuContext,
@@ -39,6 +40,11 @@ pub struct App {
     undo_history: UndoHistory,
     modifiers: winit::keyboard::ModifiersState,
     background_color: [f32; 3],
+    // Tone mapping
+    tonemap_mode: ToneMapMode,
+    tonemap_curve: ToneCurve,
+    exposure: f32,
+    gamma: f32,
 }
 
 impl App {
@@ -76,6 +82,10 @@ impl App {
             color_mode: ColorMode::Transform,
             palette_index: 1,
             background_color: [0.0, 0.0, 0.0],
+            tonemap_mode: ToneMapMode::Logarithmic,
+            tonemap_curve: ToneCurve::linear(),
+            exposure: 1.0,
+            gamma: 2.2,
         };
 
         let mut app = Self {
@@ -106,6 +116,10 @@ impl App {
             undo_history: UndoHistory::new(initial_config),
             modifiers: winit::keyboard::ModifiersState::default(),
             background_color: [0.0, 0.0, 0.0], // Default to black
+            tonemap_mode: ToneMapMode::Logarithmic,
+            tonemap_curve: ToneCurve::linear(),
+            exposure: 1.0,
+            gamma: 2.2,
         };
 
         #[allow(deprecated)]
@@ -943,6 +957,10 @@ impl App {
             color_mode: self.color_mode,
             palette_index: self.current_palette_index,
             background_color: self.background_color,
+            tonemap_mode: self.tonemap_mode,
+            tonemap_curve: self.tonemap_curve.clone(),
+            exposure: self.exposure,
+            gamma: self.gamma,
         }
     }
 
@@ -961,6 +979,10 @@ impl App {
         self.color_mode = config.color_mode;
         self.current_palette_index = config.palette_index;
         self.background_color = config.background_color;
+        self.tonemap_mode = config.tonemap_mode;
+        self.tonemap_curve = config.tonemap_curve.clone();
+        self.exposure = config.exposure;
+        self.gamma = config.gamma;
 
         // Use the comprehensive load_config function to ensure all GPU state is synchronized
         if let Some(ref mut renderer) = self.flame_renderer {
