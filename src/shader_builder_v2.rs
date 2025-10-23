@@ -141,7 +141,7 @@ impl ShaderBuilder {
     fn build_apply_variations_2d(&self, active_variations: &[(String, u32)]) -> String {
         let mut code = String::from(
             "// Apply all variations with weights\n\
-             fn apply_variations(xform: Transform, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {\n\
+             fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {\n\
              \x20   var result = vec2<f32>(0.0, 0.0);\n\n"
         );
 
@@ -175,7 +175,7 @@ impl ShaderBuilder {
     fn build_apply_variations_3d(&self, active_variations: &[(String, u32)]) -> String {
         let mut code = String::from(
             "// Apply all variations with weights (3D)\n\
-             fn apply_variations(xform: Transform, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {\n\
+             fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {\n\
              \x20   var result = vec3<f32>(0.0, 0.0, 0.0);\n\n"
         );
 
