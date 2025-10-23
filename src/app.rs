@@ -405,12 +405,12 @@ impl App {
             if should_iterate {
                 let t0 = Instant::now();
                 // 1. Compute new samples with fresh random seed
-                renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                let samples_this_frame = renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 self.metrics.record_compute_time(t0.elapsed().as_secs_f64() * 1000.0);
 
                 let t1 = Instant::now();
                 // 2. Accumulate samples (blend with previous frames)
-                renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device);
+                renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, samples_this_frame);
                 self.metrics.record_accumulate_time(t1.elapsed().as_secs_f64() * 1000.0);
             } else {
                 self.metrics.record_compute_time(0.0);
