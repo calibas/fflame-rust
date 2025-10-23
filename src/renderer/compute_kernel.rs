@@ -13,7 +13,7 @@ pub struct FlameRenderer {
     tonemap_bind_group: BindGroup,
     pub width: u32,
     pub height: u32,
-    samples_accumulated: u32,
+    samples_accumulated: u64,
     total_iterations: u64,
     color_mode: ColorMode,
     density_scale: f32,
@@ -96,7 +96,8 @@ impl FlameRenderer {
     }
 
     /// Run compute pass to generate flame samples
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
+    /// Returns the number of samples generated this frame
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) -> u64 {
         // Update seed for new random samples each frame
         let (projection_type, perspective_strength) = match self.current_projection {
             crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
@@ -133,7 +134,8 @@ impl FlameRenderer {
         // Track total iterations: workgroups * threads_per_workgroup * iterations_per_thread
         // Each workgroup has 64 threads (8x8)
         let threads_per_workgroup = 64u64;
-        self.total_iterations += num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
+        let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
+        self.total_iterations += samples_this_frame;
 
         // Clear temp samples texture before rendering new samples
         self.buffers.clear_temp(encoder);
@@ -151,15 +153,18 @@ impl FlameRenderer {
         compute_pass.dispatch_workgroups(num_workgroups, 1, 1);
 
         drop(compute_pass);
+
+        samples_this_frame
     }
 
     /// Run accumulation pass to blend new samples with previous accumulation
-    pub fn accumulate_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, device: &Device) {
-        self.samples_accumulated += 1;
+    pub fn accumulate_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, device: &Device, samples_this_frame: u64) {
+        self.samples_accumulated += samples_this_frame;
 
         // Calculate blend factor for exponential moving average
-        // blend_factor = 1 / samples_accumulated gives equal weight to all samples
-        let blend_factor = 1.0 / self.samples_accumulated as f32;
+        // blend_factor = samples_this_frame / samples_accumulated
+        // This properly weights each frame by the number of samples it contributes
+        let blend_factor = samples_this_frame as f32 / self.samples_accumulated as f32;
 
         let params = AccumulateParams {
             width: self.width,
@@ -350,7 +355,7 @@ impl FlameRenderer {
         self.buffers.update_tonemap_params(queue, &params);
     }
 
-    pub fn samples_accumulated(&self) -> u32 {
+    pub fn samples_accumulated(&self) -> u64 {
         self.samples_accumulated
     }
 

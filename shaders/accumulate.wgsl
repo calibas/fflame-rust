@@ -28,14 +28,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Load new samples
     let new_sample = textureLoad(new_samples, pixel, 0);
 
-    // Blend RGB with previous accumulation (average)
-    // Simple average: accumulated = (accumulated * n + new_sample) / (n + 1)
-    // Equivalent to: accumulated = accumulated * (1 - 1/(n+1)) + new_sample * (1/(n+1))
+    // Blend RGB with previous accumulation (weighted average by sample count)
+    // blend_factor = samples_this_frame / total_samples
     let rgb_accumulated = prev.rgb * (1.0 - params.blend_factor) + new_sample.rgb * params.blend_factor;
 
-    // Blend alpha (density) the same way as RGB
-    // This prevents unbounded density accumulation that causes saturation
-    let alpha_accumulated = prev.a * (1.0 - params.blend_factor) + new_sample.a * params.blend_factor;
+    // Alpha (density) represents total sample count, so just add it
+    // Each sample writes 0.01 alpha, so alpha = total_samples * 0.01
+    let alpha_accumulated = prev.a + new_sample.a;
 
     // Write to output
     textureStore(output_texture, pixel, vec4<f32>(rgb_accumulated, alpha_accumulated));

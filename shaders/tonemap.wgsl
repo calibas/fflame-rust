@@ -44,8 +44,17 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var color = accum.rgb;
     let density = accum.a;
 
-    // Apply exposure to color directly (not multiplied by density)
-    // The density is already encoded in the accumulated RGB values
+    // Normalize color by density, but cap density to prevent unbounded growth
+    // Density represents total samples * 0.01, so density=1.0 means 100 samples
+    // We use sqrt to compress high densities while preserving low-density detail
+    // Apply density_scale so user can control the brightness contribution
+    let normalized_density = sqrt(density * tonemap_params.density_scale);
+
+    if (density > 0.001) {
+        color = color * normalized_density;
+    }
+
+    // Apply exposure
     color *= tonemap_params.exposure;
 
     // Logarithmic tone mapping for high dynamic range
