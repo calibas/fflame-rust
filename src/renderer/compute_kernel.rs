@@ -110,7 +110,7 @@ impl FlameRenderer {
             burn_in: 20,
             width: self.width,
             height: self.height,
-            seed: rand::random::<u32>(),
+            seed: 12345, // Fixed seed for deterministic rendering
             color_mode: self.color_mode as u32,
             render_mode: match self.current_render_mode {
                 crate::scene::transforms::RenderMode::TwoD => 0,
@@ -262,7 +262,7 @@ impl FlameRenderer {
             burn_in: 20,
             width: self.width,
             height: self.height,
-            seed: rand::random::<u32>(),
+            seed: 12345, // Fixed seed for deterministic rendering
             color_mode: config.color_mode as u32,
             render_mode: match self.current_render_mode {
                 crate::scene::transforms::RenderMode::TwoD => 0,
@@ -317,7 +317,7 @@ impl FlameRenderer {
             burn_in: 20,
             width: self.width,
             height: self.height,
-            seed: rand::random::<u32>(),
+            seed: 12345, // Fixed seed for deterministic rendering
             color_mode: self.color_mode as u32,
             render_mode: match self.current_render_mode {
                 crate::scene::transforms::RenderMode::TwoD => 0,
@@ -376,7 +376,7 @@ impl FlameRenderer {
             burn_in: 20,
             width: self.width,
             height: self.height,
-            seed: rand::random::<u32>(),
+            seed: 12345, // Fixed seed for deterministic rendering
             color_mode: self.color_mode as u32,
             splat_size: 1.0,
             zoom,
@@ -469,7 +469,7 @@ impl FlameRenderer {
             burn_in: 20,
             width: self.width,
             height: self.height,
-            seed: rand::random::<u32>(),
+            seed: 12345, // Fixed seed for deterministic rendering
             color_mode: self.color_mode as u32,
             splat_size: 1.0,
             zoom,
