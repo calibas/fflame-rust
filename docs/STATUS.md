@@ -56,6 +56,7 @@ Fully implemented in [src/scene/transforms.rs](src/scene/transforms.rs)
 - ✅ Color [f32; 3]
 - ➕ **Extra:** color_speed field for palette blending
 - ➕ **Extra:** g (Z offset) for 3D mode - **Added 2025-10-21**
+- ➕ **Extra:** variation_params HashMap for parameterized variations - **Added 2025-10-22**
 
 #### 4.2 Palette/LUT ✅
 Implemented in [src/scene/palette.rs](src/scene/palette.rs)
@@ -96,8 +97,10 @@ All implemented in [src/gpu/pipelines.rs](src/gpu/pipelines.rs)
 - ✅ WGSL shaders
 - ✅ Single-precision float math
 - ✅ Per-thread RNG (PCG-based in [shaders/trajectory.wgsl:17-23](shaders/trajectory.wgsl#L17-L23))
-- ✅ 24 variation functions implemented in WGSL (16 2D + 8 3D) - **Expanded 2025-10-21**
+- ✅ 26 variation functions implemented in WGSL (16 2D + 8 3D + 2 parameterized) - **Expanded 2025-10-21, 2025-10-22**
 - ✅ CPU-side variation reference in Rust ([src/scene/transforms.rs:163-276](src/scene/transforms.rs#L163-L276))
+- ➕ **Extra:** Variation parameter system with GPU storage buffer (192 floats) - **Added 2025-10-22**
+- ➕ **Extra:** Dynamic shader generation via ShaderBuilder for active variations - **Added 2025-10-22**
 - ✅ Dual shader system: trajectory.wgsl (2D) and trajectory_3d.wgsl (3D) - **Added 2025-10-21**
 - ⚠️ Float atomics not used (using additive blending instead)
 
@@ -120,6 +123,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 - ✅ **Global params** - Iterations per thread, density scale, exposure
 - ✅ **View controls** - Zoom, pan, rotation with buttons and sliders
 - ✅ **Color settings** - Mode selector (Transform/Palette/Speed), palette library
+- ➕ **Variation parameters** - Float/Integer/Angle sliders for parameterized variations (Added 2025-10-22)
 - ➕ **Pause/Resume** - Control accumulation
 - ➕ **Max iterations limit** - Auto-stop at target
 - ➕ **Undo/Redo** - Full history system (Ctrl+Z, Ctrl+Y)
