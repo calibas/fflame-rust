@@ -133,6 +133,7 @@ impl VariationRegistry {
         registry.register_core("diamond", "Diamond", VariationCategory::Advanced2D, false);
         registry.register_core("ex", "Ex", VariationCategory::Advanced2D, false);
         registry.register_core("julia", "Julia", VariationCategory::Advanced2D, true); // Needs RNG
+        registry.register_core("julian", "JuliaN", VariationCategory::Advanced2D, true); // Needs RNG
         registry.register_core("bent", "Bent", VariationCategory::Advanced2D, false);
         registry.register_core("waves", "Waves", VariationCategory::Advanced2D, false);
 
@@ -151,6 +152,26 @@ impl VariationRegistry {
 
         // Register 3D depth variations (continued)
         registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, false);
+
+        // Add parameters to variations that need them
+        registry.add_parameters("julian", vec![
+            VariationParameter {
+                name: "power".to_string(),
+                display_name: "Power".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 2.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "dist".to_string(),
+                display_name: "Distance".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.1),
+                max_value: Some(5.0),
+            },
+        ]);
 
         registry
     }
@@ -234,6 +255,13 @@ impl VariationRegistry {
             .iter()
             .filter_map(|name| self.variations.get(name))
             .collect()
+    }
+
+    /// Add parameters to an existing variation (helper for defining parameters after registration)
+    fn add_parameters(&mut self, name: &str, parameters: Vec<VariationParameter>) {
+        if let Some(info) = self.variations.get_mut(name) {
+            info.parameters = parameters;
+        }
     }
 }
 

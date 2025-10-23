@@ -151,10 +151,21 @@ impl ShaderBuilder {
 
         for (name, idx) in entries {
             if let Some(info) = self.registry.get(&name) {
-                let call = if info.needs_rng {
-                    format!("{}(p, rng)", info.wgsl_function)
+                // Determine function call signature based on needs
+                let call = if !info.parameters.is_empty() {
+                    // Has parameters - needs xform_id
+                    if info.needs_rng {
+                        format!("{}(p, xform_id, rng)", info.wgsl_function)
+                    } else {
+                        format!("{}(p, xform_id)", info.wgsl_function)
+                    }
                 } else {
-                    format!("{}(p)", info.wgsl_function)
+                    // No parameters - original signature
+                    if info.needs_rng {
+                        format!("{}(p, rng)", info.wgsl_function)
+                    } else {
+                        format!("{}(p)", info.wgsl_function)
+                    }
                 };
 
                 code.push_str(&format!(
@@ -227,10 +238,20 @@ impl ShaderBuilder {
                     }
                     _ => {
                         // Standard variation
-                        let call = if info.needs_rng {
-                            format!("{}(p, rng)", info.wgsl_function)
+                        let call = if !info.parameters.is_empty() {
+                            // Has parameters - needs xform_id
+                            if info.needs_rng {
+                                format!("{}(p, xform_id, rng)", info.wgsl_function)
+                            } else {
+                                format!("{}(p, xform_id)", info.wgsl_function)
+                            }
                         } else {
-                            format!("{}(p)", info.wgsl_function)
+                            // No parameters - original signature
+                            if info.needs_rng {
+                                format!("{}(p, rng)", info.wgsl_function)
+                            } else {
+                                format!("{}(p)", info.wgsl_function)
+                            }
                         };
 
                         code.push_str(&format!(
