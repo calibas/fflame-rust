@@ -117,3 +117,21 @@ fn variation_waves(p: vec2<f32>) -> vec2<f32> {
         p.y + e * sin(p.x / (f * f + 1e-6))
     );
 }
+
+fn variation_julian(p: vec2<f32>, xform_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Get parameters
+    let power = get_param(xform_id, 14u, 0u);  // julian is variation index 14 (after julia at 13)
+    let dist = get_param(xform_id, 14u, 1u);
+
+    let abs_power = abs(power);
+    let cpower = dist / abs_power / 2.0;
+
+    let r = pow(length(p), cpower);
+    let theta = atan2(p.y, p.x);
+
+    // Random selection of symmetry
+    let trunc_val = floor(abs_power * rng_nextf(rng));
+    let t = (theta + 6.28318530718 * trunc_val) / power;
+
+    return vec2<f32>(r * cos(t), r * sin(t));
+}
