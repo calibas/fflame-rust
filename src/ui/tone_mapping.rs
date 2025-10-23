@@ -234,20 +234,35 @@ fn render_curve_editor(ui: &mut egui::Ui, curve: &mut ToneCurve, curve_changed: 
         egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 200, 255)),
     ));
 
+    // Persistent drag state (tracks which point is being dragged across frames)
+    let mut dragging_point = ui.ctx().data_mut(|d| {
+        d.get_persisted::<Option<usize>>(egui::Id::new("curve_editor_dragging_point"))
+            .unwrap_or(None)
+    });
+
+    // Check if mouse button is down globally
+    let mouse_down = ui.ctx().input(|i| i.pointer.primary_down());
+
     // Draw control points
-    let mut dragging_point: Option<usize> = None;
     for (i, point) in curve.points.iter().enumerate() {
         let screen_pos = to_screen(point.x, point.y);
         let point_radius = 6.0;
 
-        // Check if mouse is over this point
+        // Check if mouse is over this point (check both hover and interact positions for fast drags)
         let is_hovered = if let Some(hover_pos) = response.hover_pos() {
             hover_pos.distance(screen_pos) < point_radius * 2.0
         } else {
             false
         };
 
-        let point_color = if is_hovered {
+        // Also check interact position for fast drags where hover might lag
+        let is_clicked = if let Some(interact_pos) = response.interact_pointer_pos() {
+            interact_pos.distance(screen_pos) < point_radius * 2.0
+        } else {
+            false
+        };
+
+        let point_color = if is_hovered || is_clicked || dragging_point == Some(i) {
             egui::Color32::from_rgb(255, 200, 100)
         } else if i == 0 || i == curve.points.len() - 1 {
             egui::Color32::from_rgb(200, 100, 100) // Endpoints in red
@@ -258,20 +273,30 @@ fn render_curve_editor(ui: &mut egui::Ui, curve: &mut ToneCurve, curve_changed: 
         painter.circle_filled(screen_pos, point_radius, point_color);
         painter.circle_stroke(screen_pos, point_radius, egui::Stroke::new(1.0, egui::Color32::WHITE));
 
-        // Handle dragging
-        if response.dragged() && is_hovered {
+        // Start dragging if clicking on a point (check both hover and interact for fast drags)
+        if dragging_point.is_none() && response.dragged() && (is_hovered || is_clicked) {
             dragging_point = Some(i);
         }
     }
 
-    // Update dragged point
+    // Update dragged point (use global pointer position)
     if let Some(idx) = dragging_point {
-        if let Some(drag_pos) = response.interact_pointer_pos() {
+        if let Some(drag_pos) = ui.ctx().pointer_latest_pos() {
             let (new_x, new_y) = from_screen(drag_pos);
             curve.move_point(idx, new_x, new_y);
             *curve_changed = true;
         }
     }
+
+    // Clear drag on mouse release
+    if !mouse_down && dragging_point.is_some() {
+        dragging_point = None;
+    }
+
+    // Persist drag state
+    ui.ctx().data_mut(|d| {
+        d.insert_persisted(egui::Id::new("curve_editor_dragging_point"), dragging_point);
+    });
 
     // Add point on double-click
     if response.double_clicked() {
