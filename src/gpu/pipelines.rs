@@ -125,6 +125,24 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Curve LUT texture (1D, sampled)
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D1,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Curve LUT sampler
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
 
@@ -355,6 +373,14 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 2,
                     resource: buffers.tonemap_params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(&buffers.curve_lut_view),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::Sampler(&buffers.sampler),
                 },
             ],
         })

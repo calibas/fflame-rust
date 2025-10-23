@@ -348,9 +348,9 @@ impl FlameRenderer {
             exposure,
             gamma,
             density_scale: 1.0,
-            _pad0: 0.0,
+            tonemap_mode: 1,  // Logarithmic
             background_color: [0.0, 0.0, 0.0],
-            _pad1: 0.0,
+            use_curve: 0,  // Disabled
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -404,9 +404,9 @@ impl FlameRenderer {
             exposure: 1.0,
             gamma: 2.2,
             density_scale: self.density_scale,
-            _pad0: 0.0,
+            tonemap_mode: 1,  // Logarithmic
             background_color: self.background_color,
-            _pad1: 0.0,
+            use_curve: 0,  // Disabled
         };
         self.buffers.update_tonemap_params(queue, &params);
     }

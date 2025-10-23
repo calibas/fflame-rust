@@ -138,9 +138,9 @@ pub struct TonemapParams {
     pub exposure: f32,
     pub gamma: f32,
     pub density_scale: f32, // Controls how density maps to alpha
-    pub _pad0: f32,
+    pub tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic
     pub background_color: [f32; 3],
-    pub _pad1: f32,
+    pub use_curve: u32,  // 0 = disabled, 1 = enabled
 }
 
 impl Default for TonemapParams {
@@ -149,9 +149,9 @@ impl Default for TonemapParams {
             exposure: 1.0,
             gamma: 2.2,
             density_scale: 1.0,
-            _pad0: 0.0,
+            tonemap_mode: 1,  // Default to Logarithmic
             background_color: [0.0, 0.0, 0.0],
-            _pad1: 0.0,
+            use_curve: 0,  // Curves disabled by default
         }
     }
 }
@@ -187,6 +187,10 @@ pub struct FlameBuffers {
     // Palette texture (1D)
     pub palette_texture: Texture,
     pub palette_view: TextureView,
+
+    // Tone curve LUT texture (1D, 256 samples)
+    pub curve_lut_texture: Texture,
+    pub curve_lut_view: TextureView,
 
     pub sampler: Sampler,
 
@@ -366,6 +370,48 @@ impl FlameBuffers {
 
         let palette_view = palette_texture.create_view(&TextureViewDescriptor::default());
 
+        // Create curve LUT texture (1D, 256 samples) - start with linear curve
+        let default_curve = crate::scene::tonemap::ToneCurve::linear();
+        let curve_lut_data = default_curve.generate_lut();
+
+        let curve_lut_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Curve LUT Texture"),
+            size: Extent3d {
+                width: 256,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D1,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        // Upload curve LUT data
+        queue.write_texture(
+            ImageCopyTexture {
+                texture: &curve_lut_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &curve_lut_data,
+            ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(256 * 4), // 256 pixels * 4 components * 1 byte
+                rows_per_image: None,
+            },
+            Extent3d {
+                width: 256,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let curve_lut_view = curve_lut_texture.create_view(&TextureViewDescriptor::default());
+
         // Create sampler for tonemap shader
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Accumulation Sampler"),
@@ -392,6 +438,8 @@ impl FlameBuffers {
             temp_samples_view,
             palette_texture,
             palette_view,
+            curve_lut_texture,
+            curve_lut_view,
             sampler,
             current_is_a: true,
         }
@@ -592,6 +640,31 @@ impl FlameBuffers {
                 aspect: TextureAspect::All,
             },
             &palette_data_u8,
+            ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(256 * 4), // 256 pixels * 4 components * 1 byte
+                rows_per_image: None,
+            },
+            Extent3d {
+                width: 256,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Update tone curve LUT texture
+    pub fn update_curve_lut(&self, queue: &Queue, curve: &crate::scene::tonemap::ToneCurve) {
+        let curve_lut_data = curve.generate_lut();
+
+        queue.write_texture(
+            ImageCopyTexture {
+                texture: &self.curve_lut_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &curve_lut_data,
             ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(256 * 4), // 256 pixels * 4 components * 1 byte

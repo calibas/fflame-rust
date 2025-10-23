@@ -1,0 +1,292 @@
+use crate::scene::tonemap::{ToneMapMode, ToneCurve};
+use crate::scene::palette::{ColorMode, PaletteLibrary};
+
+/// Render the Tone Mapping window with all tone mapping and color controls
+#[allow(clippy::too_many_arguments)]
+pub fn render_tone_mapping_window(
+    ctx: &egui::Context,
+    show_tone_mapping: &mut bool,
+    show_palette_editor: &mut bool,
+    tonemap_mode: &mut ToneMapMode,
+    tonemap_mode_changed: &mut bool,
+    tonemap_curve: &mut ToneCurve,
+    tonemap_curve_changed: &mut bool,
+    use_curve: &mut bool,
+    use_curve_changed: &mut bool,
+    exposure: &mut f32,
+    exposure_changed: &mut bool,
+    gamma: &mut f32,
+    gamma_changed: &mut bool,
+    density_scale: &mut f32,
+    density_changed: &mut bool,
+    color_mode: &mut ColorMode,
+    color_mode_changed: &mut bool,
+    palette_library: &PaletteLibrary,
+    current_palette_index: &mut usize,
+    palette_changed: &mut bool,
+    palette_editor_palette: &mut crate::scene::palette::Palette,
+    speed_factor: &mut f32,
+    background_color: &mut [f32; 3],
+    background_color_changed: &mut bool,
+) {
+    egui::Window::new("Tone Mapping & Colors")
+        .open(show_tone_mapping)
+        .show(ctx, |ui| {
+            // Section 1: Tone Mapping
+            egui::CollapsingHeader::new("Tone Mapping")
+                .default_open(true)
+                .show(ui, |ui| {
+                    ui.label("Tone Map Mode");
+                    ui.horizontal(|ui| {
+                        let is_linear = matches!(*tonemap_mode, ToneMapMode::Linear);
+                        if ui.selectable_label(is_linear, "Linear").clicked() {
+                            *tonemap_mode = ToneMapMode::Linear;
+                            *tonemap_mode_changed = true;
+                        }
+                        if ui.selectable_label(!is_linear, "Logarithmic").clicked() {
+                            *tonemap_mode = ToneMapMode::Logarithmic;
+                            *tonemap_mode_changed = true;
+                        }
+                    });
+
+                    ui.separator();
+
+                    if ui.add(egui::Slider::new(exposure, 0.1..=5.0).text("Exposure")).changed() {
+                        *exposure_changed = true;
+                    }
+
+                    if ui.add(egui::Slider::new(gamma, 1.0..=3.0).text("Gamma")).changed() {
+                        *gamma_changed = true;
+                    }
+
+                    if ui.add(egui::Slider::new(density_scale, 0.01..=10.0).text("Density Scale")).changed() {
+                        *density_changed = true;
+                    }
+                });
+
+            // Section 2: Tone Curve
+            egui::CollapsingHeader::new("Tone Curve")
+                .default_open(false)
+                .show(ui, |ui| {
+                    // Enable/disable curve
+                    if ui.checkbox(use_curve, "Enable Tone Curve").changed() {
+                        *use_curve_changed = true;
+                    }
+
+                    ui.add_enabled_ui(*use_curve, |ui| {
+                        // Preset curves
+                        ui.label("Presets");
+                        ui.horizontal(|ui| {
+                            if ui.button("Linear").clicked() {
+                                *tonemap_curve = ToneCurve::linear();
+                                *tonemap_curve_changed = true;
+                            }
+                            if ui.button("S-Curve").clicked() {
+                                *tonemap_curve = ToneCurve::s_curve();
+                                *tonemap_curve_changed = true;
+                            }
+                            if ui.button("Brighten Shadows").clicked() {
+                                *tonemap_curve = ToneCurve::brighten_shadows();
+                                *tonemap_curve_changed = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("Darken Highlights").clicked() {
+                                *tonemap_curve = ToneCurve::darken_highlights();
+                                *tonemap_curve_changed = true;
+                            }
+                        });
+
+                        ui.separator();
+
+                        // Curve editor
+                        render_curve_editor(ui, tonemap_curve, tonemap_curve_changed);
+                    });
+                });
+
+            // Section 3: Color & Appearance
+            egui::CollapsingHeader::new("Color & Appearance")
+                .default_open(true)
+                .show(ui, |ui| {
+                    let current_mode = *color_mode;
+                    let selected_text = match current_mode {
+                        ColorMode::Transform => "Transform Colors",
+                        ColorMode::Palette => "Palette",
+                        ColorMode::Speed => "Speed",
+                    };
+
+                    egui::ComboBox::from_label("Color Mode")
+                        .selected_text(selected_text)
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_value(color_mode, ColorMode::Transform, "Transform Colors").changed() {
+                                *color_mode_changed = true;
+                            }
+                            if ui.selectable_value(color_mode, ColorMode::Palette, "Palette").changed() {
+                                *color_mode_changed = true;
+                            }
+                            if ui.selectable_value(color_mode, ColorMode::Speed, "Speed").changed() {
+                                *color_mode_changed = true;
+                            }
+                        });
+
+                    // Show palette selector for Palette and Speed modes
+                    if matches!(*color_mode, ColorMode::Palette | ColorMode::Speed) {
+                        let palettes = palette_library.palettes();
+                        let current_palette_name = palettes.get(*current_palette_index)
+                            .map(|p| p.name.as_str())
+                            .unwrap_or("Unknown");
+
+                        egui::ComboBox::from_label("Palette")
+                            .selected_text(current_palette_name)
+                            .show_ui(ui, |ui| {
+                                for (idx, palette) in palettes.iter().enumerate() {
+                                    if ui.selectable_value(current_palette_index, idx, &palette.name).changed() {
+                                        *palette_changed = true;
+                                    }
+                                }
+                            });
+
+                        // Palette editor button
+                        if ui.button("🎨 Edit Palette").clicked() {
+                            *show_palette_editor = !*show_palette_editor;
+                            // Load current palette into editor
+                            if let Some(pal) = palette_library.get(*current_palette_index) {
+                                *palette_editor_palette = pal.clone();
+                            }
+                        }
+                    }
+
+                    // Show speed factor slider in Speed mode
+                    if matches!(*color_mode, ColorMode::Speed) {
+                        if ui.add(egui::Slider::new(speed_factor, 0.0..=1.0).text("Speed Blend Factor")).changed() {
+                            *color_mode_changed = true;
+                        }
+                    }
+
+                    ui.separator();
+
+                    // Background color picker
+                    ui.label("Background Color");
+                    if ui.color_edit_button_rgb(background_color).changed() {
+                        *background_color_changed = true;
+                    }
+                });
+        });
+}
+
+/// Render curve editor UI
+fn render_curve_editor(ui: &mut egui::Ui, curve: &mut ToneCurve, curve_changed: &mut bool) {
+    ui.label("Curve Editor");
+
+    // Plot the curve
+    let (response, painter) = ui.allocate_painter(
+        egui::vec2(ui.available_width(), 200.0),
+        egui::Sense::click_and_drag(),
+    );
+
+    let rect = response.rect;
+    let to_screen = |x: f32, y: f32| -> egui::Pos2 {
+        egui::pos2(
+            rect.left() + x * rect.width(),
+            rect.bottom() - y * rect.height(),
+        )
+    };
+
+    let from_screen = |pos: egui::Pos2| -> (f32, f32) {
+        (
+            ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0),
+            ((rect.bottom() - pos.y) / rect.height()).clamp(0.0, 1.0),
+        )
+    };
+
+    // Draw background
+    painter.rect_filled(rect, 0.0, egui::Color32::from_gray(20));
+
+    // Draw grid
+    for i in 0..=4 {
+        let t = i as f32 / 4.0;
+        let pos_x = to_screen(t, 0.0);
+        let pos_y = to_screen(0.0, t);
+        painter.line_segment(
+            [to_screen(t, 0.0), to_screen(t, 1.0)],
+            egui::Stroke::new(1.0, egui::Color32::from_gray(40)),
+        );
+        painter.line_segment(
+            [to_screen(0.0, t), to_screen(1.0, t)],
+            egui::Stroke::new(1.0, egui::Color32::from_gray(40)),
+        );
+    }
+
+    // Draw diagonal reference line (y = x)
+    painter.line_segment(
+        [to_screen(0.0, 0.0), to_screen(1.0, 1.0)],
+        egui::Stroke::new(1.0, egui::Color32::from_gray(60)),
+    );
+
+    // Draw curve
+    let num_samples = 100;
+    let mut points: Vec<egui::Pos2> = Vec::with_capacity(num_samples);
+    for i in 0..num_samples {
+        let x = i as f32 / (num_samples - 1) as f32;
+        let y = curve.evaluate(x);
+        points.push(to_screen(x, y));
+    }
+    painter.add(egui::Shape::line(
+        points,
+        egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 200, 255)),
+    ));
+
+    // Draw control points
+    let mut dragging_point: Option<usize> = None;
+    for (i, point) in curve.points.iter().enumerate() {
+        let screen_pos = to_screen(point.x, point.y);
+        let point_radius = 6.0;
+
+        // Check if mouse is over this point
+        let is_hovered = if let Some(hover_pos) = response.hover_pos() {
+            hover_pos.distance(screen_pos) < point_radius * 2.0
+        } else {
+            false
+        };
+
+        let point_color = if is_hovered {
+            egui::Color32::from_rgb(255, 200, 100)
+        } else if i == 0 || i == curve.points.len() - 1 {
+            egui::Color32::from_rgb(200, 100, 100) // Endpoints in red
+        } else {
+            egui::Color32::from_rgb(255, 255, 100)
+        };
+
+        painter.circle_filled(screen_pos, point_radius, point_color);
+        painter.circle_stroke(screen_pos, point_radius, egui::Stroke::new(1.0, egui::Color32::WHITE));
+
+        // Handle dragging
+        if response.dragged() && is_hovered {
+            dragging_point = Some(i);
+        }
+    }
+
+    // Update dragged point
+    if let Some(idx) = dragging_point {
+        if let Some(drag_pos) = response.interact_pointer_pos() {
+            let (new_x, new_y) = from_screen(drag_pos);
+            curve.move_point(idx, new_x, new_y);
+            *curve_changed = true;
+        }
+    }
+
+    // Add point on double-click
+    if response.double_clicked() {
+        if let Some(click_pos) = response.interact_pointer_pos() {
+            let (x, y) = from_screen(click_pos);
+            curve.add_point(crate::scene::tonemap::CurvePoint::new(x, y));
+            *curve_changed = true;
+        }
+    }
+
+    // Show instructions
+    ui.label("Double-click to add points, drag to move, Ctrl+click to remove");
+
+    // List control points
+    ui.label(format!("{} control points", curve.points.len()));
+}

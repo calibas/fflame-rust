@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::scene::transforms::Flame;
 use crate::scene::palette::ColorMode;
+use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 
 /// Complete fractal configuration (excludes runtime-only settings)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +29,24 @@ pub struct FractalConfig {
     pub color_mode: ColorMode,
     pub palette_index: usize,
     pub background_color: [f32; 3],
+
+    /// Tone mapping settings
+    #[serde(default)]
+    pub tonemap_mode: ToneMapMode,
+    #[serde(default)]
+    pub tonemap_curve: ToneCurve,
+    #[serde(default = "default_exposure")]
+    pub exposure: f32,
+    #[serde(default = "default_gamma")]
+    pub gamma: f32,
+}
+
+fn default_exposure() -> f32 {
+    1.0
+}
+
+fn default_gamma() -> f32 {
+    2.2
 }
 
 impl FractalConfig {
