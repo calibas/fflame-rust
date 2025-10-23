@@ -4,6 +4,82 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added - 2025-10-22
+
+#### Variation Parameters System ✅
+**Complete parameter system for variations with custom values**
+
+Implements a comprehensive parameter system that allows variations to have configurable parameters (like power, distance, high/low bounds, wave counts, etc). Parameters are stored per-transform, uploaded to GPU, and accessible in shaders.
+
+- **Data Model** ([src/variations/mod.rs](src/variations/mod.rs))
+  - `VariationParameter` struct: name, display_name, param_type, default_value, min/max
+  - `ParamType` enum: Float, Integer, Angle (0-360°)
+  - `VariationInfo.parameters: Vec<VariationParameter>` - parameter definitions per variation
+  - `Transform.variation_params: HashMap<String, f32>` - actual parameter values
+  - Helper methods: `set_variation_param()`, `get_variation_param()`, `get_variation_param_or_default()`
+  - Backward-compatible serialization with `#[serde(default)]`
+
+- **GPU Pipeline** ([src/gpu/buffers.rs](src/gpu/buffers.rs))
+  - `GpuVariationParams` struct: 192 floats (24 variations × 8 params per variation)
+  - `MAX_PARAMS_PER_VARIATION = 8` constant
+  - Manual `Pod`/`Zeroable` implementation (arrays > 128 elements)
+  - `variation_params_buffer` added to `FlameBuffers`
+  - `GpuVariationParams::from_transform()` - converts Transform params to GPU layout
+  - `update_variation_params()` - uploads all transform parameters to GPU
+  - Binding 5 in compute bind group layout (storage buffer, read-only)
+
+- **Shader Infrastructure** ([shaders/core/](shaders/core/))
+  - `VariationParams` struct in header.wgsl (192-element array)
+  - `@binding(5)` for variation_params storage buffer
+  - `get_param(xform_id, variation_id, param_slot)` helper function in utilities.wgsl
+  - `apply_variations()` signature updated to accept `xform_id: u32` parameter
+  - Passed from main_2d.wgsl and main_3d.wgsl entry points
+
+- **Dynamic Shader Generation** ([src/shader_builder_v2.rs](src/shader_builder_v2.rs))
+  - Detects variations with parameters via `!info.parameters.is_empty()`
+  - Generates correct function signatures:
+    - Parameterized + RNG: `variation(p, xform_id, rng)`
+    - Parameterized only: `variation(p, xform_id)`
+    - RNG only: `variation(p, rng)`
+    - Basic: `variation(p)`
+  - Applies to both 2D and 3D shader builders
+
+- **UI Integration** ([src/ui/transforms.rs](src/ui/transforms.rs))
+  - Parameter sliders appear indented below active variations
+  - Three slider types:
+    - **Float**: Continuous slider with step_by(0.01)
+    - **Integer**: Discrete slider with whole numbers
+    - **Angle**: 0-360° slider with degree symbol suffix
+  - Applied to all variation categories (Basic 2D, Advanced 2D, 3D Depth, 3D Rotation, Full 3D)
+  - Real-time updates via `flame_changed` flag
+  - Parameter values displayed in sliders with default fallback
+
+- **Parameterized Variations Added:**
+  - **julian** (JuliaN) - Index 14 (Advanced 2D)
+    - `power` (Integer): -10 to 10, default 2 - Number of symmetry axes
+    - `dist` (Float): 0.1 to 5.0, default 1.0 - Radial scaling factor
+    - Creates symmetrical patterns with configurable rotation order
+    - Needs RNG for random symmetry selection
+
+  - **blob** - Index 17 (Advanced 2D)
+    - `high` (Float): 0.0 to 3.0, default 1.0 - Upper bound for blob size
+    - `low` (Float): 0.0 to 3.0, default 1.0 - Lower bound for blob size
+    - `waves` (Float): 1.0 to 20.0, default 6.0 - Number of wavy edges
+    - Formula: `r · (low + ((high - low)/2)(sin(waves·θ) + 1)) · (cos θ, sin θ)`
+    - Creates blob-like distortions with undulating edges
+
+**Testing:**
+- End-to-end parameter flow tested with julian and blob variations
+- UI sliders correctly update GPU parameters in real-time
+- Shaders access parameters via get_param() helper
+- Dynamic shader generation handles all parameter combinations
+
+**Architecture Notes:**
+- Fixed-size array (192 floats) for predictable GPU indexing
+- Storage buffer allows 24KB of parameter data (well under 64KB uniform limit)
+- Parameters stored as "variation.param" keys in HashMap for flexibility
+- Backward compatibility via serde default on variation_params field
+
 ### Added - 2025-10-21 (Evening)
 
 #### Version Tracking and Build System ✅

@@ -25,9 +25,15 @@ See [docs/outline.md](docs/outline.md) for original design goals
 ### Key Concepts
 - **Fractal Flames**: IFS (Iterated Function System) with variations
 - **Render Modes**: 2D (classic) and 3D (pseudo-3D with depth)
-- **24 Variations**: 16 2D + 8 3D
+- **26 Variations**: 16 2D + 8 3D + 2 parameterized
   - **2D (0-15)**: Linear, Sinusoidal, Spherical, Swirl, Horseshoe, Polar, Handkerchief, Heart, Disc, Spiral, Hyperbolic, Diamond, Ex, Julia, Bent, Waves
-  - **3D (16-23)**: Zcone, Flatten, Hemisphere, PreRotateX, PreRotateY, PostRotateX, PostRotateY, ZScale
+  - **Parameterized 2D (14, 17)**: Julian (power, dist), Blob (high, low, waves)
+  - **3D (16, 18-23)**: Zcone, Flatten, Hemisphere, PreRotateX, PreRotateY, PostRotateX, PostRotateY, ZScale
+- **Variation Parameters**: Some variations have configurable parameters (power, distance, waves, etc.)
+  - Stored per-transform in HashMap
+  - Uploaded to GPU via dedicated storage buffer (192 floats: 24 variations × 8 params)
+  - Accessible in shaders via `get_param(xform_id, variation_id, param_slot)`
+  - UI sliders appear below active variations (Float, Integer, Angle types)
 - **3-Pass Rendering**: Compute samples → Accumulate temporally → Tonemap for display
 - **Ping-Pong Accumulation**: Two textures swapped each frame for progressive refinement
 - **Color Modes**: Transform colors, Palette lookup, Speed-based coloring
@@ -127,22 +133,57 @@ cargo run --release
 ### Adding a New Variation
 
 #### 2D Variation (affects XY only)
-1. Add to `VariationType` enum in `src/scene/transforms.rs`
-2. Implement CPU version in `VariationType::apply()` (returns modified XY)
-3. Add GPU version to both shaders:
-   - `shaders/trajectory.wgsl` (2D shader)
-   - `shaders/trajectory_3d.wgsl` (3D shader - make it return `vec3(new_x, new_y, p.z)`)
-4. Update `MAX_VARIATIONS` if expanding beyond 24
-5. Add to UI variation list in `src/ui/mod.rs` under "2D Variations"
+1. Register in `VariationRegistry::new()` in `src/variations/mod.rs`:
+   ```rust
+   registry.register_core("myvar", "My Variation", VariationCategory::Advanced2D, false);
+   ```
+2. Add WGSL implementation to both shaders:
+   - `shaders/core/variations_2d.wgsl` (2D shader)
+   - `shaders/core/variations_3d.wgsl` (3D shader - pass Z through: `vec3(new_x, new_y, p.z)`)
+3. Function signature depends on needs:
+   - Basic: `fn variation_myvar(p: vec2<f32>) -> vec2<f32>`
+   - Needs RNG: `fn variation_myvar(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32>`
+   - Has parameters: `fn variation_myvar(p: vec2<f32>, xform_id: u32) -> vec2<f32>`
+   - Both: `fn variation_myvar(p: vec2<f32>, xform_id: u32, rng: ptr<function, RngState>) -> vec2<f32>`
+4. Shader builder automatically detects signature based on `needs_rng` and `!parameters.is_empty()`
+5. Variation automatically appears in UI under its category
 
 #### 3D Variation (affects Z or rotates)
-1. Add to `VariationType` enum in `src/scene/transforms.rs` (indices 16-23 reserved for 3D)
-2. Implement CPU version in `VariationType::apply()` (can return p unchanged - CPU is 2D only)
-3. Add GPU version to `shaders/trajectory_3d.wgsl`:
+1. Register in `VariationRegistry::new()` (indices 16-23 reserved for 3D):
+   ```rust
+   registry.register_core("myvar", "My Variation", VariationCategory::Depth3D, false);
+   ```
+2. Add WGSL implementation to `shaders/core/variations_3d.wgsl`:
    - **Z-only variations**: Modify `result.z` directly (e.g., `result.z *= scale`)
    - **Rotation variations**: Apply rotation matrix to full `result` vector
    - **Full 3D variations**: Use `result += weight * variation(p)`
-4. Add to UI variation list in `src/ui/mod.rs` under "3D Variations" (only visible in 3D mode)
+3. Only visible in 3D mode UI
+4. CPU reference can return `p` unchanged (CPU is 2D only)
+
+#### Parameterized Variation (with custom parameters)
+1. Register variation (as above)
+2. Add parameters using `registry.add_parameters()`:
+   ```rust
+   registry.add_parameters("myvar", vec![
+       VariationParameter {
+           name: "power".to_string(),
+           display_name: "Power".to_string(),
+           param_type: ParamType::Integer,
+           default_value: 2.0,
+           min_value: Some(-10.0),
+           max_value: Some(10.0),
+       },
+   ]);
+   ```
+3. In shader, access parameters via `get_param()`:
+   ```wgsl
+   fn variation_myvar(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
+       let power = get_param(xform_id, VARIATION_INDEX, 0u);
+       // Use power in calculation...
+   }
+   ```
+4. Parameter sliders automatically appear in UI below variation
+5. Supports Float, Integer, and Angle (0-360°) parameter types
 
 ### Adding a New Palette
 **Option 1: Code-based (built-in)**
