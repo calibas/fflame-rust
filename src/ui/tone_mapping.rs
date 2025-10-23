@@ -205,8 +205,6 @@ fn render_curve_editor(ui: &mut egui::Ui, curve: &mut ToneCurve, curve_changed: 
     // Draw grid
     for i in 0..=4 {
         let t = i as f32 / 4.0;
-        let pos_x = to_screen(t, 0.0);
-        let pos_y = to_screen(0.0, t);
         painter.line_segment(
             [to_screen(t, 0.0), to_screen(t, 1.0)],
             egui::Stroke::new(1.0, egui::Color32::from_gray(40)),
