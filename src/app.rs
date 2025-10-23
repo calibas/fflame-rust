@@ -43,6 +43,7 @@ pub struct App {
     // Tone mapping
     tonemap_mode: ToneMapMode,
     tonemap_curve: ToneCurve,
+    use_curve: bool,
     exposure: f32,
     gamma: f32,
 }
@@ -118,6 +119,7 @@ impl App {
             background_color: [0.0, 0.0, 0.0], // Default to black
             tonemap_mode: ToneMapMode::Logarithmic,
             tonemap_curve: ToneCurve::linear(),
+            use_curve: false,  // Curves disabled by default
             exposure: 1.0,
             gamma: 2.2,
         };
@@ -435,6 +437,7 @@ impl App {
             // 3. Update tonemap parameters and render to screen
             renderer.update_density_scale(&self.gpu.queue, self.density_scale);
             renderer.update_background_color(&self.gpu.queue, self.background_color);
+            renderer.update_tonemap(&self.gpu.queue, self.tonemap_mode, self.use_curve, self.exposure, self.gamma);
             renderer.tonemap_pass(&mut encoder, &view);
             self.metrics.record_tonemap_time(t2.elapsed().as_secs_f64() * 1000.0);
         }
@@ -473,6 +476,11 @@ impl App {
             can_undo,
             can_redo,
             &mut self.background_color,
+            &mut self.tonemap_mode,
+            &mut self.tonemap_curve,
+            &mut self.use_curve,
+            &mut self.exposure,
+            &mut self.gamma,
         );
         self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
 
@@ -883,6 +891,7 @@ impl App {
             // Only capture on drag START, not during continuous dragging
             let should_capture = ui_response.triangle_drag_started || view_changed || ui_response.palette_changed
                 || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed
+                || ui_response.tonemap_mode_changed || ui_response.tonemap_curve_changed
                 || (ui_response.flame_changed && !ui_response.triangle_drag_started); // Other flame changes (not dragging)
             if should_capture {
                 self.capture_state();
@@ -916,11 +925,17 @@ impl App {
                     }
                 }
 
+                // Update tone curve LUT if curve changed
+                if ui_response.tonemap_curve_changed {
+                    renderer.update_curve_lut(&self.gpu.queue, &self.tonemap_curve);
+                }
+
                 // Reset accumulation when view changes, palette changes, color mode changes, background color changes, flame changes, or user requests it
                 // Note: preset_changed is handled separately above with import_config() which also resets
                 // For triangle dragging: reset on first frame (triangle_drag_started) and when drag ends (triangle_drag_ended), but not during continuous drag
+                // Tone mapping: reset on mode change (log vs linear affects accumulation), but not curve/exposure/gamma (post-processing only)
                 let should_reset = ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
-                    || ui_response.background_color_changed || ui_response.triangle_drag_started || ui_response.triangle_drag_ended
+                    || ui_response.background_color_changed || ui_response.tonemap_mode_changed || ui_response.triangle_drag_started || ui_response.triangle_drag_ended
                     || (ui_response.flame_changed && !ui_response.triangle_dragging);
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
