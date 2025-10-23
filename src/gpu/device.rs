@@ -13,17 +13,20 @@ pub struct GpuContext {
 
 impl GpuContext {
     pub async fn new(window: &Window) -> anyhow::Result<Self> {
-        let mut size = window.inner_size();
+        let size = window.inner_size();
 
         // WASM fallback: ensure we have valid dimensions
         #[cfg(target_arch = "wasm32")]
-        {
-            if size.width == 0 || size.height == 0 {
+        let size = {
+            let final_size = if size.width == 0 || size.height == 0 {
                 log::warn!("Window inner_size is zero, using fallback dimensions");
-                size = winit::dpi::PhysicalSize::new(1280, 720);
-            }
-            log::info!("GPU Context size: {}x{}", size.width, size.height);
-        }
+                winit::dpi::PhysicalSize::new(1280, 720)
+            } else {
+                size
+            };
+            log::info!("GPU Context size: {}x{}", final_size.width, final_size.height);
+            final_size
+        };
 
         let instance = Instance::default();
 
