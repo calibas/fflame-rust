@@ -98,19 +98,79 @@ impl ToneCurve {
         }
     }
 
-    /// Evaluate the curve at a given input value using linear interpolation
+    /// Evaluate the curve at a given input value using monotonic cubic Hermite interpolation
+    /// This creates smooth curves that pass through all control points without overshooting
     pub fn evaluate(&self, x: f32) -> f32 {
         let x = x.clamp(0.0, 1.0);
 
-        // Find the two points to interpolate between
+        // Find the segment containing x
         for i in 0..self.points.len() - 1 {
             let p0 = &self.points[i];
             let p1 = &self.points[i + 1];
 
             if x >= p0.x && x <= p1.x {
-                // Linear interpolation between p0 and p1
+                // Current segment slope
+                let delta = (p1.y - p0.y) / (p1.x - p0.x);
+
+                // Compute tangents using Catmull-Rom finite differences
+                let m0 = if i == 0 {
+                    // First point: use current segment slope
+                    delta
+                } else {
+                    let p_prev = &self.points[i - 1];
+                    // Average of left and right slopes
+                    let slope_left = (p0.y - p_prev.y) / (p0.x - p_prev.x);
+                    (slope_left + delta) * 0.5
+                };
+
+                let m1 = if i == self.points.len() - 2 {
+                    // Last point: use current segment slope
+                    delta
+                } else {
+                    let p_next = &self.points[i + 2];
+                    // Average of left and right slopes
+                    let slope_right = (p_next.y - p1.y) / (p_next.x - p1.x);
+                    (delta + slope_right) * 0.5
+                };
+
+                // Apply monotonicity constraint to prevent overshoot
+                let (m0_final, m1_final) = if delta.abs() < 1e-6 {
+                    // Flat segment - zero tangents
+                    (0.0, 0.0)
+                } else {
+                    // Fritsch-Carlson monotonicity constraints
+                    let alpha = m0 / delta;
+                    let beta = m1 / delta;
+
+                    // Check if tangents would cause non-monotonic behavior
+                    if alpha < 0.0 || beta < 0.0 {
+                        // One tangent points wrong direction - use linear
+                        (delta, delta)
+                    } else {
+                        // Apply constraint: alpha^2 + beta^2 <= 9
+                        let sum_sq = alpha * alpha + beta * beta;
+                        if sum_sq > 9.0 {
+                            let tau = 3.0 / sum_sq.sqrt();
+                            (tau * alpha * delta, tau * beta * delta)
+                        } else {
+                            // No constraint needed
+                            (m0, m1)
+                        }
+                    }
+                };
+
+                // Cubic Hermite interpolation
                 let t = (x - p0.x) / (p1.x - p0.x);
-                return p0.y + t * (p1.y - p0.y);
+                let t2 = t * t;
+                let t3 = t2 * t;
+
+                let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+                let h10 = t3 - 2.0 * t2 + t;
+                let h01 = -2.0 * t3 + 3.0 * t2;
+                let h11 = t3 - t2;
+
+                let dx = p1.x - p0.x;
+                return h00 * p0.y + h10 * dx * m0_final + h01 * p1.y + h11 * dx * m1_final;
             }
         }
 

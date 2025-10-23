@@ -221,8 +221,8 @@ fn render_curve_editor(ui: &mut egui::Ui, curve: &mut ToneCurve, curve_changed: 
         egui::Stroke::new(1.0, egui::Color32::from_gray(60)),
     );
 
-    // Draw curve
-    let num_samples = 100;
+    // Draw smooth curve (use more samples for cubic interpolation)
+    let num_samples = 200;
     let mut points: Vec<egui::Pos2> = Vec::with_capacity(num_samples);
     for i in 0..num_samples {
         let x = i as f32 / (num_samples - 1) as f32;
