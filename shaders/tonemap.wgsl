@@ -44,14 +44,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var color = accum.rgb;
     let density = accum.a;
 
-    // Apply density scale to both color and alpha
-    // This makes denser areas both brighter AND more opaque
-    color *= density * tonemap_params.density_scale;
-
-    // Apply exposure
+    // Apply exposure to color directly (not multiplied by density)
+    // The density is already encoded in the accumulated RGB values
     color *= tonemap_params.exposure;
 
     // Logarithmic tone mapping for high dynamic range
+    // This compresses the bright areas while preserving detail
     color = log(color + 1.0) / log(10.0);
 
     // Gamma correction
@@ -61,7 +59,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
 
     // Map density to alpha using density_scale
-    // Higher density = more opaque, lower density = more transparent
+    // The density represents how many samples hit this pixel
+    // density_scale controls transparency: higher = more opaque
     let alpha = clamp(density * tonemap_params.density_scale, 0.0, 1.0);
 
     // Check if background is black (transparent export mode)
