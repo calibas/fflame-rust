@@ -108,6 +108,47 @@ pub fn create_julia_flame() -> Flame {
     flame
 }
 
+/// Create Simple2 - a test preset with specific view settings
+#[allow(dead_code)]
+pub fn create_simple2_flame() -> Flame {
+    let mut flame = Flame::new();
+    flame.name = "Simple2".to_string();
+
+    // Transform 1: Linear + Sinusoidal
+    let mut xform1 = Transform::new();
+    xform1.a = 0.8;
+    xform1.b = 0.0;
+    xform1.c = 0.0;
+    xform1.d = 0.8;
+    xform1.e = 0.1;
+    xform1.f = 0.0;
+    xform1.g = 0.0;
+    xform1.weight = 1.0;
+    xform1.set_variation("sinusoidal", 0.2);
+    xform1.set_variation("linear", 0.8);
+    xform1.color = [1.0, 0.2, 0.2];
+    xform1.color_speed = 0.5;
+    flame.add_transform(xform1);
+
+    // Transform 2: Swirl + Linear
+    let mut xform2 = Transform::new();
+    xform2.a = 0.6;
+    xform2.b = -0.3;
+    xform2.c = 0.3;
+    xform2.d = 0.6;
+    xform2.e = 0.0;
+    xform2.f = 0.0;
+    xform2.g = 0.0;
+    xform2.weight = 1.0;
+    xform2.set_variation("swirl", 0.4);
+    xform2.set_variation("linear", 0.6);
+    xform2.color = [0.2, 0.2, 1.0];
+    xform2.color_speed = 0.5;
+    flame.add_transform(xform2);
+
+    flame
+}
+
 /// Create a complex multi-transform flame
 #[allow(dead_code)]
 pub fn create_complex_flame() -> Flame {
@@ -299,6 +340,25 @@ impl PresetLibrary {
             Self::flame_to_config(create_complex_flame()),
             Self::flame_to_config(create_flower_of_life()),
             Self::flame_to_config(create_3d_flame()),
+            // Simple2 with specific view settings for testing
+            FractalConfig {
+                flame: create_simple2_flame(),
+                zoom: 54.76374,
+                pan_x: 0.03848837,
+                pan_y: 0.11393361,
+                rotation: 0.0,
+                camera_rotation_x: 0.0,
+                camera_rotation_y: 0.0,
+                density_scale: 1.2,
+                speed_factor: 0.5,
+                color_mode: ColorMode::Transform,
+                palette_index: 1,
+                background_color: [0.0, 0.0, 0.0],
+                tonemap_mode: ToneMapMode::Logarithmic,
+                tonemap_curve: ToneCurve::linear(),
+                exposure: 1.0,
+                gamma: 2.2,
+            },
         ];
 
         // Desktop: Load additional presets from assets folder (copied to target/ by build.rs)
