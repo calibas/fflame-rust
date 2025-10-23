@@ -185,8 +185,15 @@ Per-Channel Statistics:
 1. **Small but real bug**: Average error ~0.1% per channel, max ~6%
 2. **Green channel slightly higher**: 0.30 avg vs 0.22-0.23 for R/B
 3. **Affects 12% of pixels**: Only pixels with non-zero color values
-4. **Alpha perfect**: No difference (expected for opaque render)
+4. **Alpha PERFECT match**: 0.00% error - confirms bug is RGB-only, not in density calculation
 5. **Subtle visual impact**: 0.1% average error is nearly imperceptible
+
+### Key Insight from Alpha Channel:
+The fact that alpha matches perfectly (0.00% error) is significant:
+- Both code paths read from same accumulation buffer correctly
+- Density calculation is identical in both paths
+- **Bug is isolated to RGB tone curve application** (lines 72-77 in tonemap.wgsl)
+- This narrows the search to texture sampling of the curve LUT
 
 ### Conclusion:
 The bug is REAL but SUBTLE. A linear curve should produce 0% difference, but we see ~0.1% average error per channel. This suggests a minor precision or sampling issue in the curve application path.
