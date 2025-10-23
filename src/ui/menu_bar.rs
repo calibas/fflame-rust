@@ -6,6 +6,7 @@ pub fn render_menu_bar(
     show_view: &mut bool,
     show_transforms: &mut bool,
     show_triangle_editor: &mut bool,
+    show_tone_mapping: &mut bool,
     show_help: &mut bool,
     show_palette_editor: &mut bool,
     show_config_window: &mut bool,
@@ -18,6 +19,7 @@ pub fn render_menu_bar(
                 ui.checkbox(show_view, "🔍 View");
                 ui.checkbox(show_transforms, "🔧 Transforms");
                 ui.checkbox(show_triangle_editor, "📐 Triangle Editor");
+                ui.checkbox(show_tone_mapping, "🎨 Tone Mapping & Colors");
                 ui.checkbox(show_help, "❓ Help");
                 ui.separator();
                 ui.checkbox(show_palette_editor, "🎨 Palette Editor");

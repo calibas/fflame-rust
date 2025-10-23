@@ -108,6 +108,11 @@ impl EguiLayer {
         can_undo: bool,
         can_redo: bool,
         background_color: &mut [f32; 3],
+        tonemap_mode: &mut crate::scene::tonemap::ToneMapMode,
+        tonemap_curve: &mut crate::scene::tonemap::ToneCurve,
+        use_curve: &mut bool,
+        exposure: &mut f32,
+        gamma: &mut f32,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -135,6 +140,12 @@ impl EguiLayer {
         let mut redo_requested = false;
         let mut background_color_changed = false;
         let mut png_export_with_background = false;
+        // Tone mapping
+        let mut tonemap_mode_changed = false;
+        let mut tonemap_curve_changed = false;
+        let mut use_curve_changed = false;
+        let mut exposure_changed = false;
+        let mut gamma_changed = false;
         let mut png_export_transparent = false;
         // Palette import/export
         let mut palette_export_json = None;
@@ -155,6 +166,7 @@ impl EguiLayer {
                 &mut self.show_view,
                 &mut self.show_transforms,
                 &mut self.show_triangle_editor,
+                &mut self.show_tone_mapping,
                 &mut self.show_help,
                 &mut self.show_palette_editor,
                 &mut self.show_config_window,
@@ -245,6 +257,34 @@ impl EguiLayer {
                 &mut triangle_drag_started,
                 &mut triangle_dragging,
                 &mut triangle_drag_ended,
+            );
+
+            // Render Tone Mapping window
+            tone_mapping::render_tone_mapping_window(
+                ctx,
+                &mut self.show_tone_mapping,
+                &mut self.show_palette_editor,
+                tonemap_mode,
+                &mut tonemap_mode_changed,
+                tonemap_curve,
+                &mut tonemap_curve_changed,
+                use_curve,
+                &mut use_curve_changed,
+                exposure,
+                &mut exposure_changed,
+                gamma,
+                &mut gamma_changed,
+                density_scale,
+                &mut density_changed,
+                color_mode,
+                &mut color_mode_changed,
+                palette_library,
+                current_palette_index,
+                &mut palette_changed,
+                &mut self.palette_editor.current_palette,
+                speed_factor,
+                background_color,
+                &mut background_color_changed,
             );
 
             // Render Palette Editor window
@@ -349,6 +389,10 @@ impl EguiLayer {
             triangle_drag_started,
             triangle_dragging,
             triangle_drag_ended,
+            tonemap_mode_changed,
+            tonemap_curve_changed,
+            exposure_changed,
+            gamma_changed,
         }
     }
 }

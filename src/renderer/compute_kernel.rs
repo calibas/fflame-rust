@@ -423,6 +423,29 @@ impl FlameRenderer {
         self.update_tonemap_state(queue);
     }
 
+    /// Update tone mapping mode, curve usage, exposure, and gamma
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32) {
+        let tonemap_mode_u32 = match tonemap_mode {
+            crate::scene::tonemap::ToneMapMode::Linear => 0u32,
+            crate::scene::tonemap::ToneMapMode::Logarithmic => 1u32,
+        };
+
+        let params = TonemapParams {
+            exposure,
+            gamma,
+            density_scale: self.density_scale,
+            tonemap_mode: tonemap_mode_u32,
+            background_color: self.background_color,
+            use_curve: if use_curve { 1u32 } else { 0u32 },
+        };
+        self.buffers.update_tonemap_params(queue, &params);
+    }
+
+    /// Update tone curve LUT texture
+    pub fn update_curve_lut(&self, queue: &Queue, curve: &crate::scene::tonemap::ToneCurve) {
+        self.buffers.update_curve_lut(queue, curve);
+    }
+
     /// Update palette texture
     pub fn update_palette(&mut self, device: &Device, queue: &Queue, palette: &Palette) {
         self.buffers.update_palette(queue, palette);
