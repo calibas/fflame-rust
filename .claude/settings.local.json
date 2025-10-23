@@ -9,7 +9,8 @@
       "Bash(tasklist)",
       "Bash(findstr:*)",
       "Bash(cargo doc:*)",
-      "Bash(wasm-pack build:*)"
+      "Bash(wasm-pack build:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
