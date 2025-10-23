@@ -5,8 +5,8 @@ use web_time::{Duration, Instant};
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PerformanceSnapshot {
     pub version: String,
-    pub build_number: u32,
     pub git_hash: String,
+    pub build_time: String,
     pub fps: f64,
     pub frame_time_ms: f64,
     pub frame_count: u64,
@@ -106,8 +106,8 @@ impl PerformanceMetrics {
     pub fn snapshot(&self) -> PerformanceSnapshot {
         PerformanceSnapshot {
             version: self.version_info.as_ref().map(|v| v.full_version()).unwrap_or_else(|| "unknown".to_string()),
-            build_number: self.version_info.as_ref().map(|v| v.build_number).unwrap_or(0),
             git_hash: self.version_info.as_ref().map(|v| v.git_hash.to_string()).unwrap_or_else(|| "unknown".to_string()),
+            build_time: self.version_info.as_ref().map(|v| v.build_time.to_string()).unwrap_or_else(|| "unknown".to_string()),
             fps: self.fps,
             frame_time_ms: self.frame_time_ms,
             frame_count: self.frame_count,
@@ -124,8 +124,8 @@ impl PerformanceMetrics {
         let snapshot = self.snapshot();
         log::info!("Performance Snapshot:");
         log::info!("  Version: {}", snapshot.version);
-        log::info!("  Build: #{}", snapshot.build_number);
         log::info!("  Git: {}", snapshot.git_hash);
+        log::info!("  Built: {}", snapshot.build_time);
         log::info!("  FPS: {:.1}", snapshot.fps);
         log::info!("  Frame Time: {:.2}ms", snapshot.frame_time_ms);
         log::info!("  Frame Count: {}", snapshot.frame_count);

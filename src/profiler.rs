@@ -206,7 +206,7 @@ pub struct FrameProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_number: Option<u32>,
+    pub build_time: Option<String>,
 }
 
 impl FrameProfile {
@@ -221,7 +221,7 @@ impl FrameProfile {
             cpu_ui_ms: 0.0,
             cpu_submit_ms: 0.0,
             version: Some(version_info.full_version()),
-            build_number: Some(version_info.build_number),
+            build_time: Some(version_info.build_time.to_string()),
         }
     }
 
