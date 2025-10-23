@@ -40,10 +40,9 @@ fractal_flame_wgpu/
 │       ├── mod.rs              Module exports
 │       │
 │       ├── transforms.rs       🔥 CORE ALGORITHM
-│       │                       - Transform struct (affine + variations + g field)
+│       │                       - Transform struct (affine + variations + variation_params + g field)
 │       │                       - RenderMode (2D/3D) and ProjectionType
 │       │                       - Point calculations (r, θ, φ)
-│       │                       - 24 Variation functions (16 2D + 8 3D, CPU reference)
 │       │                       - Flame struct (transform collection + name + 3D settings)
 │       │                       - CPU iteration reference (2D only)
 │       │
@@ -58,11 +57,20 @@ fractal_flame_wgpu/
 │       │                       - load_configs_from_dir()
 │       │                       - Filesystem-based asset discovery
 │       │
-│       └── palette.rs          Color system
-│                               - ColorMode enum (Transform/Palette/Speed)
-│                               - ColorStop gradient system
-│                               - Palette with interpolation
-│                               - PaletteLibrary (auto-loads from assets/)
+│       ├── palette.rs          Color system
+│       │                       - ColorMode enum (Transform/Palette/Speed)
+│       │                       - ColorStop gradient system
+│       │                       - Palette with interpolation
+│       │                       - PaletteLibrary (auto-loads from assets/)
+│       │
+│       └── variations/         Variation system
+│           ├── mod.rs          VariationRegistry
+│           │                   - VariationInfo (name, display_name, category, parameters)
+│           │                   - VariationParameter (name, type, default, min/max)
+│           │                   - ParamType enum (Float, Integer, Angle)
+│           │                   - Registration system for all 26 variations
+│           │
+│           └── (future)        Plugin variations (wgsl + metadata)
 │
 ├── GPU Layer
 │   └── gpu/
@@ -81,12 +89,13 @@ fractal_flame_wgpu/
 │       │                       - Runtime pipeline selection based on render mode
 │       │
 │       └── buffers.rs          FlameBuffers + GPU data structures
-│                               - Transform buffer (storage)
+│                               - Transform buffer (storage, 32 slots)
+│                               - Variation params buffer (storage, 192 floats)
 │                               - Palette texture (1D)
 │                               - Params uniform buffers
 │                               - Accumulation textures (ping-pong)
 │                               - Temp samples texture
-│                               - GpuTransform, GpuParams, TonemapParams
+│                               - GpuTransform, GpuParams, TonemapParams, GpuVariationParams
 │
 ├── Renderer Layer
 │   └── renderer/
@@ -107,6 +116,15 @@ fractal_flame_wgpu/
 │                                 • update_flame() - individual flame updates
 │                                 • load_config() - atomic FractalConfig loading
 │                                 • reset() - clear accumulation only (no params)
+│
+├── Shader Generation
+│   └── shader_builder_v2.rs   ShaderBuilder
+│                               - Dynamic WGSL generation based on active variations
+│                               - Detects variation needs (RNG, parameters)
+│                               - Generates correct function signatures
+│                               - Builds apply_variations() switch statement
+│                               - Separate builders for 2D and 3D modes
+│                               - Enables variation plugins (future)
 │
 ├── State Management
 │   ├── config.rs               FractalConfig
@@ -150,18 +168,33 @@ fractal_flame_wgpu/
 │                               - M ops/sec output
 │
 └── Shaders (WGSL)
-    ├── trajectory.wgsl         🔥 COMPUTE: Flame iteration (2D mode)
+    ├── core/                   🔥 SHADER MODULES (dynamically composed)
+    │   ├── header.wgsl         - Bindings and data structures
+    │   │                       - VariationParams struct (192 floats)
+    │   ├── rng.wgsl            - PCG random number generator
+    │   ├── affine.wgsl         - Affine transformation functions
+    │   ├── variations_2d.wgsl  - 18 2D variation functions (CPU + parameterized)
+    │   ├── variations_3d.wgsl  - 26 total variations (2D + 3D + parameterized)
+    │   ├── utilities.wgsl      - Helper functions (get_param, world_to_pixel)
+    │   ├── main_2d.wgsl        - 2D compute entry point
+    │   └── main_3d.wgsl        - 3D compute entry point
+    │
+    ├── trajectory.wgsl         🔥 COMPUTE: Flame iteration (2D mode) [GENERATED]
+    │                           - Built by ShaderBuilder from core modules
+    │                           - Only includes active variations
     │                           - PCG random number generator
     │                           - Transform selection (weighted)
     │                           - Affine transformation (2D)
-    │                           - 16 2D Variation functions (GPU)
+    │                           - Active 2D variation functions
     │                           - Color accumulation (3 modes)
     │                           - Write to temp texture
     │
-    ├── trajectory_3d.wgsl      🔥 COMPUTE: Flame iteration (3D mode)
+    ├── trajectory_3d.wgsl      🔥 COMPUTE: Flame iteration (3D mode) [GENERATED]
+    │                           - Built by ShaderBuilder from core modules
+    │                           - Only includes active variations
     │                           - Same as 2D plus:
     │                           - Affine transformation with Z (g field)
-    │                           - 24 Variation functions (16 2D + 8 3D)
+    │                           - Active 2D + 3D variation functions
     │                           - Camera rotation (pitch/yaw)
     │                           - Projection (orthographic/perspective)
     │                           - Z tracking through iteration
@@ -303,11 +336,12 @@ In render():
 
 ### Bind Group 0 (Compute Pass)
 ```
-@group(0) @binding(0) - transforms: array<GpuTransform>  (storage buffer, read)
-@group(0) @binding(1) - params: GpuParams               (uniform buffer, read)
-@group(0) @binding(2) - palette_texture: texture_1d     (texture, sample)
-@group(0) @binding(3) - palette_sampler: sampler        (sampler)
-@group(0) @binding(4) - temp_samples: texture_storage_2d (texture, write)
+@group(0) @binding(0) - transforms: array<GpuTransform>      (storage buffer, read)
+@group(0) @binding(1) - params: GpuParams                   (uniform buffer, read)
+@group(0) @binding(2) - palette_texture: texture_1d         (texture, sample)
+@group(0) @binding(3) - palette_sampler: sampler            (sampler)
+@group(0) @binding(4) - temp_samples: texture_storage_2d    (texture, write)
+@group(0) @binding(5) - variation_params: array<VariationParams> (storage buffer, read)
 ```
 
 ### Bind Group 0 (Accumulate Pass)
@@ -338,10 +372,21 @@ struct GpuTransform {
     offset: vec2<f32>,      // Translation (e, f)
     g: f32,                 // Z offset (3D mode only)
     weight: f32,            // Selection probability
-    variations: [f32; 24],  // Variation weights (16 2D + 8 3D)
+    variations: [f32; 24],  // Variation weights (16 basic 2D + 8 3D + 2 parameterized)
     color: vec3<f32>,       // RGB color
     color_speed: f32,       // Color blend factor
 }
+```
+
+### GpuVariationParams (std140 layout)
+```rust
+struct GpuVariationParams {
+    params: [f32; 192],  // 24 variations × 8 params each
+}
+
+// Access pattern:
+// param = variation_params[xform_id].params[variation_id * 8 + param_slot]
+// Example: julian power = variation_params[0].params[14 * 8 + 0]
 ```
 
 ### GpuParams
@@ -517,7 +562,8 @@ For each pixel:
 ## 🔢 Key Constants
 
 ```rust
-MAX_VARIATIONS = 24              // Number of variation functions (16 2D + 8 3D)
+MAX_VARIATIONS = 24              // Number of variation slots (16 basic 2D + 8 3D)
+MAX_PARAMS_PER_VARIATION = 8     // Parameter slots per variation
 MAX_TRANSFORMS = 32              // Max transforms in a flame (buffer limit)
 PALETTE_SIZE = 256               // 1D palette texture resolution
 WORKGROUP_SIZE = 64              // 8x8 threads per workgroup
@@ -526,6 +572,49 @@ DEFAULT_WORKGROUPS = 128         // Workgroups per dispatch
 BURN_IN = 20                     // Initial iterations to discard
 MAX_UNDO_HISTORY = 50            // Undo stack depth
 ```
+
+---
+
+## 🖼️ UI Organization
+
+### Window Layout (Menu Bar + 5 Windows)
+```
+┌─────────────────────────────────────────────────────────┐
+│ Menu Bar: View ▼                                        │
+│   ☑ Performance  ☑ Transforms  ☑ Settings              │
+│   ☑ Triangle Editor  ☑ Palette Editor                  │
+└─────────────────────────────────────────────────────────┘
+
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ Performance  │  │  Transforms  │  │   Settings   │
+│              │  │              │  │              │
+│ - FPS/timing │  │ - Add/Delete │  │ - View (zoom │
+│ - Iterations │  │ - Affine     │  │   pan, rot)  │
+│ - Resolution │  │ - Variations │  │ - Color mode │
+│ - Preset ▼   │  │ - Color      │  │ - Palette ▼  │
+│ - 3D mode    │  │ - Weight     │  │ - Global     │
+│ - Camera     │  │ - Z offset   │  │   params     │
+│ - Projection │  │ - Params 🆕  │  │ - Export PNG │
+└──────────────┘  └──────────────┘  └──────────────┘
+
+┌──────────────────────┐  ┌──────────────────────┐
+│   Triangle Editor    │  │   Palette Editor     │
+│                      │  │                      │
+│ - Visual transform   │  │ - Gradient preview   │
+│   editor with drag   │  │ - Color stops        │
+│ - Real-time updates  │  │ - Import/export      │
+│ - Bounding boxes     │  │ - Built-in library   │
+│ - Smart accumulation │  │                      │
+└──────────────────────┘  └──────────────────────┘
+```
+
+### Key UI Features
+- **Menu Bar** - Toggle window visibility (Added 2025-10-21)
+- **Collapsible Sections** - All sections can be collapsed to save space
+- **Real-time Updates** - Most changes update immediately without reset
+- **Smart Accumulation** - Triangle editor only resets when dragging stops
+- **Undo/Redo** - Ctrl+Z/Ctrl+Y for all state changes
+- **Variation Parameters** - Float/Integer/Angle sliders appear below active variations (Added 2025-10-22)
 
 ---
 
@@ -572,19 +661,22 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 
 | Task | Files to Modify |
 |------|-----------------|
-| Add new 2D variation | [transforms.rs](src/scene/transforms.rs), [trajectory.wgsl](shaders/trajectory.wgsl), [trajectory_3d.wgsl](shaders/trajectory_3d.wgsl) |
-| Add new 3D variation | [transforms.rs](src/scene/transforms.rs), [trajectory_3d.wgsl](shaders/trajectory_3d.wgsl) |
-| Change color algorithm | [trajectory.wgsl](shaders/trajectory.wgsl), [tonemap.wgsl](shaders/tonemap.wgsl) |
-| Add UI panel | [ui/mod.rs](src/ui/mod.rs) |
-| Add preset | [presets.rs](src/scene/presets.rs) |
+| Add new 2D variation | [variations/mod.rs](src/variations/mod.rs), [variations_2d.wgsl](shaders/core/variations_2d.wgsl), [variations_3d.wgsl](shaders/core/variations_3d.wgsl) |
+| Add new 3D variation | [variations/mod.rs](src/variations/mod.rs), [variations_3d.wgsl](shaders/core/variations_3d.wgsl) |
+| Add variation parameters | [variations/mod.rs](src/variations/mod.rs) - use `registry.add_parameters()` |
+| Change color algorithm | [main_2d.wgsl](shaders/core/main_2d.wgsl), [main_3d.wgsl](shaders/core/main_3d.wgsl), [tonemap.wgsl](shaders/tonemap.wgsl) |
+| Add UI panel/window | [ui/mod.rs](src/ui/mod.rs) - add to menu bar and window rendering |
+| Add preset | [presets.rs](src/scene/presets.rs) or create `.flame` file in `assets/presets/` |
 | Modify accumulation | [accumulate.wgsl](shaders/accumulate.wgsl), [compute_kernel.rs](src/renderer/compute_kernel.rs) |
 | Change tone mapping | [tonemap.wgsl](shaders/tonemap.wgsl) |
 | Add export format | [compute_kernel.rs](src/renderer/compute_kernel.rs) |
-| Modify GPU params | [buffers.rs](src/gpu/buffers.rs), corresponding shader |
+| Modify GPU params | [buffers.rs](src/gpu/buffers.rs), corresponding shader module |
 | Add keyboard shortcut | [app.rs](src/app.rs) handle_keyboard() |
-| Add built-in palette | [palette.rs](src/scene/palette.rs) |
+| Add built-in palette | [palette.rs](src/scene/palette.rs) or create `.palette` file in `assets/palettes/` |
 | Import/export palette | Use Palette Editor UI (Added 2025-10-20) |
 | Add/delete transforms | Use "➕ Add Transform" / "🗑 Delete Transform" buttons (Added 2025-10-20) |
+| Edit transform visually | Use Triangle Editor window (Added 2025-10-21) |
+| Toggle window visibility | Use "View" menu in menu bar (Added 2025-10-21) |
 | Run unit tests | `cargo test` |
 | Run regression tests | `cargo test --test regression` |
 | Run benchmarks | `cargo bench` |
@@ -594,5 +686,12 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 
 ---
 
-**Last Updated:** 2025-10-21 (Evening, Build #9)
+**Last Updated:** 2025-10-22
 **Project:** fflame-rust
+
+**Major Recent Changes:**
+- Variation registry system with parameters (2025-10-22)
+- Dynamic shader generation via ShaderBuilder v2 (2025-10-21)
+- Triangle editor with visual transform editing (2025-10-21)
+- UI refactoring into 5 windows with menu bar (2025-10-21)
+- 26 total variations (16 basic 2D + 8 3D + 2 parameterized)
