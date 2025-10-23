@@ -148,7 +148,7 @@ pub fn render_settings_window(
                     ui.separator();
 
                     // Pause/Resume button
-                    if let Some(renderer) = &flame_renderer {
+                    if flame_renderer.is_some() {
                         let button_text = if *paused { "▶ Resume" } else { "⏸ Pause" };
                         if ui.button(button_text).clicked() {
                             *paused = !*paused;

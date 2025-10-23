@@ -1,5 +1,5 @@
 /// GPU and CPU profiling utilities for performance analysis
-use web_time::{Duration, Instant};
+use web_time::Instant;
 use wgpu::{Device, Queue};
 
 /// GPU timestamp query pool for measuring GPU pass durations
@@ -123,7 +123,7 @@ impl GpuProfiler {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use pollster::FutureExt;
-            rx.block_on().ok()?;
+            let _ = rx.block_on().ok()?;
         }
         #[cfg(target_arch = "wasm32")]
         {
