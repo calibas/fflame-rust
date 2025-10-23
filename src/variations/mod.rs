@@ -1,6 +1,39 @@
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
+/// Parameter type for variation parameters
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum ParamType {
+    /// Continuous floating-point value
+    Float,
+    /// Integer value (stored as f32, cast for UI)
+    Integer,
+    /// Angle in degrees (0-360, or custom range)
+    Angle,
+}
+
+/// Definition of a single variation parameter
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VariationParameter {
+    /// Parameter name (e.g., "power", "dist")
+    pub name: String,
+
+    /// Display name for UI (e.g., "Power", "Distance")
+    pub display_name: String,
+
+    /// Parameter type
+    pub param_type: ParamType,
+
+    /// Default value
+    pub default_value: f32,
+
+    /// Minimum value (None = no limit)
+    pub min_value: Option<f32>,
+
+    /// Maximum value (None = no limit)
+    pub max_value: Option<f32>,
+}
+
 /// Variation metadata and registration
 #[derive(Clone, Debug)]
 pub struct VariationInfo {
@@ -24,6 +57,24 @@ pub struct VariationInfo {
 
     /// Optional: WGSL source code (for plugins loaded at runtime)
     pub wgsl_source: Option<String>,
+
+    /// Parameters for this variation
+    pub parameters: Vec<VariationParameter>,
+}
+
+impl VariationInfo {
+    /// Get the default value for a parameter by name
+    pub fn get_param_default(&self, param_name: &str) -> Option<f32> {
+        self.parameters
+            .iter()
+            .find(|p| p.name == param_name)
+            .map(|p| p.default_value)
+    }
+
+    /// Get parameter definition by name
+    pub fn get_param(&self, param_name: &str) -> Option<&VariationParameter> {
+        self.parameters.iter().find(|p| p.name == param_name)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -121,6 +172,7 @@ impl VariationRegistry {
             needs_rng,
             is_core: true,
             wgsl_source: None,
+            parameters: Vec::new(),  // No parameters by default
         };
 
         self.variations.insert(name.to_string(), info);
@@ -139,6 +191,7 @@ impl VariationRegistry {
             needs_rng,
             is_core: false,
             wgsl_source: Some(wgsl_source),
+            parameters: Vec::new(),  // Parameters can be added later
         };
 
         self.variations.insert(name.clone(), info);

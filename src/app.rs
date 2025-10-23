@@ -545,6 +545,7 @@ impl App {
                     v.insert("linear".to_string(), 0.5);
                     v
                 },
+                variation_params: std::collections::HashMap::new(),
                 color: [0.5, 0.5, 0.5],
                 color_speed: 0.5,
             };
