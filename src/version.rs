@@ -212,11 +212,13 @@ mod tests {
     fn test_serialization() {
         let info = VersionInfo::current();
 
-        // Test JSON serialization
+        // Test JSON serialization only
+        // Note: Deserialization from JSON doesn't work because VersionInfo uses &'static str
+        // which requires the data to live for the entire program. This is fine since
+        // VersionInfo is only created via current() using compile-time env! macros.
         let json = serde_json::to_string(&info).expect("Failed to serialize");
-        assert!(json.contains(info.version));
-
-        // Test deserialization
-        let _deserialized: VersionInfo = serde_json::from_str(&json).expect("Failed to deserialize");
+        assert!(json.contains(env!("CARGO_PKG_VERSION")));
+        assert!(json.contains("build_number"));
+        assert!(json.contains("git_hash"));
     }
 }
