@@ -69,6 +69,16 @@ fn main() -> Result<()> {
     let mut different_pixels = 0u64;
     let mut diff_image: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(width, height);
 
+    // Per-channel statistics
+    let mut total_diff_r = 0u64;
+    let mut total_diff_g = 0u64;
+    let mut total_diff_b = 0u64;
+    let mut total_diff_a = 0u64;
+    let mut max_diff_r = 0u32;
+    let mut max_diff_g = 0u32;
+    let mut max_diff_b = 0u32;
+    let mut max_diff_a = 0u32;
+
     for y in 0..height {
         for x in 0..width {
             let p1 = img1.get_pixel(x, y);
@@ -82,6 +92,16 @@ fn main() -> Result<()> {
             let pixel_diff = diff_r + diff_g + diff_b + diff_a;
             total_diff += pixel_diff as u64;
             max_diff = max_diff.max(pixel_diff);
+
+            // Per-channel stats
+            total_diff_r += diff_r as u64;
+            total_diff_g += diff_g as u64;
+            total_diff_b += diff_b as u64;
+            total_diff_a += diff_a as u64;
+            max_diff_r = max_diff_r.max(diff_r);
+            max_diff_g = max_diff_g.max(diff_g);
+            max_diff_b = max_diff_b.max(diff_b);
+            max_diff_a = max_diff_a.max(diff_a);
 
             if pixel_diff > args.threshold as u32 {
                 different_pixels += 1;
@@ -102,6 +122,12 @@ fn main() -> Result<()> {
     let avg_diff = total_diff as f64 / total_pixels as f64;
     let percent_different = (different_pixels as f64 / total_pixels as f64) * 100.0;
 
+    // Per-channel averages
+    let avg_diff_r = total_diff_r as f64 / total_pixels as f64;
+    let avg_diff_g = total_diff_g as f64 / total_pixels as f64;
+    let avg_diff_b = total_diff_b as f64 / total_pixels as f64;
+    let avg_diff_a = total_diff_a as f64 / total_pixels as f64;
+
     // Report results
     println!("Results:");
     println!("  Total pixel difference: {}", total_diff);
@@ -109,6 +135,16 @@ fn main() -> Result<()> {
     println!("  Maximum pixel difference: {}", max_diff);
     println!("  Different pixels (threshold {}): {} ({:.2}%)",
         args.threshold, different_pixels, percent_different);
+    println!();
+    println!("Per-Channel Statistics:");
+    println!("  Red   - Avg: {:.2} ({:.2}%), Max: {} ({:.2}%)",
+        avg_diff_r, (avg_diff_r / 255.0) * 100.0, max_diff_r, (max_diff_r as f64 / 255.0) * 100.0);
+    println!("  Green - Avg: {:.2} ({:.2}%), Max: {} ({:.2}%)",
+        avg_diff_g, (avg_diff_g / 255.0) * 100.0, max_diff_g, (max_diff_g as f64 / 255.0) * 100.0);
+    println!("  Blue  - Avg: {:.2} ({:.2}%), Max: {} ({:.2}%)",
+        avg_diff_b, (avg_diff_b / 255.0) * 100.0, max_diff_b, (max_diff_b as f64 / 255.0) * 100.0);
+    println!("  Alpha - Avg: {:.2} ({:.2}%), Max: {} ({:.2}%)",
+        avg_diff_a, (avg_diff_a / 255.0) * 100.0, max_diff_a, (max_diff_a as f64 / 255.0) * 100.0);
     println!();
 
     if different_pixels == 0 {

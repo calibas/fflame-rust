@@ -157,9 +157,44 @@ User suggested: Maybe the curve-enabled path is actually CORRECT, and there's a 
 - `src/gpu/buffers.rs` - Upload logging
 - `src/renderer/compute_kernel.rs` - State change logging
 
+## Quantitative Analysis (2025-10-23)
+
+With deterministic RNG and improved testing tools, we can now quantify the bug precisely.
+
+### Test Setup:
+- Preset: Simple2
+- Frames: 100 (deterministic RNG)
+- Resolution: 1920x1080
+- Comparison: No curve vs Linear curve (should be identical)
+
+### Results:
+```
+Total pixel difference: 1,556,909
+Average difference per pixel: 0.75
+Maximum pixel difference: 35
+Different pixels: 253,845 (12.24%)
+
+Per-Channel Statistics:
+  Red   - Avg: 0.23 (0.09%), Max: 15 (5.88%)
+  Green - Avg: 0.30 (0.12%), Max: 14 (5.49%)
+  Blue  - Avg: 0.22 (0.09%), Max: 15 (5.88%)
+  Alpha - Avg: 0.00 (0.00%), Max: 0 (0.00%)
+```
+
+### Analysis:
+1. **Small but real bug**: Average error ~0.1% per channel, max ~6%
+2. **Green channel slightly higher**: 0.30 avg vs 0.22-0.23 for R/B
+3. **Affects 12% of pixels**: Only pixels with non-zero color values
+4. **Alpha perfect**: No difference (expected for opaque render)
+5. **Subtle visual impact**: 0.1% average error is nearly imperceptible
+
+### Conclusion:
+The bug is REAL but SUBTLE. A linear curve should produce 0% difference, but we see ~0.1% average error per channel. This suggests a minor precision or sampling issue in the curve application path.
+
 ## Next Steps (Proposed)
-1. Create quantifiable test framework (CLI PNG export)
-2. Build image comparison tool
-3. Test if RNG is deterministic
-4. Get numerical measurements instead of visual assessments
-5. Consider reverting changes if they don't improve anything
+1. ✅ Create quantifiable test framework (CLI PNG export) - DONE
+2. ✅ Build image comparison tool with per-channel stats - DONE
+3. ✅ Test if RNG is deterministic - DONE
+4. ✅ Get numerical measurements instead of visual assessments - DONE
+5. Investigate why curve path has 0.1% error vs no-curve path
+6. Consider if 0.1% error is acceptable or needs fixing
