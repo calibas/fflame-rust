@@ -79,6 +79,17 @@ impl FlamePipelines {
                     ty: BindingType::Sampler(SamplerBindingType::Filtering),
                     count: None,
                 },
+                // Variation parameters buffer (storage)
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -284,6 +295,10 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 4,
                     resource: BindingResource::Sampler(&buffers.sampler),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.variation_params_buffer.as_entire_binding(),
                 },
             ],
         })
