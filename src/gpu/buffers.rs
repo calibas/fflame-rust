@@ -6,6 +6,9 @@ use crate::scene::palette::Palette;
 /// Maximum number of transforms supported (buffer is pre-allocated for this many)
 pub const MAX_TRANSFORMS: usize = 32;
 
+/// Maximum parameters per variation (expandable if needed)
+pub const MAX_PARAMS_PER_VARIATION: usize = 8;
+
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -44,6 +47,61 @@ impl GpuTransform {
             color: xform.color,
             color_speed: xform.color_speed,
         }
+    }
+}
+
+/// GPU representation of variation parameters for ONE transform
+/// Total size: 24 variations × 8 params = 192 floats = 768 bytes per transform
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct GpuVariationParams {
+    /// Flat array indexed by: variation_id * MAX_PARAMS_PER_VARIATION + param_slot
+    /// Each variation gets MAX_PARAMS_PER_VARIATION consecutive slots
+    pub params: [f32; 192],  // 24 variations × 8 params
+}
+
+// Manual implementation for bytemuck (arrays > 128 not auto-derived)
+unsafe impl bytemuck::Pod for GpuVariationParams {}
+unsafe impl bytemuck::Zeroable for GpuVariationParams {}
+
+impl GpuVariationParams {
+    /// Create from Transform using VariationRegistry
+    pub fn from_transform(
+        xform: &Transform,
+        registry: &crate::variations::VariationRegistry,
+    ) -> Self {
+        let mut params = [0.0f32; 192];
+
+        // For each active variation, copy its parameters
+        for (var_name, _weight) in &xform.variations {
+            if let Some(info) = registry.get(var_name) {
+                // Get variation ID from registry
+                let var_id = registry.names()
+                    .iter()
+                    .position(|n| n == var_name)
+                    .unwrap_or(0);
+
+                // Copy each parameter for this variation
+                for (param_idx, param_def) in info.parameters.iter().enumerate() {
+                    if param_idx >= MAX_PARAMS_PER_VARIATION {
+                        break;  // Safety check
+                    }
+
+                    // Get parameter value (or default)
+                    let value = xform.get_variation_param_or_default(
+                        var_name,
+                        &param_def.name,
+                        registry,
+                    );
+
+                    // Write to buffer at correct index
+                    let buffer_idx = var_id * MAX_PARAMS_PER_VARIATION + param_idx;
+                    params[buffer_idx] = value;
+                }
+            }
+        }
+
+        Self { params }
     }
 }
 
@@ -111,6 +169,7 @@ pub struct AccumulateParams {
 /// Manages GPU buffers and textures for fractal flame rendering
 pub struct FlameBuffers {
     pub transform_buffer: Buffer,
+    pub variation_params_buffer: Buffer,  // NEW: Parameter buffer for variations
     pub params_buffer: Buffer,
     pub tonemap_params_buffer: Buffer,
     pub accumulate_params_buffer: Buffer,
@@ -154,6 +213,23 @@ impl FlameBuffers {
             .map(|xform| GpuTransform::from_transform(xform, &flame.variation_registry))
             .collect();
         queue.write_buffer(&transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
+
+        // Create variation parameters storage buffer sized for MAX_TRANSFORMS
+        let params_buffer_size = (MAX_TRANSFORMS * std::mem::size_of::<GpuVariationParams>()) as u64;
+        let variation_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Variation Params Buffer"),
+            size: params_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Upload initial variation parameters
+        let gpu_params: Vec<GpuVariationParams> = flame
+            .transforms
+            .iter()
+            .map(|xform| GpuVariationParams::from_transform(xform, &flame.variation_registry))
+            .collect();
+        queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&gpu_params));
 
         // Create params uniform buffer
         let params = GpuParams {
@@ -304,6 +380,7 @@ impl FlameBuffers {
 
         Self {
             transform_buffer,
+            variation_params_buffer,
             params_buffer,
             tonemap_params_buffer,
             accumulate_params_buffer,
