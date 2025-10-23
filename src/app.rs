@@ -46,6 +46,8 @@ pub struct App {
     use_curve: bool,
     exposure: f32,
     gamma: f32,
+    // Rendering
+    deterministic_rng: bool,
 }
 
 impl App {
@@ -122,6 +124,7 @@ impl App {
             use_curve: false,  // Curves disabled by default
             exposure: 1.0,
             gamma: 2.2,
+            deterministic_rng: true, // Enabled by default for reproducible rendering
         };
 
         #[allow(deprecated)]
@@ -481,6 +484,7 @@ impl App {
             &mut self.use_curve,
             &mut self.exposure,
             &mut self.gamma,
+            &mut self.deterministic_rng,
         );
         self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
 
@@ -909,6 +913,7 @@ impl App {
                 }
 
                 if ui_response.iterations_changed || view_changed {
+                    renderer.set_deterministic_rng(self.deterministic_rng);
                     renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 

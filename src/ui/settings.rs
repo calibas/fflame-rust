@@ -1,4 +1,4 @@
-use crate::scene::{palette::ColorMode, presets::PresetLibrary, transforms::Flame};
+use crate::scene::{presets::PresetLibrary, transforms::Flame};
 use super::formatting::format_iterations;
 
 /// Render the Settings window with all control panels
@@ -7,7 +7,7 @@ pub fn render_settings_window(
     ctx: &egui::Context,
     show_settings: &mut bool,
     show_config_window: &mut bool,
-    show_palette_editor: &mut bool,
+    _show_palette_editor: &mut bool,
     can_undo: bool,
     can_redo: bool,
     undo_requested: &mut bool,
@@ -28,17 +28,7 @@ pub fn render_settings_window(
     max_iterations: &mut Option<u64>,
     iterations_per_thread: &mut u32,
     iterations_changed: &mut bool,
-    density_scale: &mut f32,
-    density_changed: &mut bool,
-    color_mode: &mut ColorMode,
-    color_mode_changed: &mut bool,
-    palette_library: &crate::scene::palette::PaletteLibrary,
-    current_palette_index: &mut usize,
-    palette_changed: &mut bool,
-    palette_editor_palette: &mut crate::scene::palette::Palette,
-    speed_factor: &mut f32,
-    background_color: &mut [f32; 3],
-    background_color_changed: &mut bool,
+    deterministic_rng: &mut bool,
 ) {
     egui::Window::new("Settings")
         .open(show_settings)
@@ -205,76 +195,17 @@ pub fn render_settings_window(
                     if ui.add(egui::Slider::new(iterations_per_thread, 64..=4096).text("Iterations per Thread")).changed() {
                         *iterations_changed = true;
                     }
-                    if ui.add(egui::Slider::new(density_scale, 0.01..=10.0).text("Density Scale")).changed() {
-                        *density_changed = true;
-                    }
                 });
 
-            // Section 3: Color & Appearance
-            egui::CollapsingHeader::new("Color & Appearance")
-                .default_open(true)
+            // Section 3: Advanced
+            egui::CollapsingHeader::new("Advanced")
+                .default_open(false)
                 .show(ui, |ui| {
-                    let current_mode = *color_mode;
-                    let selected_text = match current_mode {
-                        ColorMode::Transform => "Transform Colors",
-                        ColorMode::Palette => "Palette",
-                        ColorMode::Speed => "Speed",
-                    };
-
-                    egui::ComboBox::from_label("Color Mode")
-                        .selected_text(selected_text)
-                        .show_ui(ui, |ui| {
-                            if ui.selectable_value(color_mode, ColorMode::Transform, "Transform Colors").changed() {
-                                *color_mode_changed = true;
-                            }
-                            if ui.selectable_value(color_mode, ColorMode::Palette, "Palette").changed() {
-                                *color_mode_changed = true;
-                            }
-                            if ui.selectable_value(color_mode, ColorMode::Speed, "Speed").changed() {
-                                *color_mode_changed = true;
-                            }
-                        });
-
-                    // Show palette selector for Palette and Speed modes
-                    if matches!(*color_mode, ColorMode::Palette | ColorMode::Speed) {
-                        let palettes = palette_library.palettes();
-                        let current_palette_name = palettes.get(*current_palette_index)
-                            .map(|p| p.name.as_str())
-                            .unwrap_or("Unknown");
-
-                        egui::ComboBox::from_label("Palette")
-                            .selected_text(current_palette_name)
-                            .show_ui(ui, |ui| {
-                                for (idx, palette) in palettes.iter().enumerate() {
-                                    if ui.selectable_value(current_palette_index, idx, &palette.name).changed() {
-                                        *palette_changed = true;
-                                    }
-                                }
-                            });
-
-                        // Palette editor button
-                        if ui.button("🎨 Edit Palette").clicked() {
-                            *show_palette_editor = !*show_palette_editor;
-                            // Load current palette into editor
-                            if let Some(pal) = palette_library.get(*current_palette_index) {
-                                *palette_editor_palette = pal.clone();
-                            }
-                        }
-                    }
-
-                    // Show speed factor slider in Speed mode
-                    if matches!(*color_mode, ColorMode::Speed) {
-                        if ui.add(egui::Slider::new(speed_factor, 0.0..=1.0).text("Speed Blend Factor")).changed() {
-                            *color_mode_changed = true;
-                        }
-                    }
-
-                    ui.separator();
-
-                    // Background color picker
-                    ui.label("Background Color");
-                    if ui.color_edit_button_rgb(background_color).changed() {
-                        *background_color_changed = true;
+                    if ui.checkbox(deterministic_rng, "Deterministic RNG").on_hover_text(
+                        "Use fixed random seed for reproducible rendering.\n\
+                        Enable for testing/comparison, disable for varied output."
+                    ).changed() {
+                        *iterations_changed = true; // Trigger renderer update
                     }
                 });
         });

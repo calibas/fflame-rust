@@ -20,6 +20,8 @@ pub struct FlameRenderer {
     background_color: [f32; 3],
     current_render_mode: crate::scene::transforms::RenderMode,
     current_projection: crate::scene::transforms::ProjectionType,
+    deterministic_rng: bool,
+    frame_counter: u32, // For deterministic seed progression
 }
 
 impl FlameRenderer {
@@ -63,6 +65,8 @@ impl FlameRenderer {
             background_color: [0.0, 0.0, 0.0],
             current_render_mode: flame.render_mode,
             current_projection: flame.projection,
+            deterministic_rng: true, // Default to deterministic for reproducible rendering
+            frame_counter: 0,
         }
     }
 
@@ -87,6 +91,7 @@ impl FlameRenderer {
     pub fn reset(&mut self, encoder: &mut CommandEncoder, _queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _speed_factor: f32) {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
+        self.frame_counter = 0; // Reset frame counter for deterministic seed progression
 
         // Clear accumulation buffers
         self.buffers.clear_all(encoder);
@@ -104,13 +109,14 @@ impl FlameRenderer {
             crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
         };
 
+        let seed = self.get_rng_seed();
         let params = GpuParams {
             num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
             iterations_per_thread,
             burn_in: 20,
             width: self.width,
             height: self.height,
-            seed: 12345, // Fixed seed for deterministic rendering
+            seed,
             color_mode: self.color_mode as u32,
             render_mode: match self.current_render_mode {
                 crate::scene::transforms::RenderMode::TwoD => 0,
@@ -129,6 +135,7 @@ impl FlameRenderer {
             _pad3: 0.0,
             _pad4: 0.0,
         };
+        log::info!("Uploading params with seed={}", seed);
         self.buffers.update_params(queue, &params);
 
         // Track total iterations: workgroups * threads_per_workgroup * iterations_per_thread
@@ -262,7 +269,7 @@ impl FlameRenderer {
             burn_in: 20,
             width: self.width,
             height: self.height,
-            seed: 12345, // Fixed seed for deterministic rendering
+            seed: self.get_rng_seed(),
             color_mode: config.color_mode as u32,
             render_mode: match self.current_render_mode {
                 crate::scene::transforms::RenderMode::TwoD => 0,
@@ -317,7 +324,7 @@ impl FlameRenderer {
             burn_in: 20,
             width: self.width,
             height: self.height,
-            seed: 12345, // Fixed seed for deterministic rendering
+            seed: self.get_rng_seed(),
             color_mode: self.color_mode as u32,
             render_mode: match self.current_render_mode {
                 crate::scene::transforms::RenderMode::TwoD => 0,
@@ -363,8 +370,28 @@ impl FlameRenderer {
         self.total_iterations
     }
 
+    /// Get RNG seed based on deterministic mode
+    fn get_rng_seed(&mut self) -> u32 {
+        if self.deterministic_rng {
+            // Deterministic progression: multiply frame counter by large prime (Knuth's multiplicative hash)
+            // Simple +1 increments cause subtle correlations in the RNG output across frames,
+            // likely due to how consecutive seeds interact with thread_id XOR in shader.
+            // Using a large prime (2654435761 = 2^32 / φ, golden ratio) ensures maximum bit mixing.
+            let seed = 12345u32.wrapping_add(self.frame_counter.wrapping_mul(2654435761u32));
+            self.frame_counter = self.frame_counter.wrapping_add(1);
+            seed
+        } else {
+            rand::random::<u32>()
+        }
+    }
+
+    /// Set deterministic RNG mode
+    pub fn set_deterministic_rng(&mut self, deterministic: bool) {
+        self.deterministic_rng = deterministic;
+    }
+
     /// Update iterations per thread
-    pub fn update_iterations(&self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
+    pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
         let (projection_type, perspective_strength) = match self.current_projection {
             crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
             crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
@@ -376,7 +403,7 @@ impl FlameRenderer {
             burn_in: 20,
             width: self.width,
             height: self.height,
-            seed: 12345, // Fixed seed for deterministic rendering
+            seed: self.get_rng_seed(),
             color_mode: self.color_mode as u32,
             splat_size: 1.0,
             zoom,
@@ -469,7 +496,7 @@ impl FlameRenderer {
             burn_in: 20,
             width: self.width,
             height: self.height,
-            seed: 12345, // Fixed seed for deterministic rendering
+            seed: self.get_rng_seed(),
             color_mode: self.color_mode as u32,
             splat_size: 1.0,
             zoom,
