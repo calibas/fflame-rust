@@ -380,7 +380,7 @@ impl FlamePipelines {
                 },
                 BindGroupEntry {
                     binding: 4,
-                    resource: BindingResource::Sampler(&buffers.sampler),
+                    resource: BindingResource::Sampler(&buffers.curve_lut_sampler),
                 },
             ],
         })

@@ -193,6 +193,7 @@ pub struct FlameBuffers {
     pub curve_lut_view: TextureView,
 
     pub sampler: Sampler,
+    pub curve_lut_sampler: Sampler,  // Separate sampler for curve LUT (nearest neighbor)
 
     // Track which texture is current for display
     pub current_is_a: bool,
@@ -384,7 +385,7 @@ impl FlameBuffers {
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D1,
-            format: TextureFormat::Rgba8Unorm,
+            format: TextureFormat::Rgba16Float,  // Use 16-bit float for precision (filterable)
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -400,7 +401,7 @@ impl FlameBuffers {
             &curve_lut_data,
             ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(256 * 4), // 256 pixels * 4 components * 1 byte
+                bytes_per_row: None,  // 1D textures don't have rows
                 rows_per_image: None,
             },
             Extent3d {
@@ -412,9 +413,21 @@ impl FlameBuffers {
 
         let curve_lut_view = curve_lut_texture.create_view(&TextureViewDescriptor::default());
 
-        // Create sampler for tonemap shader
+        // Create sampler for tonemap shader (accumulation texture - needs linear filtering)
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("Accumulation Sampler"),
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            address_mode_w: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            mipmap_filter: FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        // Create separate sampler for curve LUT (linear filtering for smooth interpolation)
+        let curve_lut_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("Curve LUT Sampler"),
             address_mode_u: AddressMode::ClampToEdge,
             address_mode_v: AddressMode::ClampToEdge,
             address_mode_w: AddressMode::ClampToEdge,
@@ -441,6 +454,7 @@ impl FlameBuffers {
             curve_lut_texture,
             curve_lut_view,
             sampler,
+            curve_lut_sampler,
             current_is_a: true,
         }
     }
@@ -667,7 +681,7 @@ impl FlameBuffers {
             &curve_lut_data,
             ImageDataLayout {
                 offset: 0,
-                bytes_per_row: Some(256 * 4), // 256 pixels * 4 components * 1 byte
+                bytes_per_row: None,  // 1D textures don't have rows
                 rows_per_image: None,
             },
             Extent3d {
