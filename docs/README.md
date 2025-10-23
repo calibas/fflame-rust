@@ -26,6 +26,11 @@ This directory contains all project documentation for the Fractal Flame Renderer
 ## Implementation Notes
 
 - **[3D_IMPLEMENTATION_PLAN.md](3D_IMPLEMENTATION_PLAN.md)** - 3D rendering implementation plan
+- **[SHADER-SYSTEM.md](SHADER-SYSTEM.md)** - Shader builder v2 and dynamic generation
+- **[VARIATION-SYSTEM-V2.md](VARIATION-SYSTEM-V2.md)** - Variation registry architecture
+- **[VARIATION-PARAMETERS-PLAN.md](VARIATION-PARAMETERS-PLAN.md)** - Parameter system design
+- **[MIGRATION-GUIDE.md](MIGRATION-GUIDE.md)** - Migration guide for major changes
+- **[variation-list.md](variation-list.md)** - Complete variation reference (WIP)
 - **[MILESTONE-7-COMPLETE.md](MILESTONE-7-COMPLETE.md)** - Milestone 7 completion summary (profiling/testing)
 - **[BUILD-SUCCESS.md](BUILD-SUCCESS.md)** - Build success notes
 
