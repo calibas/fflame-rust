@@ -3,7 +3,7 @@ pub mod gpu;
 mod ui;
 mod util;
 pub mod scene;
-mod renderer;
+pub mod renderer;
 pub mod config;
 mod undo;
 pub mod profiler;
@@ -12,6 +12,15 @@ pub mod variations;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
 mod shader_builder_v2;
 mod shader_cache;
+
+// Prelude for convenient imports
+pub mod prelude {
+    pub use crate::scene::presets::PresetLibrary;
+    pub use crate::scene::palette::{PaletteLibrary, ColorMode};
+    pub use crate::scene::tonemap::{ToneCurve, ToneMapMode};
+    pub use crate::renderer::compute_kernel::FlameRenderer;
+    pub use crate::config::FractalConfig;
+}
 
 use app::App;
 use winit::dpi::PhysicalSize;
