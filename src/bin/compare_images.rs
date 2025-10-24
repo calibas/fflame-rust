@@ -30,6 +30,10 @@ struct Args {
     /// Amplify differences in output image
     #[arg(short, long, default_value = "10")]
     amplify: u8,
+
+    /// Enable advanced metrics (SSIM, MSE, PSNR)
+    #[arg(long)]
+    advanced: bool,
 }
 
 fn main() -> Result<()> {
@@ -147,6 +151,34 @@ fn main() -> Result<()> {
         avg_diff_a, (avg_diff_a / 255.0) * 100.0, max_diff_a, (max_diff_a as f64 / 255.0) * 100.0);
     println!();
 
+    // Advanced metrics if requested
+    if args.advanced {
+        println!("Advanced Metrics:");
+
+        // MSE (Mean Squared Error)
+        let mse = calculate_mse(&img1, &img2);
+        println!("  MSE: {:.4}", mse);
+
+        // PSNR (Peak Signal-to-Noise Ratio)
+        let psnr = if mse > 0.0 {
+            20.0 * (255.0_f64).log10() - 10.0 * mse.log10()
+        } else {
+            f64::INFINITY
+        };
+        println!("  PSNR: {:.2} dB{}", psnr, if psnr.is_infinite() { " (identical)" } else { "" });
+
+        // SSIM (Structural Similarity Index)
+        let ssim = calculate_ssim(&img1, &img2);
+        println!("  SSIM: {:.4} (1.0 = identical)", ssim);
+
+        println!();
+        println!("Metric Interpretation:");
+        println!("  MSE:  Lower is better (0 = identical)");
+        println!("  PSNR: Higher is better (>40 dB = excellent, 30-40 dB = good)");
+        println!("  SSIM: Higher is better (>0.99 = excellent, >0.95 = good)");
+        println!();
+    }
+
     if different_pixels == 0 {
         println!("✓ Images are identical!");
     } else if percent_different < 0.01 {
@@ -171,4 +203,113 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Calculate Mean Squared Error
+fn calculate_mse(img1: &ImageBuffer<Rgba<u8>, Vec<u8>>, img2: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> f64 {
+    let (width, height) = img1.dimensions();
+    let mut sum_squared_error = 0.0;
+    let total_channels = (width * height * 4) as f64; // RGBA = 4 channels
+
+    for y in 0..height {
+        for x in 0..width {
+            let p1 = img1.get_pixel(x, y);
+            let p2 = img2.get_pixel(x, y);
+
+            for i in 0..4 {
+                let diff = p1[i] as f64 - p2[i] as f64;
+                sum_squared_error += diff * diff;
+            }
+        }
+    }
+
+    sum_squared_error / total_channels
+}
+
+/// Calculate Structural Similarity Index (SSIM)
+/// Simplified implementation using luminance comparison
+fn calculate_ssim(img1: &ImageBuffer<Rgba<u8>, Vec<u8>>, img2: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> f64 {
+    let (width, height) = img1.dimensions();
+
+    // Constants for SSIM calculation
+    let c1 = (0.01 * 255.0_f64).powi(2);
+    let c2 = (0.03 * 255.0_f64).powi(2);
+
+    // Use 8x8 windows for SSIM calculation
+    let window_size = 8;
+    let mut ssim_sum = 0.0;
+    let mut window_count = 0;
+
+    for y in (0..height).step_by(window_size) {
+        for x in (0..width).step_by(window_size) {
+            // Calculate window bounds
+            let x_end = (x + window_size as u32).min(width);
+            let y_end = (y + window_size as u32).min(height);
+
+            if x_end - x < window_size as u32 || y_end - y < window_size as u32 {
+                continue; // Skip partial windows at edges
+            }
+
+            // Calculate mean and variance for this window
+            let mut mean1 = 0.0;
+            let mut mean2 = 0.0;
+            let pixels_in_window = (window_size * window_size) as f64;
+
+            // Calculate means
+            for wy in y..y_end {
+                for wx in x..x_end {
+                    let p1 = img1.get_pixel(wx, wy);
+                    let p2 = img2.get_pixel(wx, wy);
+
+                    // Convert to luminance (RGB only, ignore alpha)
+                    let lum1 = 0.299 * p1[0] as f64 + 0.587 * p1[1] as f64 + 0.114 * p1[2] as f64;
+                    let lum2 = 0.299 * p2[0] as f64 + 0.587 * p2[1] as f64 + 0.114 * p2[2] as f64;
+
+                    mean1 += lum1;
+                    mean2 += lum2;
+                }
+            }
+            mean1 /= pixels_in_window;
+            mean2 /= pixels_in_window;
+
+            // Calculate variances and covariance
+            let mut var1 = 0.0;
+            let mut var2 = 0.0;
+            let mut covar = 0.0;
+
+            for wy in y..y_end {
+                for wx in x..x_end {
+                    let p1 = img1.get_pixel(wx, wy);
+                    let p2 = img2.get_pixel(wx, wy);
+
+                    let lum1 = 0.299 * p1[0] as f64 + 0.587 * p1[1] as f64 + 0.114 * p1[2] as f64;
+                    let lum2 = 0.299 * p2[0] as f64 + 0.587 * p2[1] as f64 + 0.114 * p2[2] as f64;
+
+                    let diff1 = lum1 - mean1;
+                    let diff2 = lum2 - mean2;
+
+                    var1 += diff1 * diff1;
+                    var2 += diff2 * diff2;
+                    covar += diff1 * diff2;
+                }
+            }
+            var1 /= pixels_in_window;
+            var2 /= pixels_in_window;
+            covar /= pixels_in_window;
+
+            // Calculate SSIM for this window
+            let numerator = (2.0 * mean1 * mean2 + c1) * (2.0 * covar + c2);
+            let denominator = (mean1 * mean1 + mean2 * mean2 + c1) * (var1 + var2 + c2);
+            let window_ssim = numerator / denominator;
+
+            ssim_sum += window_ssim;
+            window_count += 1;
+        }
+    }
+
+    if window_count > 0 {
+        ssim_sum / window_count as f64
+    } else {
+        1.0 // If no windows, assume identical
+    }
 }
