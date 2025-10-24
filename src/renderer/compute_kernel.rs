@@ -785,8 +785,9 @@ pub fn encode_png_from_rgba(width: u32, height: u32, rgba_data: Vec<u8>) -> Resu
         rgba_data,
     ).ok_or("Failed to create image buffer")?;
 
-    // Flip vertically (GPU textures are upside down)
-    let img = image::imageops::flip_vertical(&img);
+    // Don't flip - wgpu textures are already in the correct orientation
+    // The Origin3d::ZERO starts at top-left, which matches PNG format
+    // Previous flip_vertical was causing 180° rotation artifacts
 
     let mut png_data = Vec::new();
     img.write_to(&mut std::io::Cursor::new(&mut png_data), image::ImageFormat::Png)
