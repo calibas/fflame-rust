@@ -21,7 +21,7 @@ pub struct ShaderCache {
 impl ShaderCache {
     /// Create a new shader cache with initial flame configuration
     pub fn new(device: &Device, flame: &Flame, bind_group_layout: &BindGroupLayout) -> Self {
-        let builder = ShaderBuilder::new(flame.variation_registry.clone());
+        let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
         let active_variations = flame.extract_active_variations();
 
         log::info!("Initial shader compilation with {} active variations", active_variations.len());
@@ -70,7 +70,7 @@ impl ShaderCache {
         );
 
         // Rebuild shaders
-        let builder = ShaderBuilder::new(flame.variation_registry.clone());
+        let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
         self.shader_source_2d = builder.build_trajectory_2d(&needed);
         self.shader_source_3d = builder.build_trajectory_3d(&needed);
 

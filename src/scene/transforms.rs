@@ -584,10 +584,6 @@ pub struct Flame {
     /// Projection type for 3D rendering
     #[serde(default)]
     pub projection: ProjectionType,
-
-    /// Variation registry (not serialized, created on load)
-    #[serde(skip)]
-    pub variation_registry: VariationRegistry,
 }
 
 fn default_flame_name() -> String {
@@ -602,7 +598,6 @@ impl Default for Flame {
             final_transform: None,
             render_mode: RenderMode::default(),
             projection: ProjectionType::default(),
-            variation_registry: crate::variations::global_registry().clone(),
         }
     }
 }
@@ -639,14 +634,15 @@ impl Flame {
         let active_set: std::collections::HashSet<String> =
             self.extract_active_variations().keys().cloned().collect();
 
-        // Use registry order for deterministic ID assignment
-        let active: Vec<String> = self.variation_registry.names()
+        // Use global registry order for deterministic ID assignment
+        let registry = crate::variations::global_registry();
+        let active: Vec<String> = registry.names()
             .iter()
             .filter(|name| active_set.contains(*name))
             .cloned()
             .collect();
 
-        self.variation_registry.assign_ids(&active)
+        registry.assign_ids(&active)
     }
 
     /// Calculate cumulative weights for transform selection

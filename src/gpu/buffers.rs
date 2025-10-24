@@ -216,10 +216,11 @@ impl FlameBuffers {
         });
 
         // Upload initial transforms
+        let registry = crate::variations::global_registry();
         let gpu_transforms: Vec<GpuTransform> = flame
             .transforms
             .iter()
-            .map(|xform| GpuTransform::from_transform(xform, &flame.variation_registry))
+            .map(|xform| GpuTransform::from_transform(xform, registry))
             .collect();
         queue.write_buffer(&transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
 
@@ -236,7 +237,7 @@ impl FlameBuffers {
         let gpu_params: Vec<GpuVariationParams> = flame
             .transforms
             .iter()
-            .map(|xform| GpuVariationParams::from_transform(xform, &flame.variation_registry))
+            .map(|xform| GpuVariationParams::from_transform(xform, registry))
             .collect();
         queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&gpu_params));
 
@@ -604,10 +605,11 @@ impl FlameBuffers {
         }
 
         // Create a fixed-size array with all transforms, padding with zeroes
+        let registry = crate::variations::global_registry();
         let mut gpu_transforms: Vec<GpuTransform> = flame
             .transforms
             .iter()
-            .map(|xform| GpuTransform::from_transform(xform, &flame.variation_registry))
+            .map(|xform| GpuTransform::from_transform(xform, registry))
             .collect();
 
         // Pad with zeroed transforms to fill the buffer
@@ -626,10 +628,11 @@ impl FlameBuffers {
         }
 
         // Create a fixed-size array with all variation parameters, padding with zeroes
+        let registry = crate::variations::global_registry();
         let mut gpu_params: Vec<GpuVariationParams> = flame
             .transforms
             .iter()
-            .map(|xform| GpuVariationParams::from_transform(xform, &flame.variation_registry))
+            .map(|xform| GpuVariationParams::from_transform(xform, registry))
             .collect();
 
         // Pad with zeroed params to fill the buffer
