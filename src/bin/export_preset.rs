@@ -327,7 +327,7 @@ async fn main() -> Result<()> {
 
     // Save PNG
     use fractal_flame_wgpu::renderer::compute_kernel::encode_png_from_rgba;
-    let png_bytes = encode_png_from_rgba(args.width, args.height, rgba_data)
+    let png_bytes = encode_png_from_rgba(args.width, args.height, rgba_data, None)
         .map_err(|e| anyhow::anyhow!("PNG encoding failed: {}", e))?;
 
     std::fs::write(&args.output, png_bytes)?;
