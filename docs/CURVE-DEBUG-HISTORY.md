@@ -247,6 +247,32 @@ let r = textureSample(curve_lut_texture, curve_lut_sampler, clamped.r).r;
 **Conclusion**: Redundant clamp has no effect (as expected)
 **Status**: REVERTED
 
+### Test 5: 1D vs 2D Texture Dimension (FAILED - INVALID TEST)
+**Change**: Changed curve LUT from `TextureDimension::D1` to `TextureDimension::D2` (256x1)
+**Files Modified**:
+- `src/gpu/buffers.rs` - Texture dimension D1 → D2
+- `src/gpu/pipelines.rs` - Bind group layout D1 → D2 (tonemap shader only)
+- `shaders/tonemap.wgsl` - Texture type and sampling coordinates
+  - `texture_1d<f32>` → `texture_2d<f32>`
+  - `textureSample(lut, sampler, color.r)` → `textureSample(lut, sampler, vec2(color.r, 0.5))`
+
+**Hypothesis**: 1D texture coordinate mapping may have subtle precision or interpolation issues
+
+**Result**: ❌ **INVALID TEST - FALSE POSITIVE**
+- Initial comparison showed 0.00% difference
+- However, BOTH exports had curve DISABLED (forgot --use-curve flag)
+- Was comparing no-curve vs no-curve (obviously identical)
+- When properly tested with --use-curve flag:
+  - Red   - Avg: 0.18 (0.07%), Max: 8 (3.14%)
+  - Green - Avg: 0.35 (0.14%), Max: 11 (4.31%)
+  - Blue  - Avg: 0.16 (0.06%), Max: 9 (3.53%)
+  - Alpha - Avg: 0.00 (0.00%), Max: 0 (0.00%)
+- **Bug still present** - 2D texture doesn't fix it
+
+**Lesson Learned**: Always verify test setup carefully. Forgetting --use-curve flag invalidated the entire test.
+
+**Status**: REVERTED
+
 ## Summary of Systematic Testing
 
 All tested hypotheses **failed to improve** the bug:
@@ -254,12 +280,16 @@ All tested hypotheses **failed to improve** the bug:
 2. ❌ Texel center LUT generation - Made it much worse
 3. ❌ u8 texture format - Made it slightly worse
 4. ❌ Explicit edge clamping - No difference (redundant)
+5. ❌ 2D texture instead of 1D - Invalid test (forgot --use-curve flag)
 
 **Current best configuration** (lowest error):
 - Linear filtering
 - Edge value LUT generation (i/255)
 - Rgba16Float texture format
+- **1D texture** (2D texture doesn't help)
 - Result: ~0.1% average error per channel
+
+**Bug remains unfixed.** Need new approach.
 
 ## Conclusions
 
@@ -274,52 +304,52 @@ All tested hypotheses **failed to improve** the bug:
 
 5. **Practical impact**: Nearly imperceptible (<0.1% avg error)
 
-## Final Status (2025-10-23)
+## Status as of 2025-10-23 Evening
 
-### All Systematic Tests Complete ✅
+### Tests Completed
 
-Four hypothetical fixes were tested systematically with deterministic RNG and quantitative image comparison:
+Five hypothetical fixes were tested:
+1. ❌ Nearest neighbor filtering - Made it worse
+2. ❌ Texel center LUT generation - Made it much worse
+3. ❌ u8 texture format - Made it slightly worse
+4. ❌ Explicit edge clamping - No difference (redundant)
+5. ❌ 2D texture instead of 1D - Invalid test (forgot --use-curve flag)
 
-1. **Nearest neighbor filtering** → Made it WORSE
-2. **Texel center LUT generation** → Made it MUCH WORSE
-3. **u8 texture format** → Made it SLIGHTLY WORSE
-4. **Explicit edge clamping** → NO DIFFERENCE (redundant)
+### Current Status
 
-### Current Implementation is Near-Optimal
+**Bug remains unfixed.** Error persists at ~0.1% average per channel.
 
-The current configuration achieves the **lowest error** of all tested approaches:
-- **Linear filtering** (better than Nearest)
-- **Edge value LUT generation** `i / 255.0` (better than texel centers)
-- **Rgba16Float texture format** (better than u8)
-- **Result**: ~0.1% average error per RGB channel
+The bug is real and measurable:
+- Red:   0.18 avg (0.07%), max 8 (3.14%)
+- Green: 0.35 avg (0.14%), max 11 (4.31%)
+- Blue:  0.16 avg (0.06%), max 9 (3.53%)
+- Alpha: 0.00 avg (0.00%), max 0 (0.00%) ← perfect
 
-### Remaining Error Analysis
+### What We Know
 
-The persistent 0.09-0.12% average error (~6% max) is likely due to:
-- GPU texture sampling hardware precision limits
-- Shader compiler optimization artifacts
-- Subtle numerical issues in GPU linear interpolation
-- Interaction between curve application and gamma correction
+**Working correctly:**
+- LUT generation (CPU evaluation is perfect)
+- Texture upload (data reaches GPU)
+- Alpha channel (0.00% error proves rendering pipeline intact)
 
-### Decision Point
+**Not working:**
+- RGB curve application produces ~0.1% error with linear curve
+- Error is consistent and reproducible
 
-**Is 0.1% average error acceptable for production use?**
+**Not the cause:**
+- Filter mode (tested Nearest vs Linear)
+- LUT coordinates (tested edge vs texel center)
+- Texture precision (tested u8 vs f16)
+- Edge clamping (tested explicit clamp)
+- Texture dimension (tested 1D vs 2D - properly this time)
 
-Arguments for **YES**:
-- Nearly imperceptible to human vision (<0.1% avg)
-- Current implementation is provably near-optimal (all fixes made it worse)
-- Alpha channel is perfect (0.00% error) - core rendering is correct
-- Only affects 12% of pixels (those with non-zero color values)
+### Next Steps to Investigate
 
-Arguments for **NO** (if pursuing further):
-- Linear curve should produce 0.00% difference (identity function)
-- Could investigate shader precision/gamma interaction more deeply
-- Could implement CPU-side curve application as fallback for pixel-perfect accuracy
+Unexplored hypotheses:
+1. **Gamma interaction** - Maybe gamma correction is being applied in wrong order?
+2. **Shader math precision** - f32 arithmetic precision in textureSample interpolation?
+3. **LUT sampling coordinates** - Are we sampling at exactly the right positions?
+4. **Hardware-specific bug** - Test on different GPU to see if error changes
+5. **Alternative approach** - Direct curve evaluation in shader instead of LUT?
 
-### Recommended Next Steps
-
-1. ✅ **Accept 0.1% error as acceptable** - Current implementation is near-optimal
-2. ✅ **Keep all debug tools** - test_curve.rs, compare_images.rs, deterministic RNG
-3. ✅ **Document findings** - This file serves as complete debugging history
-4. ⏸️ **Defer further investigation** - Only pursue if users report visible artifacts
-5. ⏸️ **Consider CPU-side curve** - Only if pixel-perfect accuracy becomes critical requirement
+The user was right to push back - this bug needs to be solved, not accepted.
