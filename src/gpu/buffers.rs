@@ -26,7 +26,11 @@ pub struct GpuTransform {
     // Variations (50 floats: future-proof for plugins)
     pub variations: [f32; 50],
 
-    // Color
+    // Padding to align color to 16-byte boundary (WGSL std430 vec3 alignment)
+    _pad1: f32,
+    _pad2: f32,
+
+    // Color (vec3<f32> in WGSL requires 16-byte alignment)
     pub color: [f32; 3],
     pub color_speed: f32,
 }
@@ -38,6 +42,11 @@ unsafe impl bytemuck::Zeroable for GpuTransform {}
 impl GpuTransform {
     /// Create from Transform using a VariationRegistry
     pub fn from_transform(xform: &Transform, registry: &crate::variations::VariationRegistry) -> Self {
+        let variations = xform.to_fixed_array(registry);
+
+        // Debug: Log first 26 variation values to verify upload
+        log::info!("GPU Transform variations (first 26): {:?}", &variations[..26]);
+
         Self {
             a: xform.a,
             b: xform.b,
@@ -47,7 +56,9 @@ impl GpuTransform {
             f: xform.f,
             g: xform.g,
             weight: xform.weight,
-            variations: xform.to_fixed_array(registry),
+            variations,
+            _pad1: 0.0,
+            _pad2: 0.0,
             color: xform.color,
             color_speed: xform.color_speed,
         }
