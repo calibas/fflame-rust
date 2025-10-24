@@ -56,7 +56,7 @@ See [docs/outline.md](docs/outline.md) for original design goals
 - Using **JSON** for serialization (not RON as in outline)
 - **Undo/redo** system with 50-state history
 - **Full WASM support** for web builds (100% complete including PNG export)
-- All GPU params use **std140 layout** for cross-platform compatibility
+- GPU buffers use **std430 layout** (storage buffers) and **std140 layout** (uniform buffers) for cross-platform compatibility
 
 ### Current Limitations
 - PNG export only at current viewport resolution (no tiled high-res export)
@@ -110,7 +110,7 @@ cargo run --release
 **What's Tested:**
 - Unit tests: Transform math, variations, palette interpolation, version info
 - Regression: 12 tests (CPU determinism, all variations, presets, serialization)
-- Benchmarks: CPU iteration, all 24 variations, affine, point calculations
+- Benchmarks: CPU iteration, all 26 variations, affine, point calculations
 
 **All tests passing:** ✅ 15+ unit tests, 12 regression tests
 
@@ -124,7 +124,10 @@ cargo run --release
 
 ### Rust Code
 - Use `bytemuck::Pod` and `bytemuck::Zeroable` for GPU data structures
-- All GPU params should be aligned to vec4 boundaries
+- GPU struct alignment rules:
+  - **std140 (uniform buffers)**: vec3/vec4 require 16-byte alignment
+  - **std430 (storage buffers)**: vec3 requires 16-byte alignment, arrays more packed
+  - **Critical**: Add explicit padding for vec3 fields after large arrays (see GpuTransform)
 - Prefer `&Queue::write_buffer()` over buffer mapping for updates
 - Use `CommandEncoder` for GPU operations, submit once per frame
 

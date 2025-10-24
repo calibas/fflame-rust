@@ -155,7 +155,7 @@ fractal_flame_wgpu/
 ├── Testing & Benchmarking
 │   ├── tests/regression.rs    12 regression tests
 │   │                           - CPU iteration determinism
-│   │                           - All 24 variation functions
+│   │                           - All 26 variation functions
 │   │                           - Preset validation
 │   │                           - Serialization round-trips
 │   │
@@ -172,7 +172,7 @@ fractal_flame_wgpu/
 └── Shaders (WGSL)
     ├── core/                   🔥 SHADER MODULES (dynamically composed)
     │   ├── header.wgsl         - Bindings and data structures
-    │   │                       - VariationParams struct (192 floats)
+    │   │                       - VariationParams struct (400 floats: 50×8)
     │   ├── rng.wgsl            - PCG random number generator
     │   ├── affine.wgsl         - Affine transformation functions
     │   ├── variations_2d.wgsl  - 18 2D variation functions (CPU + parameterized)
