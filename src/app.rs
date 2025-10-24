@@ -824,12 +824,15 @@ impl App {
                 // SAFETY: The Device, Queue, and FlameRenderer live in App which persists
                 // for the entire program lifetime. The GPU resources won't be dropped
                 // until the app exits, so extending their lifetime to 'static is safe.
+                // We need mutable access for capture_pixels which may temporarily modify
+                // background_color, but this is safe since the async task completes before
+                // any other code runs (single-threaded WASM environment).
                 use wasm_bindgen_futures::spawn_local;
 
-                if let Some(ref renderer) = self.flame_renderer {
+                if let Some(ref mut renderer) = self.flame_renderer {
                     let device: &'static wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
                     let queue: &'static wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
-                    let renderer: &'static crate::renderer::compute_kernel::FlameRenderer =
+                    let renderer: &'static mut crate::renderer::compute_kernel::FlameRenderer =
                         unsafe { std::mem::transmute(renderer) };
                     let format = self.gpu.config.format;
 
