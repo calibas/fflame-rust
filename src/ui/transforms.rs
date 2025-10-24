@@ -106,7 +106,7 @@ pub fn render_transforms_window(
                                 ui.label("Basic 2D Variations");
 
                                 // Get basic 2D variations from registry
-                                let basic_2d = flame.variation_registry.by_category(crate::variations::VariationCategory::Basic2D);
+                                let basic_2d = crate::variations::global_registry().by_category(crate::variations::VariationCategory::Basic2D);
                                 for var_info in basic_2d {
                                     let mut value = transform.get_variation(&var_info.name);
                                     if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
@@ -121,7 +121,7 @@ pub fn render_transforms_window(
                                                 let mut param_value = transform.get_variation_param_or_default(
                                                     &var_info.name,
                                                     &param.name,
-                                                    &flame.variation_registry,
+                                                    &crate::variations::global_registry(),
                                                 );
 
                                                 let param_changed = match param.param_type {
@@ -166,7 +166,7 @@ pub fn render_transforms_window(
                                 ui.label("Advanced 2D Variations");
 
                                 // Get advanced 2D variations from registry
-                                let advanced_2d = flame.variation_registry.by_category(crate::variations::VariationCategory::Advanced2D);
+                                let advanced_2d = crate::variations::global_registry().by_category(crate::variations::VariationCategory::Advanced2D);
                                 for var_info in advanced_2d {
                                     let mut value = transform.get_variation(&var_info.name);
                                     if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
@@ -181,7 +181,7 @@ pub fn render_transforms_window(
                                                 let mut param_value = transform.get_variation_param_or_default(
                                                     &var_info.name,
                                                     &param.name,
-                                                    &flame.variation_registry,
+                                                    &crate::variations::global_registry(),
                                                 );
 
                                                 let param_changed = match param.param_type {
@@ -228,7 +228,7 @@ pub fn render_transforms_window(
                                     ui.label("3D Depth Variations");
 
                                     // Get 3D depth variations from registry
-                                    let depth_3d = flame.variation_registry.by_category(crate::variations::VariationCategory::Depth3D);
+                                    let depth_3d = crate::variations::global_registry().by_category(crate::variations::VariationCategory::Depth3D);
                                     for var_info in depth_3d {
                                         let mut value = transform.get_variation(&var_info.name);
                                         if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
@@ -243,7 +243,7 @@ pub fn render_transforms_window(
                                                     let mut param_value = transform.get_variation_param_or_default(
                                                         &var_info.name,
                                                         &param.name,
-                                                        &flame.variation_registry,
+                                                        &crate::variations::global_registry(),
                                                     );
 
                                                     let param_changed = match param.param_type {
@@ -288,7 +288,7 @@ pub fn render_transforms_window(
                                     ui.label("3D Rotation Variations");
 
                                     // Get 3D rotation variations from registry
-                                    let rotation_3d = flame.variation_registry.by_category(crate::variations::VariationCategory::Rotation3D);
+                                    let rotation_3d = crate::variations::global_registry().by_category(crate::variations::VariationCategory::Rotation3D);
                                     for var_info in rotation_3d {
                                         let mut value = transform.get_variation(&var_info.name);
                                         if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
@@ -303,7 +303,7 @@ pub fn render_transforms_window(
                                                     let mut param_value = transform.get_variation_param_or_default(
                                                         &var_info.name,
                                                         &param.name,
-                                                        &flame.variation_registry,
+                                                        &crate::variations::global_registry(),
                                                     );
 
                                                     let param_changed = match param.param_type {
@@ -348,7 +348,7 @@ pub fn render_transforms_window(
                                     ui.label("Full 3D Variations");
 
                                     // Get full 3D variations from registry
-                                    let full_3d = flame.variation_registry.by_category(crate::variations::VariationCategory::Full3D);
+                                    let full_3d = crate::variations::global_registry().by_category(crate::variations::VariationCategory::Full3D);
                                     for var_info in full_3d {
                                         let mut value = transform.get_variation(&var_info.name);
                                         if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
@@ -363,7 +363,7 @@ pub fn render_transforms_window(
                                                     let mut param_value = transform.get_variation_param_or_default(
                                                         &var_info.name,
                                                         &param.name,
-                                                        &flame.variation_registry,
+                                                        &crate::variations::global_registry(),
                                                     );
 
                                                     let param_changed = match param.param_type {
