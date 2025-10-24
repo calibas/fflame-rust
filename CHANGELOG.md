@@ -4,6 +4,144 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added - 2025-10-24
+
+#### Visual Regression Testing System ✅
+**Complete automated testing infrastructure with PNG metadata and image comparison**
+
+Implements Phases 1-3 of visual regression testing plan for catching rendering bugs and ensuring cross-platform consistency.
+
+- **PNG Metadata Embedding** ([src/png_metadata.rs](src/png_metadata.rs))
+  - `PngMetadata` struct with comprehensive metadata capture:
+    - **Build Info**: version, git hash, branch, timestamp, platform, rustc version, build profile
+    - **Render Settings**: resolution, total iterations, render time (ms), frame count
+    - **Flame Config**: Complete FractalConfig serialized as JSON with SHA256 checksum
+    - **Display Settings**: background color, exposure, gamma, tone curve usage
+    - **Rendering Info**: render mode (2D/3D), projection type, variations count
+    - **Test Support**: Optional test_name and test_category fields
+  - PNG tEXt chunks for portable metadata storage
+  - `from_app_state()` constructor pulls data from version info and config
+  - `encode_png_with_metadata()` embeds metadata during PNG encoding
+  - `read_png_metadata()` extracts metadata from existing PNGs
+  - Integrated into desktop and WASM PNG export paths
+  - Added `png = "0.17"` dependency for direct tEXt chunk support
+
+- **Headless Batch PNG Export** ([src/bin/test_export.rs](src/bin/test_export.rs))
+  - Batch renders `.flame` files from directory (recursive scanning)
+  - Configurable: resolution, frame count, workgroups, iterations
+  - Embeds full metadata in every PNG
+  - Progress reporting with per-file timing
+  - Error handling with summary statistics
+  - GPU feature requirements: `CLEAR_TEXTURE` for buffer clearing
+  - Example: 3 test configs rendered at 800x600 @ 50 frames in ~0.3s total
+  - Usage: `test_export --input tests/visual/configs --output tests/visual/current --frames 50 --category variations`
+
+- **Advanced Image Comparison Metrics** ([src/bin/compare_images.rs](src/bin/compare_images.rs))
+  - Enhanced existing tool with industry-standard quality metrics
+  - **Basic Metrics** (existing):
+    - Pixel-by-pixel difference
+    - Per-channel statistics (R, G, B, A)
+    - Threshold-based detection
+    - Amplified visual diff output
+  - **Advanced Metrics** (new, via `--advanced` flag):
+    - **MSE** (Mean Squared Error): Standard pixel-wise error metric
+    - **PSNR** (Peak Signal-to-Noise Ratio): Quality metric in dB (>40 dB = excellent)
+    - **SSIM** (Structural Similarity Index): Perceptual similarity metric (>0.99 = excellent)
+      - 8x8 windowed luminance comparison
+      - Based on mean, variance, and covariance
+      - Industry-standard for image quality assessment
+  - Metric interpretation guide printed with results
+  - CI/CD friendly: non-zero exit code on differences
+  - Usage: `compare_images --image1 ref.png --image2 current.png --advanced --output diff.png`
+
+- **Test Infrastructure**
+  - Test directory structure: `tests/visual/configs/`, `tests/visual/current/`
+  - Sample test configs: linear, sinusoidal, spherical variations
+  - All test PNGs include embedded metadata for reproducibility
+  - Documentation: [docs/TESTING-PLAN.md](docs/TESTING-PLAN.md) (464 lines, 7-phase plan)
+
+**Testing Results:**
+- Batch export: 3/3 success, ~0.1s per 800x600 @ 50 frames
+- Metadata verified embedded in all PNGs
+- Image comparison validated (linear vs sinusoidal):
+  - MSE: 0.5468 (very low)
+  - PSNR: 50.75 dB (excellent)
+  - SSIM: 0.9998 (nearly identical)
+
+**Architecture:**
+- Phase 1: PNG metadata - ✅ Complete
+- Phase 2: Headless export - ✅ Complete
+- Phase 3: Image comparison - ✅ Complete
+- Future: Phase 4-7 (test library expansion, CI/CD, Apophysis comparison)
+
+#### UI Improvements
+- **1-Based Transform Indexing** ([src/ui/triangle_editor.rs](src/ui/triangle_editor.rs), [src/ui/transforms.rs](src/ui/transforms.rs))
+  - UI now displays "Transform 1, 2, 3..." instead of "Transform 0, 1, 2..."
+  - Internal indexing remains 0-based (no logic changes)
+  - Applied to: Triangle Editor combobox, Transforms window headers
+- **Triangle Coordinate Display Order**
+  - Changed from O, X, Y to X, Y, O as requested
+  - Transform number shown in coordinate section header
+
+### Fixed - 2025-10-24
+
+#### Variation System and Global Registry
+- **Fixed variation registry being initialized multiple times**
+  - Root cause: `VariationRegistry::new()` called on every preset load
+  - Solution: Global singleton via `once_cell::sync::Lazy<VariationRegistry>`
+  - Registry now initialized exactly once at first access
+  - All code uses `global_registry()` function instead of creating instances
+
+- **Fixed unstable variation order in UI**
+  - Root cause: HashMap iteration order is non-deterministic
+  - Solution: Store ordered list of variation names in VariationRegistry
+  - UI iterates `ordered_names()` instead of HashMap keys
+  - Ensures stable, predictable variation order across runs
+
+- **Fixed shader/CPU variation index mismatches**
+  - Expanded system from 24 to 50 variation slots for future expansion
+  - Ensures shader indices match CPU `VariationType` enum values
+  - Added padding reservation for future variations
+
+- **Fixed WGSL vec3 alignment causing rendering bugs**
+  - Root cause: `GpuTransform` had vec3 (12 bytes) followed by f32, violating WGSL alignment
+  - WGSL requires vec3 to be 16-byte aligned (pad to vec4)
+  - Solution: Added `_padding1: f32` after `g: f32` field
+  - Struct now: `a,b,c,d,e,f,g,_pad1` (32 bytes) + `variations[50]` (200 bytes) + `_pad2[2]` (8 bytes) = 240 bytes
+  - Verified with assertions in `update_transforms()`
+  - **Critical fix**: Resolved all visual rendering artifacts
+
+#### PNG Export Fixes
+- **Fixed transparent PNG exports**
+  - Tone curve now applied AFTER background blending to prevent washout
+  - Transparent mode uses accumulation buffer (Rgba16Float) with CPU-side tone mapping
+  - Opaque alpha forced in PNG exports when background is black
+  - Removed incorrect `flip_vertical` causing 180° rotation
+  - Wire up `--transparent` flag in export_preset tool
+
+#### Window Management
+- **Fixed crash when minimizing window on Windows**
+  - Root cause: Surface configuration with 0x0 dimensions
+  - Solution: Skip rendering when width or height is 0
+  - Prevents panic in wgpu surface creation
+
+### Changed - 2025-10-24
+
+#### Variation System Architecture
+- **MAX_VARIATIONS** expanded from 24 to 50
+  - Future-proofing for additional variation implementations
+  - GPU buffers sized for 50 variations per transform
+  - VariationParams buffer: 400 floats (50 variations × 8 params)
+  - GpuTransform variations: `[f32; 50]` (200 bytes)
+
+#### Documentation Updates
+- Updated CLAUDE.md and ARCHITECTURE.md to reflect:
+  - 50-variation system (was 24, then 26)
+  - Global variation registry pattern
+  - Correct GPU buffer layouts (std430 for storage, std140 for uniform)
+  - WGSL vec3 alignment requirements and padding strategy
+  - VariationParams size: 400 floats (50×8)
+
 ### Added - 2025-10-22
 
 #### Variation Parameters System ✅
