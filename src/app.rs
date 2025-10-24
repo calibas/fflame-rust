@@ -789,7 +789,7 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 // Desktop: use blocking task for both capture and save
-                if let Some(ref renderer) = self.flame_renderer {
+                if let Some(ref mut renderer) = self.flame_renderer {
                     let pixels_future = renderer.capture_pixels(&self.gpu.device, &self.gpu.queue, transparent, self.gpu.config.format);
 
                     match pollster::block_on(pixels_future) {
