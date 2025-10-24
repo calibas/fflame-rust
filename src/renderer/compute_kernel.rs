@@ -768,14 +768,20 @@ impl FlameRenderer {
     pub async fn capture_png(&mut self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<Vec<u8>, String> {
         let (width, height, rgba_data) = self.capture_pixels(device, queue, transparent, surface_format).await?;
 
-        // Encode as PNG
-        encode_png_from_rgba(width, height, rgba_data)
+        // Encode as PNG without metadata (use encode_png_with_full_metadata for metadata support)
+        encode_png_from_rgba(width, height, rgba_data, None)
     }
 }
 
-/// Standalone function to encode RGBA pixel data as PNG
+/// Standalone function to encode RGBA pixel data as PNG with metadata
 /// This doesn't borrow anything and can be moved into async contexts
-pub fn encode_png_from_rgba(width: u32, height: u32, rgba_data: Vec<u8>) -> Result<Vec<u8>, String> {
+pub fn encode_png_from_rgba(width: u32, height: u32, rgba_data: Vec<u8>, metadata: Option<crate::png_metadata::PngMetadata>) -> Result<Vec<u8>, String> {
+    // Use new metadata-aware encoder if metadata provided
+    if let Some(meta) = metadata {
+        return crate::png_metadata::encode_png_with_metadata(width, height, rgba_data, &meta);
+    }
+
+    // Fallback to simple encoding without metadata
     use image::{ImageBuffer, Rgba};
 
     let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_raw(

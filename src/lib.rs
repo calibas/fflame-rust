@@ -9,6 +9,7 @@ mod undo;
 pub mod profiler;
 pub mod version;
 pub mod variations;
+pub mod png_metadata;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
 mod shader_builder_v2;
 mod shader_cache;

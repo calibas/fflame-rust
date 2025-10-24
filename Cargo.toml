@@ -27,6 +27,7 @@ chrono = "0.4"
 
 # Optional
 image = "0.25"
+png = "0.17"
 futures = "0.3"
 
 # WASM-specific dependencies

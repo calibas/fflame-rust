@@ -792,13 +792,27 @@ impl App {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 // Desktop: use blocking task for both capture and save
+                // Build metadata before borrowing renderer
+                let config = self.export_config();
+                let render_time_ms = self.metrics.render_time_ms;
+
                 if let Some(ref mut renderer) = self.flame_renderer {
+                    let total_iterations = renderer.total_iterations();
                     let pixels_future = renderer.capture_pixels(&self.gpu.device, &self.gpu.queue, transparent, self.gpu.config.format);
 
                     match pollster::block_on(pixels_future) {
                         Ok((width, height, rgba_data)) => {
-                            // Encode PNG
-                            match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data) {
+                            // Build metadata with captured values
+                            let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                                width,
+                                height,
+                                total_iterations,
+                                render_time_ms,
+                                &config,
+                            );
+
+                            // Encode PNG with metadata
+                            match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
                                 Ok(png_data) => {
                                     // Open file dialog
                                     if let Some(path) = rfd::FileDialog::new()
@@ -833,6 +847,11 @@ impl App {
                 use wasm_bindgen_futures::spawn_local;
 
                 if let Some(ref mut renderer) = self.flame_renderer {
+                    // Build metadata before moving into async closure
+                    let config = self.export_config();
+                    let total_iterations = renderer.total_iterations();
+                    let render_time_ms = self.metrics.render_time_ms;
+
                     let device: &'static wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
                     let queue: &'static wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
                     let renderer: &'static mut crate::renderer::compute_kernel::FlameRenderer =
@@ -843,8 +862,17 @@ impl App {
                         // Await pixel capture
                         match renderer.capture_pixels(device, queue, transparent, format).await {
                             Ok((width, height, rgba_data)) => {
-                                // Encode PNG (owned data, no borrowing)
-                                match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data) {
+                                // Build metadata with captured dimensions
+                                let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                                    width,
+                                    height,
+                                    total_iterations,
+                                    render_time_ms,
+                                    &config,
+                                );
+
+                                // Encode PNG with metadata (owned data, no borrowing)
+                                match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
                                     Ok(png_data) => {
                                         // Open file dialog and save
                                         if let Some(file_handle) = rfd::AsyncFileDialog::new()
