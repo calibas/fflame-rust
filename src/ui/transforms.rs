@@ -30,7 +30,7 @@ pub fn render_transforms_window(
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for (i, transform) in flame.transforms.iter_mut().enumerate() {
                     ui.push_id(i, |ui| {
-                        egui::CollapsingHeader::new(format!("Transform {}", i))
+                        egui::CollapsingHeader::new(format!("Transform {}", i + 1))
                             .default_open(i == 0)
                             .show(ui, |ui| {
                                 ui.label("Affine Matrix");
