@@ -135,7 +135,6 @@ impl FlameRenderer {
             _pad3: 0.0,
             _pad4: 0.0,
         };
-        log::info!("Uploading params with seed={}", seed);
         self.buffers.update_params(queue, &params);
 
         // Track total iterations: workgroups * threads_per_workgroup * iterations_per_thread

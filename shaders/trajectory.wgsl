@@ -17,8 +17,8 @@ struct Transform {
     // Probability weight
     weight: f32,
 
-    // Variation weights (24 variations: 16 2D + 8 3D, but 2D shader only uses first 16)
-    variations: array<f32, 24>,
+    // Variation weights (50 slots: 26 current + 24 reserved for plugins)
+    variations: array<f32, 50>,
 
     // Color (RGB)
     color: vec3<f32>,

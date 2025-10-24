@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Maximum number of variation types supported
-pub const MAX_VARIATIONS: usize = 24; // 16 2D + 8 3D variations
+pub const MAX_VARIATIONS: usize = 50; // Increased to support plugins and future variations
 
 /// Rendering mode for the fractal flame
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,7 +100,7 @@ pub struct Transform {
 }
 
 /// Custom deserializer for variations array that handles backward compatibility
-/// Accepts arrays of length 16 (old format) or 24 (new format)
+/// Accepts arrays of length 16 (old), 24 (medium), or 50 (current)
 fn deserialize_variations<'de, D>(deserializer: D) -> Result<[f32; MAX_VARIATIONS], D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -111,19 +111,25 @@ where
 
     match v.len() {
         16 => {
-            // Old format: pad with zeros to reach 24
+            // Old format (16 2D variations): pad with zeros to reach 50
             let mut result = [0.0; MAX_VARIATIONS];
             result[..16].copy_from_slice(&v);
             Ok(result)
         }
         24 => {
-            // New format: convert directly
+            // Medium format (24 variations before JuliaN/Blob added): pad with zeros to 50
+            let mut result = [0.0; MAX_VARIATIONS];
+            result[..24].copy_from_slice(&v);
+            Ok(result)
+        }
+        50 => {
+            // Current format: convert directly
             let mut result = [0.0; MAX_VARIATIONS];
             result.copy_from_slice(&v);
             Ok(result)
         }
         other => Err(D::Error::custom(format!(
-            "invalid variations array length {}, expected 16 (old format) or 24 (new format)",
+            "invalid variations array length {}, expected 16, 24, or 50",
             other
         ))),
     }

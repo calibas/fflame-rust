@@ -116,43 +116,48 @@ impl VariationRegistry {
             ordered_names: Vec::new(),
         };
 
-        // Register core 2D variations (Basic)
-        registry.register_core("linear", "Linear", VariationCategory::Basic2D, false);
-        registry.register_core("sinusoidal", "Sinusoidal", VariationCategory::Basic2D, false);
-        registry.register_core("spherical", "Spherical", VariationCategory::Basic2D, false);
-        registry.register_core("swirl", "Swirl", VariationCategory::Basic2D, false);
-        registry.register_core("horseshoe", "Horseshoe", VariationCategory::Basic2D, false);
+        log::info!("=== VARIATION REGISTRY INITIALIZATION ===");
 
-        // Register core 2D variations (Advanced)
-        registry.register_core("polar", "Polar", VariationCategory::Advanced2D, false);
-        registry.register_core("handkerchief", "Handkerchief", VariationCategory::Advanced2D, false);
-        registry.register_core("heart", "Heart", VariationCategory::Advanced2D, false);
-        registry.register_core("disc", "Disc", VariationCategory::Advanced2D, false);
-        registry.register_core("spiral", "Spiral", VariationCategory::Advanced2D, false);
-        registry.register_core("hyperbolic", "Hyperbolic", VariationCategory::Advanced2D, false);
-        registry.register_core("diamond", "Diamond", VariationCategory::Advanced2D, false);
-        registry.register_core("ex", "Ex", VariationCategory::Advanced2D, false);
-        registry.register_core("julia", "Julia", VariationCategory::Advanced2D, true); // Needs RNG
-        registry.register_core("julian", "JuliaN", VariationCategory::Advanced2D, true); // Needs RNG
-        registry.register_core("bent", "Bent", VariationCategory::Advanced2D, false);
-        registry.register_core("waves", "Waves", VariationCategory::Advanced2D, false);
-        registry.register_core("blob", "Blob", VariationCategory::Advanced2D, false);
+        // Register core 2D variations (Basic) - Indices 0-4
+        registry.register_core("linear", "Linear", VariationCategory::Basic2D, false);          // 0
+        registry.register_core("sinusoidal", "Sinusoidal", VariationCategory::Basic2D, false);  // 1
+        registry.register_core("spherical", "Spherical", VariationCategory::Basic2D, false);    // 2
+        registry.register_core("swirl", "Swirl", VariationCategory::Basic2D, false);            // 3
+        registry.register_core("horseshoe", "Horseshoe", VariationCategory::Basic2D, false);    // 4
 
-        // Register 3D depth variations
-        registry.register_core("zcone", "Z-Cone", VariationCategory::Depth3D, false);
-        registry.register_core("flatten", "Flatten", VariationCategory::Depth3D, false);
+        // Register core 2D variations (Advanced) - Indices 5-15
+        registry.register_core("polar", "Polar", VariationCategory::Advanced2D, false);          // 5
+        registry.register_core("handkerchief", "Handkerchief", VariationCategory::Advanced2D, false); // 6
+        registry.register_core("heart", "Heart", VariationCategory::Advanced2D, false);          // 7
+        registry.register_core("disc", "Disc", VariationCategory::Advanced2D, false);            // 8
+        registry.register_core("spiral", "Spiral", VariationCategory::Advanced2D, false);        // 9
+        registry.register_core("hyperbolic", "Hyperbolic", VariationCategory::Advanced2D, false); // 10
+        registry.register_core("diamond", "Diamond", VariationCategory::Advanced2D, false);      // 11
+        registry.register_core("ex", "Ex", VariationCategory::Advanced2D, false);                // 12
+        registry.register_core("julia", "Julia", VariationCategory::Advanced2D, true);           // 13 (Needs RNG)
+        registry.register_core("bent", "Bent", VariationCategory::Advanced2D, false);            // 14
+        registry.register_core("waves", "Waves", VariationCategory::Advanced2D, false);          // 15
 
-        // Register full 3D variations
-        registry.register_core("hemisphere", "Hemisphere", VariationCategory::Full3D, false);
+        // Register 3D depth variations - Indices 16-17, 23
+        registry.register_core("zcone", "Z-Cone", VariationCategory::Depth3D, false);            // 16
+        registry.register_core("flatten", "Flatten", VariationCategory::Depth3D, false);         // 17
 
-        // Register 3D rotation variations
-        registry.register_core("pre_rotate_x", "Pre-Rotate X", VariationCategory::Rotation3D, false);
-        registry.register_core("pre_rotate_y", "Pre-Rotate Y", VariationCategory::Rotation3D, false);
-        registry.register_core("post_rotate_x", "Post-Rotate X", VariationCategory::Rotation3D, false);
-        registry.register_core("post_rotate_y", "Post-Rotate Y", VariationCategory::Rotation3D, false);
+        // Register full 3D variations - Index 18
+        registry.register_core("hemisphere", "Hemisphere", VariationCategory::Full3D, false);    // 18
 
-        // Register 3D depth variations (continued)
-        registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, false);
+        // Register 3D rotation variations - Indices 19-22
+        registry.register_core("pre_rotate_x", "Pre-Rotate X", VariationCategory::Rotation3D, false);   // 19
+        registry.register_core("pre_rotate_y", "Pre-Rotate Y", VariationCategory::Rotation3D, false);   // 20
+        registry.register_core("post_rotate_x", "Post-Rotate X", VariationCategory::Rotation3D, false); // 21
+        registry.register_core("post_rotate_y", "Post-Rotate Y", VariationCategory::Rotation3D, false); // 22
+
+        // Register 3D depth variations (continued) - Index 23
+        registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, false);         // 23
+
+        // NEW VARIATIONS (added after original 24) - Indices 24-25
+        // IMPORTANT: Always add new variations at the end to preserve index compatibility
+        registry.register_core("julian", "JuliaN", VariationCategory::Advanced2D, true);        // 24 (Needs RNG)
+        registry.register_core("blob", "Blob", VariationCategory::Advanced2D, false);           // 25
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -200,6 +205,13 @@ impl VariationRegistry {
                 max_value: Some(20.0),
             },
         ]);
+
+        // DEBUG: Print final registry order
+        log::info!("Final variation registry (name -> index):");
+        for (i, name) in registry.ordered_names.iter().enumerate() {
+            log::info!("  [{}] = {}", i, name);
+        }
+        log::info!("Total variations: {}", registry.ordered_names.len());
 
         registry
     }
@@ -297,4 +309,12 @@ impl Default for VariationRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Global variation registry singleton
+/// This ensures the registry is initialized only once and shared across all code paths
+pub fn global_registry() -> &'static VariationRegistry {
+    use once_cell::sync::Lazy;
+    static REGISTRY: Lazy<VariationRegistry> = Lazy::new(|| VariationRegistry::new());
+    &REGISTRY
 }

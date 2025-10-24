@@ -197,17 +197,17 @@ impl Transform {
         }
     }
 
-    /// COMPATIBILITY: Convert to fixed 24-element array for GPU
-    pub fn to_fixed_array(&self, registry: &VariationRegistry) -> [f32; 24] {
-        let mut array = [0.0; 24];
-        for (i, name) in registry.names().iter().enumerate().take(24) {
+    /// COMPATIBILITY: Convert to fixed 50-element array for GPU
+    pub fn to_fixed_array(&self, registry: &VariationRegistry) -> [f32; 50] {
+        let mut array = [0.0; 50];
+        for (i, name) in registry.names().iter().enumerate().take(50) {
             array[i] = self.get_variation(name);
         }
         array
     }
 
     /// COMPATIBILITY: Set from fixed array
-    pub fn from_fixed_array(&mut self, array: [f32; 24], registry: &VariationRegistry) {
+    pub fn from_fixed_array(&mut self, array: [f32; 50], registry: &VariationRegistry) {
         self.variations.clear();
         for (i, &weight) in array.iter().enumerate() {
             if weight.abs() > 1e-6 {
@@ -309,10 +309,10 @@ impl<'de> Deserialize<'de> for Transform {
                                     }
                                     map
                                 }
-                                // Old format: Array - convert using default registry
+                                // Old format: Array - convert using global registry
                                 serde_json::Value::Array(arr) => {
                                     let mut map = HashMap::new();
-                                    let registry = crate::variations::VariationRegistry::new();
+                                    let registry = crate::variations::global_registry();
                                     let names = registry.names();
 
                                     for (i, val) in arr.iter().enumerate() {
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn test_array_conversion() {
         let array = [0.5, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-        let registry = VariationRegistry::new();
+        let registry = crate::variations::global_registry();
 
         let map = Transform::from_array(&array, &registry);
 
@@ -602,7 +602,7 @@ impl Default for Flame {
             final_transform: None,
             render_mode: RenderMode::default(),
             projection: ProjectionType::default(),
-            variation_registry: VariationRegistry::new(),
+            variation_registry: crate::variations::global_registry().clone(),
         }
     }
 }

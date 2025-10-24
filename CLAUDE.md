@@ -25,13 +25,24 @@ See [docs/outline.md](docs/outline.md) for original design goals
 ### Key Concepts
 - **Fractal Flames**: IFS (Iterated Function System) with variations
 - **Render Modes**: 2D (classic) and 3D (pseudo-3D with depth)
-- **26 Variations**: 16 2D + 8 3D + 2 parameterized
-  - **2D (0-15)**: Linear, Sinusoidal, Spherical, Swirl, Horseshoe, Polar, Handkerchief, Heart, Disc, Spiral, Hyperbolic, Diamond, Ex, Julia, Bent, Waves
-  - **Parameterized 2D (14, 17)**: Julian (power, dist), Blob (high, low, waves)
-  - **3D (16, 18-23)**: Zcone, Flatten, Hemisphere, PreRotateX, PreRotateY, PostRotateX, PostRotateY, ZScale
+- **26 Core Variations** (registry can hold hundreds/thousands total, max 50 active per flame):
+  - **Basic 2D (0-4)**: Linear, Sinusoidal, Spherical, Swirl, Horseshoe
+  - **Advanced 2D (5-15)**: Polar, Handkerchief, Heart, Disc, Spiral, Hyperbolic, Diamond, Ex, Julia (RNG), Bent, Waves
+  - **3D Depth (16-17, 23)**: Zcone, Flatten, ZScale
+  - **3D Full (18)**: Hemisphere
+  - **3D Rotation (19-22)**: PreRotateX, PreRotateY, PostRotateX, PostRotateY
+  - **Parameterized (24-25)**: JuliaN (power, dist), Blob (high, low, waves)
+  - **Plugin Variations**: Registry can hold unlimited variations; dynamically assigned to shader indices 26-49 based on active usage
+- **Variation Index Mapping**: Two-tier system for core stability + plugin flexibility
+  - **Core variations (0-25)**: Fixed indices, never change (backward compatibility)
+  - **Plugin variations (26-49)**: Dynamic indices assigned per-flame based on which plugins are active
+  - Shader is dynamically compiled with only the active variations (up to 50 total)
+  - Registration order for core variations is fixed in code to maintain consistent IDs
+  - Global singleton registry ensures all code paths use same mapping
+  - UI ordering: by category first, then by registration order within category
 - **Variation Parameters**: Some variations have configurable parameters (power, distance, waves, etc.)
   - Stored per-transform in HashMap
-  - Uploaded to GPU via dedicated storage buffer (192 floats: 24 variations × 8 params)
+  - Uploaded to GPU via dedicated storage buffer (400 floats: 50 variations × 8 params)
   - Accessible in shaders via `get_param(xform_id, variation_id, param_slot)`
   - UI sliders appear below active variations (Float, Integer, Angle types)
 - **3-Pass Rendering**: Compute samples → Accumulate temporally → Tonemap for display
@@ -121,6 +132,31 @@ cargo run --release
 - Call `app.capture_state()` before making changes (for undo)
 - Reset accumulation when view/flame/palette changes
 - Use `view_changed_by_keyboard` flag pattern for deferred updates
+
+### Variation Registry Architecture
+- **Global Singleton**: `global_registry()` returns `&'static VariationRegistry` (initialized once via `once_cell::Lazy`)
+- **Two-Tier ID System**: Core variations have fixed IDs, plugins get dynamic IDs
+  - **Core variations (0-25)**: Fixed position in `ordered_names`, never changes
+    - `ordered_names[0]` = "linear" → always shader index 0
+    - `ordered_names[1]` = "sinusoidal" → always shader index 1
+    - Ensures backward compatibility with existing presets
+  - **Plugin variations (26-49)**: Dynamically assigned per-flame based on active usage
+    - Registry can hold unlimited plugins (hundreds/thousands)
+    - Only active plugins get assigned shader indices 26-49
+    - Shader is dynamically compiled with the specific active set
+- **Registration Order**: Fixed for core (0-25), append-only for plugins
+  - Indices 0-23: Original 24 variations (NEVER REORDER - breaks presets!)
+  - Indices 24-25: JuliaN, Blob (added later, placed at end for backward compatibility)
+  - Indices 26+: Plugin variations (stored in registry but ID assigned dynamically)
+- **Data Structures**:
+  - `variations: HashMap<String, VariationInfo>` - Name → metadata lookup (unlimited size)
+  - `ordered_names: Vec<String>` - Core variations list (defines indices 0-25)
+  - Transform stores `HashMap<String, f32>` for active variations (any from registry)
+  - GPU upload: Core variations use fixed indices, active plugins fill 26-49
+  - Shader compilation: Generate code for exactly the active set (up to 50 total)
+- **UI Ordering Rule**: Sort by category first, then by registration order within category
+  - WRONG: `variations.values().filter(category)` ❌ (HashMap iteration is random!)
+  - RIGHT: `ordered_names.iter().filter_map().filter(category)` ✅ (preserves order)
 
 ### Performance
 - Target 60+ FPS at 1080p
