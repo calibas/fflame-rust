@@ -42,11 +42,6 @@ unsafe impl bytemuck::Zeroable for GpuTransform {}
 impl GpuTransform {
     /// Create from Transform using a VariationRegistry
     pub fn from_transform(xform: &Transform, registry: &crate::variations::VariationRegistry) -> Self {
-        let variations = xform.to_fixed_array(registry);
-
-        // Debug: Log first 26 variation values to verify upload
-        log::info!("GPU Transform variations (first 26): {:?}", &variations[..26]);
-
         Self {
             a: xform.a,
             b: xform.b,
@@ -56,7 +51,7 @@ impl GpuTransform {
             f: xform.f,
             g: xform.g,
             weight: xform.weight,
-            variations,
+            variations: xform.to_fixed_array(registry),
             _pad1: 0.0,
             _pad2: 0.0,
             color: xform.color,
