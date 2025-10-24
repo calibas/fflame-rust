@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("Test Export Device"),
-                required_features: wgpu::Features::empty(),
+                required_features: wgpu::Features::CLEAR_TEXTURE,
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::default(),
             },
