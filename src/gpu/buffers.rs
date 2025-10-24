@@ -11,7 +11,7 @@ pub const MAX_PARAMS_PER_VARIATION: usize = 8;
 
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug)]
 pub struct GpuTransform {
     // Affine matrix
     pub a: f32,
@@ -23,13 +23,17 @@ pub struct GpuTransform {
     pub g: f32, // Z offset for 3D mode
     pub weight: f32,
 
-    // Variations (24 floats: 16 2D + 8 3D)
-    pub variations: [f32; 24],
+    // Variations (50 floats: future-proof for plugins)
+    pub variations: [f32; 50],
 
     // Color
     pub color: [f32; 3],
     pub color_speed: f32,
 }
+
+// Manual implementation for bytemuck (arrays of size 50 not auto-derived)
+unsafe impl bytemuck::Pod for GpuTransform {}
+unsafe impl bytemuck::Zeroable for GpuTransform {}
 
 impl GpuTransform {
     /// Create from Transform using a VariationRegistry
@@ -51,13 +55,13 @@ impl GpuTransform {
 }
 
 /// GPU representation of variation parameters for ONE transform
-/// Total size: 24 variations × 8 params = 192 floats = 768 bytes per transform
+/// Total size: 50 variations × 8 params = 400 floats = 1600 bytes per transform
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct GpuVariationParams {
     /// Flat array indexed by: variation_id * MAX_PARAMS_PER_VARIATION + param_slot
     /// Each variation gets MAX_PARAMS_PER_VARIATION consecutive slots
-    pub params: [f32; 192],  // 24 variations × 8 params
+    pub params: [f32; 400],  // 50 variations × 8 params
 }
 
 // Manual implementation for bytemuck (arrays > 128 not auto-derived)
@@ -70,7 +74,7 @@ impl GpuVariationParams {
         xform: &Transform,
         registry: &crate::variations::VariationRegistry,
     ) -> Self {
-        let mut params = [0.0f32; 192];
+        let mut params = [0.0f32; 400];
 
         // For each active variation, copy its parameters
         for (var_name, _weight) in &xform.variations {

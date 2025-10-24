@@ -200,10 +200,10 @@ impl<'de> Deserialize<'de> for Transform {
                                     }
                                     map
                                 }
-                                // Old format: Array - convert using default registry
+                                // Old format: Array - convert using global registry
                                 serde_json::Value::Array(arr) => {
                                     let mut map = HashMap::new();
-                                    let registry = crate::variations::VariationRegistry::new();
+                                    let registry = crate::variations::global_registry();
                                     let names = registry.names();
 
                                     for (i, val) in arr.iter().enumerate() {
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn test_array_conversion() {
         let array = [0.5, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-        let registry = VariationRegistry::new();
+        let registry = crate::variations::global_registry();
 
         let map = Transform::from_array(&array, &registry);
 

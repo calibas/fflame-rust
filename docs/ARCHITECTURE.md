@@ -64,11 +64,13 @@ fractal_flame_wgpu/
 │       │                       - PaletteLibrary (auto-loads from assets/)
 │       │
 │       └── variations/         Variation system
-│           ├── mod.rs          VariationRegistry
+│           ├── mod.rs          VariationRegistry (global singleton)
 │           │                   - VariationInfo (name, display_name, category, parameters)
 │           │                   - VariationParameter (name, type, default, min/max)
 │           │                   - ParamType enum (Float, Integer, Angle)
 │           │                   - Registration system for all 26 variations
+│           │                   - ordered_names: Vec<String> (defines numerical IDs)
+│           │                   - global_registry() function for singleton access
 │           │
 │           └── (future)        Plugin variations (wgsl + metadata)
 │
@@ -90,7 +92,7 @@ fractal_flame_wgpu/
 │       │
 │       └── buffers.rs          FlameBuffers + GPU data structures
 │                               - Transform buffer (storage, 32 slots)
-│                               - Variation params buffer (storage, 192 floats)
+│                               - Variation params buffer (storage, 400 floats: 50 variations × 8 params)
 │                               - Palette texture (1D)
 │                               - Params uniform buffers
 │                               - Accumulation textures (ping-pong)
