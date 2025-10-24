@@ -378,7 +378,7 @@ impl FlameBuffers {
         let curve_lut_texture = device.create_texture(&TextureDescriptor {
             label: Some("Curve LUT Texture"),
             size: Extent3d {
-                width: 4096,  // Increased from 256 to reduce quantization error
+                width: 256,
                 height: 1,
                 depth_or_array_layers: 1,
             },
@@ -405,7 +405,7 @@ impl FlameBuffers {
                 rows_per_image: None,
             },
             Extent3d {
-                width: 4096,  // Match texture width
+                width: 256,
                 height: 1,
                 depth_or_array_layers: 1,
             },
@@ -685,7 +685,7 @@ impl FlameBuffers {
                 rows_per_image: None,
             },
             Extent3d {
-                width: 4096,  // Match texture width
+                width: 256,
                 height: 1,
                 depth_or_array_layers: 1,
             },
