@@ -536,14 +536,30 @@ impl FlameRenderer {
     /// blends RGB channels with the background before outputting. Even though it outputs
     /// the alpha channel, the RGB values are already pre-multiplied/blended, making the
     /// alpha useless for compositing. For transparency, we must read raw accumulation data.
-    pub async fn capture_pixels(&self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<(u32, u32, Vec<u8>), String> {
+    pub async fn capture_pixels(&mut self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<(u32, u32, Vec<u8>), String> {
         if transparent {
             // For transparent export, read directly from accumulation buffer
             // and apply tone mapping on CPU to preserve true alpha values
             self.capture_from_accumulation_buffer(device, queue).await
         } else {
-            // For opaque export, use the normal tonemapped render path
-            self.capture_from_tonemap_render(device, queue, surface_format).await
+            // For opaque export, force non-black background to trigger opaque mode
+            // even if user has set background to black in UI
+            let original_bg = self.background_color;
+            let needs_override = original_bg[0] < 0.001 && original_bg[1] < 0.001 && original_bg[2] < 0.001;
+
+            if needs_override {
+                // Temporarily set to nearly-black to force opaque alpha output
+                self.update_background_color(queue, [0.001, 0.001, 0.001]);
+            }
+
+            let result = self.capture_from_tonemap_render(device, queue, surface_format).await;
+
+            if needs_override {
+                // Restore original background
+                self.update_background_color(queue, original_bg);
+            }
+
+            result
         }
     }
 
@@ -750,7 +766,7 @@ impl FlameRenderer {
 
     /// Capture the current rendered frame as PNG data (convenience wrapper)
     /// If transparent is true, renders without background blending (alpha channel preserved)
-    pub async fn capture_png(&self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<Vec<u8>, String> {
+    pub async fn capture_png(&mut self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<Vec<u8>, String> {
         let (width, height, rgba_data) = self.capture_pixels(device, queue, transparent, surface_format).await?;
 
         // Encode as PNG
