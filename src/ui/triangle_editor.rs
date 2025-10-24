@@ -52,10 +52,10 @@ pub fn render_triangle_editor_window(
                 ui.label("Transform:");
                 let old_selection = selected_transform;
                 egui::ComboBox::new("triangle_editor_transform_selector", "")
-                    .selected_text(format!("Transform {}", selected_transform))
+                    .selected_text(format!("Transform {}", selected_transform + 1))
                     .show_ui(ui, |ui| {
                         for i in 0..flame.transforms.len() {
-                            ui.selectable_value(&mut selected_transform, i, format!("Transform {}", i));
+                            ui.selectable_value(&mut selected_transform, i, format!("Transform {}", i + 1));
                         }
                     });
 
@@ -424,15 +424,15 @@ pub fn render_triangle_editor_window(
             if let Some(transform) = flame.transforms.get(selected_transform) {
                 let (o, x, y) = transform.to_triangle();
 
-                ui.label("Triangle Coordinates:");
-                ui.horizontal(|ui| {
-                    ui.monospace(format!("O: ({:.3}, {:.3})", o[0], o[1]));
-                });
+                ui.label(format!("Triangle Coordinates (Transform {}):", selected_transform + 1));
                 ui.horizontal(|ui| {
                     ui.monospace(format!("X: ({:.3}, {:.3})", x[0], x[1]));
                 });
                 ui.horizontal(|ui| {
                     ui.monospace(format!("Y: ({:.3}, {:.3})", y[0], y[1]));
+                });
+                ui.horizontal(|ui| {
+                    ui.monospace(format!("O: ({:.3}, {:.3})", o[0], o[1]));
                 });
 
                 ui.separator();
