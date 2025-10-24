@@ -271,10 +271,13 @@ impl VariationRegistry {
         &self.ordered_names
     }
 
-    /// Get variations by category
+    /// Get variations by category (in registration order)
     pub fn by_category(&self, category: VariationCategory) -> Vec<&VariationInfo> {
-        self.variations
-            .values()
+        // Iterate ordered_names to preserve registration order (numerical ID order)
+        // This ensures UI displays variations in consistent order
+        self.ordered_names
+            .iter()
+            .filter_map(|name| self.variations.get(name))
             .filter(|v| v.category == category)
             .collect()
     }
