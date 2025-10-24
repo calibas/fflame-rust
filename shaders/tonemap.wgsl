@@ -68,14 +68,6 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         color = log(color + 1.0) / log(10.0);
     }
 
-    // Apply tone curve if enabled
-    if (tonemap_params.use_curve != 0u) {
-        let r = textureSample(curve_lut_texture, curve_lut_sampler, color.r).r;
-        let g = textureSample(curve_lut_texture, curve_lut_sampler, color.g).r;
-        let b = textureSample(curve_lut_texture, curve_lut_sampler, color.b).r;
-        color = vec3<f32>(r, g, b);
-    }
-
     // Gamma correction
     color = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));
 
@@ -93,12 +85,22 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // In transparent mode, output fractal color with alpha
     // In normal mode, blend with background and output opaque
-    let final_color = select(
+    var final_color = select(
         mix(tonemap_params.background_color, color, alpha),  // Normal mode: blend with background
         color,                                                 // Transparent mode: just the color
         is_transparent_mode
     );
     let output_alpha = select(1.0, alpha, is_transparent_mode);
+
+    // Apply tone curve AFTER background blending
+    // This ensures curve adjustments affect the final composited image
+    // rather than being washed out by low-alpha blending
+    if (tonemap_params.use_curve != 0u) {
+        let r = textureSample(curve_lut_texture, curve_lut_sampler, final_color.r).r;
+        let g = textureSample(curve_lut_texture, curve_lut_sampler, final_color.g).r;
+        let b = textureSample(curve_lut_texture, curve_lut_sampler, final_color.b).r;
+        final_color = vec3<f32>(r, g, b);
+    }
 
     return vec4<f32>(final_color, output_alpha);
 }
