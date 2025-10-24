@@ -488,9 +488,66 @@ The bug was coordinate quantization when mapping continuous colors to discrete L
 Linear interpolation between adjacent LUT entries now has 16x finer granularity,
 reducing quantization error to essentially zero (<0.01% = noise level).
 
-## Final Status: BUG SOLVED ✅
+## Final Status: BUG SOLVED ✅ (2025-10-23)
 
-The tone curve bug is now fixed. Linear curves produce near-perfect 0.00% error.
+### The Real Problem
 
-The user was absolutely right to push back - systematic investigation led to
-identifying the root cause and implementing the correct solution!
+After implementing the 4096 LUT "fix", the user reported the bug was **still visible in the app**, despite export_preset showing 0.00% error. This led to a critical realization:
+
+**The bug was never about LUT resolution or coordinate quantization.**
+
+The real issue: **Tone curve was applied BEFORE background blending.**
+
+### The Background Blending Problem
+
+In the tonemap shader, the original order was:
+1. Exposure
+2. Tone mapping (Linear/Logarithmic)
+3. **Tone curve** ← Applied here
+4. Gamma correction
+5. **Background blend**: `mix(background_color, color, alpha)`
+
+This caused visible artifacts in low-density areas because:
+- Tone curve adjustments (e.g., lifting blacks from 0.1 to 0.2)
+- Get immediately washed out by low-alpha blending: `mix(black, 0.2, 0.1) = 0.02`
+- The tone curve adjustment is effectively undone
+
+### Why export_preset Didn't Show the Bug
+
+The export_preset tool uses `background_color = [0,0,0]` which triggers **transparent mode** in the shader (skips background blending entirely). So the tone curve worked fine because there was no background blend to wash it out.
+
+The app UI uses **opaque mode** with black background blending, which triggered the bug.
+
+### The Actual Fix
+
+**Moved tone curve application to AFTER background blending:**
+
+```wgsl
+// NEW ORDER:
+1. Exposure
+2. Tone mapping (Linear/Logarithmic)
+3. Gamma correction
+4. Background blend: mix(background_color, color, alpha)
+5. Tone curve ← Applied to final composited image
+```
+
+Now the tone curve adjustments affect the final composited image and aren't washed out by low-alpha blending.
+
+### Secondary Fixes
+
+While investigating, also fixed two export bugs:
+
+1. **export_preset**: `--transparent` flag was defined but never used
+2. **App PNG export**: "Export PNG (with BG)" was outputting transparent alpha when background was black
+
+Both fixed by forcing background to `[0.001, 0.001, 0.001]` to trigger opaque mode when transparent=false.
+
+### Reverted Changes
+
+The 4096 LUT increase was **reverted** - it didn't solve the actual problem and added unnecessary complexity. Back to 256-entry LUT.
+
+### Lessons Learned
+
+1. **Test in the actual environment where the bug appears** - export_preset couldn't reproduce the issue
+2. **Blending order matters** - applying adjustments before blending can cause them to be washed out
+3. **Simple fixes are often correct** - the solution was moving 5 lines of shader code, not increasing LUT resolution 16x
