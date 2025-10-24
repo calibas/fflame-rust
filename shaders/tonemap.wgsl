@@ -74,6 +74,16 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Clamp to valid range
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
 
+    // Apply tone curve to fractal color only (not background)
+    // Only apply where there's significant fractal density to avoid affecting background
+    var fractal_color = color;
+    if (tonemap_params.use_curve != 0u && density > 0.001) {
+        let r = textureSample(curve_lut_texture, curve_lut_sampler, color.r).r;
+        let g = textureSample(curve_lut_texture, curve_lut_sampler, color.g).r;
+        let b = textureSample(curve_lut_texture, curve_lut_sampler, color.b).r;
+        fractal_color = vec3<f32>(r, g, b);
+    }
+
     // Map density to alpha using density_scale
     // The density represents how many samples hit this pixel
     // density_scale controls transparency: higher = more opaque
@@ -83,24 +93,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let bg_sum = tonemap_params.background_color.r + tonemap_params.background_color.g + tonemap_params.background_color.b;
     let is_transparent_mode = bg_sum < 0.001;
 
-    // In transparent mode, output fractal color with alpha
-    // In normal mode, blend with background and output opaque
-    var final_color = select(
-        mix(tonemap_params.background_color, color, alpha),  // Normal mode: blend with background
-        color,                                                 // Transparent mode: just the color
+    // Composite: background * (1 - alpha) + tone_curved_fractal * alpha
+    // This ensures tone curve only affects the fractal layer, not the background
+    let final_color = select(
+        tonemap_params.background_color * (1.0 - alpha) + fractal_color * alpha,  // Normal mode: manual blend
+        fractal_color,                                                              // Transparent mode: just fractal
         is_transparent_mode
     );
     let output_alpha = select(1.0, alpha, is_transparent_mode);
-
-    // Apply tone curve AFTER background blending
-    // This ensures curve adjustments affect the final composited image
-    // rather than being washed out by low-alpha blending
-    if (tonemap_params.use_curve != 0u) {
-        let r = textureSample(curve_lut_texture, curve_lut_sampler, final_color.r).r;
-        let g = textureSample(curve_lut_texture, curve_lut_sampler, final_color.g).r;
-        let b = textureSample(curve_lut_texture, curve_lut_sampler, final_color.b).r;
-        final_color = vec3<f32>(r, g, b);
-    }
 
     return vec4<f32>(final_color, output_alpha);
 }
