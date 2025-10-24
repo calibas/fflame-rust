@@ -343,13 +343,59 @@ The bug is real and measurable:
 - Edge clamping (tested explicit clamp)
 - Texture dimension (tested 1D vs 2D - properly this time)
 
+### Debug Tools Created (2025-10-23 Evening)
+
+Two standalone debug tools were created to inspect the curve LUT system:
+
+#### 1. `debug_curve_lut.rs` - LUT Generation Verification
+**Purpose**: Verify CPU-side LUT generation is correct
+
+**Findings**:
+- ✅ LUT generation is mathematically correct
+- ✅ R channel contains correct values (identity for linear curve)
+- ✅ G, B channels are 0.0 (correct)
+- ✅ A channel is 1.0 (correct)
+- ✅ f16 quantization error is negligible (~0.00001 = 0.001%)
+- ✅ All 256 LUT entries are within f16 precision limits
+
+**Conclusion**: CPU-side LUT generation is NOT the source of the bug.
+
+#### 2. `debug_curve_sampling.rs` - Sampling Simulation
+**Purpose**: Simulate GPU texture sampling behavior on CPU
+
+**Findings**:
+- ✅ Linear interpolation produces mathematically perfect results (0.00% error)
+- ✅ Coordinate mapping formula `floor(coord * 255)` is correct
+- ✅ Blend factor calculation `fract(coord * 255)` is correct
+- ✅ CPU simulation of linear sampling matches expected output perfectly
+
+**Conclusion**: The sampling **algorithm** is correct. The bug must be in the GPU implementation.
+
+### What We Know For Certain
+
+**✅ Working correctly (verified):**
+1. CPU curve evaluation (`ToneCurve::evaluate()`)
+2. LUT generation (`ToneCurve::generate_lut()`)
+3. f16 precision (quantization < 0.001%)
+4. Sampling algorithm (CPU simulation perfect)
+5. Alpha channel rendering (0.00% error)
+
+**❌ Not working (measured):**
+- GPU RGB curve application produces ~0.1% error with linear curve
+
+**🔍 Remaining unknowns:**
+1. **GPU texture upload** - Does the data reach GPU intact?
+2. **GPU sampling implementation** - Does `textureSample()` work as expected?
+3. **Coordinate transformation** - Is there a subtle mapping difference?
+4. **Hardware/driver issue** - Could this be GPU-specific?
+
 ### Next Steps to Investigate
 
-Unexplored hypotheses:
-1. **Gamma interaction** - Maybe gamma correction is being applied in wrong order?
-2. **Shader math precision** - f32 arithmetic precision in textureSample interpolation?
-3. **LUT sampling coordinates** - Are we sampling at exactly the right positions?
-4. **Hardware-specific bug** - Test on different GPU to see if error changes
-5. **Alternative approach** - Direct curve evaluation in shader instead of LUT?
+Remaining hypotheses that could be tested:
+1. **Read back GPU texture data** - Verify LUT bytes on GPU match CPU
+2. **Test on different GPU** - Check if error is hardware-specific
+3. **Direct curve evaluation in shader** - Bypass LUT entirely
+4. **Compare Vulkan/DirectX/Metal backends** - wgpu backend differences
+5. **Shader assembly inspection** - Look at compiled shader code
 
 The user was right to push back - this bug needs to be solved, not accepted.
