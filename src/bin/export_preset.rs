@@ -176,7 +176,22 @@ async fn main() -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Palette index {} not found", config.palette_index))?;
     renderer.update_palette(&device, &queue, palette);
     renderer.update_density_scale(&queue, config.density_scale);
-    renderer.update_background_color(&queue, config.background_color);
+
+    // Use --transparent flag to control background mode
+    // Black [0,0,0] triggers transparent mode (alpha = density)
+    // Non-black triggers opaque mode (alpha = 1.0, blended with background)
+    let background_color = if args.transparent {
+        [0.0, 0.0, 0.0]  // Transparent mode
+    } else {
+        config.background_color  // Use preset's background (usually black but forces opaque)
+    };
+    // If preset has black background and not in transparent mode, use tiny epsilon to force opaque
+    let background_color = if !args.transparent && background_color == [0.0, 0.0, 0.0] {
+        [0.001, 0.001, 0.001]  // Force opaque mode with nearly-black background
+    } else {
+        background_color
+    };
+    renderer.update_background_color(&queue, background_color);
 
     // Update tone curve if enabled
     use fractal_flame_wgpu::scene::tonemap::ToneMapMode;
