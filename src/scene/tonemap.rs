@@ -178,15 +178,17 @@ impl ToneCurve {
         x
     }
 
-    /// Generate a 256-sample lookup texture for fast GPU evaluation
+    /// Generate a 4096-sample lookup texture for fast GPU evaluation
     /// Returns Rgba16Float data as bytes (R channel = curve value, GBA = 0)
+    /// Higher resolution (2048 vs 256) greatly reduces coordinate quantization error
     pub fn generate_lut(&self) -> Vec<u8> {
         use half::f16;
-        let mut bytes = Vec::with_capacity(256 * 4 * 2); // 256 pixels * 4 components * 2 bytes
-        for i in 0..256 {
-            // Generate LUT at edge values (i / 255) for proper range coverage
-            // This ensures LUT[0] = f(0.0) and LUT[255] = f(1.0)
-            let x = i as f32 / 255.0;
+        const LUT_SIZE: usize = 4096;
+        let mut bytes = Vec::with_capacity(LUT_SIZE * 4 * 2); // 4096 pixels * 4 components * 2 bytes
+        for i in 0..LUT_SIZE {
+            // Generate LUT at edge values (i / (SIZE-1)) for proper range coverage
+            // This ensures LUT[0] = f(0.0) and LUT[4095] = f(1.0)
+            let x = i as f32 / (LUT_SIZE - 1) as f32;
             let y = self.evaluate(x);
             // Convert to f16 and write bytes
             bytes.extend_from_slice(&f16::from_f32(y).to_le_bytes());    // R
