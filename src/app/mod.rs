@@ -675,6 +675,8 @@ impl App {
                                 height,
                                 total_iterations,
                                 render_time_ms,
+                                self.iterations_per_thread,
+                                self.speed_factor,
                                 &config,
                             );
 
@@ -718,6 +720,8 @@ impl App {
                     let config = self.export_config();
                     let total_iterations = renderer.total_iterations();
                     let render_time_ms = self.metrics.render_time_ms;
+                    let iterations_per_thread = self.iterations_per_thread;
+                    let speed_factor = self.speed_factor;
 
                     let device: &'static wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
                     let queue: &'static wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
@@ -735,6 +739,8 @@ impl App {
                                     height,
                                     total_iterations,
                                     render_time_ms,
+                                    iterations_per_thread,
+                                    speed_factor,
                                     &config,
                                 );
 

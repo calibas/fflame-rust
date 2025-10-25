@@ -6,6 +6,7 @@
 use anyhow::Result;
 use clap::Parser;
 use image::{ImageBuffer, Rgba};
+use fractal_flame_wgpu::png_metadata::read_png_metadata;
 
 #[derive(Parser, Debug)]
 #[command(name = "compare_images")]
@@ -34,6 +35,14 @@ struct Args {
     /// Enable advanced metrics (SSIM, MSE, PSNR)
     #[arg(long)]
     advanced: bool,
+
+    /// Minimum average color intensity (0-255) to consider valid
+    #[arg(long, default_value = "10")]
+    min_color: u8,
+
+    /// Skip color validation check
+    #[arg(long)]
+    skip_color_check: bool,
 }
 
 fn main() -> Result<()> {
@@ -66,6 +75,67 @@ fn main() -> Result<()> {
     let (width, height) = img1.dimensions();
     println!("Dimensions: {}x{} ({} pixels)", width, height, width * height);
     println!();
+
+    // Read PNG metadata if available
+    let metadata1 = std::fs::read(&args.image1)
+        .ok()
+        .and_then(|data| read_png_metadata(&data).ok());
+    let metadata2 = std::fs::read(&args.image2)
+        .ok()
+        .and_then(|data| read_png_metadata(&data).ok());
+
+    // Display metadata comparison
+    if let (Some(ref m1), Some(ref m2)) = (&metadata1, &metadata2) {
+        println!("Metadata Comparison:");
+        println!("  Image 1: v{} ({})", m1.version, m1.git_hash);
+        println!("  Image 2: v{} ({})", m2.version, m2.git_hash);
+
+        if m1.git_hash != m2.git_hash {
+            println!("  ⚠ Different git commits!");
+        }
+
+        println!("  Iterations: {} vs {}", m1.total_iterations, m2.total_iterations);
+        println!("  Render time: {:.2}ms vs {:.2}ms", m1.render_time_ms, m2.render_time_ms);
+        println!("  Iterations/thread: {} vs {}", m1.iterations_per_thread, m2.iterations_per_thread);
+        println!("  Speed factor: {:.2}x vs {:.2}x", m1.speed_factor, m2.speed_factor);
+
+        if m1.shader_compile_time_ms.is_some() || m2.shader_compile_time_ms.is_some() {
+            println!("  Shader compile time: {} vs {}",
+                m1.shader_compile_time_ms.map(|t| format!("{:.2}ms", t)).unwrap_or("N/A".to_string()),
+                m2.shader_compile_time_ms.map(|t| format!("{:.2}ms", t)).unwrap_or("N/A".to_string())
+            );
+        }
+
+        println!();
+    } else if metadata1.is_some() || metadata2.is_some() {
+        println!("⚠ Warning: Only one image has metadata\n");
+    }
+
+    // Color validation
+    if !args.skip_color_check {
+        let color1 = calculate_average_color(&img1);
+        let color2 = calculate_average_color(&img2);
+
+        println!("Color Validation:");
+        println!("  Image 1 avg intensity: R={:.1} G={:.1} B={:.1}", color1.0, color1.1, color1.2);
+        println!("  Image 2 avg intensity: R={:.1} G={:.1} B={:.1}", color2.0, color2.1, color2.2);
+
+        let avg1 = (color1.0 + color1.1 + color1.2) / 3.0;
+        let avg2 = (color2.0 + color2.1 + color2.2) / 3.0;
+
+        if avg1 < args.min_color as f64 {
+            println!("  ✗ Image 1 appears mostly black (avg: {:.1} < {})", avg1, args.min_color);
+            println!("     This may indicate a bad reference image!");
+            anyhow::bail!("Image 1 failed color validation - appears mostly black");
+        }
+        if avg2 < args.min_color as f64 {
+            println!("  ✗ Image 2 appears mostly black (avg: {:.1} < {})", avg2, args.min_color);
+            println!("     This may indicate a bad reference image!");
+            anyhow::bail!("Image 2 failed color validation - appears mostly black");
+        }
+
+        println!("  ✓ Both images have sufficient color data\n");
+    }
 
     // Compare pixels
     let mut total_diff = 0u64;
@@ -312,4 +382,28 @@ fn calculate_ssim(img1: &ImageBuffer<Rgba<u8>, Vec<u8>>, img2: &ImageBuffer<Rgba
     } else {
         1.0 // If no windows, assume identical
     }
+}
+
+/// Calculate average color intensity (R, G, B) across all pixels
+fn calculate_average_color(img: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> (f64, f64, f64) {
+    let (width, height) = img.dimensions();
+    let mut sum_r = 0u64;
+    let mut sum_g = 0u64;
+    let mut sum_b = 0u64;
+
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = img.get_pixel(x, y);
+            sum_r += pixel[0] as u64;
+            sum_g += pixel[1] as u64;
+            sum_b += pixel[2] as u64;
+        }
+    }
+
+    let total_pixels = (width * height) as f64;
+    (
+        sum_r as f64 / total_pixels,
+        sum_g as f64 / total_pixels,
+        sum_b as f64 / total_pixels,
+    )
 }
