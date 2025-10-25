@@ -136,7 +136,6 @@ pub fn render_tone_mapping_window(
                             .map(|p| p.name.as_str())
                             .unwrap_or("Unknown");
 
-                        ui.label(format!("({} palettes in library)", palettes.len()));
                         // Use ID with palette count to force refresh when library changes
                         egui::ComboBox::from_id_source(format!("palette_selector_{}", palettes.len()))
                             .selected_text(current_palette_name)
@@ -145,30 +144,55 @@ pub fn render_tone_mapping_window(
                                 for (idx, palette) in palettes.iter().enumerate() {
                                     if ui.selectable_value(current_palette_index, idx, &palette.name).changed() {
                                         *palette_changed = true;
+                                        // Update palette editor when selection changes
+                                        if let Some(pal) = palette_library.get(*current_palette_index) {
+                                            let mut edited_palette = pal.clone();
+
+                                            // Generate unique name for built-in palettes even when switching
+                                            if pal.built_in {
+                                                let base_name = &pal.name;
+                                                let mut new_name = format!("{} (Custom)", base_name);
+                                                let mut counter = 2;
+
+                                                while palette_library.palettes().iter().any(|p| p.name == new_name) {
+                                                    new_name = format!("{} (Custom {})", base_name, counter);
+                                                    counter += 1;
+                                                }
+
+                                                edited_palette.name = new_name;
+                                                edited_palette.built_in = false;
+                                            }
+
+                                            *palette_editor_palette = edited_palette;
+                                        }
                                     }
                                 }
                             });
 
-                        // Palette editor button
+                        // Edit Palette button - creates copy of built-ins, edits custom palettes in-place
                         if ui.button("🎨 Edit Palette").clicked() {
                             *show_palette_editor = !*show_palette_editor;
-                            // Load current palette into editor with auto-generated unique name
+                            // Load current palette into editor
                             if let Some(pal) = palette_library.get(*current_palette_index) {
                                 let mut edited_palette = pal.clone();
 
-                                // Always generate a unique name to avoid overwriting existing palettes
-                                // User can rename in the editor if they want to update an existing one
-                                let base_name = &pal.name;
-                                let mut new_name = format!("{} (Custom)", base_name);
-                                let mut counter = 2;
+                                // Always generate unique name for built-in palettes to prevent editing originals
+                                if pal.built_in {
+                                    let base_name = &pal.name;
+                                    let mut new_name = format!("{} (Custom)", base_name);
+                                    let mut counter = 2;
 
-                                // Keep incrementing until we find a unique name
-                                while palette_library.palettes().iter().any(|p| p.name == new_name) {
-                                    new_name = format!("{} (Custom {})", base_name, counter);
-                                    counter += 1;
+                                    // Keep incrementing until we find a unique name
+                                    while palette_library.palettes().iter().any(|p| p.name == new_name) {
+                                        new_name = format!("{} (Custom {})", base_name, counter);
+                                        counter += 1;
+                                    }
+
+                                    edited_palette.name = new_name;
+                                    edited_palette.built_in = false; // Custom palettes are not built-in
                                 }
+                                // For custom palettes, keep the same name (will update in place)
 
-                                edited_palette.name = new_name;
                                 *palette_editor_palette = edited_palette;
                             }
                         }
