@@ -25,7 +25,7 @@ pub fn render_config_dialog(
                     *config_export_json = Some(String::new()); // Will be filled in app.rs
                 }
 
-                if ui.button("💾 Save as .flame").clicked() {
+                if ui.button("💾 Save as .fflame").clicked() {
                     *config_save_file = true;
                 }
             });
@@ -48,7 +48,7 @@ pub fn render_config_dialog(
                     config_json_buffer.clear();
                 }
 
-                if ui.button("📁 Load .flame").clicked() {
+                if ui.button("📁 Load .fflame").clicked() {
                     *config_load_file = true;
                 }
             });

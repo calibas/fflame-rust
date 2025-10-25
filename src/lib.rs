@@ -63,7 +63,7 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
     println!("Output: {}", output);
     println!();
 
-    // Find all .flame files
+    // Find all .fflame files
     let input_path = Path::new(input);
     let flame_files = if input_path.is_dir() {
         scene::assets::load_configs_from_dir(input_path)
@@ -72,7 +72,7 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
     };
 
     if flame_files.is_empty() {
-        eprintln!("No .flame files found");
+        eprintln!("No .fflame files found");
         return Ok(());
     }
 

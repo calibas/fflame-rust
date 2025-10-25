@@ -59,7 +59,7 @@ pub fn load_configs_from_dir(dir: &Path) -> Vec<FractalConfig> {
         Ok(entries) => {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("flame") {
+                if path.extension().and_then(|s| s.to_str()) == Some("fflame") {
                     match load_config(&path) {
                         Ok(config) => {
                             log::info!("Loaded preset: {} from {}", config.flame.name, path.display());
