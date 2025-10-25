@@ -8,6 +8,7 @@ pub async fn export_headless(
     width: u32,
     height: u32,
     test_category: Option<String>,
+    iterations_per_thread: u32,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     use crate::renderer::compute_kernel::FlameRenderer;
     use crate::scene::palette::PaletteLibrary;
@@ -55,7 +56,7 @@ pub async fn export_headless(
         .or_else(|| palette_library.get(config.palette_index))
         .ok_or("No palette found")?;
 
-    renderer.load_config(&device, &mut encoder, &queue, config, palette, 256);
+    renderer.load_config(&device, &mut encoder, &queue, config, palette, iterations_per_thread);
 
     queue.submit(std::iter::once(encoder.finish()));
 
@@ -63,7 +64,6 @@ pub async fn export_headless(
     let render_start = Instant::now();
     let mut total_rendered = 0u64;
     let target = config.max_iterations;
-    let iterations_per_frame = 256u32;
 
     while total_rendered < target {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -74,7 +74,7 @@ pub async fn export_headless(
             &mut encoder,
             &queue,
             128,  // workgroups
-            iterations_per_frame,
+            iterations_per_thread,
             config.zoom,
             config.pan_x,
             config.pan_y,
@@ -84,7 +84,7 @@ pub async fn export_headless(
             config.speed_factor,
         );
 
-        let samples = 128 * iterations_per_frame as u64;
+        let samples = 128 * iterations_per_thread as u64;
         renderer.accumulate_pass(&mut encoder, &queue, &device, samples);
 
         queue.submit(std::iter::once(encoder.finish()));
