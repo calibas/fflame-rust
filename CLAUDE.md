@@ -65,8 +65,12 @@ See [docs/outline.md](docs/outline.md) for original design goals
 
 ### Build Commands
 ```bash
-# Desktop (Windows/macOS/Linux)
+# Desktop GUI (Windows/macOS/Linux)
 cargo run --release
+
+# Headless CLI Export (batch PNG generation)
+cargo run --release -- export --input tests/visual/configs --output tests/visual/current
+# See CLI Export section below for details
 
 # WASM (Web)
 wasm-pack build --target web --release
@@ -113,6 +117,73 @@ cargo run --release
 - Benchmarks: CPU iteration, all 26 variations, affine, point calculations
 
 **All tests passing:** ✅ 15+ unit tests, 12 regression tests
+
+### CLI Export Mode
+
+The main app supports headless batch PNG export for testing and automation:
+
+```bash
+# Export single file
+fractal_flame_wgpu export -i config.flame -o output.png --width 1920 --height 1080
+
+# Batch export directory
+fractal_flame_wgpu export -i tests/visual/configs -o tests/visual/current
+
+# With test category metadata
+fractal_flame_wgpu export -i tests/visual/configs/variations -o tests/visual/current --category variations
+```
+
+**Features:**
+- Uses same fast rendering code as interactive app (~0.5s for 10M iterations @ 800x600)
+- Renders exact `max_iterations` from config for reproducibility
+- Progress indicator shows iteration count and percentage
+- Full PNG metadata embedding (build info, config, render settings)
+- Batch processes entire directories
+- Headless GPU rendering (no window required)
+
+**Performance:**
+- 128 workgroups × 256 iterations = 32,768 iterations/dispatch
+- Automatically calculates dispatch count from `config.max_iterations`
+- Example: 10M iterations @ 800x600 renders in ~0.5 seconds
+
+**Output:**
+- PNG files with embedded metadata (see PNG Metadata section below)
+- Named after flame config name (lowercase, underscores)
+- Includes test category if provided
+
+### PNG Metadata
+
+All exported PNGs include comprehensive metadata in tEXt chunks:
+
+**Build Information:**
+- Version, git hash, branch, timestamp
+- Platform, rustc version, build profile
+
+**Render Settings:**
+- Resolution, total iterations, render time
+- Frame count, workgroups, iterations per dispatch
+
+**Flame Configuration:**
+- Complete FractalConfig serialized as JSON
+- SHA256 checksum of config for verification
+- All transforms, variations, parameters
+
+**Display Settings:**
+- Background color, exposure, gamma
+- Tone curve usage, tonemap mode
+
+**Test Support:**
+- Optional test_name and test_category fields
+- For visual regression testing
+
+**Reading Metadata:**
+```rust
+use fractal_flame_wgpu::png_metadata::read_png_metadata;
+
+let metadata = read_png_metadata("output.png")?;
+println!("Rendered {} iterations in {:.2}ms",
+    metadata.total_iterations, metadata.render_time_ms);
+```
 
 ## Coding Guidelines
 
@@ -330,14 +401,31 @@ JSON format with name and color stops:
 ### Config Files (.flame)
 JSON format containing full fractal state (see [src/config.rs](src/config.rs))
 
+**FractalConfig includes ALL settings for exact reproduction:**
+- Flame definition (transforms, variations, variation parameters, colors)
+- View state (zoom, pan, rotation, camera rotation)
+- Rendering settings (density_scale, speed_factor, **max_iterations**)
+- Color settings (color_mode, palette_index, background_color, **actual palette data**)
+- Tone mapping (**tonemap_mode, tonemap_curve, use_curve**, exposure, gamma)
+- Reproducibility (**deterministic_rng** flag)
+
+**Added 2025-10-24 for full reproducibility:**
+- `palette: Option<Palette>` - Embeds actual palette data (not just library index)
+- `use_curve: bool` - Whether to apply tone curve (default: true)
+- `max_iterations: u64` - Exact iteration count for tests (default: 1 billion)
+- `deterministic_rng: bool` - Enable reproducible RNG (default: false)
+
+This ensures configs can **exactly recreate** fractals via JSON import/export.
+
 ## Important Implementation Notes
 
 ### Preset System (Added 2025-10-20)
 The preset system stores **complete FractalConfig** (not just Flame):
 - Includes flame definition (transforms, variations, colors)
 - Includes view state (zoom, pan, rotation)
-- Includes rendering settings (density_scale, speed_factor)
-- Includes color settings (color_mode, palette_index, background_color)
+- Includes rendering settings (density_scale, speed_factor, max_iterations)
+- Includes color settings (color_mode, palette_index, background_color, palette data)
+- Includes tone mapping (tonemap_mode, tonemap_curve, use_curve, exposure, gamma)
 
 **Key Implementation Details:**
 1. **Transform Buffer Sizing** - Pre-allocated for `MAX_TRANSFORMS` (32) to support any preset
@@ -356,6 +444,27 @@ Desktop builds auto-load from filesystem:
 - `assets/palettes/*.palette` → PaletteLibrary
 - `assets/presets/*.flame` → PresetLibrary
 WASM builds use built-in assets only (no filesystem access)
+
+### Rotation-Aware Panning (Added 2025-10-24)
+All panning inputs now respect view rotation for intuitive navigation:
+
+**Input Methods:**
+- **Mouse drag**: Left-click and drag to pan
+- **Keyboard**: Arrow keys (↑↓←→)
+- **UI buttons**: View window arrow controls
+
+**Behavior:**
+- When rotation = 0°: Standard axis-aligned panning
+- When rotation ≠ 0°: Pan direction rotates with view
+- Example at 90° rotation: Right arrow pans in original "up" direction
+
+**Implementation:**
+- Applies inverse rotation matrix to screen-space movements
+- Converts screen deltas to fractal-space coordinates
+- Formula: `fractal_delta = rotate(screen_delta, -rotation)`
+- All three input methods use identical rotation logic
+
+This ensures panning always moves in the direction you see on screen.
 
 ### 3D Rendering System (Added 2025-10-21)
 Full pseudo-3D rendering inspired by Apophysis 7X:

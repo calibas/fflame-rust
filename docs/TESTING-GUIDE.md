@@ -11,6 +11,10 @@ cargo test
 # Regression Tests (integration tests)
 cargo test --test regression
 
+# Visual Regression Tests (PNG export + comparison)
+cargo run --release -- export --input tests/visual/configs --output tests/visual/current
+cargo run --release --bin compare_images -- --image1 ref.png --image2 current.png --advanced
+
 # CPU Benchmarks (Criterion)
 cargo bench
 
@@ -20,8 +24,11 @@ cargo run --release --bin simple_benchmark
 # Show Version Info
 cargo run --example show_version
 
-# Run Main App
+# Run Main App (GUI)
 cargo run --release
+
+# Run Main App (CLI export mode)
+cargo run --release -- export --input config.flame --output output.png
 ```
 
 ---
@@ -340,21 +347,49 @@ metrics.export_to_console();
 
 ## 8. Visual Regression Testing
 
-**Status:** Infrastructure in place, image generation not yet implemented
+**Status:** CLI export mode implemented, automated comparison available
 
-**Planned Usage:**
+**Current Workflow:**
 ```bash
-# Generate reference images
-cargo run --release --bin generate_references
+# Generate test images from .flame configs (batch mode)
+cargo run --release -- export --input tests/visual/configs --output tests/visual/current
 
-# Run visual tests
-cargo test --test visual_regression
+# Generate single image
+cargo run --release -- export --input config.flame --output output.png
+
+# Compare images with metrics
+cargo run --release --bin compare_images -- --image1 tests/visual/references/linear.png --image2 tests/visual/current/linear.png --advanced
+
+# Advanced comparison shows SSIM, MSE, PSNR
+```
+
+**Features:**
+- **Headless rendering** - Uses same GPU code as interactive app
+- **PNG metadata** - Embeds version, build, config JSON, checksums
+- **Batch processing** - Export entire directories of .flame files
+- **Iteration-based** - Uses `max_iterations` from config (not frame count)
+- **Image comparison** - Advanced metrics (SSIM, MSE, PSNR) and visual diffs
+
+**PNG Metadata (Embedded in every export):**
+```
+Software: Fractal Flame Renderer v0.1.0
+Build: #123 (abc1234)
+Platform: windows-x86_64
+BuildDate: 2025-10-24T12:34:56Z
+Resolution: 1920x1080
+Iterations: 10000000
+RenderTime: 1234.56ms
+Config: <full FractalConfig JSON>
+ConfigChecksum: sha256:...
 ```
 
 **Current Status:**
-- Metadata generation works
-- GPU readback for image capture not yet implemented
-- Manual visual inspection required
+- ✅ CLI export mode working
+- ✅ PNG metadata embedded
+- ✅ Batch processing
+- ✅ Image comparison tool with advanced metrics
+- ⏳ Automated regression test harness (future)
+- ⏳ Reference image library (in progress)
 
 ---
 
@@ -542,12 +577,14 @@ Before releasing:
 | Regression | `tests/regression.rs` | `cargo test --test regression` |
 | Benchmarks | `benches/flame_bench.rs` | `cargo bench` |
 | Simple bench | `src/bin/simple_benchmark.rs` | `cargo run --bin simple_benchmark` |
+| CLI export | `src/lib.rs`, `src/app.rs` | `cargo run -- export -i config.flame -o out.png` |
+| Image compare | `src/bin/compare_images.rs` | `cargo run --bin compare_images -- --image1 a.png --image2 b.png` |
 | Profiler | `src/profiler.rs` | (used in code) |
 | Metrics | `src/util.rs` | (automatic in app) |
 | Version | `examples/show_version.rs` | `cargo run --example show_version` |
 
 ---
 
-**Last Updated:** 2025-10-21
-**Current Build:** #9
-**Test Coverage:** Unit tests ✅, Regression ✅, Benchmarks ✅, Profiling ✅
+**Last Updated:** 2025-10-24
+**Current Build:** #123 (check with `cargo run --example show_version`)
+**Test Coverage:** Unit tests ✅, Regression ✅, Benchmarks ✅, Profiling ✅, Visual (CLI) ✅
