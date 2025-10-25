@@ -1041,6 +1041,7 @@ impl App {
         self.camera_rotation_y = config.camera_rotation_y;
         self.density_scale = config.density_scale;
         self.speed_factor = config.speed_factor;
+        self.max_iterations = Some(config.max_iterations);
         self.color_mode = config.color_mode;
         self.current_palette_index = config.palette_index;
         self.background_color = config.background_color;
