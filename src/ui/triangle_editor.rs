@@ -95,7 +95,7 @@ pub fn render_triangle_editor_window(
                 MouseMode::MovePoints => "Click and drag O, X, or Y points individually",
                 MouseMode::Translate => "Click and drag anywhere to move the entire triangle",
                 MouseMode::Rotate => "Click and drag to rotate the triangle around O",
-                MouseMode::Scale => "Click and drag up/down to scale the triangle",
+                MouseMode::Scale => "Click and drag along perpendicular axis to X-Y line to scale",
             };
             ui.label(egui::RichText::new(mode_desc).italics().small());
 
@@ -306,20 +306,47 @@ pub fn render_triangle_editor_window(
                             *triangle_drag_started = true;
                         }
 
-                        // Scale X and Y from O
+                        // Scale along perpendicular axis to X-Y line
                         if let (Some(start_pos), Some(current_pos)) = (drag_start_pos, response.interact_pointer_pos()) {
                             if response.dragged() {
-                                let delta_y = (start_pos.y - current_pos.y) * 0.005; // Sensitivity (up = bigger)
-                                let scale_factor = 1.0 + delta_y;
+                                // Calculate X-Y vector in world space
+                                let xy_vec = [x[0] - y[0], x[1] - y[1]];
+                                let xy_len = (xy_vec[0] * xy_vec[0] + xy_vec[1] * xy_vec[1]).sqrt();
 
-                                // Scale X and Y vectors from O
-                                let x_vec = [x[0] - o[0], x[1] - o[1]];
-                                let y_vec = [y[0] - o[0], y[1] - o[1]];
+                                if xy_len > 1e-6 {
+                                    // Perpendicular vector to X-Y line (rotate 90°)
+                                    let perp_vec = [-xy_vec[1] / xy_len, xy_vec[0] / xy_len];
 
-                                x = [o[0] + x_vec[0] * scale_factor, o[1] + x_vec[1] * scale_factor];
-                                y = [o[0] + y_vec[0] * scale_factor, o[1] + y_vec[1] * scale_factor];
+                                    // Convert O to canvas space
+                                    let o_canvas = to_canvas(o);
 
-                                transform.from_triangle(o, x, y);
+                                    // Calculate mouse movement vector
+                                    let mouse_delta = [current_pos.x - start_pos.x, current_pos.y - start_pos.y];
+
+                                    // Convert perpendicular vector to canvas space direction
+                                    let perp_canvas_end = to_canvas([o[0] + perp_vec[0], o[1] + perp_vec[1]]);
+                                    let perp_canvas_vec = [perp_canvas_end.x - o_canvas.x, perp_canvas_end.y - o_canvas.y];
+                                    let perp_canvas_len = (perp_canvas_vec[0] * perp_canvas_vec[0] + perp_canvas_vec[1] * perp_canvas_vec[1]).sqrt();
+
+                                    if perp_canvas_len > 1e-6 {
+                                        let perp_canvas_normalized = [perp_canvas_vec[0] / perp_canvas_len, perp_canvas_vec[1] / perp_canvas_len];
+
+                                        // Project mouse movement onto perpendicular axis
+                                        let projection = mouse_delta[0] * perp_canvas_normalized[0] + mouse_delta[1] * perp_canvas_normalized[1];
+
+                                        // Scale factor: further from origin = scale up, closer = scale down
+                                        let scale_factor = 1.0 + projection * 0.005;
+
+                                        // Scale X and Y vectors from O
+                                        let x_vec = [x[0] - o[0], x[1] - o[1]];
+                                        let y_vec = [y[0] - o[0], y[1] - o[1]];
+
+                                        x = [o[0] + x_vec[0] * scale_factor, o[1] + x_vec[1] * scale_factor];
+                                        y = [o[0] + y_vec[0] * scale_factor, o[1] + y_vec[1] * scale_factor];
+
+                                        transform.from_triangle(o, x, y);
+                                    }
+                                }
                                 *flame_changed = true;
                                 *triangle_dragging = true;
 
@@ -367,6 +394,15 @@ pub fn render_triangle_editor_window(
                 // Draw lines O→X and O→Y
                 painter.line_segment([o_pos, x_pos], Stroke::new(2.0, color));
                 painter.line_segment([o_pos, y_pos], Stroke::new(2.0, color));
+
+                // Draw semi-transparent line between X and Y to complete the triangle
+                let transparent_color = Color32::from_rgba_unmultiplied(
+                    base_color.r(),
+                    base_color.g(),
+                    base_color.b(),
+                    (alpha as f32 * 0.5) as u8,  // 50% of current alpha for semi-transparency
+                );
+                painter.line_segment([x_pos, y_pos], Stroke::new(1.5, transparent_color));
 
                 // Draw points with highlighting for active drag target
                 let point_radius = if i == selected_transform { 6.0 } else { 4.0 };
@@ -420,35 +456,60 @@ pub fn render_triangle_editor_window(
 
             ui.separator();
 
-            // Display coordinates for selected transform
-            if let Some(transform) = flame.transforms.get(selected_transform) {
-                let (o, x, y) = transform.to_triangle();
+            // Editable coordinates for selected transform
+            if let Some(transform) = flame.transforms.get_mut(selected_transform) {
+                let (mut o, mut x, mut y) = transform.to_triangle();
 
                 ui.label(format!("Triangle Coordinates (Transform {}):", selected_transform + 1));
+
+                let mut coords_changed = false;
+
                 ui.horizontal(|ui| {
-                    ui.monospace(format!("X: ({:.3}, {:.3})", x[0], x[1]));
+                    ui.label("O:");
+                    coords_changed |= ui.add(egui::DragValue::new(&mut o[0]).speed(0.01).prefix("x: ")).changed();
+                    coords_changed |= ui.add(egui::DragValue::new(&mut o[1]).speed(0.01).prefix("y: ")).changed();
                 });
                 ui.horizontal(|ui| {
-                    ui.monospace(format!("Y: ({:.3}, {:.3})", y[0], y[1]));
+                    ui.label("X:");
+                    coords_changed |= ui.add(egui::DragValue::new(&mut x[0]).speed(0.01).prefix("x: ")).changed();
+                    coords_changed |= ui.add(egui::DragValue::new(&mut x[1]).speed(0.01).prefix("y: ")).changed();
                 });
                 ui.horizontal(|ui| {
-                    ui.monospace(format!("O: ({:.3}, {:.3})", o[0], o[1]));
+                    ui.label("Y:");
+                    coords_changed |= ui.add(egui::DragValue::new(&mut y[0]).speed(0.01).prefix("x: ")).changed();
+                    coords_changed |= ui.add(egui::DragValue::new(&mut y[1]).speed(0.01).prefix("y: ")).changed();
                 });
+
+                if coords_changed {
+                    transform.from_triangle(o, x, y);
+                    *flame_changed = true;
+                }
 
                 ui.separator();
 
                 ui.label("Affine Coefficients:");
+
+                let mut affine_changed = false;
+
                 ui.horizontal(|ui| {
-                    ui.monospace(format!("a: {:.3}  b: {:.3}  e: {:.3}", transform.a, transform.b, transform.e));
+                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.a).speed(0.01).prefix("a: ")).changed();
+                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.b).speed(0.01).prefix("b: ")).changed();
+                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.e).speed(0.01).prefix("e: ")).changed();
                 });
                 ui.horizontal(|ui| {
-                    ui.monospace(format!("c: {:.3}  d: {:.3}  f: {:.3}", transform.c, transform.d, transform.f));
+                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.c).speed(0.01).prefix("c: ")).changed();
+                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.d).speed(0.01).prefix("d: ")).changed();
+                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.f).speed(0.01).prefix("f: ")).changed();
                 });
+
+                if affine_changed {
+                    *flame_changed = true;
+                }
 
                 ui.separator();
 
                 // Control buttons
-                if let Some(transform) = flame.transforms.get_mut(selected_transform) {
+                {
                     if ui.button("Reset to Identity").clicked() {
                         transform.reset_to_identity();
                         *flame_changed = true;
