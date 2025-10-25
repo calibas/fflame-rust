@@ -149,9 +149,23 @@ pub fn render_tone_mapping_window(
                         // Palette editor button
                         if ui.button("🎨 Edit Palette").clicked() {
                             *show_palette_editor = !*show_palette_editor;
-                            // Load current palette into editor
+                            // Load current palette into editor with unique name
                             if let Some(pal) = palette_library.get(*current_palette_index) {
-                                *palette_editor_palette = pal.clone();
+                                let mut edited_palette = pal.clone();
+
+                                // Generate unique name for the custom palette
+                                let base_name = &pal.name;
+                                let mut counter = 1;
+                                let mut new_name = format!("{} (Custom)", base_name);
+
+                                // Keep incrementing until we find a unique name
+                                while palette_library.palettes().iter().any(|p| p.name == new_name) {
+                                    counter += 1;
+                                    new_name = format!("{} (Custom {})", base_name, counter);
+                                }
+
+                                edited_palette.name = new_name;
+                                *palette_editor_palette = edited_palette;
                             }
                         }
                     }
