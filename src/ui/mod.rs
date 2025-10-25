@@ -137,6 +137,7 @@ impl EguiLayer {
         let mut config_import_json = None;
         let mut config_save_file = false;
         let mut config_load_file = false;
+        let mut apophysis_import_file = false;
         let mut custom_palette = None;
         let mut undo_requested = false;
         let mut redo_requested = false;
@@ -302,6 +303,7 @@ impl EguiLayer {
                 &mut config_import_json,
                 &mut config_save_file,
                 &mut config_load_file,
+                &mut apophysis_import_file,
             );
         });
 
@@ -362,6 +364,8 @@ impl EguiLayer {
             config_import_requested: config_import_json,
             config_save_file_requested: config_save_file,
             config_load_file_requested: config_load_file,
+            apophysis_import_file_requested: apophysis_import_file,
+            apophysis_import_configs: None,
             custom_palette,
             undo_requested,
             redo_requested,

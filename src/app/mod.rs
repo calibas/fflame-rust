@@ -516,6 +516,76 @@ impl App {
             }
         }
 
+        // Handle Apophysis .flame import
+        if ui_response.apophysis_import_file_requested {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Desktop: synchronous file dialog
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Apophysis Flame", &["flame"])
+                    .pick_file()
+                {
+                    match std::fs::read_to_string(&path) {
+                        Ok(xml) => {
+                            match crate::apophysis_xml::parse_flame_xml(&xml) {
+                                Ok(configs) => {
+                                    if configs.is_empty() {
+                                        eprintln!("No flames found in file");
+                                    } else if configs.len() == 1 {
+                                        // Single flame: import directly
+                                        self.capture_state();
+                                        self.import_config(configs.into_iter().next().unwrap());
+                                        println!("Imported Apophysis flame from: {}", path.display());
+                                    } else {
+                                        // Multiple flames: let user choose
+                                        // TODO: Add multi-flame selection dialog
+                                        println!("Found {} flames, importing first one", configs.len());
+                                        self.capture_state();
+                                        self.import_config(configs.into_iter().next().unwrap());
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Failed to parse Apophysis XML: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to read file: {}", e);
+                        }
+                    }
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // WASM: async file dialog
+                let ctx = self.egui_layer.ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Some(file_handle) = rfd::AsyncFileDialog::new()
+                        .add_filter("Apophysis Flame", &["flame"])
+                        .pick_file()
+                        .await
+                    {
+                        let contents = file_handle.read().await;
+                        let xml = String::from_utf8_lossy(&contents).to_string();
+                        match crate::apophysis_xml::parse_flame_xml(&xml) {
+                            Ok(configs) => {
+                                if !configs.is_empty() {
+                                    if let Ok(json) = serde_json::to_string_pretty(&configs[0]) {
+                                        ctx.copy_text(json);
+                                        log::info!("Apophysis flame converted to JSON - paste to import");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("Failed to parse Apophysis XML: {}", e);
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
         // Handle palette export to clipboard
         if let Some(palette) = ui_response.palette_export_json {
             if let Ok(json) = serde_json::to_string_pretty(&palette) {

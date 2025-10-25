@@ -7,6 +7,7 @@ pub fn render_config_dialog(
     config_import_json: &mut Option<String>,
     config_save_file: &mut bool,
     config_load_file: &mut bool,
+    apophysis_import_file: &mut bool,
 ) {
     if !*show_config_window {
         return;
@@ -51,6 +52,15 @@ pub fn render_config_dialog(
                 if ui.button("📁 Load .fflame").clicked() {
                     *config_load_file = true;
                 }
+            });
+
+            ui.separator();
+            ui.label("Import from Apophysis:");
+            ui.horizontal(|ui| {
+                if ui.button("🔥 Load Apophysis .flame").clicked() {
+                    *apophysis_import_file = true;
+                }
+                ui.label("(XML format from Apophysis 7X)");
             });
         });
 }
