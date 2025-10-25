@@ -287,6 +287,20 @@ impl PaletteLibrary {
     pub fn add(&mut self, palette: Palette) {
         self.palettes.push(palette);
     }
+
+    pub fn update(&mut self, index: usize, palette: Palette) {
+        if index < self.palettes.len() {
+            self.palettes[index] = palette;
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Palette> {
+        self.palettes.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.palettes.len()
+    }
 }
 
 #[cfg(test)]

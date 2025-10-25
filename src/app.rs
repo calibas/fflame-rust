@@ -84,11 +84,14 @@ impl App {
             speed_factor: 0.5,
             color_mode: ColorMode::Transform,
             palette_index: 1,
+            palette: Some(palette_library.get(1).unwrap().clone()),
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::Logarithmic,
             tonemap_curve: ToneCurve::linear(),
+            use_curve: true,
             exposure: 1.0,
             gamma: 2.2,
+            deterministic_rng: false,
         };
 
         let mut app = Self {
@@ -998,6 +1001,9 @@ impl App {
 
     /// Export current configuration to FractalConfig
     pub fn export_config(&self) -> FractalConfig {
+        // Get the current palette from the library
+        let palette = self.palette_library.get(self.current_palette_index).cloned();
+
         FractalConfig {
             flame: self.flame.clone(),
             zoom: self.zoom,
@@ -1010,11 +1016,14 @@ impl App {
             speed_factor: self.speed_factor,
             color_mode: self.color_mode,
             palette_index: self.current_palette_index,
+            palette,  // Include actual palette data
             background_color: self.background_color,
             tonemap_mode: self.tonemap_mode,
             tonemap_curve: self.tonemap_curve.clone(),
+            use_curve: self.use_curve,
             exposure: self.exposure,
             gamma: self.gamma,
+            deterministic_rng: self.deterministic_rng,
         }
     }
 
@@ -1035,8 +1044,32 @@ impl App {
         self.background_color = config.background_color;
         self.tonemap_mode = config.tonemap_mode;
         self.tonemap_curve = config.tonemap_curve.clone();
+        self.use_curve = config.use_curve;
         self.exposure = config.exposure;
         self.gamma = config.gamma;
+        self.deterministic_rng = config.deterministic_rng;
+
+        // If config includes a palette, add it to library or update existing
+        if let Some(ref palette) = config.palette {
+            // Try to find if this palette already exists in library by name
+            let mut found_index = None;
+            for (i, lib_palette) in self.palette_library.iter().enumerate() {
+                if lib_palette.name == palette.name {
+                    found_index = Some(i);
+                    break;
+                }
+            }
+
+            if let Some(idx) = found_index {
+                // Palette exists, update it
+                self.palette_library.update(idx, palette.clone());
+                self.current_palette_index = idx;
+            } else {
+                // New palette, add to library
+                self.palette_library.add(palette.clone());
+                self.current_palette_index = self.palette_library.len() - 1;
+            }
+        }
 
         // Use the comprehensive load_config function to ensure all GPU state is synchronized
         if let Some(ref mut renderer) = self.flame_renderer {

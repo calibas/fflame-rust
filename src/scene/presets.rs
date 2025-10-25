@@ -1,5 +1,5 @@
 use super::transforms::{Flame, Transform};
-use super::palette::ColorMode;
+use super::palette::{ColorMode, PaletteLibrary};
 use super::tonemap::{ToneMapMode, ToneCurve};
 use crate::config::FractalConfig;
 
@@ -341,23 +341,30 @@ impl PresetLibrary {
             Self::flame_to_config(create_flower_of_life()),
             Self::flame_to_config(create_3d_flame()),
             // Simple2 with specific view settings for testing
-            FractalConfig {
-                flame: create_simple2_flame(),
-                zoom: 54.76374,
-                pan_x: 0.03848837,
-                pan_y: 0.11393361,
-                rotation: 0.0,
-                camera_rotation_x: 0.0,
-                camera_rotation_y: 0.0,
-                density_scale: 1.2,
-                speed_factor: 0.5,
-                color_mode: ColorMode::Transform,
-                palette_index: 1,
-                background_color: [0.0, 0.0, 0.0],
-                tonemap_mode: ToneMapMode::Logarithmic,
-                tonemap_curve: ToneCurve::linear(),
-                exposure: 1.0,
-                gamma: 2.2,
+            {
+                let palette_library = PaletteLibrary::new();
+                let palette = palette_library.get(1).cloned();
+                FractalConfig {
+                    flame: create_simple2_flame(),
+                    zoom: 54.76374,
+                    pan_x: 0.03848837,
+                    pan_y: 0.11393361,
+                    rotation: 0.0,
+                    camera_rotation_x: 0.0,
+                    camera_rotation_y: 0.0,
+                    density_scale: 1.2,
+                    speed_factor: 0.5,
+                    color_mode: ColorMode::Transform,
+                    palette_index: 1,
+                    palette,
+                    background_color: [0.0, 0.0, 0.0],
+                    tonemap_mode: ToneMapMode::Logarithmic,
+                    tonemap_curve: ToneCurve::linear(),
+                    use_curve: true,
+                    exposure: 1.0,
+                    gamma: 2.2,
+                    deterministic_rng: false,
+                }
             },
         ];
 
@@ -380,6 +387,12 @@ impl PresetLibrary {
 
     /// Helper to convert old Flame to FractalConfig with sensible defaults
     fn flame_to_config(flame: Flame) -> FractalConfig {
+        use crate::scene::palette::PaletteLibrary;
+
+        // Get palette from library for complete export
+        let palette_library = PaletteLibrary::new();
+        let palette = palette_library.get(1).cloned(); // Fire palette
+
         FractalConfig {
             flame,
             zoom: 1.0,
@@ -392,11 +405,14 @@ impl PresetLibrary {
             speed_factor: 0.5,
             color_mode: ColorMode::Transform,
             palette_index: 1,
+            palette,
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::Logarithmic,
             tonemap_curve: ToneCurve::linear(),
+            use_curve: true,
             exposure: 1.0,
             gamma: 2.2,
+            deterministic_rng: false,
         }
     }
 
