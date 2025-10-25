@@ -2,10 +2,11 @@
 // Includes 2D variations (0-15) adapted for vec3 and 3D-specific variations (16-23)
 
 // Affine transformation for 3D (XY transformed, Z offset)
+// Y is negated to match Apophysis coordinate system
 fn apply_affine(xform: Transform, p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(
         xform.a * p.x + xform.b * p.y + xform.e,
-        xform.c * p.x + xform.d * p.y + xform.f,
+        -(xform.c * p.x + xform.d * p.y + xform.f),
         p.z + xform.g  // Z is just offset
     );
 }
