@@ -1,3 +1,11 @@
+//! Application state and event loop
+
+mod input;
+mod config;
+mod export;
+
+pub use export::export_headless;
+
 use winit::{event::*, event_loop::{EventLoop, ControlFlow}, window::Window};
 use wgpu::SurfaceError;
 
@@ -13,43 +21,42 @@ use crate::undo::UndoHistory;
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 
 pub struct App {
-    gpu: GpuContext,
-    egui_layer: EguiLayer,
-    flame_renderer: Option<FlameRenderer>,
-    flame: Flame,
-    iterations_per_thread: u32,
-    zoom: f32,
-    pan_x: f32,
-    pan_y: f32,
-    rotation: f32,
-    camera_rotation_x: f32, // 3D camera pitch
-    camera_rotation_y: f32, // 3D camera yaw
-    density_scale: f32,
-    view_changed_by_keyboard: bool,
-    mouse_dragging: bool,
-    last_mouse_pos: Option<(f32, f32)>,
-    metrics: PerformanceMetrics,
-    palette_library: PaletteLibrary,
-    current_palette_index: usize,
-    preset_library: PresetLibrary,
-    current_preset_index: usize,
-    color_mode: ColorMode,
-    paused: bool,
-    max_iterations: Option<u64>,
-    speed_factor: f32,
-    undo_history: UndoHistory,
-    modifiers: winit::keyboard::ModifiersState,
-    background_color: [f32; 3],
+    pub(super) gpu: GpuContext,
+    pub(super) egui_layer: EguiLayer,
+    pub(super) flame_renderer: Option<FlameRenderer>,
+    pub(super) flame: Flame,
+    pub(super) iterations_per_thread: u32,
+    pub(super) zoom: f32,
+    pub(super) pan_x: f32,
+    pub(super) pan_y: f32,
+    pub(super) rotation: f32,
+    pub(super) camera_rotation_x: f32, // 3D camera pitch
+    pub(super) camera_rotation_y: f32, // 3D camera yaw
+    pub(super) density_scale: f32,
+    pub(super) view_changed_by_keyboard: bool,
+    pub(super) mouse_dragging: bool,
+    pub(super) last_mouse_pos: Option<(f32, f32)>,
+    pub(super) metrics: PerformanceMetrics,
+    pub(super) palette_library: PaletteLibrary,
+    pub(super) current_palette_index: usize,
+    pub(super) preset_library: PresetLibrary,
+    pub(super) current_preset_index: usize,
+    pub(super) color_mode: ColorMode,
+    pub(super) paused: bool,
+    pub(super) max_iterations: Option<u64>,
+    pub(super) speed_factor: f32,
+    pub(super) undo_history: UndoHistory,
+    pub(super) modifiers: winit::keyboard::ModifiersState,
+    pub(super) background_color: [f32; 3],
     // Tone mapping
-    tonemap_mode: ToneMapMode,
-    tonemap_curve: ToneCurve,
-    use_curve: bool,
-    exposure: f32,
-    gamma: f32,
+    pub(super) tonemap_mode: ToneMapMode,
+    pub(super) tonemap_curve: ToneCurve,
+    pub(super) use_curve: bool,
+    pub(super) exposure: f32,
+    pub(super) gamma: f32,
     // Rendering
-    deterministic_rng: bool,
+    pub(super) deterministic_rng: bool,
 }
-
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
         let gpu = GpuContext::new(&window).await.expect("GPU init failed");
@@ -230,215 +237,6 @@ impl App {
         // Update performance metrics
         self.metrics.update();
     }
-
-    fn handle_keyboard(&mut self, event: &winit::event::KeyEvent) {
-        use winit::keyboard::{KeyCode, PhysicalKey};
-
-        // Only handle key press (not release)
-        if !event.state.is_pressed() {
-            return;
-        }
-
-        // Check for Ctrl/Cmd modifier
-        let ctrl_or_cmd = {
-            #[cfg(target_os = "macos")]
-            { self.modifiers.super_key() }
-            #[cfg(not(target_os = "macos"))]
-            { self.modifiers.control_key() }
-        };
-
-        // Handle undo/redo with logical key
-        use winit::keyboard::Key;
-        if ctrl_or_cmd {
-            if let Key::Character(ref c) = event.logical_key {
-                let c_lower = c.to_lowercase().to_string();
-                if c_lower == "z" {
-                    self.undo();
-                    return;
-                } else if c_lower == "y" {
-                    self.redo();
-                    return;
-                }
-            }
-        }
-
-        let pan_step = 0.1 / self.zoom;
-
-        match event.physical_key {
-            PhysicalKey::Code(KeyCode::ArrowUp) => {
-                // Up in screen space: (0, -1), rotate to fractal space
-                let cos_r = (-self.rotation).cos();
-                let sin_r = (-self.rotation).sin();
-                let screen_dx = 0.0;
-                let screen_dy = -pan_step;
-                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
-                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
-                self.view_changed_by_keyboard = true;
-            }
-            PhysicalKey::Code(KeyCode::ArrowDown) => {
-                // Down in screen space: (0, 1), rotate to fractal space
-                let cos_r = (-self.rotation).cos();
-                let sin_r = (-self.rotation).sin();
-                let screen_dx = 0.0;
-                let screen_dy = pan_step;
-                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
-                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
-                self.view_changed_by_keyboard = true;
-            }
-            PhysicalKey::Code(KeyCode::ArrowLeft) => {
-                // Left in screen space: (-1, 0), rotate to fractal space
-                let cos_r = (-self.rotation).cos();
-                let sin_r = (-self.rotation).sin();
-                let screen_dx = -pan_step;
-                let screen_dy = 0.0;
-                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
-                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
-                self.view_changed_by_keyboard = true;
-            }
-            PhysicalKey::Code(KeyCode::ArrowRight) => {
-                // Right in screen space: (1, 0), rotate to fractal space
-                let cos_r = (-self.rotation).cos();
-                let sin_r = (-self.rotation).sin();
-                let screen_dx = pan_step;
-                let screen_dy = 0.0;
-                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
-                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
-                self.view_changed_by_keyboard = true;
-            }
-            PhysicalKey::Code(KeyCode::Equal) | PhysicalKey::Code(KeyCode::NumpadAdd) => {
-                self.zoom *= 1.5;
-                self.view_changed_by_keyboard = true;
-            }
-            PhysicalKey::Code(KeyCode::Minus) | PhysicalKey::Code(KeyCode::NumpadSubtract) => {
-                self.zoom /= 1.5;
-                self.view_changed_by_keyboard = true;
-            }
-            _ => {}
-        }
-    }
-
-    fn handle_mouse_button(&mut self, state: winit::event::ElementState, button: winit::event::MouseButton, consumed: bool) {
-        use winit::event::{ElementState, MouseButton};
-
-        if button == MouseButton::Left {
-            match state {
-                ElementState::Pressed => {
-                    // Only start dragging if egui didn't consume the event
-                    if !consumed {
-                        self.mouse_dragging = true;
-                    }
-                }
-                ElementState::Released => {
-                    // Always clear dragging state on release, even if egui consumed it
-                    self.mouse_dragging = false;
-                    self.last_mouse_pos = None;
-                }
-            }
-        }
-    }
-
-    fn handle_mouse_move(&mut self, x: f32, y: f32) {
-        if self.mouse_dragging {
-            if let Some((last_x, last_y)) = self.last_mouse_pos {
-                // Calculate delta in screen pixels
-                let dx = x - last_x;
-                let dy = y - last_y;
-
-                // Convert to fractal space - scale inversely with zoom and window size
-                let scale = f32::min(self.gpu.size.width as f32, self.gpu.size.height as f32) * 0.25;
-                let pan_dx = -dx / (scale * self.zoom);
-                let pan_dy = -dy / (scale * self.zoom); // Negative to match drag direction
-
-                // Rotate pan delta to account for view rotation
-                // When view is rotated, we want pan to move relative to the rotated view
-                // Negate rotation angle to rotate in screen space instead of fractal space
-                let cos_r = (-self.rotation).cos();
-                let sin_r = (-self.rotation).sin();
-                let rotated_dx = pan_dx * cos_r - pan_dy * sin_r;
-                let rotated_dy = pan_dx * sin_r + pan_dy * cos_r;
-
-                self.pan_x += rotated_dx;
-                self.pan_y += rotated_dy;
-                self.view_changed_by_keyboard = true; // Reuse same flag for mouse
-            }
-        }
-        // Always update mouse position for zoom-to-cursor
-        self.last_mouse_pos = Some((x, y));
-    }
-
-    fn handle_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
-        use winit::event::MouseScrollDelta;
-
-        let zoom_factor = match delta {
-            MouseScrollDelta::LineDelta(_x, y) => {
-                // Each line is typically one "click" of the wheel
-                // Positive y = scroll up = zoom in, negative y = scroll down = zoom out
-                if y > 0.0 {
-                    1.1f32.powf(y)
-                } else if y < 0.0 {
-                    1.1f32.powf(y)
-                } else {
-                    1.0
-                }
-            }
-            MouseScrollDelta::PixelDelta(pos) => {
-                // Pixel delta for touchpad scrolling
-                // Positive y = scroll up = zoom in
-                let y = pos.y as f32;
-                if y.abs() > 0.1 {
-                    1.1f32.powf(y * 0.01)
-                } else {
-                    1.0
-                }
-            }
-        };
-
-        if zoom_factor != 1.0 {
-            // Zoom in toward cursor, zoom out from center
-            if zoom_factor > 1.0 {
-                // Zooming in - zoom toward mouse cursor position
-                if let Some((mouse_x, mouse_y)) = self.last_mouse_pos {
-                    // Convert mouse position from screen space to fractal space
-                    // Screen center
-                    let center_x = self.gpu.size.width as f32 / 2.0;
-                    let center_y = self.gpu.size.height as f32 / 2.0;
-
-                    // Mouse offset from center in screen pixels
-                    let mouse_offset_x = mouse_x - center_x;
-                    let mouse_offset_y = mouse_y - center_y;
-
-                    // Convert to fractal space (account for current zoom and scale)
-                    let scale = f32::min(self.gpu.size.width as f32, self.gpu.size.height as f32) * 0.25;
-                    let fractal_offset_x = mouse_offset_x / (scale * self.zoom);
-                    let fractal_offset_y = mouse_offset_y / (scale * self.zoom);
-
-                    // Calculate the point in fractal space that the mouse is pointing at
-                    let point_x = self.pan_x + fractal_offset_x;
-                    let point_y = self.pan_y + fractal_offset_y;
-
-                    // Apply zoom
-                    self.zoom *= zoom_factor;
-
-                    // Adjust pan so the point under the mouse stays in the same place
-                    // After zoom, the fractal coordinates change, so we need to compensate
-                    let new_fractal_offset_x = mouse_offset_x / (scale * self.zoom);
-                    let new_fractal_offset_y = mouse_offset_y / (scale * self.zoom);
-
-                    self.pan_x = point_x - new_fractal_offset_x;
-                    self.pan_y = point_y - new_fractal_offset_y;
-                } else {
-                    // No mouse position, zoom to center
-                    self.zoom *= zoom_factor;
-                }
-            } else {
-                // Zooming out - always zoom from center
-                self.zoom *= zoom_factor;
-            }
-
-            self.view_changed_by_keyboard = true; // Reuse same flag
-        }
-    }
-
     fn render(&mut self, window: &Window) -> Result<(), SurfaceError> {
         use web_time::Instant;
 
@@ -1031,248 +829,4 @@ impl App {
 
         Ok(())
     }
-
-    /// Export current configuration to FractalConfig
-    pub fn export_config(&self) -> FractalConfig {
-        // Get the current palette from the library
-        let palette = self.palette_library.get(self.current_palette_index).cloned();
-
-        FractalConfig {
-            flame: self.flame.clone(),
-            zoom: self.zoom,
-            pan_x: self.pan_x,
-            pan_y: self.pan_y,
-            rotation: self.rotation,
-            camera_rotation_x: self.camera_rotation_x,
-            camera_rotation_y: self.camera_rotation_y,
-            density_scale: self.density_scale,
-            speed_factor: self.speed_factor,
-            max_iterations: self.max_iterations.unwrap_or(1_000_000_000),
-            color_mode: self.color_mode,
-            palette_index: self.current_palette_index,
-            palette,  // Include actual palette data
-            background_color: self.background_color,
-            tonemap_mode: self.tonemap_mode,
-            tonemap_curve: self.tonemap_curve.clone(),
-            use_curve: self.use_curve,
-            exposure: self.exposure,
-            gamma: self.gamma,
-            deterministic_rng: self.deterministic_rng,
-        }
-    }
-
-    /// Import configuration from FractalConfig
-    pub fn import_config(&mut self, config: FractalConfig) {
-        // Update app-level state
-        self.flame = config.flame.clone();
-        self.zoom = config.zoom;
-        self.pan_x = config.pan_x;
-        self.pan_y = config.pan_y;
-        self.rotation = config.rotation;
-        self.camera_rotation_x = config.camera_rotation_x;
-        self.camera_rotation_y = config.camera_rotation_y;
-        self.density_scale = config.density_scale;
-        self.speed_factor = config.speed_factor;
-        self.max_iterations = Some(config.max_iterations);
-        self.color_mode = config.color_mode;
-        self.current_palette_index = config.palette_index;
-        self.background_color = config.background_color;
-        self.tonemap_mode = config.tonemap_mode;
-        self.tonemap_curve = config.tonemap_curve.clone();
-        self.use_curve = config.use_curve;
-        self.exposure = config.exposure;
-        self.gamma = config.gamma;
-        self.deterministic_rng = config.deterministic_rng;
-
-        // If config includes a palette, add it to library or update existing
-        if let Some(ref palette) = config.palette {
-            // Try to find if this palette already exists in library by name
-            let mut found_index = None;
-            for (i, lib_palette) in self.palette_library.iter().enumerate() {
-                if lib_palette.name == palette.name {
-                    found_index = Some(i);
-                    break;
-                }
-            }
-
-            if let Some(idx) = found_index {
-                // Palette exists, update it
-                self.palette_library.update(idx, palette.clone());
-                self.current_palette_index = idx;
-            } else {
-                // New palette, add to library
-                self.palette_library.add(palette.clone());
-                self.current_palette_index = self.palette_library.len() - 1;
-            }
-        }
-
-        // Use the comprehensive load_config function to ensure all GPU state is synchronized
-        // (including tone mapping, palette, transforms, params, etc.)
-        if let Some(ref mut renderer) = self.flame_renderer {
-            let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Config Import Encoder"),
-            });
-
-            if let Some(palette) = self.palette_library.get(self.current_palette_index) {
-                renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, self.iterations_per_thread);
-            }
-
-            self.gpu.queue.submit(std::iter::once(encoder.finish()));
-        }
-    }
-
-    /// Capture current state to undo history before making a change
-    fn capture_state(&mut self) {
-        let config = self.export_config();
-        self.undo_history.push(config);
-    }
-
-    /// Undo to previous state
-    pub fn undo(&mut self) {
-        let config = self.undo_history.undo().cloned();
-        if let Some(config) = config {
-            self.import_config(config);
-        }
-    }
-
-    /// Redo to next state
-    pub fn redo(&mut self) {
-        let config = self.undo_history.redo().cloned();
-        if let Some(config) = config {
-            self.import_config(config);
-        }
-    }
-
-    pub fn can_undo(&self) -> bool {
-        self.undo_history.can_undo()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        self.undo_history.can_redo()
-    }
-}
-
-/// Headless PNG export for CLI mode
-#[cfg(not(target_arch = "wasm32"))]
-pub async fn export_headless(
-    config: &FractalConfig,
-    output_path: &std::path::Path,
-    width: u32,
-    height: u32,
-    test_category: Option<String>,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    use crate::renderer::compute_kernel::FlameRenderer;
-    use crate::scene::palette::PaletteLibrary;
-    use std::time::Instant;
-
-    // Create headless GPU instance
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::all(),
-        ..Default::default()
-    });
-
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-        })
-        .await
-        .ok_or("Failed to find adapter")?;
-
-    let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("Headless Device"),
-                required_features: wgpu::Features::CLEAR_TEXTURE,
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::Performance,
-            },
-            None,
-        )
-        .await?;
-
-    // Create renderer
-    let surface_format = wgpu::TextureFormat::Rgba8UnormSrgb;
-    let mut renderer = FlameRenderer::new(&device, &queue, surface_format, width, height, &config.flame);
-
-    // Load config into renderer
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("Headless Export Encoder"),
-    });
-
-    // Get palette
-    let palette_library = PaletteLibrary::new();
-    let palette = config.palette.as_ref()
-        .or_else(|| palette_library.get(config.palette_index))
-        .ok_or("No palette found")?;
-
-    renderer.load_config(&device, &mut encoder, &queue, config, palette, 256);
-
-    queue.submit(std::iter::once(encoder.finish()));
-
-    // Render until max_iterations
-    let render_start = Instant::now();
-    let mut total_rendered = 0u64;
-    let target = config.max_iterations;
-    let iterations_per_frame = 256u32;
-
-    while total_rendered < target {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Frame"),
-        });
-
-        renderer.compute_pass(
-            &mut encoder,
-            &queue,
-            128,  // workgroups
-            iterations_per_frame,
-            config.zoom,
-            config.pan_x,
-            config.pan_y,
-            config.rotation,
-            config.camera_rotation_x,
-            config.camera_rotation_y,
-            config.speed_factor,
-        );
-
-        let samples = 128 * iterations_per_frame as u64;
-        renderer.accumulate_pass(&mut encoder, &queue, &device, samples);
-
-        queue.submit(std::iter::once(encoder.finish()));
-
-        total_rendered += samples;
-
-        // Progress indicator every 10M iterations
-        if total_rendered % 10_000_000 < samples {
-            print!("\r  Progress: {}/{} ({:.1}%)", total_rendered, target, (total_rendered as f64 / target as f64) * 100.0);
-            use std::io::Write;
-            std::io::stdout().flush().ok();
-        }
-    }
-
-    println!("\r  Progress: {}/{} (100.0%)", total_rendered, target);
-
-    let render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-
-    // Capture pixels
-    let (width, height, rgba_data) = renderer.capture_pixels(&device, &queue, false, surface_format).await?;
-
-    // Build metadata
-    let mut metadata = crate::png_metadata::PngMetadata::from_app_state(
-        width,
-        height,
-        total_rendered,
-        render_time_ms,
-        config,
-    );
-    metadata.test_category = test_category;
-
-    // Encode PNG
-    let png_data = crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata))?;
-
-    // Save to file
-    std::fs::write(output_path, png_data)?;
-
-    Ok(true)
 }
