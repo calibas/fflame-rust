@@ -462,11 +462,25 @@ impl App {
             // Capture state before applying palette change (for undo)
             self.capture_state();
 
-            // Add to library if not already there
+            // Check if this palette already exists in library by name
             let palette_lib = &mut self.palette_library;
-            palette_lib.add(custom_pal);
-            // Set to the newly added palette (last in list)
-            self.current_palette_index = palette_lib.palettes().len() - 1;
+            let mut found_index = None;
+            for (i, lib_palette) in palette_lib.iter().enumerate() {
+                if lib_palette.name == custom_pal.name {
+                    found_index = Some(i);
+                    break;
+                }
+            }
+
+            if let Some(idx) = found_index {
+                // Palette exists, update it in place
+                palette_lib.update(idx, custom_pal);
+                self.current_palette_index = idx;
+            } else {
+                // New palette, add to library
+                palette_lib.add(custom_pal);
+                self.current_palette_index = palette_lib.palettes().len() - 1;
+            }
 
             // Update renderer
             if let Some(ref mut renderer) = self.flame_renderer {
@@ -903,6 +917,13 @@ impl App {
 
                 if ui_response.color_mode_changed {
                     renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+
+                    // When switching to Palette or Speed mode, ensure the correct palette is loaded
+                    if matches!(self.color_mode, ColorMode::Palette | ColorMode::Speed) {
+                        if let Some(palette) = self.palette_library.get(self.current_palette_index) {
+                            renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
+                        }
+                    }
                 }
 
                 if ui_response.palette_changed {
