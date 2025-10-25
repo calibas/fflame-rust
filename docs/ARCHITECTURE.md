@@ -9,16 +9,23 @@ Quick reference guide to understanding the codebase structure and data flow.
 ```
 fractal_flame_wgpu/
 ├── Core Entry Points
-│   ├── main.rs                 Desktop entry → calls lib::desktop_main()
+│   ├── main.rs                 Desktop entry → CLI parser + GUI/export mode
+│   │                           - clap subcommand: export (headless batch PNG)
+│   │                           - No args: launches GUI via lib::desktop_main()
+│   │
 │   └── lib.rs                  Library root + WASM entry
+│                               - desktop_main() → GUI mode
+│                               - export_mode() → headless batch export
+│                               - export_async() → batch processing loop
 │
 ├── Application Layer
-│   ├── app.rs                  Main App struct
-│   │                           - Event loop
-│   │                           - Input handling (keyboard, mouse)
+│   ├── app.rs                  Main App struct + headless export
+│   │                           - Event loop (GUI mode)
+│   │                           - Input handling (keyboard, mouse, rotation-aware panning)
 │   │                           - Render coordination
 │   │                           - Config import/export
 │   │                           - Undo/redo management
+│   │                           - export_headless() → CLI PNG export
 │   │
 │   └── util.rs                 PerformanceMetrics
 │                               - FPS tracking
@@ -129,14 +136,25 @@ fractal_flame_wgpu/
 │                               - Enables variation plugins (future)
 │
 ├── State Management
-│   ├── config.rs               FractalConfig
-│   │                           - Serializable app state
-│   │                           - JSON import/export
-│   │                           - File save/load (.flame files)
+│   ├── config.rs               FractalConfig (complete state)
+│   │                           - Flame (transforms, variations, params)
+│   │                           - View (zoom, pan, rotation, camera)
+│   │                           - Rendering (density, speed, max_iterations)
+│   │                           - Colors (mode, palette_index, palette data, background)
+│   │                           - Tone mapping (mode, curve, use_curve, exposure, gamma)
+│   │                           - Reproducibility (deterministic_rng)
+│   │                           - JSON import/export (.flame files)
+│   │                           - File save/load with full metadata
 │   │
-│   └── undo.rs                 UndoHistory
-│                               - 50-state circular buffer
-│                               - Undo/redo tracking
+│   ├── undo.rs                 UndoHistory
+│   │                           - 50-state circular buffer
+│   │                           - Undo/redo tracking
+│   │
+│   └── png_metadata.rs         PNG metadata embedding
+│                               - PngMetadata struct (build, render, config)
+│                               - encode_png_with_metadata() → tEXt chunks
+│                               - read_png_metadata() → extract from PNG
+│                               - SHA256 checksum of config JSON
 │
 ├── Profiling & Version Tracking
 │   ├── profiler.rs             GpuProfiler + CPU timing
