@@ -136,6 +136,7 @@ pub fn render_tone_mapping_window(
                             .map(|p| p.name.as_str())
                             .unwrap_or("Unknown");
 
+                        ui.label(format!("({} palettes in library)", palettes.len()));
                         egui::ComboBox::from_label("Palette")
                             .selected_text(current_palette_name)
                             .show_ui(ui, |ui| {
@@ -149,19 +150,20 @@ pub fn render_tone_mapping_window(
                         // Palette editor button
                         if ui.button("🎨 Edit Palette").clicked() {
                             *show_palette_editor = !*show_palette_editor;
-                            // Load current palette into editor with unique name
+                            // Load current palette into editor with auto-generated unique name
                             if let Some(pal) = palette_library.get(*current_palette_index) {
                                 let mut edited_palette = pal.clone();
 
-                                // Generate unique name for the custom palette
+                                // Always generate a unique name to avoid overwriting existing palettes
+                                // User can rename in the editor if they want to update an existing one
                                 let base_name = &pal.name;
-                                let mut counter = 1;
                                 let mut new_name = format!("{} (Custom)", base_name);
+                                let mut counter = 2;
 
                                 // Keep incrementing until we find a unique name
                                 while palette_library.palettes().iter().any(|p| p.name == new_name) {
-                                    counter += 1;
                                     new_name = format!("{} (Custom {})", base_name, counter);
+                                    counter += 1;
                                 }
 
                                 edited_palette.name = new_name;
