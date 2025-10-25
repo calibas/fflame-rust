@@ -1072,6 +1072,7 @@ impl App {
         }
 
         // Use the comprehensive load_config function to ensure all GPU state is synchronized
+        // (including tone mapping, palette, transforms, params, etc.)
         if let Some(ref mut renderer) = self.flame_renderer {
             let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Config Import Encoder"),
