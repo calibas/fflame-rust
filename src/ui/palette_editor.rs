@@ -37,7 +37,10 @@ pub fn render_palette_editor_window(
         .open(show_palette_editor)
         .default_width(600.0)
         .show(ctx, |ui| {
-            ui.heading(&palette_editor.current_palette.name);
+            ui.horizontal(|ui| {
+                ui.label("Palette Name:");
+                ui.text_edit_singleline(&mut palette_editor.current_palette.name);
+            });
             ui.separator();
 
             // Gradient preview
