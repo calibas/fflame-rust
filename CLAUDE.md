@@ -4,7 +4,7 @@
 See [docs/STATUS.md](docs/STATUS.md) for implementation status vs original design
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for code organization and data flow
 See [CHANGELOG.md](CHANGELOG.md) for recent changes and release notes
-See [docs/WASM-STATUS.md](docs/WASM-STATUS.md) for WebAssembly build status and platform-specific details
+See [docs/WASM.md](docs/WASM.md) for WebAssembly build guide and platform-specific details
 See [docs/outline.md](docs/outline.md) for original design goals
 
 ## Quick Reference
