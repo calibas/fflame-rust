@@ -576,12 +576,14 @@ Before releasing:
 | Unit tests | `src/**/*.rs` (bottom of files) | `cargo test` |
 | Regression | `tests/regression.rs` | `cargo test --test regression` |
 | Benchmarks | `benches/flame_bench.rs` | `cargo bench` |
-| Simple bench | `src/bin/simple_benchmark.rs` | `cargo run --bin simple_benchmark` |
-| CLI export | `src/lib.rs`, `src/app.rs` | `cargo run -- export -i config.flame -o out.png` |
-| Image compare | `src/bin/compare_images.rs` | `cargo run --bin compare_images -- --image1 a.png --image2 b.png` |
+| Simple bench | `src/bin/simple_benchmark.rs` | `cargo run --release --bin simple_benchmark` |
+| CLI export | `src/lib.rs`, `src/app.rs` | `cargo run --release -- export -i config.flame -o out.png` |
+| Image compare | `src/bin/compare_images.rs` | `cargo run --release --bin compare_images -- --image1 a.png --image2 b.png` |
 | Profiler | `src/profiler.rs` | (used in code) |
 | Metrics | `src/util.rs` | (automatic in app) |
 | Version | `examples/show_version.rs` | `cargo run --example show_version` |
+
+**Note:** Old export tools (`export_preset`, `test_export`) have been removed. Use the main CLI export mode instead.
 
 ---
 
