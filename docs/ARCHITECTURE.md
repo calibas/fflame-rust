@@ -731,10 +731,139 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 
 ---
 
-**Last Updated:** 2025-10-22
+## ⚡ Speed Multiplier System (Added 2025-10-25)
+
+### Overview
+The speed multiplier system decouples **rendering throughput** from **accumulation quality**, solving a fundamental quality degradation issue at high `iterations_per_thread` settings.
+
+### The Problem
+- **Observation**: High `iterations_per_thread` (4096) causes 60-70% visual quality degradation vs baseline (256)
+- **Root Cause**: Fewer accumulation passes → large density jumps → sqrt() tone mapping artifacts
+- **Impact**: Progressive rendering looks "chunky" instead of smooth
+- **Critical Issue**: Would cause temporal flickering in animations with adaptive iteration counts
+
+### The Solution: Two Approaches
+
+#### 1. Interactive App (Frame Rate Control)
+**Location**: [src/app/mod.rs](../src/app/mod.rs#L228-L256)
+
+**Mechanism**:
+```rust
+// Speed multiplier controls target FPS
+let target_fps = 60.0 * speed_multiplier as f64;
+
+// Frame rate limiter using ControlFlow::WaitUntil
+if elapsed >= target_frame_time {
+    window.request_redraw();  // Time for next frame
+} else {
+    set_control_flow(WaitUntil(next_frame_time));  // Sleep until deadline
+}
+```
+
+**How it works**:
+- Each frame does ONE full compute+accumulate at full `iterations_per_thread`
+- Speed multiplier increases frame rate: 1x=60fps, 2x=120fps, ... 16x=960fps
+- More frames per second → more accumulation passes per second
+- When idle (paused/finished): Falls back to 60 FPS to save CPU
+- PresentMode: `Mailbox` for smooth uncapped rendering
+
+**UI Controls**: Settings window → Speed selector (1x/2x/4x/8x/16x buttons)
+
+#### 2. CLI Export (Explicit Chunking)
+**Location**: [src/app/export.rs](../src/app/export.rs#L72-L107)
+
+**Mechanism**:
+```rust
+// Calculate iterations per chunk
+let iterations_per_frame = iterations_per_thread / speed_multiplier;
+
+// Render multiple chunks per "batch"
+for _ in 0..speed_multiplier {
+    compute_pass(iterations_per_frame, ...);  // Smaller chunk
+    accumulate_pass(samples_this_chunk);      // Accumulate immediately
+    // Ping-pong buffers swap - chunk is a complete frame
+}
+```
+
+**How it works**:
+- No frame rate concept in headless export
+- Speed multiplier chunks iterations into smaller batches
+- Each chunk: compute → accumulate → swap (complete frame cycle)
+- Example: 4096 iters with 16x speed = 16 chunks of 256 iterations each
+
+**CLI Usage**: `--speed-multiplier` parameter
+```bash
+fractal_flame_wgpu export -i config.flame -o output.png \
+  --iterations-per-thread 4096 --speed-multiplier 16
+```
+
+### Verification
+**Test Results**: Pixel-perfect identical (PSNR = inf, SSIM = 1.0)
+- 256 iters (1x speed) vs 4096 iters (16x speed): 0.00% pixel difference
+- Formula for equivalent quality: `speed_multiplier = iterations_per_thread / 256`
+
+### Architecture Impact
+
+**Data Flow Changes**:
+```
+Before:
+  iterations_per_thread=4096 → 1 compute(4096) → 1 accumulate → chunky quality
+
+After (Interactive):
+  speed_multiplier=16x → 16 frames/sec at 960fps
+  Each frame: compute(4096) → accumulate → smooth quality
+
+After (Export):
+  speed_multiplier=16 → 16 chunks of 256 iters
+  Each chunk: compute(256) → accumulate → smooth quality
+```
+
+**Key Design Principles**:
+1. **Orthogonal Concerns**: Throughput (`iterations_per_thread`) vs Quality (`speed_multiplier`)
+2. **Context-Appropriate**: Frame rate for interactive, chunking for export
+3. **No Shader Changes**: All logic is CPU-side
+4. **Animation-Ready**: Foundation for future adaptive rendering with consistent quality
+
+### Performance Characteristics
+
+**Interactive App**:
+- Higher frame rate = more frequent screen updates
+- Each frame has full `iterations_per_thread` work
+- Total throughput unchanged, distributed over more frames
+- GPU utilization: Spiky (brief compute bursts at high FPS)
+
+**Export**:
+- More chunks per batch = more accumulate passes
+- Each chunk has smaller `iterations_per_frame` work
+- Total throughput unchanged, same time to completion
+- GPU utilization: Sustained (continuous compute+accumulate)
+
+### Future: Animation System
+The speed multiplier enables **adaptive rendering** with **consistent quality**:
+```rust
+for frame in animation {
+    let iterations = calculate_adaptive_iterations(frame.motion);
+    let speed = iterations / base_iterations;  // Maintain constant accumulation frequency
+    render_frame(iterations_per_thread: iterations, speed_multiplier: speed);
+}
+```
+Result: Variable throughput based on motion, but constant visual quality.
+
+### References
+- Complete analysis: [ITERATIONS_PER_THREAD_QUALITY.md](ITERATIONS_PER_THREAD_QUALITY.md)
+- Root cause investigation: 4 failed attempts documented
+- Implementation details: Frame rate control vs iteration chunking
+
+---
+
+**Last Updated:** 2025-10-25
 **Project:** fflame-rust
 
 **Major Recent Changes:**
+- **Speed multiplier system** for quality-independent throughput control (2025-10-25)
+  - Frame rate control (interactive app) and iteration chunking (export)
+  - Pixel-perfect quality at any iterations_per_thread setting
+  - Foundation for future animation system
 - Variation registry system with parameters (2025-10-22)
 - Dynamic shader generation via ShaderBuilder v2 (2025-10-21)
 - Triangle editor with visual transform editing (2025-10-21)

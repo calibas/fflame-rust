@@ -514,16 +514,23 @@ let iterations_per_frame = iterations_per_thread / speed_multiplier;
 
 **Implementation:**
 
-1. **Interactive App** ([src/app/mod.rs](../src/app/mod.rs#L232-L256))
-   - Speed multiplier controls frame rate (60 × multiplier FPS)
-   - When rendering: Uses high frame rate for smooth accumulation
-   - When idle: Falls back to 60 FPS to save CPU
-   - Options: 1x, 2x, 4x, 8x, 16x (UI controls in Settings window)
+1. **Interactive App** ([src/app/mod.rs](../src/app/mod.rs#L228-L256))
+   - **Mechanism**: Frame rate control via `ControlFlow::WaitUntil`
+   - Speed multiplier sets target FPS: 60 × multiplier (e.g., 16× = 960 FPS)
+   - Each frame does ONE full compute+accumulate at full `iterations_per_thread`
+   - Higher frame rate → more accumulation passes per second → smoother density growth
+   - When idle (paused or max_iterations reached): Falls back to 60 FPS to save CPU
+   - UI controls: Settings window → Speed selector (1x/2x/4x/8x/16x buttons)
+   - PresentMode: `Mailbox` for smooth uncapped rendering
 
 2. **CLI Export** ([src/app/export.rs](../src/app/export.rs#L72-L107))
-   - `--speed-multiplier` parameter chunks iterations into smaller batches
+   - **Mechanism**: Explicit iteration chunking (no frame rate concept in headless mode)
+   - `--speed-multiplier` parameter: chunks iterations into smaller batches
+   - Formula: `iterations_per_frame = iterations_per_thread / speed_multiplier`
    - Example: `--iterations-per-thread 4096 --speed-multiplier 16`
-   - Result: 16 accumulation passes of 256 iterations each
+     - Result: 16 chunks × 256 iterations = 16 accumulation passes
+   - Each chunk does: compute(256 iters) → accumulate → swap buffers
+   - Treats each chunk as a complete frame cycle
 
 **Test Results (Pixel-Perfect Verified):**
 ```bash
@@ -555,6 +562,49 @@ fractal_flame_wgpu export -i config.flame -o test.png --iterations-per-thread 40
 - `iterations_per_thread` = Speed control (higher = faster iteration)
 - `speed_multiplier` = Quality control (higher = smoother accumulation)
 - Optimal: Set speed_multiplier = iterations_per_thread / 256 for baseline quality
+
+## Implications for Animation (Future Feature)
+
+The speed multiplier system is **critical for animation consistency**:
+
+### The Problem with Naive Animation
+Without speed multiplier, animating parameters would show visible quality variance:
+- Frame 1 (low motion): Uses low iterations_per_thread → smooth quality
+- Frame 2 (high motion): Uses high iterations_per_thread → chunky quality
+- Result: Temporal flickering as quality varies frame-to-frame
+
+### The Solution: Lock Speed Multiplier
+For animations, **speed_multiplier must remain constant** across all frames:
+```rust
+// Animation render loop (conceptual)
+let base_iterations = 256;
+let max_iterations = 4096;
+
+for frame in animation {
+    // Adaptively choose iterations_per_thread based on motion
+    let iterations = calculate_adaptive_iterations(frame.motion);
+
+    // CRITICAL: Maintain constant accumulation frequency
+    let speed = iterations / base_iterations;
+
+    render_frame(iterations_per_thread: iterations, speed_multiplier: speed);
+}
+```
+
+**Result**: Every frame gets the same accumulation frequency (256 iterations/pass), regardless of how many total iterations are rendered. Quality is perfectly consistent across the animation.
+
+### Performance Benefits
+- Low motion frames: Few iterations × low speed = fast render
+- High motion frames: Many iterations × high speed = more accumulation passes, still smooth
+- Total throughput: Proportional to motion complexity (as desired)
+- Visual quality: Constant and predictable
+
+### Design Philosophy
+The speed multiplier system **decouples two orthogonal concerns**:
+1. **Throughput** (`iterations_per_thread`): How fast we generate samples
+2. **Quality** (`speed_multiplier`): How smoothly we accumulate those samples
+
+This separation is **essential for adaptive rendering** where throughput varies but quality must remain constant.
 
 ## References
 

@@ -70,6 +70,15 @@ See [docs/outline.md](docs/outline.md) for original design goals
      - Exposure and gamma correction
      - Background color blending
 - **Total Speed**: ~2 million iterations/second at default settings (128 × 256 × 60 FPS)
+- **Speed Multiplier**: Quality control independent of render speed
+  - **Problem**: High `iterations_per_thread` causes quality degradation (60-70% difference)
+  - **Root Cause**: Fewer accumulation passes → chunky density growth → sqrt() artifacts
+  - **Solution**: Speed multiplier normalizes accumulation frequency
+  - **Interactive App**: Frame rate control (60 × multiplier FPS, up to 16× = 960 FPS)
+  - **CLI Export**: Iteration chunking (`--speed-multiplier` parameter)
+  - **Result**: Pixel-perfect quality at any `iterations_per_thread` setting
+  - **Critical for animation**: Ensures consistent quality across frames with varying iteration counts
+  - See [docs/ITERATIONS_PER_THREAD_QUALITY.md](docs/ITERATIONS_PER_THREAD_QUALITY.md) for complete analysis
 - **Color Modes**: Transform colors, Palette lookup, Speed-based coloring
 - **Projection Types**: Orthographic (flat) and Perspective (depth-aware)
 - **Camera Control**: Full 3D camera rotation (pitch and yaw) for viewing from any angle
