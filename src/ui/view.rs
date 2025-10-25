@@ -58,25 +58,46 @@ pub fn render_view_window(
             ui.separator();
             ui.label("Arrow Controls");
 
+            // Pre-calculate rotation for arrow controls
+            // Negate rotation to convert screen space to fractal space
+            let cos_r = (-*rotation).cos();
+            let sin_r = (-*rotation).sin();
+
             // Arrow keys layout
             ui.horizontal(|ui| {
                 ui.add_space(30.0);
                 if ui.button("  ^  ").clicked() {
-                    *pan_y -= pan_step;
+                    // Up in screen space: (0, -1), rotate to fractal space
+                    let screen_dx = 0.0;
+                    let screen_dy = -pan_step;
+                    *pan_x += screen_dx * cos_r - screen_dy * sin_r;
+                    *pan_y += screen_dx * sin_r + screen_dy * cos_r;
                     *view_changed = true;
                 }
             });
             ui.horizontal(|ui| {
                 if ui.button("  <  ").clicked() {
-                    *pan_x -= pan_step;
+                    // Left in screen space: (-1, 0), rotate to fractal space
+                    let screen_dx = -pan_step;
+                    let screen_dy = 0.0;
+                    *pan_x += screen_dx * cos_r - screen_dy * sin_r;
+                    *pan_y += screen_dx * sin_r + screen_dy * cos_r;
                     *view_changed = true;
                 }
                 if ui.button("  v  ").clicked() {
-                    *pan_y += pan_step;
+                    // Down in screen space: (0, 1), rotate to fractal space
+                    let screen_dx = 0.0;
+                    let screen_dy = pan_step;
+                    *pan_x += screen_dx * cos_r - screen_dy * sin_r;
+                    *pan_y += screen_dx * sin_r + screen_dy * cos_r;
                     *view_changed = true;
                 }
                 if ui.button("  >  ").clicked() {
-                    *pan_x += pan_step;
+                    // Right in screen space: (1, 0), rotate to fractal space
+                    let screen_dx = pan_step;
+                    let screen_dy = 0.0;
+                    *pan_x += screen_dx * cos_r - screen_dy * sin_r;
+                    *pan_y += screen_dx * sin_r + screen_dy * cos_r;
                     *view_changed = true;
                 }
             });

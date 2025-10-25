@@ -266,19 +266,43 @@ impl App {
 
         match event.physical_key {
             PhysicalKey::Code(KeyCode::ArrowUp) => {
-                self.pan_y -= pan_step;
+                // Up in screen space: (0, -1), rotate to fractal space
+                let cos_r = (-self.rotation).cos();
+                let sin_r = (-self.rotation).sin();
+                let screen_dx = 0.0;
+                let screen_dy = -pan_step;
+                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
+                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::ArrowDown) => {
-                self.pan_y += pan_step;
+                // Down in screen space: (0, 1), rotate to fractal space
+                let cos_r = (-self.rotation).cos();
+                let sin_r = (-self.rotation).sin();
+                let screen_dx = 0.0;
+                let screen_dy = pan_step;
+                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
+                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::ArrowLeft) => {
-                self.pan_x -= pan_step;
+                // Left in screen space: (-1, 0), rotate to fractal space
+                let cos_r = (-self.rotation).cos();
+                let sin_r = (-self.rotation).sin();
+                let screen_dx = -pan_step;
+                let screen_dy = 0.0;
+                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
+                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::ArrowRight) => {
-                self.pan_x += pan_step;
+                // Right in screen space: (1, 0), rotate to fractal space
+                let cos_r = (-self.rotation).cos();
+                let sin_r = (-self.rotation).sin();
+                let screen_dx = pan_step;
+                let screen_dy = 0.0;
+                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
+                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::Equal) | PhysicalKey::Code(KeyCode::NumpadAdd) => {
@@ -325,8 +349,16 @@ impl App {
                 let pan_dx = -dx / (scale * self.zoom);
                 let pan_dy = -dy / (scale * self.zoom); // Negative to match drag direction
 
-                self.pan_x += pan_dx;
-                self.pan_y += pan_dy;
+                // Rotate pan delta to account for view rotation
+                // When view is rotated, we want pan to move relative to the rotated view
+                // Negate rotation angle to rotate in screen space instead of fractal space
+                let cos_r = (-self.rotation).cos();
+                let sin_r = (-self.rotation).sin();
+                let rotated_dx = pan_dx * cos_r - pan_dy * sin_r;
+                let rotated_dy = pan_dx * sin_r + pan_dy * cos_r;
+
+                self.pan_x += rotated_dx;
+                self.pan_y += rotated_dy;
                 self.view_changed_by_keyboard = true; // Reuse same flag for mouse
             }
         }
