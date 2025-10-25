@@ -203,39 +203,48 @@ fractal_flame_wgpu/
 │                               - Tests all presets and variations
 │                               - M ops/sec output
 │
-└── Shaders (WGSL)
-    ├── core/                   🔥 SHADER MODULES (dynamically composed)
-    │   ├── header.wgsl         - Bindings and data structures
-    │   │                       - VariationParams struct (400 floats: 50×8)
-    │   ├── rng.wgsl            - PCG random number generator
-    │   ├── affine.wgsl         - Affine transformation functions
-    │   ├── variations_2d.wgsl  - 18 2D variation functions (CPU + parameterized)
-    │   ├── variations_3d.wgsl  - 26 total variations (2D + 3D + parameterized)
-    │   ├── utilities.wgsl      - Helper functions (get_param, world_to_pixel)
-    │   ├── main_2d.wgsl        - 2D compute entry point
-    │   └── main_3d.wgsl        - 3D compute entry point
+└── Shaders (WGSL) - Dynamic Compilation System
+    ├── core/                   🔥 MODULAR COMPONENTS (assembled at runtime)
+    │   ├── header.wgsl         Bindings and data structures (66 lines)
+    │   │                       - Transform, DispatchParams, VariationParams
+    │   │                       - All bind group layouts
+    │   │
+    │   ├── rng.wgsl            RNG functions (34 lines)
+    │   │                       - PCG random number generator
+    │   │
+    │   ├── affine.wgsl         Affine transform (9 lines)
+    │   │
+    │   ├── variations_2d.wgsl  2D variation functions (152 lines)
+    │   │                       - Core 2D variations (0-15)
+    │   │                       - Parameterized 2D (JuliaN, Blob)
+    │   │
+    │   ├── variations_3d.wgsl  All variations including 3D (202 lines)
+    │   │                       - All 2D variations PLUS
+    │   │                       - 3D depth variations (Zcone, Flatten, ZScale)
+    │   │                       - 3D rotation variations (PreRotate, PostRotate)
+    │   │                       - 3D full variations (Hemisphere)
+    │   │
+    │   ├── utilities.wgsl      Helper functions (135 lines)
+    │   │                       - get_param() - Parameter access
+    │   │                       - world_to_pixel() - Camera and projection
+    │   │                       - Point calculations (r, θ, φ)
+    │   │
+    │   ├── main_2d.wgsl        2D entry point (75 lines)
+    │   │                       - @compute main function
+    │   │                       - Calls apply_variations() [GENERATED]
+    │   │
+    │   └── main_3d.wgsl        3D entry point (76 lines)
+    │                           - @compute main function
+    │                           - Calls apply_variations() [GENERATED]
     │
-    ├── trajectory.wgsl         🔥 COMPUTE: Flame iteration (2D mode) [GENERATED]
-    │                           - Built by ShaderBuilder from core modules
-    │                           - Only includes active variations
-    │                           - PCG random number generator
-    │                           - Transform selection (weighted)
-    │                           - Affine transformation (2D)
-    │                           - Active 2D variation functions
-    │                           - Color accumulation (3 modes)
-    │                           - Write to temp texture
+    ├── [GENERATED at runtime]  Trajectory shaders built by ShaderBuilder
+    │                           - 2D: header + rng + variations_2d + [generated apply_variations] + utilities + main_2d
+    │                           - 3D: header + rng + variations_3d + [generated apply_variations] + utilities + main_3d
+    │                           - Only active variations compiled
+    │                           - Conditional RNG and parameter passing
+    │                           - Supports plugin variation injection
     │
-    ├── trajectory_3d.wgsl      🔥 COMPUTE: Flame iteration (3D mode) [GENERATED]
-    │                           - Built by ShaderBuilder from core modules
-    │                           - Only includes active variations
-    │                           - Same as 2D plus:
-    │                           - Affine transformation with Z (g field)
-    │                           - Active 2D + 3D variation functions
-    │                           - Camera rotation (pitch/yaw)
-    │                           - Projection (orthographic/perspective)
-    │                           - Z tracking through iteration
-    │
-    ├── accumulate.wgsl         🔥 COMPUTE: Temporal blending
+    ├── accumulate.wgsl         🔥 COMPUTE: Temporal blending (41 lines)
     │                           - Read temp samples
     │                           - Blend with previous accumulation
     │                           - Exponential moving average
