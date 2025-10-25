@@ -25,6 +25,7 @@ pub fn render_tone_mapping_window(
     current_palette_index: &mut usize,
     palette_changed: &mut bool,
     palette_editor_palette: &mut crate::scene::palette::Palette,
+    palette_editor_has_changes: &mut bool,
     speed_factor: &mut f32,
     background_color: &mut [f32; 3],
     background_color_changed: &mut bool,
@@ -164,38 +165,65 @@ pub fn render_tone_mapping_window(
                                             }
 
                                             *palette_editor_palette = edited_palette;
+                                            *palette_editor_has_changes = true; // New palette needs to be applied
                                         }
                                     }
                                 }
                             });
 
-                        // Edit Palette button - creates copy of built-ins, edits custom palettes in-place
-                        if ui.button("🎨 Edit Palette").clicked() {
-                            *show_palette_editor = !*show_palette_editor;
-                            // Load current palette into editor
-                            if let Some(pal) = palette_library.get(*current_palette_index) {
-                                let mut edited_palette = pal.clone();
+                        ui.horizontal(|ui| {
+                            // Edit Palette button - creates copy of built-ins, edits custom palettes in-place
+                            if ui.button("🎨 Edit Palette").clicked() {
+                                *show_palette_editor = !*show_palette_editor;
+                                // Load current palette into editor
+                                if let Some(pal) = palette_library.get(*current_palette_index) {
+                                    let mut edited_palette = pal.clone();
 
-                                // Always generate unique name for built-in palettes to prevent editing originals
-                                if pal.built_in {
+                                    // Always generate unique name for built-in palettes to prevent editing originals
+                                    if pal.built_in {
+                                        let base_name = &pal.name;
+                                        let mut new_name = format!("{} (Custom)", base_name);
+                                        let mut counter = 2;
+
+                                        // Keep incrementing until we find a unique name
+                                        while palette_library.palettes().iter().any(|p| p.name == new_name) {
+                                            new_name = format!("{} (Custom {})", base_name, counter);
+                                            counter += 1;
+                                        }
+
+                                        edited_palette.name = new_name;
+                                        edited_palette.built_in = false; // Custom palettes are not built-in
+                                    }
+                                    // For custom palettes, keep the same name (will update in place)
+
+                                    *palette_editor_palette = edited_palette;
+                                    *palette_editor_has_changes = true; // New palette needs to be applied
+                                }
+                            }
+
+                            // Clone button - always creates a copy with unique name
+                            if ui.button("📋 Clone").clicked() {
+                                *show_palette_editor = !*show_palette_editor;
+                                if let Some(pal) = palette_library.get(*current_palette_index) {
+                                    let mut edited_palette = pal.clone();
+                                    edited_palette.built_in = false; // Clones are never built-in
+
                                     let base_name = &pal.name;
-                                    let mut new_name = format!("{} (Custom)", base_name);
+                                    let mut new_name = format!("{} (Copy)", base_name);
                                     let mut counter = 2;
 
                                     // Keep incrementing until we find a unique name
                                     while palette_library.palettes().iter().any(|p| p.name == new_name) {
-                                        new_name = format!("{} (Custom {})", base_name, counter);
+                                        new_name = format!("{} (Copy {})", base_name, counter);
                                         counter += 1;
                                     }
 
                                     edited_palette.name = new_name;
-                                    edited_palette.built_in = false; // Custom palettes are not built-in
+                                    *palette_editor_palette = edited_palette;
+                                    *palette_editor_has_changes = true; // New palette needs to be applied
                                 }
-                                // For custom palettes, keep the same name (will update in place)
-
-                                *palette_editor_palette = edited_palette;
                             }
-                        }
+                        });
                     }
 
                     // Show speed factor slider in Speed mode
