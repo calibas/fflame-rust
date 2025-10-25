@@ -19,13 +19,29 @@ fractal_flame_wgpu/
 │                               - export_async() → batch processing loop
 │
 ├── Application Layer
-│   ├── app.rs                  Main App struct + headless export
-│   │                           - Event loop (GUI mode)
-│   │                           - Input handling (keyboard, mouse, rotation-aware panning)
-│   │                           - Render coordination
-│   │                           - Config import/export
-│   │                           - Undo/redo management
+│   ├── app/                    Main App module (refactored into 4 files)
+│   │   ├── mod.rs              Core App struct (832 lines)
+│   │   │                       - Event loop and window management
+│   │   │                       - Render function + UI response handling
+│   │   │                       - update() performance tracking
+│   │   │
+│   │   ├── input.rs            Input handlers (208 lines)
+│   │   │                       - handle_keyboard() - Arrow keys, zoom, undo/redo
+│   │   │                       - handle_mouse_button() - Drag state management
+│   │   │                       - handle_mouse_move() - Rotation-aware panning
+│   │   │                       - handle_mouse_wheel() - Zoom to cursor
+│   │   │
+│   │   ├── config.rs           Config management (122 lines)
+│   │   │                       - export_config() → FractalConfig
+│   │   │                       - import_config() + palette library sync
+│   │   │                       - capture_state() for undo
+│   │   │                       - undo/redo/can_undo/can_redo
+│   │   │
+│   │   └── export.rs           Headless export (126 lines)
 │   │                           - export_headless() → CLI PNG export
+│   │                           - Creates headless GPU instance
+│   │                           - Renders to max_iterations
+│   │                           - Embeds PNG metadata
 │   │
 │   └── util.rs                 PerformanceMetrics
 │                               - FPS tracking
