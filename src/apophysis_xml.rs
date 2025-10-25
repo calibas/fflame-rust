@@ -102,7 +102,12 @@ fn parse_flame_element(
                 }
             }
             "brightness" => brightness = value.parse().unwrap_or(1.0),
-            "gamma" => gamma = value.parse().unwrap_or(2.2),
+            "gamma" => {
+                // Apophysis gamma 1.0 ≈ our gamma 2.2 (sRGB standard)
+                // Multiply by 2.2 to convert
+                let apo_gamma: f32 = value.parse().unwrap_or(1.0);
+                gamma = apo_gamma * 2.2;
+            }
             _ => {} // Ignore unknown attributes for now
         }
     }
