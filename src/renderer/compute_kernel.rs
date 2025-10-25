@@ -585,7 +585,10 @@ impl FlameRenderer {
 
         // Create buffer to copy accumulation texture data (Rgba16Float format)
         let bytes_per_pixel = 8; // Rgba16Float = 4 channels × 2 bytes each
-        let buffer_size = (self.width * self.height * bytes_per_pixel) as u64;
+        let unpadded_bytes_per_row = self.width * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * self.height) as u64;
         let buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Accumulation Capture Buffer"),
             size: buffer_size,
@@ -605,7 +608,7 @@ impl FlameRenderer {
                 buffer: &buffer,
                 layout: ImageDataLayout {
                     offset: 0,
-                    bytes_per_row: Some(self.width * bytes_per_pixel),
+                    bytes_per_row: Some(padded_bytes_per_row),
                     rows_per_image: Some(self.height),
                 },
             },
@@ -634,12 +637,17 @@ impl FlameRenderer {
         // Convert Rgba16Float to Rgba8 with CPU tone mapping
         let mut rgba_data = Vec::with_capacity((self.width * self.height * 4) as usize);
 
-        for chunk in data.chunks_exact(8) {
-            // Read f16 values and convert to f32
-            let r = half::f16::from_le_bytes([chunk[0], chunk[1]]).to_f32();
-            let g = half::f16::from_le_bytes([chunk[2], chunk[3]]).to_f32();
-            let b = half::f16::from_le_bytes([chunk[4], chunk[5]]).to_f32();
-            let density = half::f16::from_le_bytes([chunk[6], chunk[7]]).to_f32();
+        // Iterate row by row to handle padding
+        for y in 0..self.height {
+            let row_start = (y * padded_bytes_per_row) as usize;
+            let row_data = &data[row_start..row_start + (self.width * bytes_per_pixel) as usize];
+
+            for chunk in row_data.chunks_exact(8) {
+                // Read f16 values and convert to f32
+                let r = half::f16::from_le_bytes([chunk[0], chunk[1]]).to_f32();
+                let g = half::f16::from_le_bytes([chunk[2], chunk[3]]).to_f32();
+                let b = half::f16::from_le_bytes([chunk[4], chunk[5]]).to_f32();
+                let density = half::f16::from_le_bytes([chunk[6], chunk[7]]).to_f32();
 
             // Apply same tone mapping as shader (exposure + log + gamma)
             let exposure = 1.0f32;
@@ -667,11 +675,12 @@ impl FlameRenderer {
             // Calculate alpha from density (same as shader)
             let alpha = (density * self.density_scale).clamp(0.0, 1.0);
 
-            // Convert to u8
-            rgba_data.push((color_r * 255.0) as u8);
-            rgba_data.push((color_g * 255.0) as u8);
-            rgba_data.push((color_b * 255.0) as u8);
-            rgba_data.push((alpha * 255.0) as u8);
+                // Convert to u8
+                rgba_data.push((color_r * 255.0) as u8);
+                rgba_data.push((color_g * 255.0) as u8);
+                rgba_data.push((color_b * 255.0) as u8);
+                rgba_data.push((alpha * 255.0) as u8);
+            }
         }
 
         drop(data);
@@ -707,7 +716,11 @@ impl FlameRenderer {
         self.tonemap_pass(&mut encoder, &view);
 
         // Create buffer to copy texture data to
-        let buffer_size = (self.width * self.height * 4) as u64;
+        let bytes_per_pixel = 4; // RGBA8
+        let unpadded_bytes_per_row = self.width * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * self.height) as u64;
         let buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Screenshot Buffer"),
             size: buffer_size,
@@ -727,7 +740,7 @@ impl FlameRenderer {
                 buffer: &buffer,
                 layout: ImageDataLayout {
                     offset: 0,
-                    bytes_per_row: Some(self.width * 4),
+                    bytes_per_row: Some(padded_bytes_per_row),
                     rows_per_image: Some(self.height),
                 },
             },
@@ -752,7 +765,15 @@ impl FlameRenderer {
             .map_err(|e| format!("Buffer map error: {:?}", e))?;
 
         let data = buffer_slice.get_mapped_range();
-        let rgba_data: Vec<u8> = data.to_vec();
+
+        // Copy data row by row, skipping padding
+        let mut rgba_data = Vec::with_capacity((self.width * self.height * 4) as usize);
+        for y in 0..self.height {
+            let row_start = (y * padded_bytes_per_row) as usize;
+            let row_end = row_start + (self.width * bytes_per_pixel) as usize;
+            rgba_data.extend_from_slice(&data[row_start..row_end]);
+        }
+
         drop(data);
         buffer.unmap();
 

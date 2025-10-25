@@ -47,6 +47,74 @@ pub fn desktop_main() {
     pollster::block_on(run()).expect("Failed to run app");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>) {
+    env_logger::init();
+    pollster::block_on(export_async(input, output, width, height, category)).expect("Export failed");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn export_async(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+    use std::path::Path;
+
+    println!("Fractal Flame Batch Export");
+    println!("===========================");
+    println!("Input: {}", input);
+    println!("Output: {}", output);
+    println!();
+
+    // Find all .flame files
+    let input_path = Path::new(input);
+    let flame_files = if input_path.is_dir() {
+        scene::assets::load_configs_from_dir(input_path)
+    } else {
+        vec![config::FractalConfig::load_from_file(input_path)?]
+    };
+
+    if flame_files.is_empty() {
+        eprintln!("No .flame files found");
+        return Ok(());
+    }
+
+    println!("Found {} config(s)\n", flame_files.len());
+
+    // Create output directory if needed
+    let output_path = Path::new(output);
+    if flame_files.len() > 1 {
+        std::fs::create_dir_all(output_path)?;
+    }
+
+    // Export each config
+    for (i, config) in flame_files.iter().enumerate() {
+        let flame_name = &config.flame.name;
+        println!("[{}/{}] Exporting {}...", i + 1, flame_files.len(), flame_name);
+
+        // Determine output file path
+        let output_file = if flame_files.len() == 1 && output_path.extension().is_some() {
+            output_path.to_path_buf()
+        } else {
+            output_path.join(format!("{}.png", flame_name.to_lowercase().replace(" ", "_")))
+        };
+
+        // Use config dimensions or provided dimensions
+        let (w, h) = (
+            width.unwrap_or(1920),
+            height.unwrap_or(1080),
+        );
+
+        // Call the existing PNG export logic from app
+        // We'll need to add a headless export helper
+        let success = app::export_headless(config, &output_file, w, h, category.clone()).await?;
+
+        if success {
+            println!("  ✓ Saved to {}", output_file.display());
+        }
+    }
+
+    println!("\nExport complete!");
+    Ok(())
+}
+
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = winit::event_loop::EventLoop::new()?;
 
