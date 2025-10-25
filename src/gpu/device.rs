@@ -59,7 +59,7 @@ impl GpuContext {
             format,
             width: size.width,
             height: size.height,
-            present_mode: PresentMode::Fifo,
+            present_mode: PresentMode::Mailbox,  // Fast but smooth - software frame limiter controls speed multiplier
             // Use Opaque alpha mode to ensure frames don't accumulate
             // Auto mode in WASM can cause compositing issues where frames blend together
             alpha_mode: CompositeAlphaMode::Opaque,

@@ -30,7 +30,7 @@
   "camera_rotation_y": 0.0,
   "density_scale": 1.0,
   "speed_factor": 0.5,
-  "max_iterations": 10000000,
+  "max_iterations": 1000000000,
   "color_mode": "Transform",
   "palette_index": 1,
   "background_color": [0.0, 0.0, 0.0],
@@ -42,5 +42,6 @@
     ]
   },
   "exposure": 1.0,
-  "gamma": 2.2
+  "gamma": 2.2,
+  "deterministic_rng": true
 }

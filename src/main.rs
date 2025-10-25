@@ -40,6 +40,10 @@ enum Commands {
         /// Iterations per thread (default: 256, range: 64-4096)
         #[arg(long, default_value_t = 256)]
         iterations_per_thread: u32,
+
+        /// Speed multiplier for accumulation frequency (1, 2, 4, 8, 16)
+        #[arg(long, default_value_t = 1)]
+        speed_multiplier: u32,
     },
 }
 
@@ -49,9 +53,9 @@ fn main() {
         let cli = Cli::parse();
 
         match cli.command {
-            Some(Commands::Export { input, output, width, height, category, iterations_per_thread }) => {
+            Some(Commands::Export { input, output, width, height, category, iterations_per_thread, speed_multiplier }) => {
                 // Run in headless export mode
-                fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread);
+                fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread, speed_multiplier);
             }
             None => {
                 // Run normal GUI mode
