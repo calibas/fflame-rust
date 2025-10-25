@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             background_color: [0.0, 0.0, 0.0],
         };
 
-        let filename = format!("assets/presets/{}.flame", config.flame.name.to_lowercase().replace(" ", "_"));
+        let filename = format!("assets/presets/{}.fflame", config.flame.name.to_lowercase().replace(" ", "_"));
         let json = serde_json::to_string_pretty(&config)?;
         fs::write(&filename, json)?;
         println!("Exported: {}", filename);

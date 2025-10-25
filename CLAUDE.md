@@ -156,7 +156,7 @@ The main app supports headless batch PNG export for testing and automation:
 
 ```bash
 # Export single file
-fractal_flame_wgpu export -i config.flame -o output.png --width 1920 --height 1080
+fractal_flame_wgpu export -i config.fflame -o output.png --width 1920 --height 1080
 
 # Batch export directory
 fractal_flame_wgpu export -i tests/visual/configs -o tests/visual/current
@@ -351,14 +351,14 @@ println!("Rendered {} iterations in {:.2}ms",
 3. Preset auto-appears in UI dropdown
 
 **Option 2: File-based (auto-loaded from assets/)**
-1. Create a `.flame` file in `assets/presets/` directory (FractalConfig JSON)
+1. Create a `.fflame` file in `assets/presets/` directory (FractalConfig JSON)
 2. File is auto-loaded on desktop builds (see `PresetLibrary::new()`)
 3. WASM builds use built-in presets only
 4. Use `cargo run --example export_presets` to generate preset files from code
 
 **Option 3: Export current state as preset**
 1. Use Config Import/Export → Save Config
-2. Save as `.flame` file in `assets/presets/`
+2. Save as `.fflame` file in `assets/presets/`
 3. Restart app to see it in preset dropdown (desktop only)
 
 ### Modifying Tone Mapping
@@ -382,7 +382,7 @@ println!("Rendered {} iterations in {:.2}ms",
    - **ZScale**: Scale Z depth up or down
 4. Set different `g` (Z offset) values per transform to create layers
 5. Test with camera rotation (Camera Pitch/Yaw sliders) to verify 3D structure
-6. Save as `.flame` file with 24-element variation arrays
+6. Save as `.fflame` file with 24-element variation arrays
 
 **Example 3D Transform:**
 ```rust
@@ -430,7 +430,7 @@ JSON format with name and color stops:
 - `position`: 0.0 to 1.0 (gradient stop position)
 - `color`: RGB array with values 0.0 to 1.0
 
-### Config Files (.flame)
+### Config Files (.fflame)
 JSON format containing full fractal state (see [src/config.rs](src/config.rs))
 
 **FractalConfig includes ALL settings for exact reproduction:**
@@ -474,7 +474,7 @@ The preset system stores **complete FractalConfig** (not just Flame):
 ### Asset Loading System (Added 2025-10-20)
 Desktop builds auto-load from filesystem:
 - `assets/palettes/*.palette` → PaletteLibrary
-- `assets/presets/*.flame` → PresetLibrary
+- `assets/presets/*.fflame` → PresetLibrary
 WASM builds use built-in assets only (no filesystem access)
 
 ### Rotation-Aware Panning (Added 2025-10-24)
@@ -532,7 +532,7 @@ Full pseudo-3D rendering inspired by Apophysis 7X:
 ## Known Issues
 - Julia variation uses CPU `rand::random()` which doesn't work on GPU (needs RNG passed in)
 - WASM PNG export uses `unsafe` lifetime extension (safe in practice, GPU resources live for program lifetime)
-- No error handling for invalid .flame or .palette file imports
+- No error handling for invalid .fflame or .palette file imports
 - Background color changes don't trigger undo capture in all cases
 - Transparent PNG export reads from accumulation buffer (Rgba16Float) and applies tone mapping on CPU
   - This is necessary because tonemap shader blends RGB with background before alpha is applied

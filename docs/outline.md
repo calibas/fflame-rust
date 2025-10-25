@@ -92,7 +92,7 @@ fractal-flame-wgpu/
 │   ├── renderer/
 │   │   ├── mod.rs
 │   │   └── compute_kernel.rs # GPU orchestration, PNG export
-│   ├── config.rs        # FractalConfig serialization (.flame files)
+│   ├── config.rs        # FractalConfig serialization (.fflame files)
 │   ├── undo.rs          # undo/redo history system
 │   ├── util.rs          # performance metrics
 │   ├── profiler.rs      # GPU/CPU profiling tools
@@ -111,12 +111,12 @@ fractal-flame-wgpu/
 │   │   ├── fire.palette
 │   │   ├── cool.palette
 │   │   └── rainbow.palette
-│   └── presets/         # .flame config files (auto-loaded on desktop)
-│       ├── simple.flame
-│       ├── complex.flame
-│       ├── spherical.flame
-│       ├── spiral.flame
-│       └── julia.flame
+│   └── presets/         # .fflame config files (auto-loaded on desktop)
+│       ├── simple.fflame
+│       ├── complex.fflame
+│       ├── spherical.fflame
+│       ├── spiral.fflame
+│       └── julia.fflame
 └── shaders/             # WGSL shader files (compute + fragment)
     ├── trajectory.wgsl  # flame iteration compute shader (2D mode)
     ├── trajectory_3d.wgsl # flame iteration compute shader (3D mode)
@@ -161,7 +161,7 @@ Transform {
 }
 ```
 
-- Serialized to JSON for config import/export (.flame files).
+- Serialized to JSON for config import/export (.fflame files).
 - Packed into a `std430`-style structure for GPU buffers (align to vec4 boundaries).
 
 ### 4.2 Palette / LUT
@@ -304,9 +304,9 @@ Implemented in `ui/mod.rs` using egui (floating windows):
 
 **Config Import/Export Window:**
 - ✅ Export to clipboard (JSON)
-- ✅ Save as .flame file (desktop file dialog)
+- ✅ Save as .fflame file (desktop file dialog)
 - ✅ Import from JSON text area
-- ✅ Load .flame file (desktop file dialog)
+- ✅ Load .fflame file (desktop file dialog)
 - ✅ WASM: file dialogs copy to/from clipboard
 
 **Viewport Interaction:**
@@ -446,7 +446,7 @@ Implemented in `ui/mod.rs` using egui (floating windows):
 
 **Added Beyond Original Milestones:**
 - ✅ Undo/redo system with 50-state history
-- ✅ Config import/export (.flame JSON files)
+- ✅ Config import/export (.fflame JSON files)
 - ✅ Three color modes (Transform, Palette, Speed)
 - ✅ 3D rendering with 8 3D variations (total 24 variations)
 - ✅ Camera rotation and projection controls (orthographic/perspective)

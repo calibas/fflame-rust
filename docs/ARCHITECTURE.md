@@ -159,7 +159,7 @@ fractal_flame_wgpu/
 │   │                           - Colors (mode, palette_index, palette data, background)
 │   │                           - Tone mapping (mode, curve, use_curve, exposure, gamma)
 │   │                           - Reproducibility (deterministic_rng)
-│   │                           - JSON import/export (.flame files)
+│   │                           - JSON import/export (.fflame files)
 │   │                           - File save/load with full metadata
 │   │
 │   ├── undo.rs                 UndoHistory
@@ -328,8 +328,8 @@ WindowEvent::RedrawRequested
       - If palette_changed → update_palette()
       - If reset_requested → reset()
       - If undo/redo → import_config()
-      - If config_export → save .flame file
-      - If config_import → load .flame file
+      - If config_export → save .fflame file
+      - If config_import → load .fflame file
       - If palette_export → save .palette file
       - If palette_import → load .palette file
       - If preset_changed → load_config()
@@ -711,7 +711,7 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 | Add variation parameters | [variations/mod.rs](src/variations/mod.rs) - use `registry.add_parameters()` |
 | Change color algorithm | [main_2d.wgsl](shaders/core/main_2d.wgsl), [main_3d.wgsl](shaders/core/main_3d.wgsl), [tonemap.wgsl](shaders/tonemap.wgsl) |
 | Add UI panel/window | [ui/mod.rs](src/ui/mod.rs) - add to menu bar and window rendering |
-| Add preset | [presets.rs](src/scene/presets.rs) or create `.flame` file in `assets/presets/` |
+| Add preset | [presets.rs](src/scene/presets.rs) or create `.fflame` file in `assets/presets/` |
 | Modify accumulation | [accumulate.wgsl](shaders/accumulate.wgsl), [compute_kernel.rs](src/renderer/compute_kernel.rs) |
 | Change tone mapping | [tonemap.wgsl](shaders/tonemap.wgsl) |
 | Add export format | [compute_kernel.rs](src/renderer/compute_kernel.rs) |
@@ -793,7 +793,7 @@ for _ in 0..speed_multiplier {
 
 **CLI Usage**: `--speed-multiplier` parameter
 ```bash
-fractal_flame_wgpu export -i config.flame -o output.png \
+fractal_flame_wgpu export -i config.fflame -o output.png \
   --iterations-per-thread 4096 --speed-multiplier 16
 ```
 

@@ -36,7 +36,7 @@ tests/visual/
 │   ├── wasm/
 │   └── report.html     # Visual diff review page
 │
-├── configs/            # Test case .flame files
+├── configs/            # Test case .fflame files
 │   ├── variations/     # One test per variation (26 files)
 │   ├── render_modes/   # 2D/3D, ortho/perspective
 │   ├── color_modes/    # Transform/palette/speed
@@ -48,7 +48,7 @@ tests/visual/
     ├── generate_references.rs   # Create baseline images
     ├── run_visual_tests.rs      # Compare current vs baseline
     ├── compare_images.rs        # Image diff with metrics
-    └── export_apophysis.rs      # Convert .flame → Apophysis format
+    └── export_apophysis.rs      # Convert .fflame → Apophysis format
 ```
 
 ---
@@ -57,65 +57,65 @@ tests/visual/
 
 ### 1. Per-Variation Tests (26 tests)
 One test case showcasing each variation in isolation:
-- `linear.flame` - 100% linear variation
-- `sinusoidal.flame` - 100% sinusoidal
-- `spherical.flame` - 100% spherical
+- `linear.fflame` - 100% linear variation
+- `sinusoidal.fflame` - 100% sinusoidal
+- `spherical.fflame` - 100% spherical
 - ... (one for each of 26 variations)
 
 **Purpose**: Catch algorithm bugs in individual variations
 
 ### 2. Render Mode Tests (6 tests)
-- `2d_orthographic.flame` - Classic 2D rendering
-- `3d_orthographic.flame` - 3D without perspective
-- `3d_perspective_weak.flame` - Perspective strength 1.0
-- `3d_perspective_strong.flame` - Perspective strength 5.0
-- `3d_camera_pitch45.flame` - Camera rotation test
-- `3d_camera_yaw90.flame` - Camera rotation test
+- `2d_orthographic.fflame` - Classic 2D rendering
+- `3d_orthographic.fflame` - 3D without perspective
+- `3d_perspective_weak.fflame` - Perspective strength 1.0
+- `3d_perspective_strong.fflame` - Perspective strength 5.0
+- `3d_camera_pitch45.fflame` - Camera rotation test
+- `3d_camera_yaw90.fflame` - Camera rotation test
 
 **Purpose**: Verify 3D rendering, camera, projection
 
 ### 3. Color Mode Tests (5 tests)
-- `color_transform.flame` - Transform color mode
-- `color_palette.flame` - Palette lookup mode
-- `color_speed.flame` - Speed-based coloring
-- `color_gradient.flame` - Smooth gradient test
-- `color_background.flame` - Background blending test
+- `color_transform.fflame` - Transform color mode
+- `color_palette.fflame` - Palette lookup mode
+- `color_speed.fflame` - Speed-based coloring
+- `color_gradient.fflame` - Smooth gradient test
+- `color_background.fflame` - Background blending test
 
 **Purpose**: Verify color interpolation and blending
 
 ### 4. Variation Parameter Tests (2 tests)
-- `julian_params.flame` - JuliaN with various power/dist values
-- `blob_params.flame` - Blob with various high/low/waves values
+- `julian_params.fflame` - JuliaN with various power/dist values
+- `blob_params.fflame` - Blob with various high/low/waves values
 
 **Purpose**: Verify parameterized variations work correctly
 
 ### 5. Edge Case Tests (8 tests)
-- `single_transform.flame` - Minimum (1 transform)
-- `max_transforms.flame` - Maximum (32 transforms)
-- `tiny_zoom.flame` - Zoom 0.001 (extreme zoom in)
-- `huge_zoom.flame` - Zoom 1000.0 (extreme zoom out)
-- `zero_weight.flame` - Edge case: all weights near zero
-- `high_iteration.flame` - Quality test (100M iterations)
-- `mixed_2d_3d.flame` - 2D + 3D variations combined
-- `all_variations.flame` - All 26 variations active at once
+- `single_transform.fflame` - Minimum (1 transform)
+- `max_transforms.fflame` - Maximum (32 transforms)
+- `tiny_zoom.fflame` - Zoom 0.001 (extreme zoom in)
+- `huge_zoom.fflame` - Zoom 1000.0 (extreme zoom out)
+- `zero_weight.fflame` - Edge case: all weights near zero
+- `high_iteration.fflame` - Quality test (100M iterations)
+- `mixed_2d_3d.fflame` - 2D + 3D variations combined
+- `all_variations.fflame` - All 26 variations active at once
 
 **Purpose**: Catch crashes, artifacts, edge condition bugs
 
 ### 6. Preset Tests (Current Built-ins)
-- `simple.flame`
-- `complex.flame`
-- `julia.flame`
-- `spherical.flame`
-- `flower_of_life.flame`
+- `simple.fflame`
+- `complex.fflame`
+- `julia.fflame`
+- `spherical.fflame`
+- `flower_of_life.fflame`
 - ... (all built-in presets)
 
 **Purpose**: Regression testing for known-good configs
 
 ### 7. Tone Curve Tests (4 tests)
-- `tonecurve_off.flame` - No curve
-- `tonecurve_linear.flame` - Linear curve
-- `tonecurve_s.flame` - S-curve
-- `tonecurve_custom.flame` - Custom curve shape
+- `tonecurve_off.fflame` - No curve
+- `tonecurve_linear.fflame` - Linear curve
+- `tonecurve_s.fflame` - S-curve
+- `tonecurve_custom.fflame` - Custom curve shape
 
 **Purpose**: Verify tone mapping doesn't affect background
 
@@ -222,24 +222,24 @@ RenderMode: 2D
 **Completed Tasks:**
 1. ✅ Added CLI export mode to main app (clap subcommands)
 2. ✅ Implemented headless GPU rendering in `src/app.rs::export_headless()`
-3. ✅ Load .flame configs without GUI
+3. ✅ Load .fflame configs without GUI
 4. ✅ Render to texture using same code as interactive app
 5. ✅ Export PNG with full metadata
-6. ✅ Batch process all .flame files in directory
+6. ✅ Batch process all .fflame files in directory
 
 **Commands:**
 ```bash
 # Generate images from single config
-cargo run --release -- export --input config.flame --output output.png
+cargo run --release -- export --input config.fflame --output output.png
 
 # Batch export all configs in directory
 cargo run --release -- export --input tests/visual/configs --output tests/visual/current
 
 # Custom resolution (overrides config)
-cargo run --release -- export --input config.flame --output out.png --width 1920 --height 1080
+cargo run --release -- export --input config.fflame --output out.png --width 1920 --height 1080
 
 # Include test category in metadata
-cargo run --release -- export --input config.flame --output out.png --category variations
+cargo run --release -- export --input config.fflame --output out.png --category variations
 ```
 
 **Deliverable:** ✅ Automated PNG generation using same rendering code as app (~0.5s for 10M iterations @ 800x600)
@@ -276,16 +276,16 @@ cargo run --release --bin compare_images -- --image1 ref.png --image2 current.pn
 ### Phase 4: Test Config Library (🔄 IN PROGRESS)
 **Current Status:**
 1. ✅ Directory structure created: `tests/visual/configs/variations/`
-2. ✅ Initial test configs: `linear.flame`, `sinusoidal.flame`, `spherical.flame`
+2. ✅ Initial test configs: `linear.fflame`, `sinusoidal.fflame`, `spherical.fflame`
 3. ⏳ Remaining 23 variation tests
 4. ⏳ Organize by category (variations/, render_modes/, color_modes/, edge_cases/)
 5. ⏳ Create `manifest.json` with test metadata
 6. ⏳ Document expected results
 
 **Completed Configs:**
-- `tests/visual/configs/variations/linear.flame` (10M iterations)
-- `tests/visual/configs/variations/sinusoidal.flame` (10M iterations)
-- `tests/visual/configs/variations/spherical.flame` (10M iterations)
+- `tests/visual/configs/variations/linear.fflame` (10M iterations)
+- `tests/visual/configs/variations/sinusoidal.fflame` (10M iterations)
+- `tests/visual/configs/variations/spherical.fflame` (10M iterations)
 
 **Next Steps:**
 - Create remaining 23 variation test configs
@@ -374,7 +374,7 @@ When tests fail:
 ### Baseline Update
 ```bash
 # After verifying changes are correct, regenerate references
-cargo run --release -- export --input tests/visual/configs/variations/linear.flame --output tests/visual/references/linear.png
+cargo run --release -- export --input tests/visual/configs/variations/linear.fflame --output tests/visual/references/linear.png
 
 # Or regenerate all references
 cargo run --release -- export --input tests/visual/configs --output tests/visual/references
@@ -440,7 +440,7 @@ cargo bench                               # Benchmarks
 - [x] Config from PNG can recreate exact render
 
 ### Phase 2 (Headless Export) - ✅ COMPLETE
-- [x] Can batch-generate PNGs from .flame files without GUI
+- [x] Can batch-generate PNGs from .fflame files without GUI
 - [x] Generates test images quickly (~0.5s for 10M iterations @ 800x600)
 - [x] All images include complete metadata
 
@@ -451,7 +451,7 @@ cargo bench                               # Benchmarks
 - [x] Pass/fail thresholds defined (manual verification for now)
 
 ### Phase 4 (Test Library) - 🔄 IN PROGRESS
-- [x] Initial test .flame files created (3/60)
+- [x] Initial test .fflame files created (3/60)
 - [x] Directory structure created
 - [ ] All 26 variations covered (3/26)
 - [ ] All render modes covered

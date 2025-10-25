@@ -36,7 +36,7 @@ This document compares the current implementation against [outline.md](outline.m
 - ➕ [src/ui/panels.rs](src/ui/panels.rs) - Panel definitions (unused/empty)
 - ➕ [src/scene/assets.rs](src/scene/assets.rs) - Asset loading from filesystem (added 2025-10-20)
 - ➕ [assets/palettes/](assets/palettes/) - Palette files (fire.palette, cool.palette, rainbow.palette)
-- ➕ [assets/presets/](assets/presets/) - Preset FractalConfig files (.flame JSON)
+- ➕ [assets/presets/](assets/presets/) - Preset FractalConfig files (.fflame JSON)
 - ➕ [examples/export_presets.rs](examples/export_presets.rs) - Export built-in presets to files
 - ➕ **3D Rendering System** (added 2025-10-21) - Full pseudo-3D with camera rotation
 
@@ -127,7 +127,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 - ➕ **Pause/Resume** - Control accumulation
 - ➕ **Max iterations limit** - Auto-stop at target
 - ➕ **Undo/Redo** - Full history system (Ctrl+Z, Ctrl+Y)
-- ➕ **Config import/export** - JSON clipboard or .flame files
+- ➕ **Config import/export** - JSON clipboard or .fflame files
 - ➕ **Palette import/export** - JSON clipboard or .palette files (Added 2025-10-20)
 - ➕ **PNG export** - Save with/without background
 
@@ -317,7 +317,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 These features were added beyond the original outline:
 
 1. **Undo/Redo System** ([src/undo.rs](src/undo.rs)) - 50-state history
-2. **Config Import/Export** ([src/config.rs](src/config.rs)) - Save/load .flame files
+2. **Config Import/Export** ([src/config.rs](src/config.rs)) - Save/load .fflame files
 3. **Palette Import/Export** ([src/ui/mod.rs](src/ui/mod.rs), [src/app.rs](src/app.rs)) - Save/load .palette files, JSON clipboard
 4. **Speed-based Coloring** - Color by iteration velocity
 5. **Background Color Picker** - Custom background colors

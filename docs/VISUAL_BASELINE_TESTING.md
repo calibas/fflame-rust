@@ -51,7 +51,7 @@ fn apply_affine(xform: Transform, p: vec2<f32>) -> vec2<f32> {
 
 ### ✅ Single Transform, Single Variation Tests
 
-**Test: spherical.flame**
+**Test: spherical.fflame**
 - **Config**: Single transform, spherical=1.0, no rotation
 - **Result**: ✅ **VISUAL MATCH** - Renders identically in both Apophysis and this app
 - **Tested scales**: a=d=0.9 (90%), a=d=1.5 (150%) - both match perfectly
@@ -65,7 +65,7 @@ fn apply_affine(xform: Transform, p: vec2<f32>) -> vec2<f32> {
 }
 ```
 
-**Test: linear.flame**
+**Test: linear.fflame**
 - **Config**: Single transform, a=d≈1.0, linear=1.0
 - **Result**: ✅ **VISUAL MATCH** (after display Y-flip fix)
 - **Rotation test**: 45° clockwise rotation matches in both apps
@@ -83,7 +83,7 @@ fn apply_affine(xform: Transform, p: vec2<f32>) -> vec2<f32> {
 
 ### 🔍 Pending Tests
 
-**Test: sinusoidal.flame**
+**Test: sinusoidal.fflame**
 - Single transform, sinusoidal variation only
 - Status: Not yet tested
 
@@ -141,7 +141,7 @@ fn apply_affine(xform: Transform, p: vec2<f32>) -> vec2<f32> {
 ## Next Steps
 
 1. Test Simple preset with multiple transforms and variations
-2. Test sinusoidal.flame
+2. Test sinusoidal.fflame
 3. Test complex multi-transform flames
 4. Verify all 26 variations render identically to Apophysis
 5. Document any variation-specific differences

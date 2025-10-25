@@ -86,7 +86,7 @@ npx serve
 - Full transform editing UI (egui panels)
 - Color palette system with editor
 - Palette import/export (clipboard-based)
-- Config import/export (.flame files via clipboard)
+- Config import/export (.fflame files via clipboard)
 - PNG export (with/without transparency)
 - Progressive accumulation
 - Three color modes (Transform/Palette/Speed)
@@ -127,7 +127,7 @@ npx serve
 
 ### Known Limitations:
 
-1. **Asset Loading**: No filesystem access for .palette or .flame files
+1. **Asset Loading**: No filesystem access for .palette or .fflame files
    - Built-in presets and palettes only
    - Desktop auto-loads from `assets/` directory
    - WASM must use clipboard-based import/export

@@ -28,7 +28,7 @@ cargo run --example show_version
 cargo run --release
 
 # Run Main App (CLI export mode)
-cargo run --release -- export --input config.flame --output output.png
+cargo run --release -- export --input config.fflame --output output.png
 ```
 
 ---
@@ -351,11 +351,11 @@ metrics.export_to_console();
 
 **Current Workflow:**
 ```bash
-# Generate test images from .flame configs (batch mode)
+# Generate test images from .fflame configs (batch mode)
 cargo run --release -- export --input tests/visual/configs --output tests/visual/current
 
 # Generate single image
-cargo run --release -- export --input config.flame --output output.png
+cargo run --release -- export --input config.fflame --output output.png
 
 # Compare images with metrics
 cargo run --release --bin compare_images -- --image1 tests/visual/references/linear.png --image2 tests/visual/current/linear.png --advanced
@@ -366,7 +366,7 @@ cargo run --release --bin compare_images -- --image1 tests/visual/references/lin
 **Features:**
 - **Headless rendering** - Uses same GPU code as interactive app
 - **PNG metadata** - Embeds version, build, config JSON, checksums
-- **Batch processing** - Export entire directories of .flame files
+- **Batch processing** - Export entire directories of .fflame files
 - **Iteration-based** - Uses `max_iterations` from config (not frame count)
 - **Image comparison** - Advanced metrics (SSIM, MSE, PSNR) and visual diffs
 
@@ -577,7 +577,7 @@ Before releasing:
 | Regression | `tests/regression.rs` | `cargo test --test regression` |
 | Benchmarks | `benches/flame_bench.rs` | `cargo bench` |
 | Simple bench | `src/bin/simple_benchmark.rs` | `cargo run --release --bin simple_benchmark` |
-| CLI export | `src/lib.rs`, `src/app.rs` | `cargo run --release -- export -i config.flame -o out.png` |
+| CLI export | `src/lib.rs`, `src/app.rs` | `cargo run --release -- export -i config.fflame -o out.png` |
 | Image compare | `src/bin/compare_images.rs` | `cargo run --release --bin compare_images -- --image1 a.png --image2 b.png` |
 | Profiler | `src/profiler.rs` | (used in code) |
 | Metrics | `src/util.rs` | (automatic in app) |
