@@ -291,28 +291,15 @@ impl App {
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;
 
-                // Calculate iterations per "frame" based on speed multiplier
-                // Higher speed multiplier = more accumulation passes = smaller chunks
-                let iterations_per_frame = self.iterations_per_thread / self.speed_multiplier;
+                let t0 = Instant::now();
+                // 1. Compute new samples with fresh random seed
+                let samples_this_frame = renderer.compute_pass(&mut encoder, &self.gpu.queue, NUM_WORKGROUPS, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                self.metrics.record_compute_time(t0.elapsed().as_secs_f64() * 1000.0);
 
-                let mut total_compute_time = 0.0;
-                let mut total_accumulate_time = 0.0;
-
-                // Do multiple compute+accumulate cycles per frame (simulating higher frame rate)
-                for _ in 0..self.speed_multiplier {
-                    let t0 = Instant::now();
-                    // 1. Compute new samples with fresh random seed
-                    let samples_this_chunk = renderer.compute_pass(&mut encoder, &self.gpu.queue, NUM_WORKGROUPS, iterations_per_frame, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
-                    total_compute_time += t0.elapsed().as_secs_f64() * 1000.0;
-
-                    let t1 = Instant::now();
-                    // 2. Accumulate samples (blend with previous frames)
-                    renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, samples_this_chunk);
-                    total_accumulate_time += t1.elapsed().as_secs_f64() * 1000.0;
-                }
-
-                self.metrics.record_compute_time(total_compute_time);
-                self.metrics.record_accumulate_time(total_accumulate_time);
+                let t1 = Instant::now();
+                // 2. Accumulate samples (blend with previous frames)
+                renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, samples_this_frame);
+                self.metrics.record_accumulate_time(t1.elapsed().as_secs_f64() * 1000.0);
             } else {
                 self.metrics.record_compute_time(0.0);
                 self.metrics.record_accumulate_time(0.0);
