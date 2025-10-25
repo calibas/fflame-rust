@@ -17,7 +17,11 @@ See [docs/outline.md](docs/outline.md) for original design goals
   - `tonemap.wgsl` - Display rendering
 
 - **Core Modules**:
-  - `src/app.rs` - Main application loop and event handling
+  - `src/app/` - Application state and event handling (modular)
+    - `mod.rs` - Core App struct, event loop, render function
+    - `input.rs` - Keyboard, mouse, wheel input handlers
+    - `config.rs` - Config export/import, undo/redo
+    - `export.rs` - Headless PNG export for CLI
   - `src/renderer/compute_kernel.rs` - GPU rendering orchestration
   - `src/scene/transforms.rs` - Flame algorithm (CPU + GPU)
   - `src/ui/mod.rs` - All UI panels and controls
