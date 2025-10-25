@@ -25,6 +25,8 @@ pub struct PngMetadata {
     pub height: u32,
     pub total_iterations: u64,
     pub render_time_ms: f64,
+    pub iterations_per_thread: u32,
+    pub speed_factor: f32,
 
     // Flame Config (embedded as JSON)
     pub config_json: String,
@@ -58,6 +60,8 @@ impl PngMetadata {
         height: u32,
         total_iterations: u64,
         render_time_ms: f64,
+        iterations_per_thread: u32,
+        speed_factor: f32,
         config: &crate::config::FractalConfig,
     ) -> Self {
         let version_info = crate::version::get_version_info();
@@ -92,6 +96,8 @@ impl PngMetadata {
             height,
             total_iterations,
             render_time_ms,
+            iterations_per_thread,
+            speed_factor,
 
             config_json,
             config_checksum,
@@ -136,6 +142,8 @@ impl PngMetadata {
             ("Resolution".to_string(), format!("{}x{}", self.width, self.height)),
             ("Iterations".to_string(), self.total_iterations.to_string()),
             ("RenderTime".to_string(), format!("{:.2}ms", self.render_time_ms)),
+            ("IterationsPerThread".to_string(), self.iterations_per_thread.to_string()),
+            ("SpeedFactor".to_string(), format!("{:.2}", self.speed_factor)),
 
             ("ConfigChecksum".to_string(), format!("hash:{}", self.config_checksum)),
             ("Config".to_string(), self.config_json.clone()),  // Full JSON config
@@ -234,6 +242,8 @@ pub fn read_png_metadata(png_data: &[u8]) -> Result<PngMetadata, String> {
         total_iterations: text_chunks.get("Iterations").and_then(|s| s.parse().ok()).unwrap_or(0),
         render_time_ms: text_chunks.get("RenderTime")
             .and_then(|s| s.trim_end_matches("ms").parse().ok()).unwrap_or(0.0),
+        iterations_per_thread: text_chunks.get("IterationsPerThread").and_then(|s| s.parse().ok()).unwrap_or(256),
+        speed_factor: text_chunks.get("SpeedFactor").and_then(|s| s.parse().ok()).unwrap_or(1.0),
 
         config_json,
         config_checksum: text_chunks.get("ConfigChecksum")

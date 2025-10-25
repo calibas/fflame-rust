@@ -127,6 +127,8 @@ pub async fn export_headless(
         height,
         total_rendered,
         render_time_ms,
+        iterations_per_thread,
+        config.speed_factor,
         config,
     );
     metadata.test_category = test_category;
