@@ -10,11 +10,18 @@ See [docs/outline.md](docs/outline.md) for original design goals
 ## Quick Reference
 
 ### Project Structure
-- **Shaders**: All WGSL shaders in `shaders/` directory
-  - `trajectory.wgsl` - 2D flame iteration compute shader
-  - `trajectory_3d.wgsl` - 3D flame iteration compute shader (with camera rotation)
-  - `accumulate.wgsl` - Temporal blending
-  - `tonemap.wgsl` - Display rendering
+- **Shaders**: Dynamic shader compilation from modular components
+  - `shaders/core/` - Modular shader components (dynamically assembled)
+    - `header.wgsl` - Structs and bind groups
+    - `rng.wgsl` - Random number generation
+    - `variations_2d.wgsl` - 2D variation functions
+    - `variations_3d.wgsl` - 3D variation functions (includes all 2D + 3D-specific)
+    - `utilities.wgsl` - Helper functions (r, θ, φ calculations)
+    - `main_2d.wgsl` - 2D compute shader entry point
+    - `main_3d.wgsl` - 3D compute shader entry point
+  - `shaders/accumulate.wgsl` - Temporal blending pass
+  - `shaders/tonemap.wgsl` - Display tone mapping pass
+  - **Note**: Shaders are built dynamically by `ShaderBuilder` with only active variations
 
 - **Core Modules**:
   - `src/app/` - Application state and event handling (modular)
