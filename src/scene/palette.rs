@@ -29,6 +29,9 @@ pub struct ColorStop {
 pub struct Palette {
     pub name: String,
     pub stops: Vec<ColorStop>,
+    /// If true, palette is in fixed 256-color mode (positions locked)
+    #[serde(default)]
+    pub locked: bool,
 }
 
 impl Default for Palette {
@@ -43,6 +46,7 @@ impl Palette {
         Self {
             name: name.into(),
             stops,
+            locked: false,
         }
     }
 
@@ -234,6 +238,40 @@ impl Palette {
             stop1.color[1] + (stop2.color[1] - stop1.color[1]) * local_t,
             stop1.color[2] + (stop2.color[2] - stop1.color[2]) * local_t,
         ]
+    }
+
+    /// Convert palette to fixed 256-color mode
+    /// Samples the current gradient at 256 evenly-spaced positions
+    pub fn convert_to_fixed(&mut self) {
+        if self.locked {
+            return; // Already in fixed mode
+        }
+
+        // Sample current gradient at 256 positions
+        let mut new_stops = Vec::with_capacity(256);
+        for i in 0..256 {
+            let position = i as f32 / 255.0;
+            let color = self.sample_color(position);
+            new_stops.push(ColorStop { position, color });
+        }
+
+        self.stops = new_stops;
+        self.locked = true;
+    }
+
+    /// Convert palette to free gradient mode
+    /// Just unlocks the palette, doesn't change stops
+    pub fn convert_to_free(&mut self) {
+        self.locked = false;
+    }
+
+    /// Create a new locked 256-color palette
+    pub fn new_locked(name: impl Into<String>, stops: Vec<ColorStop>) -> Self {
+        Self {
+            name: name.into(),
+            stops,
+            locked: true,
+        }
     }
 }
 

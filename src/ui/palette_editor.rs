@@ -3,6 +3,7 @@ use crate::scene::palette::{ColorStop, Palette};
 pub struct PaletteEditor {
     pub current_palette: Palette,
     pub json_buffer: String,
+    pub show_fixed_mode_warning: bool,
 }
 
 impl PaletteEditor {
@@ -10,6 +11,7 @@ impl PaletteEditor {
         Self {
             current_palette: Palette::fire(),
             json_buffer: String::new(),
+            show_fixed_mode_warning: false,
         }
     }
 }
@@ -72,6 +74,36 @@ pub fn render_palette_editor_window(
 
             ui.separator();
 
+            // Mode indicator and toggle
+            ui.horizontal(|ui| {
+                if palette_editor.current_palette.locked {
+                    ui.label("Mode: 🔒 Fixed 256-Color");
+                } else {
+                    ui.label("Mode: 🎨 Free Gradient");
+                }
+
+                // Toggle button
+                let button_text = if palette_editor.current_palette.locked {
+                    "Switch to Free Mode"
+                } else {
+                    "Switch to Fixed 256-Color Mode"
+                };
+
+                if ui.button(button_text).clicked() {
+                    if palette_editor.current_palette.locked {
+                        // Free mode: just unlock (no data loss, no warning needed)
+                        palette_editor.current_palette.convert_to_free();
+                        *palette_changed = true;
+                        // Auto-apply the palette when converting to free mode
+                        *custom_palette = Some(palette_editor.current_palette.clone());
+                    } else {
+                        // Fixed mode: show warning dialog
+                        palette_editor.show_fixed_mode_warning = true;
+                    }
+                }
+            });
+            ui.separator();
+
             // Color stops list
             ui.label("Color Stops:");
 
@@ -87,10 +119,13 @@ pub fn render_palette_editor_window(
 
                             ui.label(format!("Stop {}:", i));
 
-                            // Position slider - use integer 0-255
+                            // Position slider - locked in fixed mode
                             let mut pos_int = (stop.position * 255.0) as i32;
-                            if ui.add(egui::Slider::new(&mut pos_int, 0..=255)
-                                .text("Position")).changed() {
+                            let slider_response = ui.add_enabled(
+                                !palette_editor.current_palette.locked,
+                                egui::Slider::new(&mut pos_int, 0..=255).text("Position")
+                            );
+                            if slider_response.changed() {
                                 stop.position = pos_int as f32 / 255.0;
                             }
 
@@ -100,8 +135,8 @@ pub fn render_palette_editor_window(
                                 stop.color = color;
                             }
 
-                            // Remove button (but keep at least 2 stops)
-                            if stops_len > 2 && ui.button("🗑").clicked() {
+                            // Remove button (disabled in fixed mode, keep at least 2 stops)
+                            if stops_len > 2 && !palette_editor.current_palette.locked && ui.button("🗑").clicked() {
                                 stop_to_remove = Some(i);
                             }
                         });
@@ -115,8 +150,11 @@ pub fn render_palette_editor_window(
 
             ui.separator();
 
-            // Add stop button
-            if ui.button("➕ Add Color Stop").clicked() {
+            // Add stop button (disabled in fixed mode)
+            if ui.add_enabled(
+                !palette_editor.current_palette.locked,
+                egui::Button::new("➕ Add Color Stop")
+            ).clicked() {
                 let new_position = if palette_editor.current_palette.stops.is_empty() {
                     0.5
                 } else {
@@ -178,4 +216,34 @@ pub fn render_palette_editor_window(
                 }
             });
         });
+
+    // Fixed mode warning dialog
+    if palette_editor.show_fixed_mode_warning {
+        egui::Window::new("⚠️ Convert to Fixed 256-Color Mode?")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("This will resample your gradient to exactly 256 color stops.");
+                ui.label("Color positions will be locked at fixed intervals (0/255, 1/255, etc.).");
+                ui.label("");
+                ui.label("You can switch back to Free Mode later without data loss.");
+
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    if ui.button("✅ Convert to Fixed Mode").clicked() {
+                        palette_editor.current_palette.convert_to_fixed();
+                        *palette_changed = true;
+                        // Auto-apply the palette when converting to fixed mode
+                        *custom_palette = Some(palette_editor.current_palette.clone());
+                        palette_editor.show_fixed_mode_warning = false;
+                    }
+
+                    if ui.button("❌ Cancel").clicked() {
+                        palette_editor.show_fixed_mode_warning = false;
+                    }
+                });
+            });
+    }
 }
