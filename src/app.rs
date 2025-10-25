@@ -82,6 +82,7 @@ impl App {
             camera_rotation_y: 0.0,
             density_scale: 1.0,
             speed_factor: 0.5,
+            max_iterations: 1_000_000_000,  // Effectively unlimited
             color_mode: ColorMode::Transform,
             palette_index: 1,
             palette: Some(palette_library.get(1).unwrap().clone()),
@@ -1014,6 +1015,7 @@ impl App {
             camera_rotation_y: self.camera_rotation_y,
             density_scale: self.density_scale,
             speed_factor: self.speed_factor,
+            max_iterations: self.max_iterations.unwrap_or(1_000_000_000),
             color_mode: self.color_mode,
             palette_index: self.current_palette_index,
             palette,  // Include actual palette data

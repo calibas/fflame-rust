@@ -24,6 +24,9 @@ pub struct FractalConfig {
     /// Rendering settings
     pub density_scale: f32,
     pub speed_factor: f32,
+    /// Maximum total iterations to render (default: 1 billion = ~infinite for interactive use)
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: u64,
 
     /// Color settings
     pub color_mode: ColorMode,
@@ -62,6 +65,10 @@ fn default_gamma() -> f32 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_max_iterations() -> u64 {
+    1_000_000_000  // 1 billion iterations (effectively infinite for interactive use)
 }
 
 impl FractalConfig {
