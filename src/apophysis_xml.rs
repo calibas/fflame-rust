@@ -108,7 +108,7 @@ fn parse_flame_element(
     }
 
     // Parse child elements (xform and palette)
-    let mut transforms = Vec::new();
+    let mut transforms_with_indices = Vec::new();
     let mut palette = None;
     let mut buf = Vec::new();
 
@@ -117,8 +117,8 @@ fn parse_flame_element(
             Ok(Event::Start(e) | Event::Empty(e)) => {
                 match e.name().as_ref() {
                     b"xform" => {
-                        let transform = parse_xform_element(reader, &e)?;
-                        transforms.push(transform);
+                        let (transform, color_index) = parse_xform_element(reader, &e)?;
+                        transforms_with_indices.push((transform, color_index));
                     }
                     b"palette" => {
                         palette = Some(parse_palette_element(reader, &e)?);
@@ -138,6 +138,18 @@ fn parse_flame_element(
         buf.clear();
     }
 
+    // Apply palette colors to transforms
+    let mut transforms = Vec::new();
+    for (mut transform, color_index) in transforms_with_indices {
+        if let (Some(ref pal), Some(idx)) = (&palette, color_index) {
+            if idx < pal.stops.len() {
+                transform.color = pal.stops[idx].color;
+                transform.color_speed = 0.5; // Default color speed
+            }
+        }
+        transforms.push(transform);
+    }
+
     // Build FractalConfig
     let flame = Flame {
         name,
@@ -148,9 +160,9 @@ fn parse_flame_element(
     };
 
     // Convert Apophysis scale/center to our zoom/pan
-    // Apophysis: center is world coords, scale is pixels per unit
+    // Apophysis: scale = pixels per unit, where scale 200 ≈ zoom 1.0
     // Our system: zoom and pan (pan is world offset)
-    let zoom = scale / 100.0; // Rough conversion
+    let zoom = scale / 200.0; // Apophysis scale 200.0 = our zoom 1.0
     let pan_x = center.0;
     let pan_y = center.1;
 
@@ -179,12 +191,14 @@ fn parse_flame_element(
 }
 
 /// Parse a single <xform> element (transform)
+/// Returns (Transform, color_index) where color_index is the palette position
 fn parse_xform_element(
     reader: &mut Reader<&[u8]>,
     element: &quick_xml::events::BytesStart,
-) -> Result<Transform> {
+) -> Result<(Transform, Option<usize>)> {
     let mut transform = Transform::new();
     let registry = global_registry();
+    let mut color_index = None;
 
     for attr in element.attributes() {
         let attr = attr?;
@@ -193,7 +207,12 @@ fn parse_xform_element(
 
         match key {
             "weight" => transform.weight = value.parse().unwrap_or(1.0),
-            "color" => transform.color_speed = value.parse().unwrap_or(0.5),
+            "color" => {
+                // In Apophysis, color is a palette index (0.0-1.0 mapped to 0-255)
+                if let Ok(color_value) = value.parse::<f32>() {
+                    color_index = Some((color_value * 255.0) as usize);
+                }
+            }
             "coefs" => {
                 // Parse "a b c d e f" format
                 let parts: Vec<&str> = value.split_whitespace().collect();
@@ -223,7 +242,7 @@ fn parse_xform_element(
         }
     }
 
-    Ok(transform)
+    Ok((transform, color_index))
 }
 
 /// Parse a <palette> element (256 RGB hex colors)
