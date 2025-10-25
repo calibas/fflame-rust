@@ -30,16 +30,12 @@ struct Args {
     #[arg(short = 'H', long, default_value = "1080")]
     height: u32,
 
-    /// Number of frames to render (more = better quality)
-    #[arg(short, long, default_value = "100")]
-    frames: u32,
-
-    /// Number of workgroups per frame
+    /// Number of workgroups per dispatch (default: use config's target iterations)
     #[arg(long, default_value = "128")]
     workgroups: u32,
 
-    /// Iterations per thread per frame
-    #[arg(long, default_value = "256")]
+    /// Iterations per thread per dispatch
+    #[arg(long, default_value = "4096")]
     iterations: u32,
 
     /// Test category (for metadata)
@@ -67,8 +63,8 @@ async fn main() -> Result<()> {
     println!("Input: {}", args.input);
     println!("Output: {}", args.output);
     println!("Size: {}x{}", args.width, args.height);
-    println!("Frames: {} ({}×{} workgroups, {} iterations)",
-        args.frames, args.workgroups, args.iterations, args.workgroups * args.iterations);
+    println!("Dispatch: {} workgroups × {} iterations = {} iterations/dispatch",
+        args.workgroups, args.iterations, args.workgroups * args.iterations);
     println!();
 
     // Create output directory
@@ -254,10 +250,21 @@ async fn render_flame_file(
         label: Some("Test Export Encoder"),
     });
 
-    // Render frames progressively
+    // Calculate how many dispatches needed to reach target iterations
+    let iterations_per_dispatch = (args.workgroups * args.iterations) as u64;
+    let target_iterations = config.max_iterations;
+    let num_dispatches = (target_iterations + iterations_per_dispatch - 1) / iterations_per_dispatch; // Round up
+
+    if args.verbose {
+        println!("  Target iterations: {}", target_iterations);
+        println!("  Iterations per dispatch: {}", iterations_per_dispatch);
+        println!("  Number of dispatches: {}", num_dispatches);
+    }
+
+    // Render dispatches progressively until we reach target iterations
     let render_start = Instant::now();
 
-    for _ in 0..args.frames {
+    for _ in 0..num_dispatches {
         renderer.compute_pass(
             &mut encoder,
             queue,
@@ -272,8 +279,7 @@ async fn render_flame_file(
             config.speed_factor,
         );
 
-        let samples = args.workgroups * args.iterations;
-        renderer.accumulate_pass(&mut encoder, queue, device, samples as u64);
+        renderer.accumulate_pass(&mut encoder, queue, device, iterations_per_dispatch);
     }
 
     // Apply tone mapping

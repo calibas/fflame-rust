@@ -34,7 +34,7 @@
   "camera_rotation_y": 0.0,
   "density_scale": 1.0,
   "speed_factor": 0.05,
-  "max_iterations": 1000000000,
+  "max_iterations": 10000000,
   "color_mode": "Speed",
   "palette_index": 3,
   "palette": {
