@@ -32,6 +32,9 @@ pub struct Palette {
     /// If true, palette is in fixed 256-color mode (positions locked)
     #[serde(default)]
     pub locked: bool,
+    /// If true, palette is built-in and should not be edited directly (create copy instead)
+    #[serde(default)]
+    pub built_in: bool,
 }
 
 impl Default for Palette {
@@ -47,12 +50,23 @@ impl Palette {
             name: name.into(),
             stops,
             locked: false,
+            built_in: false,
+        }
+    }
+
+    /// Create a new built-in palette (prevents direct editing)
+    fn new_builtin(name: impl Into<String>, stops: Vec<ColorStop>) -> Self {
+        Self {
+            name: name.into(),
+            stops,
+            locked: false,
+            built_in: true,
         }
     }
 
     /// Create a simple grayscale palette
     pub fn grayscale() -> Self {
-        Self::new(
+        Self::new_builtin(
             "Grayscale",
             vec![
                 ColorStop {
@@ -69,7 +83,7 @@ impl Palette {
 
     /// Create a fire palette (black -> red -> orange -> yellow -> white)
     pub fn fire() -> Self {
-        Self::new(
+        Self::new_builtin(
             "Fire",
             vec![
                 ColorStop {
@@ -98,7 +112,7 @@ impl Palette {
 
     /// Create a cool (blue-cyan-white) palette
     pub fn cool() -> Self {
-        Self::new(
+        Self::new_builtin(
             "Cool",
             vec![
                 ColorStop {
@@ -123,7 +137,7 @@ impl Palette {
 
     /// Create a rainbow palette
     pub fn rainbow() -> Self {
-        Self::new(
+        Self::new_builtin(
             "Rainbow",
             vec![
                 ColorStop {
@@ -160,7 +174,7 @@ impl Palette {
 
     /// Create a purple-pink palette
     pub fn purple_pink() -> Self {
-        Self::new(
+        Self::new_builtin(
             "Purple Pink",
             vec![
                 ColorStop {
@@ -271,6 +285,7 @@ impl Palette {
             name: name.into(),
             stops,
             locked: true,
+            built_in: false,
         }
     }
 }
@@ -295,9 +310,13 @@ impl PaletteLibrary {
         // Desktop: Load palettes from assets folder (copied to target/ by build.rs)
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let assets_palettes = super::assets::load_palettes_from_dir(
+            let mut assets_palettes = super::assets::load_palettes_from_dir(
                 std::path::Path::new("assets/palettes")
             );
+            // Mark all asset palettes as built-in (shipped with the application)
+            for pal in &mut assets_palettes {
+                pal.built_in = true;
+            }
             palettes.extend(assets_palettes);
         }
 
