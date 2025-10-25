@@ -56,8 +56,19 @@ See [docs/outline.md](docs/outline.md) for original design goals
   - Uploaded to GPU via dedicated storage buffer (400 floats: 50 variations × 8 params)
   - Accessible in shaders via `get_param(xform_id, variation_id, param_slot)`
   - UI sliders appear below active variations (Float, Integer, Angle types)
-- **3-Pass Rendering**: Compute samples → Accumulate temporally → Tonemap for display
-- **Ping-Pong Accumulation**: Two textures swapped each frame for progressive refinement
+- **3-Pass GPU Rendering Pipeline** (each frame at ~60 FPS):
+  1. **Compute Pass** - Generate samples (128 workgroups × 256 iterations = 32,768 iterations/frame)
+     - Each iteration: random transform → affine → variations → color → write to temp texture
+     - Alpha channel = density (0.01 per hit)
+  2. **Accumulate Pass** - Progressive refinement (blend new samples with history)
+     - Ping-pong buffers swapped each frame
+     - Exponential moving average for smooth convergence
+  3. **Tonemap Pass** - Display rendering
+     - Log/linear tone mapping based on density
+     - Optional S-curve adjustment
+     - Exposure and gamma correction
+     - Background color blending
+- **Total Speed**: ~2 million iterations/second at default settings (128 × 256 × 60 FPS)
 - **Color Modes**: Transform colors, Palette lookup, Speed-based coloring
 - **Projection Types**: Orthographic (flat) and Perspective (depth-aware)
 - **Camera Control**: Full 3D camera rotation (pitch and yaw) for viewing from any angle
