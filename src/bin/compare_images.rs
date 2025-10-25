@@ -36,9 +36,13 @@ struct Args {
     #[arg(long)]
     advanced: bool,
 
-    /// Minimum average color intensity (0-255) to consider valid
-    #[arg(long, default_value = "10")]
+    /// Minimum color intensity threshold (0-255)
+    #[arg(long, default_value = "30")]
     min_color: u8,
+
+    /// Minimum percentage of pixels above threshold (0-100)
+    #[arg(long, default_value = "1.0")]
+    min_pixels_percent: f64,
 
     /// Skip color validation check
     #[arg(long)]
@@ -113,25 +117,28 @@ fn main() -> Result<()> {
 
     // Color validation
     if !args.skip_color_check {
-        let color1 = calculate_average_color(&img1);
-        let color2 = calculate_average_color(&img2);
+        let (avg1, bright1) = calculate_color_stats(&img1, args.min_color);
+        let (avg2, bright2) = calculate_color_stats(&img2, args.min_color);
+
+        let total_pixels = (width * height) as f64;
+        let bright1_percent = (bright1 as f64 / total_pixels) * 100.0;
+        let bright2_percent = (bright2 as f64 / total_pixels) * 100.0;
 
         println!("Color Validation:");
-        println!("  Image 1 avg intensity: R={:.1} G={:.1} B={:.1}", color1.0, color1.1, color1.2);
-        println!("  Image 2 avg intensity: R={:.1} G={:.1} B={:.1}", color2.0, color2.1, color2.2);
+        println!("  Image 1: avg intensity={:.1}, pixels >{}: {} ({:.2}%)",
+            avg1, args.min_color, bright1, bright1_percent);
+        println!("  Image 2: avg intensity={:.1}, pixels >{}: {} ({:.2}%)",
+            avg2, args.min_color, bright2, bright2_percent);
 
-        let avg1 = (color1.0 + color1.1 + color1.2) / 3.0;
-        let avg2 = (color2.0 + color2.1 + color2.2) / 3.0;
-
-        if avg1 < args.min_color as f64 {
-            println!("  ✗ Image 1 appears mostly black (avg: {:.1} < {})", avg1, args.min_color);
+        if bright1_percent < args.min_pixels_percent {
+            println!("  ✗ Image 1 has too few bright pixels ({:.2}% < {:.2}%)", bright1_percent, args.min_pixels_percent);
             println!("     This may indicate a bad reference image!");
-            anyhow::bail!("Image 1 failed color validation - appears mostly black");
+            anyhow::bail!("Image 1 failed color validation - too dark or mostly black");
         }
-        if avg2 < args.min_color as f64 {
-            println!("  ✗ Image 2 appears mostly black (avg: {:.1} < {})", avg2, args.min_color);
+        if bright2_percent < args.min_pixels_percent {
+            println!("  ✗ Image 2 has too few bright pixels ({:.2}% < {:.2}%)", bright2_percent, args.min_pixels_percent);
             println!("     This may indicate a bad reference image!");
-            anyhow::bail!("Image 2 failed color validation - appears mostly black");
+            anyhow::bail!("Image 2 failed color validation - too dark or mostly black");
         }
 
         println!("  ✓ Both images have sufficient color data\n");
@@ -384,26 +391,29 @@ fn calculate_ssim(img1: &ImageBuffer<Rgba<u8>, Vec<u8>>, img2: &ImageBuffer<Rgba
     }
 }
 
-/// Calculate average color intensity (R, G, B) across all pixels
-fn calculate_average_color(img: &ImageBuffer<Rgba<u8>, Vec<u8>>) -> (f64, f64, f64) {
+/// Calculate average color intensity and count of bright pixels
+/// Returns (average_intensity, bright_pixel_count)
+fn calculate_color_stats(img: &ImageBuffer<Rgba<u8>, Vec<u8>>, threshold: u8) -> (f64, u64) {
     let (width, height) = img.dimensions();
-    let mut sum_r = 0u64;
-    let mut sum_g = 0u64;
-    let mut sum_b = 0u64;
+    let mut sum_intensity = 0u64;
+    let mut bright_pixels = 0u64;
 
     for y in 0..height {
         for x in 0..width {
             let pixel = img.get_pixel(x, y);
-            sum_r += pixel[0] as u64;
-            sum_g += pixel[1] as u64;
-            sum_b += pixel[2] as u64;
+            // Calculate luminance (perceived brightness)
+            let intensity = (0.299 * pixel[0] as f64 + 0.587 * pixel[1] as f64 + 0.114 * pixel[2] as f64) as u8;
+            sum_intensity += intensity as u64;
+
+            // Count pixels above threshold
+            if intensity > threshold {
+                bright_pixels += 1;
+            }
         }
     }
 
     let total_pixels = (width * height) as f64;
-    (
-        sum_r as f64 / total_pixels,
-        sum_g as f64 / total_pixels,
-        sum_b as f64 / total_pixels,
-    )
+    let avg_intensity = sum_intensity as f64 / total_pixels;
+
+    (avg_intensity, bright_pixels)
 }
