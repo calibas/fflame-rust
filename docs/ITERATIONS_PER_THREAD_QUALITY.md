@@ -535,10 +535,10 @@ let iterations_per_frame = iterations_per_thread / speed_multiplier;
 **Test Results (Pixel-Perfect Verified):**
 ```bash
 # Baseline (256 iters/thread, 1x speed)
-fractal_flame_wgpu export -i config.flame -o baseline.png --iterations-per-thread 256
+fractal_flame_wgpu export -i config.fflame -o baseline.png --iterations-per-thread 256
 
 # High speed with quality normalization (4096 iters/thread, 16x speed)
-fractal_flame_wgpu export -i config.flame -o test.png --iterations-per-thread 4096 --speed-multiplier 16
+fractal_flame_wgpu export -i config.fflame -o test.png --iterations-per-thread 4096 --speed-multiplier 16
 
 # Result: 100% identical (0.00% pixel difference, PSNR = inf, SSIM = 1.0)
 ```
