@@ -304,10 +304,7 @@ fn parse_palette_element(
         });
     }
 
-    Ok(Palette {
-        name: "Imported from Apophysis".to_string(),
-        stops,
-    })
+    Ok(Palette::new_locked("Imported from Apophysis", stops))
 }
 
 #[cfg(test)]

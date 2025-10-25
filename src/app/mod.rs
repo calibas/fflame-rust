@@ -459,6 +459,9 @@ impl App {
 
         // Handle custom palette from editor
         if let Some(custom_pal) = ui_response.custom_palette {
+            // Capture state before applying palette change (for undo)
+            self.capture_state();
+
             // Add to library if not already there
             let palette_lib = &mut self.palette_library;
             palette_lib.add(custom_pal);
@@ -870,7 +873,8 @@ impl App {
         if !preset_loaded {
             // Capture state before applying meaningful changes
             // Only capture on drag START, not during continuous dragging
-            let should_capture = ui_response.triangle_drag_started || view_changed || ui_response.palette_changed
+            // Note: palette_changed removed - undo is captured when Apply is clicked (see custom_palette handler)
+            let should_capture = ui_response.triangle_drag_started || view_changed
                 || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed
                 || ui_response.tonemap_mode_changed || ui_response.tonemap_curve_changed
                 || (ui_response.flame_changed && !ui_response.triangle_drag_started); // Other flame changes (not dragging)

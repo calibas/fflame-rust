@@ -73,6 +73,14 @@ impl App {
                 self.palette_library.add(palette.clone());
                 self.current_palette_index = self.palette_library.len() - 1;
             }
+
+            // Sync palette editor with the updated palette
+            self.egui_layer.update_palette_editor(palette.clone());
+        } else {
+            // No custom palette in config, sync with library palette
+            if let Some(palette) = self.palette_library.get(self.current_palette_index) {
+                self.egui_layer.update_palette_editor(palette.clone());
+            }
         }
 
         // Use the comprehensive load_config function to ensure all GPU state is synchronized
