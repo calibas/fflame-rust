@@ -33,7 +33,8 @@ pub struct Palette {
     #[serde(default)]
     pub locked: bool,
     /// If true, palette is built-in and should not be edited directly (create copy instead)
-    #[serde(default)]
+    /// This flag is ONLY set at runtime in PaletteLibrary, never serialized
+    #[serde(skip)]
     pub built_in: bool,
 }
 

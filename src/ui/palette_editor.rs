@@ -4,6 +4,7 @@ pub struct PaletteEditor {
     pub current_palette: Palette,
     pub json_buffer: String,
     pub show_fixed_mode_warning: bool,
+    pub has_unsaved_changes: bool,
 }
 
 impl PaletteEditor {
@@ -12,6 +13,7 @@ impl PaletteEditor {
             current_palette: Palette::fire(),
             json_buffer: String::new(),
             show_fixed_mode_warning: false,
+            has_unsaved_changes: false,
         }
     }
 }
@@ -39,7 +41,9 @@ pub fn render_palette_editor_window(
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Palette Name:");
-                ui.text_edit_singleline(&mut palette_editor.current_palette.name);
+                if ui.text_edit_singleline(&mut palette_editor.current_palette.name).changed() {
+                    palette_editor.has_unsaved_changes = true;
+                }
             });
             ui.separator();
 
@@ -130,17 +134,20 @@ pub fn render_palette_editor_window(
                             );
                             if slider_response.changed() {
                                 stop.position = pos_int as f32 / 255.0;
+                                palette_editor.has_unsaved_changes = true;
                             }
 
                             // Color picker
                             let mut color = [stop.color[0], stop.color[1], stop.color[2]];
                             if ui.color_edit_button_rgb(&mut color).changed() {
                                 stop.color = color;
+                                palette_editor.has_unsaved_changes = true;
                             }
 
                             // Remove button (disabled in fixed mode, keep at least 2 stops)
                             if stops_len > 2 && !palette_editor.current_palette.locked && ui.button("🗑").clicked() {
                                 stop_to_remove = Some(i);
+                                palette_editor.has_unsaved_changes = true;
                             }
                         });
                     }
@@ -170,6 +177,7 @@ pub fn render_palette_editor_window(
                 });
                 // Sort by position
                 palette_editor.current_palette.stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap());
+                palette_editor.has_unsaved_changes = true;
             }
 
             ui.separator();
@@ -213,9 +221,18 @@ pub fn render_palette_editor_window(
             ui.separator();
 
             ui.horizontal(|ui| {
-                if ui.button("✅ Apply").clicked() {
+                // Apply button - green with white text when changes exist, grey when no changes
+                let apply_button = if palette_editor.has_unsaved_changes {
+                    egui::Button::new(egui::RichText::new("✅ Apply").color(egui::Color32::WHITE))
+                        .fill(egui::Color32::from_rgb(60, 150, 60))
+                } else {
+                    egui::Button::new("✅ Apply")
+                };
+
+                if ui.add(apply_button).clicked() {
                     *custom_palette = Some(palette_editor.current_palette.clone());
                     *palette_changed = true;
+                    palette_editor.has_unsaved_changes = false;
                 }
             });
         });
