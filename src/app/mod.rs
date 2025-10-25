@@ -379,8 +379,8 @@ impl App {
             {
                 // Desktop: synchronous file dialog
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Fractal Flame", &["flame"])
-                    .set_file_name("fractal.flame")
+                    .add_filter("Fractal Flame Config", &["fflame"])
+                    .set_file_name("fractal.fflame")
                     .save_file()
                 {
                     if let Err(e) = config.save_to_file(&path) {
@@ -397,8 +397,8 @@ impl App {
                 if let Ok(json) = config.to_json() {
                     wasm_bindgen_futures::spawn_local(async move {
                         if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                            .add_filter("Fractal Flame", &["flame"])
-                            .set_file_name("fractal.flame")
+                            .add_filter("Fractal Flame Config", &["fflame"])
+                            .set_file_name("fractal.fflame")
                             .save_file()
                             .await
                         {
@@ -479,7 +479,7 @@ impl App {
             {
                 // Desktop: synchronous file dialog
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Fractal Flame", &["flame"])
+                    .add_filter("Fractal Flame Config", &["fflame"])
                     .pick_file()
                 {
                     match FractalConfig::load_from_file(&path) {

@@ -17,7 +17,7 @@ struct Cli {
 enum Commands {
     /// Export flame configs to PNG (headless batch mode)
     Export {
-        /// Input .flame config file or directory
+        /// Input .fflame config file or directory
         #[arg(short, long)]
         input: String,
 
