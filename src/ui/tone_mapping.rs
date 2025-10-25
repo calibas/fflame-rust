@@ -137,9 +137,11 @@ pub fn render_tone_mapping_window(
                             .unwrap_or("Unknown");
 
                         ui.label(format!("({} palettes in library)", palettes.len()));
-                        egui::ComboBox::from_label("Palette")
+                        // Use ID with palette count to force refresh when library changes
+                        egui::ComboBox::from_id_source(format!("palette_selector_{}", palettes.len()))
                             .selected_text(current_palette_name)
                             .show_ui(ui, |ui| {
+                                ui.label("Palette");
                                 for (idx, palette) in palettes.iter().enumerate() {
                                     if ui.selectable_value(current_palette_index, idx, &palette.name).changed() {
                                         *palette_changed = true;
