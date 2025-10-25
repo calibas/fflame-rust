@@ -9,6 +9,7 @@ pub async fn export_headless(
     height: u32,
     test_category: Option<String>,
     iterations_per_thread: u32,
+    speed_multiplier: u32,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     use crate::renderer::compute_kernel::FlameRenderer;
     use crate::scene::palette::PaletteLibrary;
@@ -60,39 +61,53 @@ pub async fn export_headless(
 
     queue.submit(std::iter::once(encoder.finish()));
 
-    // Render until max_iterations
+    // Render until max_iterations with chunked accumulation for consistent quality
     let render_start = Instant::now();
     let mut total_rendered = 0u64;
     let target = config.max_iterations;
 
+    const NUM_WORKGROUPS: u32 = 128;
+    const THREADS_PER_WORKGROUP: u64 = 64;
+
+    // Calculate iterations per "frame" based on speed multiplier
+    // Higher speed multiplier = more accumulation passes = smaller chunks
+    let iterations_per_frame = iterations_per_thread / speed_multiplier;
+
     while total_rendered < target {
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Frame"),
-        });
+        // Do multiple compute+accumulate cycles per "batch" (simulating higher frame rate)
+        for _ in 0..speed_multiplier {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Frame"),
+            });
 
-        renderer.compute_pass(
-            &mut encoder,
-            &queue,
-            128,  // workgroups
-            iterations_per_thread,
-            config.zoom,
-            config.pan_x,
-            config.pan_y,
-            config.rotation,
-            config.camera_rotation_x,
-            config.camera_rotation_y,
-            config.speed_factor,
-        );
+            renderer.compute_pass(
+                &mut encoder,
+                &queue,
+                NUM_WORKGROUPS,
+                iterations_per_frame,
+                config.zoom,
+                config.pan_x,
+                config.pan_y,
+                config.rotation,
+                config.camera_rotation_x,
+                config.camera_rotation_y,
+                config.speed_factor,
+            );
 
-        let samples = 128 * iterations_per_thread as u64;
-        renderer.accumulate_pass(&mut encoder, &queue, &device, samples);
+            let samples = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_frame as u64;
+            renderer.accumulate_pass(&mut encoder, &queue, &device, samples);
 
-        queue.submit(std::iter::once(encoder.finish()));
+            total_rendered += samples;
 
-        total_rendered += samples;
+            queue.submit(std::iter::once(encoder.finish()));
+
+            if total_rendered >= target {
+                break;
+            }
+        }
 
         // Progress indicator every 10M iterations
-        if total_rendered % 10_000_000 < samples {
+        if total_rendered % 10_000_000 < (NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64) {
             print!("\r  Progress: {}/{} ({:.1}%)", total_rendered, target, (total_rendered as f64 / target as f64) * 100.0);
             use std::io::Write;
             std::io::stdout().flush().ok();

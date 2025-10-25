@@ -114,6 +114,7 @@ impl EguiLayer {
         exposure: &mut f32,
         gamma: &mut f32,
         deterministic_rng: &mut bool,
+        speed_multiplier: &mut u32,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -209,6 +210,7 @@ impl EguiLayer {
                 iterations_per_thread,
                 &mut iterations_changed,
                 deterministic_rng,
+                speed_multiplier,
             );
 
             // Render View window

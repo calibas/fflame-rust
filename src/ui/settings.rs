@@ -29,6 +29,7 @@ pub fn render_settings_window(
     iterations_per_thread: &mut u32,
     iterations_changed: &mut bool,
     deterministic_rng: &mut bool,
+    speed_multiplier: &mut u32,
 ) {
     egui::Window::new("Settings")
         .open(show_settings)
@@ -195,6 +196,25 @@ pub fn render_settings_window(
                     if ui.add(egui::Slider::new(iterations_per_thread, 64..=4096).text("Iterations per Thread")).changed() {
                         *iterations_changed = true;
                     }
+
+                    // Speed multiplier for frame rate (1x = 60 FPS, 2x = 120 FPS, etc.)
+                    ui.horizontal(|ui| {
+                        ui.label("Speed:");
+                        if ui.selectable_label(*speed_multiplier == 1, "1x").clicked() { *speed_multiplier = 1; }
+                        if ui.selectable_label(*speed_multiplier == 2, "2x").clicked() { *speed_multiplier = 2; }
+                        if ui.selectable_label(*speed_multiplier == 4, "4x").clicked() { *speed_multiplier = 4; }
+                        if ui.selectable_label(*speed_multiplier == 8, "8x").clicked() { *speed_multiplier = 8; }
+                        if ui.selectable_label(*speed_multiplier == 16, "16x").clicked() { *speed_multiplier = 16; }
+                    });
+                    ui.label(format!("Target FPS: {}", 60 * *speed_multiplier)).on_hover_text(
+                        "Speed multiplier increases frame rate for smoother progressive rendering.\n\
+                        Higher speeds improve quality consistency across different iterations_per_thread settings.\n\
+                        1x = 60 FPS (default, vsync)\n\
+                        2x = 120 FPS\n\
+                        4x = 240 FPS\n\
+                        8x = 480 FPS\n\
+                        16x = 960 FPS"
+                    );
                 });
 
             // Section 3: Advanced

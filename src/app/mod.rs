@@ -56,6 +56,8 @@ pub struct App {
     pub(super) gamma: f32,
     // Rendering
     pub(super) deterministic_rng: bool,
+    pub(super) speed_multiplier: u32,  // 1x, 2x, 4x, 8x, 16x (target FPS = 60 * multiplier)
+    pub(super) last_frame_time: Option<web_time::Instant>,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -136,6 +138,8 @@ impl App {
             exposure: 1.0,
             gamma: 2.2,
             deterministic_rng: true, // Enabled by default for reproducible rendering
+            speed_multiplier: 1, // Default 1x (60 FPS)
+            last_frame_time: None,
         };
 
         #[allow(deprecated)]
@@ -222,9 +226,34 @@ impl App {
                     }
                 }
                 Event::AboutToWait => {
-                    // Use Wait instead of Poll to let the browser control frame timing
-                    elwt.set_control_flow(ControlFlow::Wait);
-                    window.request_redraw();
+                    use std::time::Duration;
+                    use web_time::Instant;
+
+                    // Check if actively rendering (not paused and under max_iterations)
+                    let is_rendering = !app.paused && app.flame_renderer.as_ref().map_or(false, |r| {
+                        app.max_iterations.map_or(true, |max| r.total_iterations() < max)
+                    });
+
+                    // Use speed multiplier when actively rendering, otherwise default to 60 FPS
+                    let multiplier = if is_rendering { app.speed_multiplier } else { 1 };
+                    let target_fps = 60.0 * multiplier as f64;
+                    let target_frame_time = Duration::from_secs_f64(1.0 / target_fps);
+
+                    let now = Instant::now();
+                    if let Some(last_frame) = app.last_frame_time {
+                        let elapsed = now.duration_since(last_frame);
+                        if elapsed >= target_frame_time {
+                            // Time for next frame, request redraw
+                            window.request_redraw();
+                        } else {
+                            // Wait until next frame is due
+                            let wait_until = last_frame + target_frame_time;
+                            elwt.set_control_flow(ControlFlow::WaitUntil(wait_until));
+                        }
+                    } else {
+                        // First frame, render immediately
+                        window.request_redraw();
+                    }
                 }
                 _ => {}
             }
@@ -241,6 +270,7 @@ impl App {
         use web_time::Instant;
 
         let render_start = Instant::now();
+        self.last_frame_time = Some(render_start);
 
         let frame = self.gpu.surface.get_current_texture()?;
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -259,15 +289,30 @@ impl App {
                 self.max_iterations.map_or(true, |max| renderer.total_iterations() < max);
 
             if should_iterate {
-                let t0 = Instant::now();
-                // 1. Compute new samples with fresh random seed
-                let samples_this_frame = renderer.compute_pass(&mut encoder, &self.gpu.queue, 128, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
-                self.metrics.record_compute_time(t0.elapsed().as_secs_f64() * 1000.0);
+                const NUM_WORKGROUPS: u32 = 128;
 
-                let t1 = Instant::now();
-                // 2. Accumulate samples (blend with previous frames)
-                renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, samples_this_frame);
-                self.metrics.record_accumulate_time(t1.elapsed().as_secs_f64() * 1000.0);
+                // Calculate iterations per "frame" based on speed multiplier
+                // Higher speed multiplier = more accumulation passes = smaller chunks
+                let iterations_per_frame = self.iterations_per_thread / self.speed_multiplier;
+
+                let mut total_compute_time = 0.0;
+                let mut total_accumulate_time = 0.0;
+
+                // Do multiple compute+accumulate cycles per frame (simulating higher frame rate)
+                for _ in 0..self.speed_multiplier {
+                    let t0 = Instant::now();
+                    // 1. Compute new samples with fresh random seed
+                    let samples_this_chunk = renderer.compute_pass(&mut encoder, &self.gpu.queue, NUM_WORKGROUPS, iterations_per_frame, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                    total_compute_time += t0.elapsed().as_secs_f64() * 1000.0;
+
+                    let t1 = Instant::now();
+                    // 2. Accumulate samples (blend with previous frames)
+                    renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, samples_this_chunk);
+                    total_accumulate_time += t1.elapsed().as_secs_f64() * 1000.0;
+                }
+
+                self.metrics.record_compute_time(total_compute_time);
+                self.metrics.record_accumulate_time(total_accumulate_time);
             } else {
                 self.metrics.record_compute_time(0.0);
                 self.metrics.record_accumulate_time(0.0);
@@ -322,6 +367,7 @@ impl App {
             &mut self.exposure,
             &mut self.gamma,
             &mut self.deterministic_rng,
+            &mut self.speed_multiplier,
         );
         self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
 
