@@ -292,9 +292,9 @@ impl FlameRenderer {
         // 7. Update deterministic RNG setting
         self.deterministic_rng = config.deterministic_rng;
 
-        // 8. Update tone mapping settings (exposure, gamma, use_curve already in app)
-        // Note: tonemap_mode, tonemap_curve, use_curve are handled by the app's UI
-        // The renderer just applies what it's told via update_tonemap()
+        // 8. Update tone mapping settings from config
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma);
+        self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
         self.buffers.clear_all(encoder);
