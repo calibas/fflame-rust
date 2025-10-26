@@ -113,18 +113,22 @@ var local_histogram: array<u32, HISTOGRAM_SIZE>;
 **Cons:** Massive memory usage (histogram per thread)
 **Status:** Impractical for current workgroup sizes
 
-### Option 4: Workgroup-Local Histograms
-Share histogram across workgroup (256 threads), then atomic merge:
+### Option 4: Per-Thread Local Cache ⭐ RECOMMENDED
+Each thread maintains small cache of recently hit pixels:
 ```wgsl
-var<workgroup> local_histogram: array<atomic<u32>, WIDTH*HEIGHT*4>;
-// Accumulate to workgroup histogram
-// workgroupBarrier()
-// Single thread: merge to global
+var local_cache: array<LocalPixel, 16>;  // 16 pixels per thread
+// Accumulate to cache (no atomics!)
+// On cache miss or full: flush to global histogram
 ```
 
-**Pros:** 256× fewer atomic operations
-**Cons:** Workgroup memory limits, complex synchronization
-**Status:** Worth exploring
+**Pros:**
+- Simple to implement (no workgroup sync)
+- Automatic adaptation to fractal structure
+- Expected 2-3× improvement with 70-80% cache hit rate
+- Fractal flames have spatial locality (same pixels hit repeatedly)
+
+**Cons:** Limited cache size (8-32 pixels typical)
+**Status:** ⭐ **PLANNED** - See [WORKGROUP_LOCAL_HISTOGRAM_PLAN.md](WORKGROUP_LOCAL_HISTOGRAM_PLAN.md)
 
 ### Option 5: Hybrid Mode Switch
 Provide quality vs speed toggle:
