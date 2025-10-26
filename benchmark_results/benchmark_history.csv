@@ -1,2 +1,5 @@
 Timestamp,Fractal,ConfigFile,Resolution,Platform,Commit,CommitName,TotalIterations,IterationsPerThread,SpeedFactor,Workgroups,Mean_ms,StdDev_ms,CV_percent,Min_ms,Max_ms,Throughput_Giter_sec,Samples,RustcVersion,BuildProfile
 2025-10-26 08:02:09,complex,assets/presets/complex.fflame,1920x1080,Windows,06bfcab,Histogram + Local Cache (current),1000341504,256,0.50,128,170.72,5.72,3.35,162.20,177.97,5.86,5,1.87.0,release
+2025-10-26 08:12:12,complex,assets/presets/complex.fflame,1920x1080,Windows,dd80003,Before Histogram (textureStore),,,,128,161.40,4.89,3.03,153.96,165.89,0.00,5,,
+2025-10-26 08:12:12,complex,assets/presets/complex.fflame,1920x1080,Windows,ef0cdd8,Histogram Fixed (naive atomic),,,,128,168.47,8.34,4.95,157.26,178.91,0.00,5,,
+2025-10-26 08:12:12,complex,assets/presets/complex.fflame,1920x1080,Windows,06bfcab,Histogram + Local Cache (current),1000341504,256,0.50,128,170.11,6.77,3.98,162.32,177.55,5.88,5,1.87.0,release
