@@ -92,6 +92,7 @@ pub async fn export_headless(
                 config.camera_rotation_x,
                 config.camera_rotation_y,
                 config.speed_factor,
+                true, // Always clear histogram for export (no batching)
             );
 
             let samples = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_frame as u64;

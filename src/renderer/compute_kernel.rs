@@ -102,7 +102,7 @@ impl FlameRenderer {
 
     /// Run compute pass to generate flame samples
     /// Returns the number of samples generated this frame
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) -> u64 {
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32, clear_histogram: bool) -> u64 {
         // Update seed for new random samples each frame
         let (projection_type, perspective_strength) = match self.current_projection {
             crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
@@ -143,8 +143,10 @@ impl FlameRenderer {
         let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
         self.total_iterations += samples_this_frame;
 
-        // Clear histogram buffer before rendering new samples
-        self.buffers.clear_histogram(encoder);
+        // Clear histogram buffer before rendering new samples (optional for batched accumulation)
+        if clear_histogram {
+            self.buffers.clear_histogram(encoder);
+        }
 
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
             label: Some("Flame Compute Pass"),
