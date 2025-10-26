@@ -27,25 +27,28 @@ Current architecture forces low `iterations_per_thread` to maintain quality (due
 3. **Modified render loop** to accumulate every N frames
 4. **Histogram accumulates** across multiple frames before processing
 
-### Current Configuration
+### Current Configuration (Updated)
 
 - `accumulation_batch_size = 4` (process every 4 frames)
-- `iterations_per_thread = 256` (default, will test higher values)
+- `iterations_per_thread = 1024` (4× increase for CLI export)
 - `scale = 100` (u16 packing)
+
+**Update:** Default iterations_per_thread increased from 256 to 1024 to properly utilize batched accumulation. Initial test with 256 showed 10% slowdown - expected since we weren't leveraging the benefit of batching.
 
 ## Testing Plan
 
-### Step 1: Baseline (Current Settings)
-Run app with:
+### Step 1: ~~Baseline (Current Settings)~~ COMPLETED
+Initial test:
 - `batch_size = 4`
 - `iterations_per_thread = 256`
-- Observe: FPS, quality, throughput
+- Result: 10% slower (expected - not utilizing batching benefit)
 
-### Step 2: High Iterations Test
-Change to:
+### Step 2: High Iterations Test (CURRENT)
+Updated configuration:
 - `batch_size = 4`
-- `iterations_per_thread = 1024` or `4096`
-- Observe: Does quality stay good? Does throughput increase?
+- `iterations_per_thread = 1024` (4× baseline)
+- Hypothesis: 4× throughput compensates for batching overhead
+- Observe: Does net performance improve vs baseline?
 
 ### Step 3: Overflow Check
 Look for grey artifacts in bright areas (indicates overflow at scale=100)
