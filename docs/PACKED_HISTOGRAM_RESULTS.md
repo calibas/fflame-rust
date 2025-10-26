@@ -251,16 +251,18 @@ atomicAdd(&histogram[pixel_idx * 2u + 1u], density);
 ## Next Steps
 
 1. ✅ Document findings (this file)
-2. ⏳ Implement f16 packed format
-3. ⏳ Test visual quality
-4. ⏳ Benchmark performance
+2. ✅ Implement f16 packed format (commit 51f05cb)
+3. ⏳ Test visual quality (expecting perfect, no artifacts)
+4. ⏳ Benchmark performance (expecting 7-10% improvement vs naive)
 5. ⏳ Compare with Apophysis HDR workflow
 6. ⏳ Decision: merge f16 version or explore other options
 
 ## Conclusion
 
-**The experiment was a success!** We proved that atomic operations were the bottleneck, achieving **14% speedup** with packed format.
+**The experiment was a success!** We proved that atomic operations were the bottleneck, achieving **14% speedup** with u8 packed format.
 
-However, the u8 packing has overflow artifacts that make it unusable for production. The path forward is clear: **f16 packed format** combines performance gains (2× atomic reduction) with quality requirements (HDR support, no overflow).
+However, the u8 packing had overflow artifacts that made it unusable for production. The solution: **f16 packed format** (commit 51f05cb) combines performance gains (2× atomic reduction) with quality requirements (HDR support, no overflow).
 
-**Expected final result:** ~7-10% speedup over naive histogram with perfect quality + HDR support for tone mapping.
+**Expected result:** ~7-10% speedup over naive histogram with perfect quality + HDR support for tone mapping.
+
+**Implementation complete - ready for testing!**
