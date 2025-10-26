@@ -58,6 +58,9 @@ pub struct App {
     pub(super) deterministic_rng: bool,
     pub(super) speed_multiplier: u32,  // 1x, 2x, 4x, 8x, 16x (target FPS = 60 * multiplier)
     pub(super) last_frame_time: Option<web_time::Instant>,
+    // Batched accumulation experiment
+    pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
+    pub(super) frames_since_accumulation: u32,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -140,6 +143,9 @@ impl App {
             deterministic_rng: true, // Enabled by default for reproducible rendering
             speed_multiplier: 1, // Default 1x (60 FPS)
             last_frame_time: None,
+            // Batched accumulation: 1 = normal (every frame), 4 = experimental batching
+            accumulation_batch_size: 1,
+            frames_since_accumulation: 0,
         };
 
         #[allow(deprecated)]
@@ -291,15 +297,31 @@ impl App {
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;
 
+                self.frames_since_accumulation += 1;
+
+                // Determine if we should accumulate this frame
+                let should_accumulate = self.frames_since_accumulation >= self.accumulation_batch_size;
+
                 let t0 = Instant::now();
                 // 1. Compute new samples with fresh random seed
-                let samples_this_frame = renderer.compute_pass(&mut encoder, &self.gpu.queue, NUM_WORKGROUPS, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                // Clear histogram only when starting a new batch (frame 1 of batch)
+                let clear_histogram = self.frames_since_accumulation == 1;
+                let samples_this_frame = renderer.compute_pass(&mut encoder, &self.gpu.queue, NUM_WORKGROUPS, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor, clear_histogram);
                 self.metrics.record_compute_time(t0.elapsed().as_secs_f64() * 1000.0);
 
                 let t1 = Instant::now();
-                // 2. Accumulate samples (blend with previous frames)
-                renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, samples_this_frame);
-                self.metrics.record_accumulate_time(t1.elapsed().as_secs_f64() * 1000.0);
+                // 2. Accumulate samples - but only every N frames if batching enabled
+                if should_accumulate {
+                    // samples_this_frame is only THIS frame's samples, but histogram contains
+                    // accumulated samples from all frames in the batch
+                    // Pass total samples for proper blend_factor calculation
+                    let total_samples_in_batch = samples_this_frame * self.accumulation_batch_size as u64;
+                    renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                    self.frames_since_accumulation = 0;
+                    self.metrics.record_accumulate_time(t1.elapsed().as_secs_f64() * 1000.0);
+                } else {
+                    self.metrics.record_accumulate_time(0.0);
+                }
             } else {
                 self.metrics.record_compute_time(0.0);
                 self.metrics.record_accumulate_time(0.0);
