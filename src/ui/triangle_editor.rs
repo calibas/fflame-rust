@@ -464,20 +464,137 @@ pub fn render_triangle_editor_window(
 
                 let mut coords_changed = false;
 
-                ui.horizontal(|ui| {
-                    ui.label("O:");
-                    coords_changed |= ui.add(egui::DragValue::new(&mut o[0]).speed(0.01).prefix("x: ")).changed();
-                    coords_changed |= ui.add(egui::DragValue::new(&mut o[1]).speed(0.01).prefix("y: ")).changed();
-                });
-                ui.horizontal(|ui| {
-                    ui.label("X:");
-                    coords_changed |= ui.add(egui::DragValue::new(&mut x[0]).speed(0.01).prefix("x: ")).changed();
-                    coords_changed |= ui.add(egui::DragValue::new(&mut x[1]).speed(0.01).prefix("y: ")).changed();
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Y:");
-                    coords_changed |= ui.add(egui::DragValue::new(&mut y[0]).speed(0.01).prefix("x: ")).changed();
-                    coords_changed |= ui.add(egui::DragValue::new(&mut y[1]).speed(0.01).prefix("y: ")).changed();
+                ui.columns(2, |columns| {
+                    // Left column: Coordinates
+                    columns[0].vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("O:");
+                            coords_changed |= ui.add(egui::DragValue::new(&mut o[0]).speed(0.01).prefix("x: ")).changed();
+                            coords_changed |= ui.add(egui::DragValue::new(&mut o[1]).speed(0.01).prefix("y: ")).changed();
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("X:");
+                            coords_changed |= ui.add(egui::DragValue::new(&mut x[0]).speed(0.01).prefix("x: ")).changed();
+                            coords_changed |= ui.add(egui::DragValue::new(&mut x[1]).speed(0.01).prefix("y: ")).changed();
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Y:");
+                            coords_changed |= ui.add(egui::DragValue::new(&mut y[0]).speed(0.01).prefix("x: ")).changed();
+                            coords_changed |= ui.add(egui::DragValue::new(&mut y[1]).speed(0.01).prefix("y: ")).changed();
+                        });
+                    });
+
+                    // Right column: Quick action buttons
+                    columns[1].vertical(|ui| {
+                        ui.label("Quick Actions:");
+
+                        // Translate arrow keys layout (matching View panel)
+                        ui.horizontal(|ui| {
+                            ui.add_space(30.0);
+                            if ui.button("  ^  ").clicked() {
+                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
+                                o_new[1] += 0.1;
+                                x_new[1] += 0.1;
+                                y_new[1] += 0.1;
+                                transform.from_triangle(o_new, x_new, y_new);
+                                *flame_changed = true;
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button("  <  ").clicked() {
+                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
+                                o_new[0] -= 0.1;
+                                x_new[0] -= 0.1;
+                                y_new[0] -= 0.1;
+                                transform.from_triangle(o_new, x_new, y_new);
+                                *flame_changed = true;
+                            }
+                            if ui.button("  v  ").clicked() {
+                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
+                                o_new[1] -= 0.1;
+                                x_new[1] -= 0.1;
+                                y_new[1] -= 0.1;
+                                transform.from_triangle(o_new, x_new, y_new);
+                                *flame_changed = true;
+                            }
+                            if ui.button("  >  ").clicked() {
+                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
+                                o_new[0] += 0.1;
+                                x_new[0] += 0.1;
+                                y_new[0] += 0.1;
+                                transform.from_triangle(o_new, x_new, y_new);
+                                *flame_changed = true;
+                            }
+                        });
+
+                        ui.add_space(5.0);
+
+                        // Rotate buttons
+                        ui.horizontal(|ui| {
+                            if ui.button("↻ Rotate CW").clicked() {
+                                let angle = -15.0_f32.to_radians();
+                                let cos_a = angle.cos();
+                                let sin_a = angle.sin();
+                                let (o_curr, x_curr, y_curr) = transform.to_triangle();
+
+                                let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
+                                let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
+
+                                let x_rot = [x_vec[0] * cos_a - x_vec[1] * sin_a, x_vec[0] * sin_a + x_vec[1] * cos_a];
+                                let y_rot = [y_vec[0] * cos_a - y_vec[1] * sin_a, y_vec[0] * sin_a + y_vec[1] * cos_a];
+
+                                let x_new = [o_curr[0] + x_rot[0], o_curr[1] + x_rot[1]];
+                                let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
+
+                                transform.from_triangle(o_curr, x_new, y_new);
+                                *flame_changed = true;
+                            }
+                            if ui.button("↺ Rotate CCW").clicked() {
+                                let angle = 15.0_f32.to_radians();
+                                let cos_a = angle.cos();
+                                let sin_a = angle.sin();
+                                let (o_curr, x_curr, y_curr) = transform.to_triangle();
+
+                                let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
+                                let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
+
+                                let x_rot = [x_vec[0] * cos_a - x_vec[1] * sin_a, x_vec[0] * sin_a + x_vec[1] * cos_a];
+                                let y_rot = [y_vec[0] * cos_a - y_vec[1] * sin_a, y_vec[0] * sin_a + y_vec[1] * cos_a];
+
+                                let x_new = [o_curr[0] + x_rot[0], o_curr[1] + x_rot[1]];
+                                let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
+
+                                transform.from_triangle(o_curr, x_new, y_new);
+                                *flame_changed = true;
+                            }
+                        });
+
+                        // Scale buttons
+                        ui.horizontal(|ui| {
+                            if ui.button("⇄ Scale Up").clicked() {
+                                let (o_curr, x_curr, y_curr) = transform.to_triangle();
+                                let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
+                                let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
+
+                                let x_new = [o_curr[0] + x_vec[0] * 1.1, o_curr[1] + x_vec[1] * 1.1];
+                                let y_new = [o_curr[0] + y_vec[0] * 1.1, o_curr[1] + y_vec[1] * 1.1];
+
+                                transform.from_triangle(o_curr, x_new, y_new);
+                                *flame_changed = true;
+                            }
+                            if ui.button("⇄ Scale Down").clicked() {
+                                let (o_curr, x_curr, y_curr) = transform.to_triangle();
+                                let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
+                                let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
+
+                                let x_new = [o_curr[0] + x_vec[0] * 0.9, o_curr[1] + x_vec[1] * 0.9];
+                                let y_new = [o_curr[0] + y_vec[0] * 0.9, o_curr[1] + y_vec[1] * 0.9];
+
+                                transform.from_triangle(o_curr, x_new, y_new);
+                                *flame_changed = true;
+                            }
+                        });
+                    });
                 });
 
                 if coords_changed {
