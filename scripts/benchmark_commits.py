@@ -204,6 +204,7 @@ def main():
         # {'hash': 'dd80003', 'name': 'Before Histogram (textureStore)'},  # Commented out - too slow
         {'hash': 'ef0cdd8', 'name': 'Histogram Fixed (naive atomic)'},
         # {'hash': '06bfcab', 'name': 'Histogram + Local Cache (reverted)'},  # Commented out - catastrophic regression
+        {'hash': 'ce58657', 'name': 'u16 packed histogram (merged)'},
     ]
 
     # Setup
