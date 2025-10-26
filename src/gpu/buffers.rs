@@ -137,8 +137,8 @@ pub struct GpuParams {
     pub perspective_strength: f32, // Strength for perspective projection
     pub camera_rotation_x: f32, // 3D camera pitch (rotation around X axis)
     pub camera_rotation_y: f32, // 3D camera yaw (rotation around Y axis)
+    pub histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
     pub _pad3: f32,
-    pub _pad4: f32,
 }
 
 /// Tonemap parameters
@@ -173,7 +173,7 @@ pub struct AccumulateParams {
     pub width: u32,
     pub height: u32,
     pub blend_factor: f32,
-    pub _pad0: f32,
+    pub histogram_color_scale: f32, // Must match compute shader value
 }
 
 /// Manages GPU buffers and textures for fractal flame rendering
@@ -271,8 +271,8 @@ impl FlameBuffers {
             perspective_strength: 2.0,
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
+            histogram_color_scale: 10.0,
             _pad3: 0.0,
-            _pad4: 0.0,
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -294,7 +294,7 @@ impl FlameBuffers {
             width,
             height,
             blend_factor: 1.0,
-            _pad0: 0.0,
+            histogram_color_scale: 10.0, // Must match compute shader
         };
         let accumulate_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Accumulate Params Buffer"),

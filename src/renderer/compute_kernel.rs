@@ -132,8 +132,8 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            histogram_color_scale: 10.0, // TODO: Get from config
             _pad3: 0.0,
-            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
 
@@ -178,7 +178,7 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             blend_factor,
-            _pad0: 0.0,
+            histogram_color_scale: 10.0, // TODO: Get from config
         };
 
         self.buffers.update_accumulate_params(queue, &params);
@@ -348,8 +348,8 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            histogram_color_scale: 10.0, // TODO: Get from config
             _pad3: 0.0,
-            _pad4: 0.0,
         };
 
         self.buffers.update_params(queue, &params);
@@ -427,8 +427,8 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            histogram_color_scale: 10.0, // TODO: Get from config
             _pad3: 0.0,
-            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -520,8 +520,8 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            histogram_color_scale: 10.0, // TODO: Get from config
             _pad3: 0.0,
-            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }

@@ -4,8 +4,8 @@
 struct AccumulateParams {
     width: u32,
     height: u32,
-    blend_factor: f32, // 1.0 / (samples_accumulated + 1)
-    _pad0: f32,
+    blend_factor: f32, // samples_this_frame / samples_accumulated
+    histogram_color_scale: f32, // Must match compute shader value
 }
 
 @group(0) @binding(0) var previous_accumulation: texture_2d<f32>;
@@ -40,8 +40,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let density = f32((packed_bd >> 16u) & 0xFFFFu);
 
     // Convert back to float color (average)
-    // Note: Values were scaled by 10 during accumulation
-    let color_scale = 10.0;
+    // Note: Values were scaled by histogram_color_scale during accumulation
+    let color_scale = params.histogram_color_scale;
     var new_color = vec3<f32>(0.0);
     if (density > 0.0) {
         // Simple division - just accept that overflow will cause color wrapping
