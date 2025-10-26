@@ -60,7 +60,7 @@ struct VariationParams {
 // Bindings
 @group(0) @binding(0) var<storage, read> transforms: array<Transform>;
 @group(0) @binding(1) var<uniform> params: Params;
-@group(0) @binding(2) var output_texture: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(2) var<storage, read_write> histogram: array<atomic<u32>>;
 @group(0) @binding(3) var palette_texture: texture_1d<f32>;
 @group(0) @binding(4) var palette_sampler: sampler;
 @group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;

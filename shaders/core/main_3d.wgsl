@@ -1,3 +1,15 @@
+// Local pixel cache entry for reducing atomic contention
+struct LocalPixel {
+    pixel_idx: u32,
+    r: u32,
+    g: u32,
+    b: u32,
+    density: u32,
+}
+
+const CACHE_SIZE: u32 = 16u;
+const INVALID_PIXEL_IDX: u32 = 0xFFFFFFFFu;
+
 // Main compute shader entry point for 3D mode
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -15,6 +27,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var color = vec3<f32>(1.0, 1.0, 1.0);
     var color_index = 0.0;  // For palette mode
+
+    // Initialize local cache
+    var local_cache: array<LocalPixel, CACHE_SIZE>;
+    for (var c = 0u; c < CACHE_SIZE; c++) {
+        local_cache[c].pixel_idx = INVALID_PIXEL_IDX;
+        local_cache[c].r = 0u;
+        local_cache[c].g = 0u;
+        local_cache[c].b = 0u;
+        local_cache[c].density = 0u;
+    }
 
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
@@ -68,9 +90,73 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     final_color = color;
                 }
 
-                // Write to texture with small alpha for density accumulation
-                textureStore(output_texture, pixel, vec4<f32>(final_color, 0.01));
+                // Local cache accumulation (reduces atomic contention)
+                let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
+
+                // Scale color to integers (0.0-1.0 → 0-10000 for precision)
+                let color_scale = 10000.0;
+                let r = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
+                let g = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
+                let b = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
+
+                // Check if pixel is already in cache
+                var cache_hit = false;
+                for (var c = 0u; c < CACHE_SIZE; c++) {
+                    if (local_cache[c].pixel_idx == pixel_idx) {
+                        // Cache hit - accumulate locally
+                        local_cache[c].r += r;
+                        local_cache[c].g += g;
+                        local_cache[c].b += b;
+                        local_cache[c].density += 1u;
+                        cache_hit = true;
+                        break;
+                    }
+                }
+
+                // Cache miss - find empty slot or evict LRU
+                if (!cache_hit) {
+                    var slot_idx = 0u;
+                    var found_empty = false;
+
+                    // Look for empty slot
+                    for (var c = 0u; c < CACHE_SIZE; c++) {
+                        if (local_cache[c].pixel_idx == INVALID_PIXEL_IDX) {
+                            slot_idx = c;
+                            found_empty = true;
+                            break;
+                        }
+                    }
+
+                    // If no empty slot, flush slot 0 to global histogram
+                    if (!found_empty) {
+                        if (local_cache[slot_idx].density > 0u) {
+                            let base_idx = local_cache[slot_idx].pixel_idx * 4u;
+                            atomicAdd(&histogram[base_idx + 0u], local_cache[slot_idx].r);
+                            atomicAdd(&histogram[base_idx + 1u], local_cache[slot_idx].g);
+                            atomicAdd(&histogram[base_idx + 2u], local_cache[slot_idx].b);
+                            atomicAdd(&histogram[base_idx + 3u], local_cache[slot_idx].density);
+                        }
+                    }
+
+                    // Insert new entry
+                    local_cache[slot_idx].pixel_idx = pixel_idx;
+                    local_cache[slot_idx].r = r;
+                    local_cache[slot_idx].g = g;
+                    local_cache[slot_idx].b = b;
+                    local_cache[slot_idx].density = 1u;
+                }
             }
+        }
+    }
+
+    // Flush all remaining cache entries to global histogram
+    for (var c = 0u; c < CACHE_SIZE; c++) {
+        if (local_cache[c].pixel_idx != INVALID_PIXEL_IDX && local_cache[c].density > 0u) {
+            let base_idx = local_cache[c].pixel_idx * 4u;
+            atomicAdd(&histogram[base_idx + 0u], local_cache[c].r);
+            atomicAdd(&histogram[base_idx + 1u], local_cache[c].g);
+            atomicAdd(&histogram[base_idx + 2u], local_cache[c].b);
+            atomicAdd(&histogram[base_idx + 3u], local_cache[c].density);
         }
     }
 }
