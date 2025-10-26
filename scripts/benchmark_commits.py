@@ -193,11 +193,11 @@ def main():
 
     args = parser.parse_args()
 
-    # Commits to benchmark
-    commits = [
+    # Commits to benchmark (excluding current)
+    past_commits = [
         {'hash': 'dd80003', 'name': 'Before Histogram (textureStore)'},
         {'hash': 'ef0cdd8', 'name': 'Histogram Fixed (naive atomic)'},
-        {'hash': '06bfcab', 'name': 'Histogram + Local Cache (current)'},
+        {'hash': '06bfcab', 'name': 'Histogram + Local Cache (reverted)'},
     ]
 
     # Setup
@@ -251,6 +251,12 @@ def main():
         returncode, stdout, _ = run_command("git rev-parse HEAD")
         original_ref = stdout.strip()
 
+    # Get current commit info
+    returncode, stdout, _ = run_command("git rev-parse HEAD")
+    current_commit_hash = stdout.strip()[:7]
+    returncode, stdout, _ = run_command("git log -1 --pretty=%B")
+    current_commit_name = stdout.strip().split('\n')[0][:60]  # First line, max 60 chars
+
     # Initialize CSV
     csv_path = results_dir / 'benchmark_history.csv'
     csv_exists = csv_path.exists()
@@ -263,10 +269,21 @@ def main():
         'RustcVersion', 'BuildProfile'
     ]
 
+    # Build list of all commits to test (current + past)
+    all_commits = [
+        {'hash': current_commit_hash, 'name': current_commit_name}
+    ] + past_commits
+
+    print(f"Will benchmark {len(all_commits)} commits:")
+    print(f"  1. CURRENT: {current_commit_hash} - {current_commit_name}")
+    for i, commit in enumerate(past_commits, start=2):
+        print(f"  {i}. {commit['hash']} - {commit['name']}")
+    print()
+
     # Run benchmarks
     results = []
     try:
-        for commit in commits:
+        for commit in all_commits:
             result = run_benchmark(
                 commit['hash'],
                 commit['name'],
