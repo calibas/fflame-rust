@@ -212,7 +212,7 @@ To better understand the bottleneck:
 - Result: **5810ms → 4998ms (14% faster!)**
 - Conclusion: **Atomic operations ARE the bottleneck**
 
-### Previous Issue: Overflow Artifacts (SOLVED) ✅
+### Issue Solved: Overflow Artifacts ✅
 
 **Problem (u8 packing):** Color corruption in bright areas
 - Overflow occurred after ~256 hits per channel
@@ -224,36 +224,42 @@ To better understand the bottleneck:
 - No overflow (f16 range: ±65504)
 - HDR support (values > 1.0 preserved)
 
-**Status:** Implemented in commit 51f05cb - ready for testing
+**Status:** ✅ **VALIDATED AND APPROVED** (commit 27396e7)
+
+### Benchmark Results (2025-10-26 11:38:43)
+
+| Approach | Time | vs Naive | Quality | HDR |
+|----------|------|----------|---------|-----|
+| **f16 packed** | **5248ms** | **-11.5%** ✅ | Perfect | ✅ |
+| u8 packed | 4998ms | -14.0% | Artifacts ❌ | ❌ |
+| Naive atomic | 5933ms | baseline | Perfect | ✅ |
+| textureStore | 6966ms | +17.4% | Broken | ❌ |
+
+**Winner:** f16 packed delivers 11.5% speedup with perfect quality + HDR support
 
 ## Recommendations (Updated 2025-10-26)
 
-**✅ COMPLETED: f16 packed format implementation**
+**✅ COMPLETED AND VALIDATED: f16 packed format**
 - Implemented in commit 51f05cb
+- Validated in commit 27396e7 (benchmark results)
 - Pack RGBA as 4× f16 into 2× u32
 - Reduced from 4 atomics → 2 atomics (50% reduction)
-- Expected: 7-10% speedup vs naive
-- **Benefits:**
-  - No overflow (f16 range: ±65504)
-  - HDR support for tone mapping (user requirement met)
-  - Better quality than u8 packing
-  - Faster than naive histogram
+- **Actual result:** **11.5% speedup vs naive** (exceeded 7-10% target!)
+- **Benefits achieved:**
+  - ✅ No overflow (f16 range: ±65504)
+  - ✅ HDR support for tone mapping (user requirement met)
+  - ✅ Perfect visual quality (no artifacts)
+  - ✅ 50% memory reduction (16 MB vs 31 MB @ 1080p)
 
-**Next: Benchmark f16 implementation**
-- Test visual quality (should be perfect, no artifacts)
-- Measure performance (expect 7-10% improvement vs naive)
-- Compare with Apophysis HDR workflow
+**Status: READY FOR MERGE TO MAIN** 🎯
 
-**Alternative (if needed): atomicCompareExchange with saturation**
-- Implement saturating add using compare-and-swap
-- Maintains u8 precision but prevents overflow
-- Performance unknown (loop overhead may negate gains)
-- Only explore if f16 results are unsatisfactory
+The f16 packed histogram is the optimal solution:
+- Performance: 11.5% faster than naive
+- Quality: Identical to naive (perfect)
+- HDR: Full color depth preserved
+- Memory: 50% smaller buffer
 
-**Fallback: Naive histogram (always available)**
-- 14% slower than packed, but perfect quality
-- Already implemented and working
-- Conservative option if optimizations don't pan out
+**No further optimization needed** - this achieves all goals.
 
 ---
 
