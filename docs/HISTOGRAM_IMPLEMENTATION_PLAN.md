@@ -264,12 +264,31 @@ let alpha_accumulated = prev.a + (density / color_scale * 0.01);  // Normalize d
 - All iterations contribute to final color
 - Matches Apophysis exactly
 
+## Next Steps: Performance Optimization
+
+The histogram implementation is correct and achieves Apophysis-quality rendering, but has ~50% performance cost due to atomic contention.
+
+**Recommended Optimization: Per-Thread Local Cache**
+- See [WORKGROUP_LOCAL_HISTOGRAM_PLAN.md](WORKGROUP_LOCAL_HISTOGRAM_PLAN.md) for complete plan
+- Expected: 2-3× performance improvement (30 FPS → 60-90 FPS)
+- Simple implementation leveraging spatial locality in fractals
+- Maintains histogram correctness and quality
+
+**Failed Attempts:**
+- See [HISTOGRAM_OPTIMIZATION_ATTEMPTS.md](HISTOGRAM_OPTIMIZATION_ATTEMPTS.md)
+- Bit-packed RGB (overflow corruption)
+- Lower precision (no improvement)
+
+**Fallback Option:**
+- Hybrid mode: Quality toggle (histogram vs old textureStore)
+- Let users choose: Perfect quality (slow) or fast rendering (color noise)
+
 ## Rollback Plan
 
 If histogram approach has issues:
 1. Keep changes in feature branch
 2. Can revert to main branch
-3. Already committed initial work (75045ce)
+3. Old textureStore approach in commits before 7670669
 
 ## References
 
