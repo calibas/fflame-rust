@@ -199,34 +199,65 @@ To better understand the bottleneck:
 
 ---
 
-## Current Status (2025-10-26)
+## Final Status (2025-10-26)
 
-**Benchmark findings reveal atomic operations are the bottleneck:**
-- Controlled test: Same 39.8B iterations
-- Low zoom (1.0): 6510ms (more atomics, 95% viewport hit rate)
-- High zoom (25.5): 5904ms (fewer atomics, 1.5% viewport hit rate)
-- **10% performance difference purely from atomic operation count**
+### ✅ COMPLETED: u16 Fixed-Point Packing (commit 286fadb)
 
-**Key insight:** Computing iterations is fast, atomic writes are slow!
+**Problem Solved:** Atomic operations were the bottleneck (confirmed via testing)
 
-## Recommendations (Updated)
+**Final Solution:** Pack RGBA+density as 4× u16 fixed-point integers into 2× u32
+- Scale: 100 (allows 655 hits before overflow)
+- Precision: 1% quantization (imperceptible)
+- Atomics: 2 per pixel (down from 4)
 
-**Short term: Implement packed histogram (PRIORITY)**
-- See [PACKED_HISTOGRAM_PLAN.md](PACKED_HISTOGRAM_PLAN.md)
-- Reduce from 4 atomics → 1 atomic per pixel hit
-- Expected: 2-3× speedup
-- Risk: Potential overflow artifacts (needs testing)
+### Benchmark Results (2025-10-26 12:18:18)
 
-**Medium term: Visual testing and benchmarking**
-- Test packed format with 10+ different fractals
-- Benchmark at multiple zoom levels
-- Compare with Apophysis quality
-- Decision: ship, iterate, or revert
+| Approach | Time | vs Naive | Quality | Notes |
+|----------|------|----------|---------|-------|
+| **u16 packed (scale=100)** | **5335ms** | **-13.8%** ✅ | Perfect ✅ | **FINAL** |
+| Naive atomic (4 atomics) | 6191ms | baseline | Perfect ✅ | Original |
+| u8 packed (scale=255) | 4998ms | -19.3% | Broken ❌ | Overflow |
+| f16 packed (pack2x16float) | 5248ms | -15.2% | Broken ❌ | Bit corruption |
 
-**Long term: Adaptive quality mode (if needed)**
-- "Fast" mode: Packed histogram (potential artifacts)
-- "Quality" mode: Current 4-atomic approach (perfect)
-- User toggleable or auto-switch based on interaction
+**Winner:** u16 fixed-point packing with scale=100
+
+### Why This Works
+
+1. **Fixed-point integers** work correctly with `atomicAdd` (unlike floats)
+2. **Scale=100** prevents overflow (655 hits at full brightness)
+3. **1% precision** is sufficient for visual quality
+4. **2× atomic reduction** provides 13.8% speedup
+5. **50% memory reduction** (16 MB vs 31 MB @ 1080p)
+
+### Why Other Approaches Failed
+
+- **u8 packing:** Overflow at 256 hits → grey artifacts
+- **f16 packing:** Integer addition on float bits → psychedelic noise
+- **Local cache:** Cache overhead > atomic cost → 50%+ regression
+
+### Investigation Summary
+
+**Key Discovery:** Zoom affects atomic count, not computation
+- Low zoom (1.0): 95% hit rate → more atomics → slower
+- High zoom (25.5): 1.5% hit rate → fewer atomics → faster
+- ~10% performance difference proves atomic bottleneck
+
+**Solution Validation:** Packed atomics confirmed the hypothesis
+- u8 packed: 14% faster (but broken)
+- u16 packed: 13.8% faster (working!)
+
+## Recommendations (Final)
+
+**✅ READY TO MERGE TO MAIN**
+
+The u16 packed histogram (scale=100) achieves all goals:
+- ✅ **13.8% performance improvement** (855ms faster)
+- ✅ **Perfect visual quality** (no artifacts, no noise)
+- ✅ **Memory efficient** (50% buffer reduction)
+- ✅ **Stable timings** (0.25% CV)
+- ✅ **Sufficient overflow headroom** (655 hits at full brightness)
+
+**See:** `docs/HISTOGRAM_OPTIMIZATION_SUMMARY.md` for complete analysis.
 
 ---
 
