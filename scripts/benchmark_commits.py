@@ -62,7 +62,7 @@ def extract_metadata(compare_output):
 
     return metadata
 
-def run_benchmark(commit_hash, commit_name, config_file, repeats, width, height, results_dir):
+def run_benchmark(commit_hash, commit_name, config_file, repeats, width, height, results_dir, fractal_name):
     """Run benchmark for a single commit."""
     print(f"\n{'='*60}")
     print(f"Testing: {commit_name}")
@@ -87,10 +87,14 @@ def run_benchmark(commit_hash, commit_name, config_file, repeats, width, height,
     times = []
     metadata_cache = None
 
+    # Use 7-character commit hash for filenames
+    short_hash = commit_hash[:7]
+
     for i in range(1, repeats + 1):
         print(f"  Repeat {i}/{repeats}...", end=" ", flush=True)
 
-        output_file = results_dir / f"{commit_hash}_repeat{i}.png"
+        # Format: [name]_[commit]_[number].png
+        output_file = results_dir / f"{fractal_name}_{short_hash}_{i}.png"
 
         # Run export
         cmd = f"cargo run --release -- export -i {config_file} -o {output_file} --width {width} --height {height}"
@@ -270,7 +274,8 @@ def main():
                 args.repeats,
                 args.width,
                 args.height,
-                results_dir
+                results_dir,
+                fractal_name
             )
 
             if result:
