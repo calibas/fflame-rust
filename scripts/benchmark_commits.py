@@ -255,7 +255,8 @@ def main():
     returncode, stdout, _ = run_command("git rev-parse HEAD")
     current_commit_hash = stdout.strip()[:7]
     returncode, stdout, _ = run_command("git log -1 --pretty=%B")
-    current_commit_name = stdout.strip().split('\n')[0][:60]  # First line, max 60 chars
+    current_commit_full_name = stdout.strip().split('\n')[0][:60]  # First line, max 60 chars
+    current_commit_name = "Current"  # Short name for CSV
 
     # Initialize CSV
     csv_path = results_dir / 'benchmark_history.csv'
@@ -275,7 +276,7 @@ def main():
     ] + past_commits
 
     print(f"Will benchmark {len(all_commits)} commits:")
-    print(f"  1. CURRENT: {current_commit_hash} - {current_commit_name}")
+    print(f"  1. CURRENT: {current_commit_hash} - {current_commit_full_name}")
     for i, commit in enumerate(past_commits, start=2):
         print(f"  {i}. {commit['hash']} - {commit['name']}")
     print()
