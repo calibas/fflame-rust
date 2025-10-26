@@ -50,6 +50,38 @@ let b_sum = f32((packed_color >> 20u) & 0x3FFu);
 
 **Lesson:** Bit-packing doesn't work with atomicAdd unless we can guarantee no overflow
 
+**UPDATE 2025-10-26:** New analysis reveals atomic operations are the primary bottleneck (10% perf difference between zoom levels purely from atomic count). Revisiting packed approach with 8-bit saturation instead of 10-bit. See [PACKED_HISTOGRAM_PLAN.md](PACKED_HISTOGRAM_PLAN.md) for detailed plan.
+
+---
+
+## Attempt 3: Per-Thread Local Cache (REVERTED - Performance Regression!)
+
+**Date:** 2025-10-26 (commits 06bfcab, 58fb8de)
+
+**Idea:** Each thread maintains 16-pixel cache to batch atomic operations
+
+**Implementation:**
+```wgsl
+var local_cache: array<LocalPixel, 16>;  // 16 pixels per thread
+// Accumulate to cache (no atomics!)
+// On cache miss or full: flush to global histogram
+```
+
+**Result:** Catastrophic performance regression!
+- Simple (zoom 1.0): **-0.9% slower**
+- Medium (zoom 21.1): **-14.5% slower**
+- High (zoom 25.5): **-53% slower!!**
+
+**Why it failed:**
+- Cache overhead (64 floats per thread)
+- Poor cache hit rate (fractal iterations jump spatially)
+- Cache flush overhead dominates any atomic savings
+- Gets exponentially worse at high zoom (opposite of intended!)
+
+**Lesson:** Local caching without workgroup cooperation doesn't help fractal workloads
+
+**Status:** REVERTED in commit 58fb8de
+
 ---
 
 ## Attempt 2: Lower Precision (FAILED)
@@ -167,20 +199,34 @@ To better understand the bottleneck:
 
 ---
 
-## Recommendations
+## Current Status (2025-10-26)
 
-**Short term:** Accept the 50% performance cost for quality
-- Histogram approach is correct and matches Apophysis
-- Quality improvement is worth the cost for static rendering
+**Benchmark findings reveal atomic operations are the bottleneck:**
+- Controlled test: Same 39.8B iterations
+- Low zoom (1.0): 6510ms (more atomics, 95% viewport hit rate)
+- High zoom (25.5): 5904ms (fewer atomics, 1.5% viewport hit rate)
+- **10% performance difference purely from atomic operation count**
 
-**Medium term:** Investigate workgroup-local histograms (Option 4)
-- Most promising for significant performance gain
-- Reduces global atomic operations dramatically
+**Key insight:** Computing iterations is fast, atomic writes are slow!
 
-**Long term:** Implement hybrid mode (Option 5)
-- Quality mode for final renders
-- Speed mode for animation/interaction
-- Best of both worlds
+## Recommendations (Updated)
+
+**Short term: Implement packed histogram (PRIORITY)**
+- See [PACKED_HISTOGRAM_PLAN.md](PACKED_HISTOGRAM_PLAN.md)
+- Reduce from 4 atomics → 1 atomic per pixel hit
+- Expected: 2-3× speedup
+- Risk: Potential overflow artifacts (needs testing)
+
+**Medium term: Visual testing and benchmarking**
+- Test packed format with 10+ different fractals
+- Benchmark at multiple zoom levels
+- Compare with Apophysis quality
+- Decision: ship, iterate, or revert
+
+**Long term: Adaptive quality mode (if needed)**
+- "Fast" mode: Packed histogram (potential artifacts)
+- "Quality" mode: Current 4-atomic approach (perfect)
+- User toggleable or auto-switch based on interaction
 
 ---
 
