@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
 Benchmark script for comparing performance across commits.
-Runs multiple iterations to account for variance.
+Runs multiple repeats to account for variance.
 Platform-agnostic (Windows/Linux/macOS).
+
+IMPORTANT: This script temporarily checks out different commits to benchmark them.
+It will return to the original branch when finished, but will NOT touch untracked
+files in your working directory. Benchmark results are stored in benchmark_results/.
 """
 
 import argparse
@@ -11,6 +15,7 @@ import sys
 import re
 import csv
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 import statistics
@@ -57,7 +62,7 @@ def extract_metadata(compare_output):
 
     return metadata
 
-def run_benchmark(commit_hash, commit_name, config_file, iterations, width, height, results_dir):
+def run_benchmark(commit_hash, commit_name, config_file, repeats, width, height, results_dir):
     """Run benchmark for a single commit."""
     print(f"\n{'='*60}")
     print(f"Testing: {commit_name}")
@@ -78,14 +83,14 @@ def run_benchmark(commit_hash, commit_name, config_file, iterations, width, heig
         print(f"❌ Build failed for {commit_hash}")
         return None
 
-    # Run benchmark iterations
+    # Run benchmark repeats
     times = []
     metadata_cache = None
 
-    for i in range(1, iterations + 1):
-        print(f"  Run {i}/{iterations}...", end=" ", flush=True)
+    for i in range(1, repeats + 1):
+        print(f"  Repeat {i}/{repeats}...", end=" ", flush=True)
 
-        output_file = results_dir / f"{commit_hash}_run{i}.png"
+        output_file = results_dir / f"{commit_hash}_repeat{i}.png"
 
         # Run export
         cmd = f"cargo run --release -- export -i {config_file} -o {output_file} --width {width} --height {height}"
@@ -127,15 +132,16 @@ def run_benchmark(commit_hash, commit_name, config_file, iterations, width, heig
     cv = (stddev / mean * 100) if mean > 0 else 0.0
 
     # Calculate throughput (Giter/sec)
-    total_iter = float(metadata_cache.get('total_iterations', 0))
-    throughput = (total_iter / (mean / 1000.0)) / 1_000_000_000.0 if mean > 0 else 0.0
+    total_iter = float(metadata_cache.get('total_iterations', 0)) if metadata_cache else 0
+    throughput = (total_iter / (mean / 1000.0)) / 1_000_000_000.0 if mean > 0 and total_iter > 0 else 0.0
 
     print("\nStatistics:")
     print(f"  Mean:       {mean:.2f} ms")
     print(f"  StdDev:     {stddev:.2f} ms ({cv:.2f}%)")
     print(f"  Min:        {min_time:.2f} ms")
     print(f"  Max:        {max_time:.2f} ms")
-    print(f"  Throughput: {throughput:.2f} Giter/sec")
+    if throughput > 0:
+        print(f"  Throughput: {throughput:.2f} Giter/sec")
 
     return {
         'mean': mean,
@@ -145,7 +151,7 @@ def run_benchmark(commit_hash, commit_name, config_file, iterations, width, heig
         'max': max_time,
         'throughput': throughput,
         'samples': len(times),
-        'metadata': metadata_cache
+        'metadata': metadata_cache if metadata_cache else {}
     }
 
 def main():
@@ -158,10 +164,10 @@ def main():
         help='Path to .fflame config file'
     )
     parser.add_argument(
-        '--iterations',
+        '--repeats',
         type=int,
         default=5,
-        help='Number of iterations per commit'
+        help='Number of benchmark repeats per commit (to measure variance)'
     )
     parser.add_argument(
         '--width',
@@ -202,16 +208,44 @@ def main():
     print("="*60)
     print("Fractal Flame Performance Benchmark")
     print("="*60)
-    print(f"Fractal:    {fractal_name}")
-    print(f"Config:     {args.config}")
-    print(f"Timestamp:  {timestamp}")
-    print(f"Platform:   {platform_name}")
-    print(f"Iterations: {args.iterations}")
-    print(f"Resolution: {resolution}")
+    print(f"Fractal:   {fractal_name}")
+    print(f"Config:    {args.config}")
+    print(f"Timestamp: {timestamp}")
+    print(f"Platform:  {platform_name}")
+    print(f"Repeats:   {args.repeats}")
+    print(f"Resolution:{resolution}")
+    print()
+    print()
+    print("⚠️  Safety check: Checking for uncommitted changes...")
 
-    # Store current branch
+    # Check for uncommitted changes to tracked files (would block checkout)
+    returncode, stdout, _ = run_command("git diff-index --quiet HEAD --")
+    has_changes = (returncode != 0)
+
+    if has_changes:
+        print("❌ ERROR: You have uncommitted changes to tracked files!")
+        print("   Git will not allow checkout and you would lose work.")
+        print()
+        print("   Please commit or stash your changes first:")
+        print("   - git add -A && git commit -m 'WIP'")
+        print("   - git stash push -m 'Before benchmark'")
+        print()
+        sys.exit(1)
+
+    print("✅ Working directory is clean - safe to proceed")
+    print()
+    print("⚠️  This script will temporarily checkout different commits.")
+    print("   It will return to your original branch when finished.")
+    print("   Untracked files in your working directory will NOT be touched.")
+
+    # Store current branch/commit
     returncode, stdout, _ = run_command("git rev-parse --abbrev-ref HEAD")
-    original_branch = stdout.strip()
+    original_ref = stdout.strip()
+
+    # If detached HEAD, get the commit hash instead
+    if original_ref == 'HEAD':
+        returncode, stdout, _ = run_command("git rev-parse HEAD")
+        original_ref = stdout.strip()
 
     # Initialize CSV
     csv_path = results_dir / 'benchmark_history.csv'
@@ -227,22 +261,33 @@ def main():
 
     # Run benchmarks
     results = []
-    for commit in commits:
-        result = run_benchmark(
-            commit['hash'],
-            commit['name'],
-            args.config,
-            args.iterations,
-            args.width,
-            args.height,
-            results_dir
-        )
+    try:
+        for commit in commits:
+            result = run_benchmark(
+                commit['hash'],
+                commit['name'],
+                args.config,
+                args.repeats,
+                args.width,
+                args.height,
+                results_dir
+            )
 
-        if result:
-            results.append({
-                'commit': commit,
-                'stats': result
-            })
+            if result:
+                results.append({
+                    'commit': commit,
+                    'stats': result
+                })
+    finally:
+        # ALWAYS return to original branch, even if benchmarks fail
+        print(f"\n{'='*60}")
+        print("Returning to original branch/commit...")
+        returncode, _, _ = run_command(f"git checkout {original_ref}")
+        if returncode != 0:
+            print(f"⚠️  WARNING: Failed to return to original ref: {original_ref}")
+            print("   You may need to manually checkout your branch.")
+        else:
+            print(f"✅ Returned to: {original_ref}")
 
     # Write results to CSV
     if results:
@@ -283,15 +328,12 @@ def main():
                 ]
                 writer.writerow(row)
 
-    # Return to original branch
-    print(f"\n{'='*60}")
-    print("Returning to original branch...")
-    run_command(f"git checkout {original_branch}")
-
-    print("\n✅ Benchmark complete!")
+    print()
+    print("✅ Benchmark complete!")
     print(f"Results saved to: {results_dir}")
     print(f"Benchmark History: {csv_path}")
-    print("\nAll benchmark data is appended to benchmark_history.csv for long-term tracking.")
+    print()
+    print("All benchmark data is appended to benchmark_history.csv for long-term tracking.")
 
 if __name__ == '__main__':
     main()
