@@ -129,10 +129,16 @@ def run_benchmark(commit_hash, commit_name, config_file, repeats, width, height,
         print("❌ No successful runs")
         return None
 
-    mean = statistics.mean(times)
-    stddev = statistics.stdev(times) if len(times) > 1 else 0.0
-    min_time = min(times)
-    max_time = max(times)
+    # Discard first run as warmup if we have multiple runs
+    times_for_stats = times[1:] if len(times) > 1 else times
+
+    if len(times) > 1:
+        print(f"  (Discarding first run as warmup: {times[0]:.2f}ms)")
+
+    mean = statistics.mean(times_for_stats)
+    stddev = statistics.stdev(times_for_stats) if len(times_for_stats) > 1 else 0.0
+    min_time = min(times_for_stats)
+    max_time = max(times_for_stats)
     cv = (stddev / mean * 100) if mean > 0 else 0.0
 
     # Calculate throughput (Giter/sec)
@@ -195,9 +201,9 @@ def main():
 
     # Commits to benchmark (excluding current)
     past_commits = [
-        {'hash': 'dd80003', 'name': 'Before Histogram (textureStore)'},
+        # {'hash': 'dd80003', 'name': 'Before Histogram (textureStore)'},  # Commented out - too slow
         {'hash': 'ef0cdd8', 'name': 'Histogram Fixed (naive atomic)'},
-        {'hash': '06bfcab', 'name': 'Histogram + Local Cache (reverted)'},
+        # {'hash': '06bfcab', 'name': 'Histogram + Local Cache (reverted)'},  # Commented out - catastrophic regression
     ]
 
     # Setup
