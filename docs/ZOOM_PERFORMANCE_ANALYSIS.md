@@ -1,5 +1,9 @@
 # Zoom Performance Analysis
 
+**⚠️ NOTE:** This document contains historical benchmark findings. The initial interpretation about zoom causing performance issues was INCORRECT. See [ZOOM_OPTIMIZATION_ANALYSIS.md](ZOOM_OPTIMIZATION_ANALYSIS.md) for the corrected understanding.
+
+**TL;DR:** Zoom has NO performance impact. Render time is purely a function of iteration count. The test configs happened to have higher `max_iterations` at higher zoom (coincidence, not causation).
+
 ## Benchmark Findings (2025-10-26)
 
 ### CRITICAL: Local Cache Performance Regression
