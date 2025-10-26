@@ -194,6 +194,12 @@ pub struct FlameBuffers {
     pub temp_samples_texture: Texture,
     pub temp_samples_view: TextureView,
 
+    // Histogram textures for atomic color accumulation (within-frame)
+    pub histogram_color_texture: Texture,
+    pub histogram_color_view: TextureView,
+    pub histogram_density_texture: Texture,
+    pub histogram_density_view: TextureView,
+
     // Palette texture (1D)
     pub palette_texture: Texture,
     pub palette_view: TextureView,
@@ -333,6 +339,30 @@ impl FlameBuffers {
         // Create temp samples texture (written by trajectory shader)
         let (temp_samples_texture, temp_samples_view) = create_accum_texture("Temp Samples Texture");
 
+        // Create histogram textures for atomic color accumulation
+        // These use integer formats to support atomic operations
+        let create_histogram_texture = |label: &str, format: TextureFormat| {
+            let texture = device.create_texture(&TextureDescriptor {
+                label: Some(label),
+                size: Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format,
+                usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&TextureViewDescriptor::default());
+            (texture, view)
+        };
+
+        let (histogram_color_texture, histogram_color_view) = create_histogram_texture("Histogram Color", TextureFormat::Rgba32Uint);
+        let (histogram_density_texture, histogram_density_view) = create_histogram_texture("Histogram Density", TextureFormat::R32Uint);
+
         // Create palette texture (1D, 256 samples)
         // Use Rgba8Unorm for efficient, standard color storage
         let default_palette = Palette::fire(); // Default palette
@@ -460,6 +490,10 @@ impl FlameBuffers {
             accumulation_view_b,
             temp_samples_texture,
             temp_samples_view,
+            histogram_color_texture,
+            histogram_color_view,
+            histogram_density_texture,
+            histogram_density_view,
             palette_texture,
             palette_view,
             curve_lut_texture,
@@ -485,6 +519,8 @@ impl FlameBuffers {
             encoder.clear_texture(&self.accumulation_texture_a, &range);
             encoder.clear_texture(&self.accumulation_texture_b, &range);
             encoder.clear_texture(&self.temp_samples_texture, &range);
+            encoder.clear_texture(&self.histogram_color_texture, &range);
+            encoder.clear_texture(&self.histogram_density_texture, &range);
         }
 
         // WASM: Clear textures by rendering black to them
