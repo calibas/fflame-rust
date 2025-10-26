@@ -1,6 +1,42 @@
 # Workgroup-Local Histogram Implementation Plan
 
-## Executive Summary
+## ✅ IMPLEMENTED - Performance Results
+
+**Implementation Date:** 2025-10-26
+
+**Approach Used:** Per-thread local cache (16 pixels per thread)
+**Alternative Considered:** Workgroup shared memory (rejected due to size constraints)
+
+### Measured Performance (Quantified)
+
+**Test Configuration:**
+- Resolution: 1920×1080 (2.07M pixels)
+- Total Iterations: 1 billion (1,000,341,504)
+- Iterations/Thread: 256
+- Test Case: Spherical variation
+
+**Baseline (Before Histogram):**
+- Implementation: Direct textureStore (race conditions, quality issues)
+- Render Time: 159.84ms
+- Throughput: 6.26 Giter/sec
+- Git Hash: `ce41484` (commit a376488)
+
+**Current (Histogram + Local Cache):**
+- Implementation: Histogram with 16-pixel per-thread cache
+- Render Time: 146.39ms
+- Throughput: 6.83 Giter/sec
+- Git Hash: `406b0d9`
+
+**Performance Improvement:**
+- **9% faster** than old textureStore approach (1.09× speedup)
+- Apophysis-quality rendering maintained (proper accumulation)
+- No visual artifacts or color noise
+
+**Conclusion:** Per-thread local cache **exceeded expectations** - not only recovered the performance loss but actually improved performance beyond the baseline while maintaining correct rendering quality.
+
+---
+
+## Executive Summary (Original Plan)
 
 **Goal:** Reduce atomic contention by accumulating to workgroup-local memory first, then merging to global histogram.
 
