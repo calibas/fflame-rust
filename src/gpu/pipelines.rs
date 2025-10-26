@@ -50,14 +50,14 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Accumulation texture (storage, write-only)
+                // Histogram buffer (storage, read-write for atomics)
                 BindGroupLayoutEntry {
                     binding: 2,
                     visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::StorageTexture {
-                        access: StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::Rgba16Float,
-                        view_dimension: TextureViewDimension::D2,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
                     count: None,
                 },
@@ -164,14 +164,14 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // New samples (sampled texture)
+                // Histogram buffer (storage, read-only)
                 BindGroupLayoutEntry {
                     binding: 1,
                     visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
                     count: None,
                 },
@@ -304,7 +304,7 @@ impl FlamePipelines {
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: BindingResource::TextureView(&buffers.temp_samples_view),
+                    resource: buffers.histogram_buffer.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 3,
@@ -338,7 +338,7 @@ impl FlamePipelines {
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: BindingResource::TextureView(&buffers.temp_samples_view),
+                    resource: buffers.histogram_buffer.as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 2,

@@ -91,23 +91,76 @@ fn main() -> Result<()> {
     // Display metadata comparison
     if let (Some(ref m1), Some(ref m2)) = (&metadata1, &metadata2) {
         println!("Metadata Comparison:");
-        println!("  Image 1: v{} ({})", m1.version, m1.git_hash);
-        println!("  Image 2: v{} ({})", m2.version, m2.git_hash);
+        println!("====================");
 
-        if m1.git_hash != m2.git_hash {
-            println!("  ⚠ Different git commits!");
+        // Build Info
+        println!("\nBuild Information:");
+        compare_field("  Version", &m1.version, &m2.version);
+        compare_field("  Git Hash", &m1.git_hash, &m2.git_hash);
+        compare_field("  Git Branch", &m1.git_branch, &m2.git_branch);
+        compare_field("  Build Time", &m1.build_timestamp, &m2.build_timestamp);
+        compare_field("  Platform", &m1.platform, &m2.platform);
+        compare_field("  Rustc Version", &m1.rustc_version, &m2.rustc_version);
+        compare_field("  Build Profile", &m1.build_profile, &m2.build_profile);
+
+        // Render Settings
+        println!("\nRender Settings:");
+        compare_field("  Resolution", &format!("{}x{}", m1.width, m1.height), &format!("{}x{}", m2.width, m2.height));
+        compare_field("  Total Iterations", &m1.total_iterations.to_string(), &m2.total_iterations.to_string());
+        compare_field("  Iterations/Thread", &m1.iterations_per_thread.to_string(), &m2.iterations_per_thread.to_string());
+        compare_field("  Speed Factor", &format!("{:.2}", m1.speed_factor), &format!("{:.2}", m2.speed_factor));
+        compare_field("  Render Time", &format!("{:.2}ms", m1.render_time_ms), &format!("{:.2}ms", m2.render_time_ms));
+
+        // Performance calculation
+        if m1.total_iterations == m2.total_iterations {
+            let throughput1 = m1.total_iterations as f64 / (m1.render_time_ms / 1000.0);
+            let throughput2 = m2.total_iterations as f64 / (m2.render_time_ms / 1000.0);
+            println!("  Throughput 1: {:.2} M iter/sec", throughput1 / 1_000_000.0);
+            println!("  Throughput 2: {:.2} M iter/sec", throughput2 / 1_000_000.0);
+            let speedup = throughput2 / throughput1;
+            if speedup > 1.0 {
+                println!("  ⚡ Image 2 is {:.2}× FASTER", speedup);
+            } else if speedup < 1.0 {
+                println!("  🐌 Image 2 is {:.2}× SLOWER", 1.0 / speedup);
+            } else {
+                println!("  ⚖ Same performance");
+            }
         }
 
-        println!("  Iterations: {} vs {}", m1.total_iterations, m2.total_iterations);
-        println!("  Render time: {:.2}ms vs {:.2}ms", m1.render_time_ms, m2.render_time_ms);
-        println!("  Iterations/thread: {} vs {}", m1.iterations_per_thread, m2.iterations_per_thread);
-        println!("  Speed factor: {:.2}x vs {:.2}x", m1.speed_factor, m2.speed_factor);
+        // Display Settings
+        println!("\nDisplay Settings:");
+        compare_field("  Background",
+            &format!("[{:.3}, {:.3}, {:.3}]", m1.background_color[0], m1.background_color[1], m1.background_color[2]),
+            &format!("[{:.3}, {:.3}, {:.3}]", m2.background_color[0], m2.background_color[1], m2.background_color[2]));
+        compare_field("  Exposure", &format!("{:.2}", m1.exposure), &format!("{:.2}", m2.exposure));
+        compare_field("  Gamma", &format!("{:.2}", m1.gamma), &format!("{:.2}", m2.gamma));
+        compare_field("  Use Tone Curve", &m1.use_tone_curve.to_string(), &m2.use_tone_curve.to_string());
+
+        // Render Mode
+        println!("\nRender Mode:");
+        compare_field("  Mode", &m1.render_mode, &m2.render_mode);
+        compare_field("  Projection", &m1.projection, &m2.projection);
+        compare_field("  Variations", &m1.shader_variations_count.to_string(), &m2.shader_variations_count.to_string());
 
         if m1.shader_compile_time_ms.is_some() || m2.shader_compile_time_ms.is_some() {
-            println!("  Shader compile time: {} vs {}",
-                m1.shader_compile_time_ms.map(|t| format!("{:.2}ms", t)).unwrap_or("N/A".to_string()),
-                m2.shader_compile_time_ms.map(|t| format!("{:.2}ms", t)).unwrap_or("N/A".to_string())
-            );
+            compare_field("  Shader Compile",
+                &m1.shader_compile_time_ms.map(|t| format!("{:.2}ms", t)).unwrap_or("N/A".to_string()),
+                &m2.shader_compile_time_ms.map(|t| format!("{:.2}ms", t)).unwrap_or("N/A".to_string()));
+        }
+
+        // Config Checksum
+        println!("\nConfiguration:");
+        compare_field("  Checksum", &m1.config_checksum, &m2.config_checksum);
+
+        // Test Metadata
+        if m1.test_name.is_some() || m2.test_name.is_some() {
+            println!("\nTest Metadata:");
+            compare_field("  Test Name",
+                &m1.test_name.as_deref().unwrap_or("N/A"),
+                &m2.test_name.as_deref().unwrap_or("N/A"));
+            compare_field("  Test Category",
+                &m1.test_category.as_deref().unwrap_or("N/A"),
+                &m2.test_category.as_deref().unwrap_or("N/A"));
         }
 
         println!();
@@ -416,4 +469,13 @@ fn calculate_color_stats(img: &ImageBuffer<Rgba<u8>, Vec<u8>>, threshold: u8) ->
     let avg_intensity = sum_intensity as f64 / total_pixels;
 
     (avg_intensity, bright_pixels)
+}
+
+/// Helper function to compare and display a field
+fn compare_field(name: &str, val1: &str, val2: &str) {
+    if val1 == val2 {
+        println!("{}: {} ✓", name, val1);
+    } else {
+        println!("{}: {} ≠ {} ✗", name, val1, val2);
+    }
 }
