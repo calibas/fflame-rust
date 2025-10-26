@@ -67,21 +67,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     final_color = color;
                 }
 
-                // Atomic accumulation to histogram buffer (PACKED)
-                // Pack RGBA+density into single u32 (8 bits each)
+                // Atomic accumulation to histogram buffer (U16 PACKED)
+                // Pack RGBA as 4× u16 into 2× u32 (fixed-point integers)
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
+                let base_idx = pixel_idx * 2u;
 
-                // Convert color to 8-bit values (0-255) with saturation
-                let r8 = min(u32(clamp(final_color.r, 0.0, 1.0) * 255.0), 255u);
-                let g8 = min(u32(clamp(final_color.g, 0.0, 1.0) * 255.0), 255u);
-                let b8 = min(u32(clamp(final_color.b, 0.0, 1.0) * 255.0), 255u);
-                let density8 = 1u;  // Each hit contributes 1 to density
+                // Convert colors to u16 fixed-point (0-100 range)
+                // Scale chosen to prevent overflow: 65535 / 100 = 655 max hits
+                // At full brightness (1.0), can accumulate 655 hits before overflow
+                let color_scale = 100.0;
+                let r16 = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
+                let g16 = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
+                let b16 = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
+                let d16 = 1u;  // Density increment
 
-                // Pack into single u32: [R:0-7][G:8-15][B:16-23][D:24-31]
-                let packed = r8 | (g8 << 8u) | (b8 << 16u) | (density8 << 24u);
+                // Pack 2× u16 into each u32 using bit shifts
+                let packed_rg = r16 | (g16 << 16u);
+                let packed_bd = b16 | (d16 << 16u);
 
-                // Single atomic operation (4× reduction from unpacked!)
-                atomicAdd(&histogram[pixel_idx], packed);
+                // Two atomic operations (atomicAdd works correctly on packed u16!)
+                atomicAdd(&histogram[base_idx + 0u], packed_rg);
+                atomicAdd(&histogram[base_idx + 1u], packed_bd);
             }
         }
     }
