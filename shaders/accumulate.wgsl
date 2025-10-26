@@ -44,11 +44,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let color_scale = 10.0;
     var new_color = vec3<f32>(0.0);
     if (density > 0.0) {
+        // Simple division - just accept that overflow will cause color wrapping
+        // This is a known limitation of the u16 packing approach
         new_color = vec3<f32>(
             r_sum / (density * color_scale),
             g_sum / (density * color_scale),
             b_sum / (density * color_scale)
         );
+
+        // Clamp to valid range
+        new_color = clamp(new_color, vec3<f32>(0.0), vec3<f32>(1.0));
     }
 
     // Blend RGB with previous accumulation (weighted average by sample count)

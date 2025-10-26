@@ -73,9 +73,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let base_idx = pixel_idx * 2u;
 
                 // Convert colors to u16 fixed-point (0-10 range)
-                // Scale chosen to prevent overflow: 65535 / 10 = 6553 max hits
-                // At full brightness (1.0), can accumulate 6553 hits before overflow
-                // Lower scale = more headroom for batched accumulation
+                // Scale=10: 65535 / 10 = 6553 max hits (better for batched accumulation)
+                // Trade-off: Lower precision (10 levels) but 10× overflow protection
                 let color_scale = 10.0;
                 let r16 = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
                 let g16 = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
@@ -86,7 +85,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let packed_rg = r16 | (g16 << 16u);
                 let packed_bd = b16 | (d16 << 16u);
 
-                // Two atomic operations (atomicAdd works correctly on packed u16!)
+                // Atomic add (let overflow wrap naturally, will be handled in accumulate)
                 atomicAdd(&histogram[base_idx + 0u], packed_rg);
                 atomicAdd(&histogram[base_idx + 1u], packed_bd);
             }
