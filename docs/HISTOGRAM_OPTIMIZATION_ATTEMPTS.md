@@ -199,67 +199,65 @@ To better understand the bottleneck:
 
 ---
 
-## Current Status (2025-10-26)
+## Final Status (2025-10-26)
 
-### Atomic Bottleneck Hypothesis - CONFIRMED ✅
+### ✅ COMPLETED: u16 Fixed-Point Packing (commit 286fadb)
 
-**Controlled test revealed 10% performance difference from atomic count:**
-- Low zoom (1.0): 6510ms (more atomics, 95% viewport hit rate)
-- High zoom (25.5): 5904ms (fewer atomics, 1.5% viewport hit rate)
+**Problem Solved:** Atomic operations were the bottleneck (confirmed via testing)
 
-**Packed histogram test PROVED the hypothesis:**
-- Implemented u8 packing (4 atomics → 1)
-- Result: **5810ms → 4998ms (14% faster!)**
-- Conclusion: **Atomic operations ARE the bottleneck**
+**Final Solution:** Pack RGBA+density as 4× u16 fixed-point integers into 2× u32
+- Scale: 100 (allows 655 hits before overflow)
+- Precision: 1% quantization (imperceptible)
+- Atomics: 2 per pixel (down from 4)
 
-### Issue Solved: Overflow Artifacts ✅
+### Benchmark Results (2025-10-26 12:18:18)
 
-**Problem (u8 packing):** Color corruption in bright areas
-- Overflow occurred after ~256 hits per channel
-- atomicAdd on packed u32 caused bit field overflow
+| Approach | Time | vs Naive | Quality | Notes |
+|----------|------|----------|---------|-------|
+| **u16 packed (scale=100)** | **5335ms** | **-13.8%** ✅ | Perfect ✅ | **FINAL** |
+| Naive atomic (4 atomics) | 6191ms | baseline | Perfect ✅ | Original |
+| u8 packed (scale=255) | 4998ms | -19.3% | Broken ❌ | Overflow |
+| f16 packed (pack2x16float) | 5248ms | -15.2% | Broken ❌ | Bit corruption |
 
-**Solution (f16 packing):** Use half-precision floats instead
-- Pack RGBA as 4× f16 into 2× u32
-- 2 atomic operations per pixel (down from 4)
-- No overflow (f16 range: ±65504)
-- HDR support (values > 1.0 preserved)
+**Winner:** u16 fixed-point packing with scale=100
 
-**Status:** ✅ **VALIDATED AND APPROVED** (commit 27396e7)
+### Why This Works
 
-### Benchmark Results (2025-10-26 11:38:43)
+1. **Fixed-point integers** work correctly with `atomicAdd` (unlike floats)
+2. **Scale=100** prevents overflow (655 hits at full brightness)
+3. **1% precision** is sufficient for visual quality
+4. **2× atomic reduction** provides 13.8% speedup
+5. **50% memory reduction** (16 MB vs 31 MB @ 1080p)
 
-| Approach | Time | vs Naive | Quality | HDR |
-|----------|------|----------|---------|-----|
-| **f16 packed** | **5248ms** | **-11.5%** ✅ | Perfect | ✅ |
-| u8 packed | 4998ms | -14.0% | Artifacts ❌ | ❌ |
-| Naive atomic | 5933ms | baseline | Perfect | ✅ |
-| textureStore | 6966ms | +17.4% | Broken | ❌ |
+### Why Other Approaches Failed
 
-**Winner:** f16 packed delivers 11.5% speedup with perfect quality + HDR support
+- **u8 packing:** Overflow at 256 hits → grey artifacts
+- **f16 packing:** Integer addition on float bits → psychedelic noise
+- **Local cache:** Cache overhead > atomic cost → 50%+ regression
 
-## Recommendations (Updated 2025-10-26)
+### Investigation Summary
 
-**✅ COMPLETED AND VALIDATED: f16 packed format**
-- Implemented in commit 51f05cb
-- Validated in commit 27396e7 (benchmark results)
-- Pack RGBA as 4× f16 into 2× u32
-- Reduced from 4 atomics → 2 atomics (50% reduction)
-- **Actual result:** **11.5% speedup vs naive** (exceeded 7-10% target!)
-- **Benefits achieved:**
-  - ✅ No overflow (f16 range: ±65504)
-  - ✅ HDR support for tone mapping (user requirement met)
-  - ✅ Perfect visual quality (no artifacts)
-  - ✅ 50% memory reduction (16 MB vs 31 MB @ 1080p)
+**Key Discovery:** Zoom affects atomic count, not computation
+- Low zoom (1.0): 95% hit rate → more atomics → slower
+- High zoom (25.5): 1.5% hit rate → fewer atomics → faster
+- ~10% performance difference proves atomic bottleneck
 
-**Status: READY FOR MERGE TO MAIN** 🎯
+**Solution Validation:** Packed atomics confirmed the hypothesis
+- u8 packed: 14% faster (but broken)
+- u16 packed: 13.8% faster (working!)
 
-The f16 packed histogram is the optimal solution:
-- Performance: 11.5% faster than naive
-- Quality: Identical to naive (perfect)
-- HDR: Full color depth preserved
-- Memory: 50% smaller buffer
+## Recommendations (Final)
 
-**No further optimization needed** - this achieves all goals.
+**✅ READY TO MERGE TO MAIN**
+
+The u16 packed histogram (scale=100) achieves all goals:
+- ✅ **13.8% performance improvement** (855ms faster)
+- ✅ **Perfect visual quality** (no artifacts, no noise)
+- ✅ **Memory efficient** (50% buffer reduction)
+- ✅ **Stable timings** (0.25% CV)
+- ✅ **Sufficient overflow headroom** (655 hits at full brightness)
+
+**See:** `docs/HISTOGRAM_OPTIMIZATION_SUMMARY.md` for complete analysis.
 
 ---
 
