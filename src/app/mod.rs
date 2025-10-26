@@ -144,7 +144,7 @@ impl App {
             speed_multiplier: 1, // Default 1x (60 FPS)
             last_frame_time: None,
             // Batched accumulation: 1 = normal (every frame), 4 = experimental batching
-            accumulation_batch_size: 1,
+            accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
         };
 
