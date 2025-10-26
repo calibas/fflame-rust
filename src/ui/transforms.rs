@@ -80,7 +80,7 @@ pub fn render_transforms_window(
 
                                 ui.separator();
                                 ui.label("Weight");
-                                if ui.add(egui::Slider::new(&mut transform.weight, 0.0..=2.0)).changed() {
+                                if ui.add(egui::Slider::new(&mut transform.weight, 0.0..=1024.0).logarithmic(true)).changed() {
                                     *flame_changed = true;
                                 }
 
