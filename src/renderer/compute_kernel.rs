@@ -94,7 +94,7 @@ impl FlameRenderer {
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
 
         // Clear accumulation buffers
-        self.buffers.clear_all(encoder);
+        self.buffers.clear_all(encoder, _queue);
 
         // Note: We don't update params here because update_flame() already set them correctly.
         // Updating params here would overwrite num_transforms which was just set by update_flame().
@@ -143,8 +143,8 @@ impl FlameRenderer {
         let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
         self.total_iterations += samples_this_frame;
 
-        // Clear temp samples texture before rendering new samples
-        self.buffers.clear_temp(encoder);
+        // Clear histogram buffer before rendering new samples
+        self.buffers.clear_histogram(encoder);
 
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
             label: Some("Flame Compute Pass"),
@@ -297,7 +297,7 @@ impl FlameRenderer {
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
-        self.buffers.clear_all(encoder);
+        self.buffers.clear_all(encoder, queue);
         self.samples_accumulated = 0;
         self.total_iterations = 0;
     }
