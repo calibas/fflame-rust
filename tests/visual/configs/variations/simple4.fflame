@@ -1,0 +1,146 @@
+{
+  "flame": {
+    "name": "Simple",
+    "transforms": [
+      {
+        "a": 1.42,
+        "b": 0.25477183,
+        "c": -0.21317983,
+        "d": 1.6559072,
+        "e": 0.13,
+        "f": -3.7252903e-9,
+        "g": 0.0,
+        "weight": 1.0,
+        "variations": {
+          "linear": 0.8,
+          "sinusoidal": 0.2
+        },
+        "variation_params": {},
+        "color": [
+          1.0,
+          0.2,
+          0.2
+        ],
+        "color_speed": 0.5
+      },
+      {
+        "a": 0.6,
+        "b": -0.3,
+        "c": 0.3,
+        "d": 0.6,
+        "e": 0.0,
+        "f": 0.0,
+        "g": 0.0,
+        "weight": 1.0,
+        "variations": {
+          "linear": 0.6,
+          "swirl": 0.4
+        },
+        "variation_params": {},
+        "color": [
+          0.2,
+          0.2,
+          1.0
+        ],
+        "color_speed": 0.5
+      }
+    ],
+    "render_mode": "TwoD",
+    "projection": "Orthographic"
+  },
+  "zoom": 21.113787,
+  "pan_x": 0.25303945,
+  "pan_y": 0.010123147,
+  "rotation": 1.5707964,
+  "camera_rotation_x": 0.0,
+  "camera_rotation_y": 0.0,
+  "density_scale": 1.5,
+  "speed_factor": 0.5,
+  "max_iterations": 10000000000,
+  "color_mode": "Speed",
+  "palette_index": 4,
+  "palette": {
+    "name": "Rainbow (Custom)",
+    "stops": [
+      {
+        "position": 0.0,
+        "color": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "position": 0.05882353,
+        "color": [
+          1.0,
+          0.5,
+          0.0
+        ]
+      },
+      {
+        "position": 0.13725491,
+        "color": [
+          1.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "position": 0.21568628,
+        "color": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "position": 0.3137255,
+        "color": [
+          0.0,
+          0.5,
+          1.0
+        ]
+      },
+      {
+        "position": 0.3529412,
+        "color": [
+          0.44018763,
+          0.0,
+          0.88037527
+        ]
+      },
+      {
+        "position": 0.4117647,
+        "color": [
+          0.09358759,
+          0.0,
+          0.04679375
+        ]
+      }
+    ],
+    "locked": false
+  },
+  "background_color": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "tonemap_mode": "Linear",
+  "tonemap_curve": {
+    "points": [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ]
+  },
+  "use_curve": false,
+  "exposure": 1.4,
+  "gamma": 1.3,
+  "deterministic_rng": true
+}
