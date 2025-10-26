@@ -68,8 +68,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     final_color = color;
                 }
 
-                // Write to texture with small alpha for density accumulation
-                textureStore(output_texture, pixel, vec4<f32>(final_color, 0.01));
+                // Atomic accumulation to histogram buffer
+                // Calculate pixel index in buffer: [r, g, b, density] × (width × height)
+                let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
+                let base_idx = pixel_idx * 4u;
+
+                // Scale color to integers (0.0-1.0 → 0-10000 for precision)
+                let color_scale = 10000.0;
+                let r = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
+                let g = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
+                let b = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
+
+                // Atomic add (thread-safe!)
+                atomicAdd(&histogram[base_idx + 0u], r);
+                atomicAdd(&histogram[base_idx + 1u], g);
+                atomicAdd(&histogram[base_idx + 2u], b);
+                atomicAdd(&histogram[base_idx + 3u], 1u);  // density
             }
         }
     }

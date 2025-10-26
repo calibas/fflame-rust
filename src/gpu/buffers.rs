@@ -194,11 +194,9 @@ pub struct FlameBuffers {
     pub temp_samples_texture: Texture,
     pub temp_samples_view: TextureView,
 
-    // Histogram textures for atomic color accumulation (within-frame)
-    pub histogram_color_texture: Texture,
-    pub histogram_color_view: TextureView,
-    pub histogram_density_texture: Texture,
-    pub histogram_density_view: TextureView,
+    // Histogram storage buffer for atomic color accumulation (within-frame)
+    // Layout: [r, g, b, density] × (width × height) as u32 array
+    pub histogram_buffer: Buffer,
 
     // Palette texture (1D)
     pub palette_texture: Texture,
@@ -339,29 +337,16 @@ impl FlameBuffers {
         // Create temp samples texture (written by trajectory shader)
         let (temp_samples_texture, temp_samples_view) = create_accum_texture("Temp Samples Texture");
 
-        // Create histogram textures for atomic color accumulation
-        // These use integer formats to support atomic operations
-        let create_histogram_texture = |label: &str, format: TextureFormat| {
-            let texture = device.create_texture(&TextureDescriptor {
-                label: Some(label),
-                size: Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format,
-                usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&TextureViewDescriptor::default());
-            (texture, view)
-        };
-
-        let (histogram_color_texture, histogram_color_view) = create_histogram_texture("Histogram Color", TextureFormat::Rgba32Uint);
-        let (histogram_density_texture, histogram_density_view) = create_histogram_texture("Histogram Density", TextureFormat::R32Uint);
+        // Create histogram storage buffer for atomic color accumulation
+        // Buffer layout: [r, g, b, density] for each pixel (4 u32s per pixel)
+        // Size: width × height × 4 × sizeof(u32)
+        let histogram_buffer_size = (width * height * 4 * std::mem::size_of::<u32>() as u32) as u64;
+        let histogram_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Histogram Buffer"),
+            size: histogram_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         // Create palette texture (1D, 256 samples)
         // Use Rgba8Unorm for efficient, standard color storage
@@ -490,10 +475,7 @@ impl FlameBuffers {
             accumulation_view_b,
             temp_samples_texture,
             temp_samples_view,
-            histogram_color_texture,
-            histogram_color_view,
-            histogram_density_texture,
-            histogram_density_view,
+            histogram_buffer,
             palette_texture,
             palette_view,
             curve_lut_texture,
@@ -505,7 +487,7 @@ impl FlameBuffers {
     }
 
     /// Clear all accumulation buffers
-    pub fn clear_all(&self, encoder: &mut CommandEncoder) {
+    pub fn clear_all(&self, encoder: &mut CommandEncoder, queue: &Queue) {
         // Use CLEAR_TEXTURE feature if available (desktop usually has it)
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -519,8 +501,6 @@ impl FlameBuffers {
             encoder.clear_texture(&self.accumulation_texture_a, &range);
             encoder.clear_texture(&self.accumulation_texture_b, &range);
             encoder.clear_texture(&self.temp_samples_texture, &range);
-            encoder.clear_texture(&self.histogram_color_texture, &range);
-            encoder.clear_texture(&self.histogram_density_texture, &range);
         }
 
         // WASM: Clear textures by rendering black to them
@@ -531,6 +511,10 @@ impl FlameBuffers {
             self.clear_texture_wasm(encoder, &self.accumulation_view_b);
             self.clear_texture_wasm(encoder, &self.temp_samples_view);
         }
+
+        // Clear histogram buffer (zero out all pixels)
+        // Note: This is done via queue.write_buffer to avoid encoder ordering issues
+        encoder.clear_buffer(&self.histogram_buffer, 0, None);
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -560,28 +544,10 @@ impl FlameBuffers {
         drop(render_pass); // End the render pass immediately
     }
 
-    /// Clear temp samples texture only
-    pub fn clear_temp(&self, encoder: &mut CommandEncoder) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            encoder.clear_texture(
-                &self.temp_samples_texture,
-                &ImageSubresourceRange {
-                    aspect: TextureAspect::All,
-                    base_mip_level: 0,
-                    mip_level_count: None,
-                    base_array_layer: 0,
-                    array_layer_count: None,
-                },
-            );
-        }
-
-        // WASM: Don't clear temp texture - it's a storage texture that can't be cleared with render pass
-        // The trajectory compute shader writes to all pixels anyway, so clearing isn't necessary
-        #[cfg(target_arch = "wasm32")]
-        {
-            // No-op for WASM
-        }
+    /// Clear histogram buffer only (before each compute pass)
+    pub fn clear_histogram(&self, encoder: &mut CommandEncoder) {
+        // Clear histogram buffer to zero for new frame
+        encoder.clear_buffer(&self.histogram_buffer, 0, None);
     }
 
     /// Get the current accumulation texture view (for display)
