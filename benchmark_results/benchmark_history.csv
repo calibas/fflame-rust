@@ -15,3 +15,7 @@ Timestamp,Fractal,ConfigFile,Resolution,Platform,Commit,CommitName,TotalIteratio
 2025-10-26 09:08:18,simple3,output/simple3.fflame,1920x1080,Windows,dd80003,Before Histogram (textureStore),,,,128,7387.78,1035.97,14.02,6534.59,9124.08,0.00,5,,
 2025-10-26 09:08:18,simple3,output/simple3.fflame,1920x1080,Windows,ef0cdd8,Histogram Fixed (naive atomic),,,,128,5899.89,22.42,0.38,5879.75,5938.28,0.00,5,,
 2025-10-26 09:08:18,simple3,output/simple3.fflame,1920x1080,Windows,06bfcab,Histogram + Local Cache (current),39812333568,256,0.90,128,9030.28,211.76,2.34,8788.08,9353.63,4.41,5,1.87.0,release
+2025-10-26 09:53:31,simple4,output/simple4.fflame,1920x1080,Windows,5bc2c17,"TOOL: Benchmark current commit first, then past commits",10001317888,256,0.50,128,1339.56,44.15,3.30,1307.73,1416.28,7.47,5,1.87.0,release
+2025-10-26 09:53:31,simple4,output/simple4.fflame,1920x1080,Windows,dd80003,Before Histogram (textureStore),,,,128,1416.86,10.92,0.77,1405.47,1432.72,0.00,5,,
+2025-10-26 09:53:31,simple4,output/simple4.fflame,1920x1080,Windows,ef0cdd8,Histogram Fixed (naive atomic),,,,128,1344.19,26.28,1.95,1319.98,1386.19,0.00,5,,
+2025-10-26 09:53:31,simple4,output/simple4.fflame,1920x1080,Windows,06bfcab,Histogram + Local Cache (reverted),10001317888,256,0.50,128,1543.95,7.76,0.50,1537.26,1556.12,6.48,5,1.87.0,release
