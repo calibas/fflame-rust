@@ -2,28 +2,52 @@
 
 ## Benchmark Findings (2025-10-26)
 
-### Performance vs Zoom Correlation
+### CRITICAL: Local Cache Performance Regression
 
-Benchmark data shows **counter-intuitive performance characteristics** with zoom levels:
+**Benchmark data reveals the 16-pixel local cache optimization is a COMPLETE REGRESSION:**
 
-| Fractal | Zoom | textureStore (ms) | Histogram Naive (ms) | Histogram+Cache (ms) | Histogram Speedup |
-|---------|------|-------------------|----------------------|----------------------|-------------------|
-| complex | 1.0  | 161.40            | 168.47               | 170.11               | **-4.4% (slower)** |
-| simple4 | 21.1 | 1456.81           | 1341.20              | 1536.17              | **+8.0% (faster)** |
-| simple3 | 25.5 | 7387.78           | 5899.89              | 9030.28              | **+20.1% (faster!)** |
+| Fractal | Zoom | textureStore (ms) | Histogram Naive (ms) | **Histogram+Cache (ms)** | Cache vs Naive | Cache vs textureStore |
+|---------|------|-------------------|----------------------|--------------------------|----------------|----------------------|
+| complex | 1.0  | 162.75            | 169.96               | **171.58**               | **-0.9% (slower!)** | **-5.4% (slower)** |
+| simple4 | 21.1 | 1456.81           | 1341.20              | **1536.17**              | **-14.5% (WORSE!)** | **-5.4% (slower)** |
+| simple3 | 25.5 | 7387.78           | 5899.89              | **9030.28**              | **-53% (DISASTER!)** | **-22.2% (slower)** |
 
 ### Key Observations
 
-1. **At low zoom (1.0)**: Histogram is ~5% slower than textureStore
-2. **At high zoom (21-25)**: Histogram becomes **significantly faster** than textureStore
-3. **Render time increases dramatically with zoom**:
-   - Zoom 1.0: ~160ms
-   - Zoom 21.1: ~1400ms (8.75× slower)
-   - Zoom 25.5: ~7000ms (43× slower!)
+1. **Local cache makes performance WORSE in ALL cases**
+2. **At low zoom (1.0)**: Cache is 0.9% slower than naive histogram
+3. **At high zoom (21-25)**: Cache becomes **catastrophically slower** (14-53% regression!)
+4. **Naive histogram WITHOUT cache is actually faster than textureStore at high zoom**:
+   - Zoom 21.1: Naive is **8% faster** than textureStore ✅
+   - Zoom 25.5: Naive is **20% faster** than textureStore ✅
+5. **The cache destroys this advantage**:
+   - Zoom 21.1: Cache is **15% slower** than textureStore ❌
+   - Zoom 25.5: Cache is **22% slower** than textureStore ❌
+
+### Why Does the Local Cache Fail?
+
+**Original hypothesis (WRONG):** 16-pixel cache would reduce atomic contention by batching writes.
+
+**Actual behavior:** The cache appears to:
+- Add overhead for cache management (16 slots × 4 channels = 64 floats per thread)
+- Cause cache misses more often than hits (fractal iterations jump around spatially)
+- Introduce synchronization overhead when flushing cache to histogram
+- Degrade memory access patterns (worse cache locality at GPU L2 level?)
+
+**At high zoom, the problem gets exponentially worse:**
+- More iterations should mean better cache utilization (same pixels hit repeatedly)
+- Instead, we see 53% slowdown at zoom 25.5 compared to naive histogram
+- This suggests fundamental design flaw in cache implementation
+
+**Naive histogram WITHOUT cache:**
+- Simple atomic operations directly to histogram texture
+- GPU may optimize atomic operations better than our manual caching
+- No cache management overhead
+- Clean, predictable memory access patterns
 
 ### Why Does Zoom Affect Performance?
 
-**Hypothesis:** High zoom causes **more iterations to hit the same pixels repeatedly**.
+**Root cause:** High zoom causes **more iterations to hit the same pixels repeatedly**.
 
 When zoom is high:
 - The visible fractal region is smaller
@@ -35,14 +59,18 @@ When zoom is high:
 - At high zoom: Many writes to same pixels race
 - Last write wins → **more wasted work** as earlier writes are discarded
 - Performance degrades as more iterations fight for same pixels
+- Data loss causes quality degradation
 
-**Histogram behavior (atomic accumulation):**
+**Histogram naive behavior (atomic accumulation):**
 - At high zoom: Many atomic operations to same memory addresses
-- **Local cache hits increase!** The 16-pixel cache becomes more effective
-- Atomic operations to same addresses may benefit from cache locality
+- GPU may optimize repeated atomics to same addresses (hardware cache)
 - Accumulation is correct (all iterations count, nothing wasted)
+- **At high zoom, becomes faster than textureStore!**
 
-**Result:** At high zoom, histogram's atomic accumulation is more efficient than textureStore's race conditions!
+**Histogram + cache behavior (BROKEN):**
+- Cache overhead dominates any potential benefit
+- Gets progressively worse at high zoom (opposite of intended)
+- Needs to be reverted
 
 ### Apophysis: Scale vs Zoom (THE KEY INSIGHT!)
 
@@ -157,59 +185,44 @@ The "different performance" is **by design** in Apophysis:
 
 **Our implementation has only ONE parameter that behaves like Apophysis Scale** - fast but quality degrades at high values.
 
-### Potential Solutions (To Discuss)
+### Action Required: Revert Local Cache Implementation
 
-**Option 1: Accept Current Behavior (RECOMMENDED)**
-- We already behave like Apophysis Scale (linear, quality-degrading)
-- High zoom = slow rendering is expected (more iterations hit same pixels)
-- Histogram is actually MORE efficient at high zoom than textureStore
-- User should adjust quality manually for different zoom levels
-- **NO CODE CHANGES NEEDED**
-
-**Option 2: Implement True Apophysis-Style Zoom**
-- Add second parameter: "zoom" (logarithmic, quality-preserving)
-- Keep current parameter as "scale" (linear, quick-and-dirty)
-- Zoom would auto-adjust `max_iterations` based on formula: `2^(2 × Zoom)`
-- **Major UI/UX change - may confuse users familiar with current behavior**
-
-**Option 3: Auto-Adjust Quality Based on Zoom**
-- Automatically scale `max_iterations` when zoom changes
-- Formula: `adjusted_iterations = base_iterations × (zoom / 1.0)^2`
-- Maintains consistent quality at all zoom levels
-- **Risk: User loses control over quality vs performance trade-off**
-
-**Option 4: Add Quality Compensation UI Hint**
-- When user changes zoom, show suggested quality adjustment
-- "Zoom increased to 25× - consider increasing Quality to 625×"
-- User manually adjusts quality as needed
-- **Minimal code change, preserves user control**
-
-### Recommendations
-
-**RECOMMENDED: Option 1 (Accept Current Behavior)**
+**IMMEDIATE ACTION: Revert to commit ef0cdd8 (Histogram Fixed - naive atomic)**
 
 **Reasoning:**
-1. Our implementation matches Apophysis Scale behavior (linear, fast preview)
-2. Performance degradation at high zoom is expected and correct
-3. Histogram optimization actually HELPS at high zoom
-4. Benchmark shows histogram is 20% faster than textureStore at high zoom
-5. No breaking changes to existing user workflows
+1. ✅ Naive histogram is **8-20% faster** than textureStore at high zoom
+2. ✅ Naive histogram maintains quality (no race conditions)
+3. ❌ Local cache is **0.9-53% slower** than naive histogram
+4. ❌ Local cache regression gets WORSE at high zoom (opposite of intended)
+5. ❌ Cache overhead dominates any theoretical benefit
 
-**What users should know:**
-- Higher zoom = more render time (expected behavior, same as Apophysis)
-- Adjust `max_iterations` manually for quality vs performance trade-off
-- Use zoom for precise positioning, not as primary magnification control
-- Histogram accumulation is more efficient than old textureStore at high zoom
+**Commits to consider:**
+- `dd80003` - Before Histogram (textureStore) - **BASELINE (has race conditions)**
+- `ef0cdd8` - Histogram Fixed (naive atomic) - **TARGET (best performance + quality)**
+- `06bfcab` - Histogram + Local Cache (current) - **BROKEN (revert this)**
 
-**Documentation updates needed:**
-1. Add note to CLAUDE.md explaining zoom behavior
-2. Document that zoom works like Apophysis "Scale" (not "Zoom")
-3. Explain quality vs zoom relationship
-4. Add performance tips for high zoom scenarios
+**Performance summary:**
+| Implementation | Low Zoom (1.0) | High Zoom (21.1) | High Zoom (25.5) |
+|----------------|----------------|------------------|------------------|
+| textureStore   | 162.75ms       | 1456.81ms        | 7387.78ms        |
+| Naive Histogram| 169.96ms (+4%) | 1341.20ms (-8%)  | 5899.89ms (-20%) |
+| Cache (current)| 171.58ms (+5%) | 1536.17ms (+5%)  | 9030.28ms (+22%) |
+
+**Verdict:** Naive histogram is the clear winner. Revert the cache implementation.
+
+### Zoom/Scale Behavior (Secondary Finding)
+
+**Our zoom parameter correctly implements Apophysis "Scale" behavior:**
+- Linear magnification (not logarithmic)
+- Does NOT auto-adjust sample density
+- Higher zoom = more render time (expected, same as Apophysis)
+- User should manually adjust quality for different zoom levels
+
+**This is correct behavior** - no changes needed to zoom implementation.
 
 ---
 
-**Status:** Analysis complete - behavior is correct and expected.
+**Status:** Critical regression identified - local cache must be reverted.
 
 **Conclusion:**
-Our "zoom" parameter correctly implements Apophysis "Scale" behavior. The performance characteristics are expected and the histogram optimization actually improves performance at high zoom compared to the old textureStore approach. No code changes recommended - documentation updates only.
+The 16-pixel local cache optimization was a failed experiment that makes performance worse in all scenarios. Naive histogram (ef0cdd8) is faster than both textureStore AND the cache implementation, especially at high zoom where it provides 8-20% speedup. Revert to commit ef0cdd8.
