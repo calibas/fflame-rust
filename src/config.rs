@@ -27,6 +27,9 @@ pub struct FractalConfig {
     /// Maximum total iterations to render (default: 1 billion = ~infinite for interactive use)
     #[serde(default = "default_max_iterations")]
     pub max_iterations: u64,
+    /// Histogram color scale (precision vs overflow protection, default: 10.0)
+    #[serde(default = "default_histogram_color_scale")]
+    pub histogram_color_scale: f32,
 
     /// Color settings
     pub color_mode: ColorMode,
@@ -69,6 +72,10 @@ fn default_true() -> bool {
 
 fn default_max_iterations() -> u64 {
     1_000_000_000  // 1 billion iterations (effectively infinite for interactive use)
+}
+
+fn default_histogram_color_scale() -> f32 {
+    10.0  // Balanced: 6553 hits before overflow, 10 color levels
 }
 
 impl FractalConfig {
