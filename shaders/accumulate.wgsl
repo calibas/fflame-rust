@@ -25,24 +25,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Load previous accumulation
     let prev = textureLoad(previous_accumulation, pixel, 0);
 
-    // Read histogram values for this pixel
+    // Read packed histogram value for this pixel
     let pixel_idx = global_id.y * params.width + global_id.x;
-    let base_idx = pixel_idx * 4u;
+    let packed = histogram[pixel_idx];
 
-    // Read histogram values (u32)
-    let r_sum = f32(histogram[base_idx + 0u]);
-    let g_sum = f32(histogram[base_idx + 1u]);
-    let b_sum = f32(histogram[base_idx + 2u]);
-    let density = f32(histogram[base_idx + 3u]);
+    // Unpack RGB + density (8 bits each)
+    let r_sum = f32(packed & 0xFFu);
+    let g_sum = f32((packed >> 8u) & 0xFFu);
+    let b_sum = f32((packed >> 16u) & 0xFFu);
+    let density = f32((packed >> 24u) & 0xFFu);
 
     // Convert back to float color (average)
-    let color_scale = 10000.0;
+    // Note: Each channel is 0-255, density is 0-255
     var new_color = vec3<f32>(0.0);
     if (density > 0.0) {
         new_color = vec3<f32>(
-            r_sum / (density * color_scale),
-            g_sum / (density * color_scale),
-            b_sum / (density * color_scale)
+            r_sum / (density * 255.0),
+            g_sum / (density * 255.0),
+            b_sum / (density * 255.0)
         );
     }
 
