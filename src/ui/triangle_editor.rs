@@ -468,11 +468,6 @@ pub fn render_triangle_editor_window(
                     // Left column: Coordinates
                     columns[0].vertical(|ui| {
                         ui.horizontal(|ui| {
-                            ui.label("O:");
-                            coords_changed |= ui.add(egui::DragValue::new(&mut o[0]).speed(0.01).prefix("x: ")).changed();
-                            coords_changed |= ui.add(egui::DragValue::new(&mut o[1]).speed(0.01).prefix("y: ")).changed();
-                        });
-                        ui.horizontal(|ui| {
                             ui.label("X:");
                             coords_changed |= ui.add(egui::DragValue::new(&mut x[0]).speed(0.01).prefix("x: ")).changed();
                             coords_changed |= ui.add(egui::DragValue::new(&mut x[1]).speed(0.01).prefix("y: ")).changed();
@@ -481,6 +476,11 @@ pub fn render_triangle_editor_window(
                             ui.label("Y:");
                             coords_changed |= ui.add(egui::DragValue::new(&mut y[0]).speed(0.01).prefix("x: ")).changed();
                             coords_changed |= ui.add(egui::DragValue::new(&mut y[1]).speed(0.01).prefix("y: ")).changed();
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("O:");
+                            coords_changed |= ui.add(egui::DragValue::new(&mut o[0]).speed(0.01).prefix("x: ")).changed();
+                            coords_changed |= ui.add(egui::DragValue::new(&mut o[1]).speed(0.01).prefix("y: ")).changed();
                         });
                     });
 
