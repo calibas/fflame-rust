@@ -10,8 +10,7 @@
       "Bash(findstr:*)",
       "Bash(cargo doc:*)",
       "Bash(wasm-pack build:*)",
-      "Bash(git add:*)",
-      "Bash(git commit -m \"$(cat <<''EOF''\nFIX: Switch from f16 to u16 packed histogram (fixed-point)\n\nRoot cause identified: pack2x16float creates IEEE 754 float bit\npatterns, but atomicAdd performs INTEGER addition, corrupting the\nfloat representation.\n\nSolution: Use u16 fixed-point integers instead of f16 floats.\n\nChanges:\n- Convert colors to u16 (0-65535 range) before packing\n- Pack using bit shifts: r16 | (g16 << 16u)\n- Unpack using bit masks: (packed >> 16u) & 0xFFFFu\n- Integer addition works correctly on fixed-point values\n\nTrade-off Warning:\n- Scale=65535: High precision but overflows after ~1 hit at max brightness\n- This WILL cause artifacts in bright areas\n- May need to reduce scale to 1000 or 100 for practical use\n\nDocumentation:\n- Created U16_PACKED_HISTOGRAM.md explaining the approach\n- Documents precision vs overflow tradeoff\n- Notes that naive atomics may still be best for quality\n\nNext: Test with fractals to see if overflow is acceptable\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
