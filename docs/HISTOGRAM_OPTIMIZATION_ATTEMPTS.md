@@ -201,32 +201,51 @@ To better understand the bottleneck:
 
 ## Current Status (2025-10-26)
 
-**Benchmark findings reveal atomic operations are the bottleneck:**
-- Controlled test: Same 39.8B iterations
+### Atomic Bottleneck Hypothesis - CONFIRMED ✅
+
+**Controlled test revealed 10% performance difference from atomic count:**
 - Low zoom (1.0): 6510ms (more atomics, 95% viewport hit rate)
 - High zoom (25.5): 5904ms (fewer atomics, 1.5% viewport hit rate)
-- **10% performance difference purely from atomic operation count**
 
-**Key insight:** Computing iterations is fast, atomic writes are slow!
+**Packed histogram test PROVED the hypothesis:**
+- Implemented u8 packing (4 atomics → 1)
+- Result: **5810ms → 4998ms (14% faster!)**
+- Conclusion: **Atomic operations ARE the bottleneck**
 
-## Recommendations (Updated)
+### Current Issue: Overflow Artifacts ❌
 
-**Short term: Implement packed histogram (PRIORITY)**
-- See [PACKED_HISTOGRAM_PLAN.md](PACKED_HISTOGRAM_PLAN.md)
-- Reduce from 4 atomics → 1 atomic per pixel hit
-- Expected: 2-3× speedup
-- Risk: Potential overflow artifacts (needs testing)
+**Problem:** u8 packing causes color corruption
+- Bright areas turn grey and noisy
+- Overflow occurs after ~256 hits per channel
+- atomicAdd on packed u32 causes bit field overflow
 
-**Medium term: Visual testing and benchmarking**
-- Test packed format with 10+ different fractals
-- Benchmark at multiple zoom levels
-- Compare with Apophysis quality
-- Decision: ship, iterate, or revert
+**User feedback:** "Anything past a certain density is grey and looks noisy."
 
-**Long term: Adaptive quality mode (if needed)**
-- "Fast" mode: Packed histogram (potential artifacts)
-- "Quality" mode: Current 4-atomic approach (perfect)
-- User toggleable or auto-switch based on interaction
+**Status:** Performance confirmed, quality unacceptable - need better solution
+
+## Recommendations (Updated 2025-10-26)
+
+**IMMEDIATE: Implement f16 packed format** ⭐ PRIORITY
+- See [PACKED_HISTOGRAM_RESULTS.md](PACKED_HISTOGRAM_RESULTS.md)
+- Pack RGBA as 4× f16 into 2× u32
+- Reduce from 4 atomics → 2 atomics (2× reduction)
+- Expected: 7-10% speedup vs naive
+- **Benefits:**
+  - No overflow (f16 range is huge)
+  - HDR support for tone mapping (user requirement)
+  - Better quality than u8 packing
+  - Still faster than naive histogram
+
+**Alternative: atomicCompareExchange with saturation**
+- Implement saturating add using compare-and-swap
+- Maintains u8 precision but prevents overflow
+- Performance unknown (loop overhead may negate gains)
+- Explore if f16 packing isn't satisfactory
+
+**Fallback: Accept naive histogram performance**
+- 14% slower than packed, but perfect quality
+- Already implemented and working
+- Conservative option if optimizations don't pan out
 
 ---
 
