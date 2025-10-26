@@ -40,8 +40,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let density = f32((packed_bd >> 16u) & 0xFFFFu);
 
     // Convert back to float color (average)
-    // Note: Values were scaled by 100 during accumulation
-    let color_scale = 100.0;
+    // Note: Values were scaled by 10 during accumulation
+    let color_scale = 10.0;
     var new_color = vec3<f32>(0.0);
     if (density > 0.0) {
         new_color = vec3<f32>(
