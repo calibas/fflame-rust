@@ -68,21 +68,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     final_color = color;
                 }
 
-                // Atomic accumulation to histogram buffer (PACKED)
-                // Pack RGBA+density into single u32 (8 bits each)
+                // Atomic accumulation to histogram buffer (F16 PACKED)
+                // Pack RGBA as 4× f16 into 2× u32 for HDR support
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
+                let base_idx = pixel_idx * 2u;
 
-                // Convert color to 8-bit values (0-255) with saturation
-                let r8 = min(u32(clamp(final_color.r, 0.0, 1.0) * 255.0), 255u);
-                let g8 = min(u32(clamp(final_color.g, 0.0, 1.0) * 255.0), 255u);
-                let b8 = min(u32(clamp(final_color.b, 0.0, 1.0) * 255.0), 255u);
-                let density8 = 1u;  // Each hit contributes 1 to density
+                // Pack R and G into first u32 (2× f16)
+                let packed_rg = pack2x16float(vec2<f32>(final_color.r, final_color.g));
 
-                // Pack into single u32: [R:0-7][G:8-15][B:16-23][D:24-31]
-                let packed = r8 | (g8 << 8u) | (b8 << 16u) | (density8 << 24u);
+                // Pack B and density into second u32 (2× f16)
+                // Density as float allows fractional accumulation
+                let packed_bd = pack2x16float(vec2<f32>(final_color.b, 1.0));
 
-                // Single atomic operation (4× reduction from unpacked!)
-                atomicAdd(&histogram[pixel_idx], packed);
+                // Two atomic operations (2× reduction from unpacked, HDR-capable!)
+                atomicAdd(&histogram[base_idx + 0u], packed_rg);
+                atomicAdd(&histogram[base_idx + 1u], packed_bd);
             }
         }
     }
