@@ -51,8 +51,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let rgb_accumulated = prev.rgb * (1.0 - params.blend_factor) + new_color * params.blend_factor;
 
     // Alpha (density) represents total sample count, so accumulate it
-    // Normalize density to match old behavior (0.01 per hit)
-    let alpha_accumulated = prev.a + (density / color_scale * 0.01);
+    // Each hit in the old system added 0.01 alpha
+    let alpha_accumulated = prev.a + (density * 0.01);
 
     // Write to output
     textureStore(output_texture, pixel, vec4<f32>(rgb_accumulated, alpha_accumulated));
