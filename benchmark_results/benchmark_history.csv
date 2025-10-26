@@ -40,3 +40,6 @@ Timestamp,Fractal,ConfigFile,Resolution,Platform,Commit,CommitName,TotalIteratio
 2025-10-26 13:14:25,simple3,output/simple3.fflame,1920x1080,Windows,2a24255,Current,39812333568,256,0.90,128,5541.21,135.52,2.45,5394.49,5718.96,7.18,5,1.87.0,release
 2025-10-26 13:14:25,simple3,output/simple3.fflame,1920x1080,Windows,ef0cdd8,Histogram Fixed (naive atomic),,,,128,6031.47,155.16,2.57,5926.32,6261.77,0.00,5,,
 2025-10-26 13:14:25,simple3,output/simple3.fflame,1920x1080,Windows,ce58657,u16 packed histogram (merged),39812333568,256,0.90,128,5183.32,32.87,0.63,5162.85,5232.36,7.68,5,1.87.0,release
+2025-10-26 13:25:44,simple3,output/simple3.fflame,1920x1080,Windows,0e6b763,Current,39812333568,1024,0.90,128,1587.58,17.25,1.09,1572.40,1611.88,25.08,5,1.87.0,release
+2025-10-26 13:25:44,simple3,output/simple3.fflame,1920x1080,Windows,ef0cdd8,Histogram Fixed (naive atomic),,,,128,6066.50,200.16,3.30,5784.10,6242.67,0.00,5,,
+2025-10-26 13:25:44,simple3,output/simple3.fflame,1920x1080,Windows,ce58657,u16 packed histogram (merged),39812333568,256,0.90,128,5204.74,15.02,0.29,5185.41,5222.07,7.65,5,1.87.0,release
