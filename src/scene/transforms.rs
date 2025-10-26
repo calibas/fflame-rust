@@ -151,22 +151,27 @@ impl Transform {
 
     /// Convert affine coefficients to triangle representation (O, X, Y points)
     /// Returns (Origin, X-axis endpoint, Y-axis endpoint)
+    ///
+    /// Note: Apophysis uses Y-down coordinate system for triangle display.
+    /// This matches Apophysis behavior by negating f, b, and c appropriately.
     pub fn to_triangle(&self) -> ([f32; 2], [f32; 2], [f32; 2]) {
-        let o = [self.e, self.f];
-        let x = [self.e + self.a, self.f + self.c];
-        let y = [self.e + self.b, self.f + self.d];
+        let o = [self.e, -self.f];
+        let x = [self.e + self.a, -self.f - self.b];
+        let y = [self.e - self.c, -self.f + self.d];
         (o, x, y)
     }
 
     /// Update affine coefficients from triangle representation
     /// Takes (Origin, X-axis endpoint, Y-axis endpoint)
+    ///
+    /// Note: Inverse of to_triangle(), accounts for Apophysis Y-down coordinate system.
     pub fn from_triangle(&mut self, o: [f32; 2], x: [f32; 2], y: [f32; 2]) {
         self.a = x[0] - o[0];
-        self.c = x[1] - o[1];
-        self.b = y[0] - o[0];
+        self.b = -(x[1] - o[1]);
+        self.c = -(y[0] - o[0]);
         self.d = y[1] - o[1];
         self.e = o[0];
-        self.f = o[1];
+        self.f = -o[1];
     }
 
     /// Reset transform to identity (unit triangle at origin)
