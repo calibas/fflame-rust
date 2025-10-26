@@ -6,3 +6,6 @@ Timestamp,Fractal,ConfigFile,Resolution,Platform,Commit,CommitName,TotalIteratio
 2025-10-26 08:35:48,complex,assets/presets/complex.fflame,1920x1080,Windows,dd80003,Before Histogram (textureStore),,,,128,162.17,8.18,5.05,154.85,174.28,0.00,5,,
 2025-10-26 08:35:48,complex,assets/presets/complex.fflame,1920x1080,Windows,ef0cdd8,Histogram Fixed (naive atomic),,,,128,169.48,5.17,3.05,164.49,178.07,0.00,5,,
 2025-10-26 08:35:48,complex,assets/presets/complex.fflame,1920x1080,Windows,06bfcab,Histogram + Local Cache (current),1000341504,256,0.50,128,172.94,7.13,4.12,160.95,178.50,5.78,5,1.87.0,release
+2025-10-26 08:48:00,complex,assets/presets/complex.fflame,1920x1080,Windows,dd80003,Before Histogram (textureStore),,,,128,164.69,3.75,2.28,160.11,168.92,0.00,5,,
+2025-10-26 08:48:00,complex,assets/presets/complex.fflame,1920x1080,Windows,ef0cdd8,Histogram Fixed (naive atomic),,,,128,171.93,12.77,7.43,159.53,191.93,0.00,5,,
+2025-10-26 08:48:00,complex,assets/presets/complex.fflame,1920x1080,Windows,06bfcab,Histogram + Local Cache (current),1000341504,256,0.50,128,171.67,7.78,4.53,161.27,181.40,5.83,5,1.87.0,release
