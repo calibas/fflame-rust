@@ -68,22 +68,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     final_color = color;
                 }
 
-                // Atomic accumulation to histogram buffer
-                // Calculate pixel index in buffer: [r, g, b, density] × (width × height)
+                // Atomic accumulation to histogram buffer (PACKED)
+                // Pack RGBA+density into single u32 (8 bits each)
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
-                let base_idx = pixel_idx * 4u;
 
-                // Scale color to integers (0.0-1.0 → 0-10000 for precision)
-                let color_scale = 10000.0;
-                let r = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
-                let g = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
-                let b = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
+                // Convert color to 8-bit values (0-255) with saturation
+                let r8 = min(u32(clamp(final_color.r, 0.0, 1.0) * 255.0), 255u);
+                let g8 = min(u32(clamp(final_color.g, 0.0, 1.0) * 255.0), 255u);
+                let b8 = min(u32(clamp(final_color.b, 0.0, 1.0) * 255.0), 255u);
+                let density8 = 1u;  // Each hit contributes 1 to density
 
-                // Atomic add (thread-safe!)
-                atomicAdd(&histogram[base_idx + 0u], r);
-                atomicAdd(&histogram[base_idx + 1u], g);
-                atomicAdd(&histogram[base_idx + 2u], b);
-                atomicAdd(&histogram[base_idx + 3u], 1u);  // density
+                // Pack into single u32: [R:0-7][G:8-15][B:16-23][D:24-31]
+                let packed = r8 | (g8 << 8u) | (b8 << 16u) | (density8 << 24u);
+
+                // Single atomic operation (4× reduction from unpacked!)
+                atomicAdd(&histogram[pixel_idx], packed);
             }
         }
     }
