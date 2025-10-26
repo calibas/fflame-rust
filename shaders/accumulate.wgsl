@@ -55,9 +55,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // blend_factor = samples_this_frame / total_samples
     let rgb_accumulated = prev.rgb * (1.0 - params.blend_factor) + new_color * params.blend_factor;
 
-    // Alpha (density) represents total sample count, so accumulate it
-    // Each hit in the old system added 0.01 alpha
-    let alpha_accumulated = prev.a + (density * 0.01);
+    // Alpha (density) accumulates additively, but needs to be scaled by blend_factor
+    // to account for the fact that blend_factor represents samples_this_batch / total_samples
+    // Each hit adds 0.01 alpha, scaled by the batch's weight in the total
+    let alpha_accumulated = prev.a + (density * 0.01 * params.blend_factor);
 
     // Write to output
     textureStore(output_texture, pixel, vec4<f32>(rgb_accumulated, alpha_accumulated));
