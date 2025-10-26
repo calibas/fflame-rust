@@ -5,47 +5,71 @@ Establish visual baseline to verify that fractal patterns match Apophysis 7X ref
 
 ## Coordinate System Analysis
 
-### Key Findings
+### Key Findings (Updated 2025-10-25)
+
+**CRITICAL DISCOVERY:** Apophysis uses **Y-down coordinate system** for triangle display but **standard math** for iteration!
 
 **Triangle Editor Coordinate System:**
-- Both Apophysis and this app use **Y-up** display in Triangle Editor
-- Identity transform shows: X:(1,0), Y:(0,1), O:(0,0) forming an L-shape
-- Y-axis goes UP as you move UP in the editor (mathematical convention)
+- Apophysis displays triangle coordinates in **Y-down** system (negates f, b, c)
+- Example: XML `coefs="0.932358 0.414263 -0.54106 1.001987 -0.041391 -0.016556"`
+  - Apophysis shows: X:(0.932358, **-0.414263**), Y:(**0.54106**, 1.00198), O:(-0.041391, **0.016556**)
+  - XML stores: a=0.932358, b=0.414263, c=-0.54106, d=1.001987, e=-0.041391, f=-0.016556
+  - Pattern: Apophysis displays (a, -b), (-c, d), (e, -f) for X, Y, O respectively
 
 **Fractal Math Coordinate System:**
-- Internal fractal calculations use **Y-up** (standard mathematical coordinates)
-- Affine transform: `x' = a*x + b*y + e`, `y' = -(c*x + d*y + f)` **← Y is negated!**
-- Variations operate on the post-affine coordinates (after Y negation)
+- Internal fractal calculations use **standard mathematical coordinates** (no Y negation!)
+- Affine transform: `x' = a*x + b*y + e`, `y' = c*x + d*y + f` (standard formula)
+- Variations operate on post-affine coordinates using standard math
+- **Previous Y-negation in shader was incorrect!**
 
 **Display Coordinate System:**
 - Screen rendering uses standard pixel mapping (no additional Y-flip needed)
 - Direct conversion: `pixel = center + transformed * scale`
-- The affine Y-negation handles the coordinate system difference
+- Triangle Editor canvas already applies Y-flip for visualization (line 117: `rect.max.y - ...`)
 
 **Critical Insight:**
-- Only **one Y-negation** is needed: in the affine transform application
-- Triangle Editor shows Y-up coordinates (matches mathematical convention)
-- Affine transform negates Y during application (matches Apophysis behavior)
-- Display uses standard pixel mapping (no flip needed)
-- Moving triangle RIGHT in editor → fractal moves LEFT on screen (coordinate system translation)
-- Moving triangle UP in editor → fractal moves UP on screen (after affine negation)
+- **Y-negation only for triangle visualization**, not for iteration!
+- Triangle Editor `to_triangle()`: O=[e, -f], X=[e+a, -f-b], Y=[e-c, -f+d] (matches Apophysis display)
+- Triangle Editor `from_triangle()`: Inverse conversion with negations
+- Affine transform in shader: Standard formula without negation
+- This separates **display coordinates** (Y-down) from **iteration math** (standard)
 
 ### Implementation
 
-**The Fix:**
+**Triangle Coordinate Conversion (for visualization):**
+```rust
+// In transforms.rs - converts to Apophysis Y-down display coordinates
+pub fn to_triangle(&self) -> ([f32; 2], [f32; 2], [f32; 2]) {
+    let o = [self.e, -self.f];
+    let x = [self.e + self.a, -self.f - self.b];
+    let y = [self.e - self.c, -self.f + self.d];
+    (o, x, y)
+}
+
+pub fn from_triangle(&mut self, o: [f32; 2], x: [f32; 2], y: [f32; 2]) {
+    self.a = x[0] - o[0];
+    self.b = -(x[1] - o[1]);  // Negate
+    self.c = -(y[0] - o[0]);  // Negate
+    self.d = y[1] - o[1];
+    self.e = o[0];
+    self.f = -o[1];  // Negate
+}
+```
+
+**Shader Affine Transform (for iteration):**
 ```wgsl
-// In apply_affine() function (both 2D and 3D shaders):
+// In affine.wgsl and variations_3d.wgsl - standard mathematical formula
 fn apply_affine(xform: Transform, p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(
         xform.a * p.x + xform.b * p.y + xform.e,
-        -(xform.c * p.x + xform.d * p.y + xform.f)  // Y is negated
+        xform.c * p.x + xform.d * p.y + xform.f  // NO negation!
     );
 }
 ```
 
 **Apophysis Reference:**
 - Source: https://github.com/xyrus02/apophysis-7x
-- Uses same principle: Y-up fractal math, Y-down display rendering
+- Triangle display uses Y-down (UI convention), but iteration uses standard math
 
 ## Test Results
 
@@ -67,11 +91,11 @@ fn apply_affine(xform: Transform, p: vec2<f32>) -> vec2<f32> {
 
 **Test: linear.fflame**
 - **Config**: Single transform, a=d≈1.0, linear=1.0
-- **Result**: ✅ **VISUAL MATCH** (after display Y-flip fix)
+- **Result**: ✅ **VISUAL MATCH** (after removing incorrect Y-negation from shader)
 - **Rotation test**: 45° clockwise rotation matches in both apps
-- **Translation test**: Moving transform right in editor → fractal moves left on screen (matches Apophysis)
+- **Translation test**: Transform movement matches Apophysis exactly
 - **Scale test**: Increasing transform scale 90% → 150% matches behavior
-- **Conclusion**: Linear variation works correctly with display Y-flip
+- **Conclusion**: Linear variation works correctly with standard affine formula
 
 **Settings:**
 ```json
@@ -80,6 +104,12 @@ fn apply_affine(xform: Transform, p: vec2<f32>) -> vec2<f32> {
   "variations": { "linear": 1.0 }
 }
 ```
+
+**Test: Complex multi-transform fractal**
+- **Config**: Multiple transforms with rotations, translations, various variations
+- **Result**: ✅ **VERY SIMILAR** (after affine formula fix - 2025-10-25)
+- **Key Fix**: Removed Y-negation from shader `apply_affine()`, added Y-down conversion to `to_triangle()`
+- **Conclusion**: Core affine transformation now matches Apophysis behavior
 
 ### 🔍 Pending Tests
 
@@ -118,19 +148,22 @@ fn apply_affine(xform: Transform, p: vec2<f32>) -> vec2<f32> {
 ## Architecture Summary
 
 **Data Flow:**
-1. **Triangle Editor** (Y-up) → Affine coefficients (a,b,c,d,e,f)
+1. **Triangle Editor** (Y-down display) → Affine coefficients (a,b,c,d,e,f)
+   - User edits in Y-down coordinates (matches Apophysis Triangle Editor)
+   - `from_triangle()` converts Y-down to standard affine coefficients
 2. **Fractal Iteration**:
-   - Apply affine with Y-negation: `p' = (a*x + b*y + e, -(c*x + d*y + f))`
+   - Apply affine: `p' = (a*x + b*y + e, c*x + d*y + f)` (standard math, no negation)
    - Apply variations: `p'' = Σ(weight_i * variation_i(p'))`
 3. **Display Rendering**:
    - Convert to pixels: `pixel = center + fractal * scale`
-   - Render to screen
+   - Triangle Editor canvas applies Y-flip for visualization
+   - Main render output uses standard pixel mapping
 
-**Why Y-Negation in Affine Transform?**
-- **Triangle Editor Y-up**: Matches mathematical convention (X right, Y up)
-- **Apophysis Coordinate System**: Uses Y-up in editor but negates Y in affine application
-- **Solution**: Single Y-negation in affine transform matches Apophysis exactly
-- **No display flip needed**: Fractal coordinates map directly to screen pixels
+**Why Y-Negation ONLY in Triangle Display?**
+- **Apophysis Triangle Editor**: Shows Y-down coordinates (UI convention)
+- **Apophysis Iteration**: Uses standard mathematical affine transformation
+- **Solution**: Y-negation only in `to_triangle()`/`from_triangle()`, NOT in shader
+- **Result**: Triangle editor matches Apophysis display, iteration uses standard math
 
 ## References
 
@@ -151,6 +184,25 @@ fn apply_affine(xform: Transform, p: vec2<f32>) -> vec2<f32> {
 - Spherical variation formula: `p / (r² + ε)` where r² = x² + y²
 - Linear variation formula: `p` (identity)
 - Affine application order: `affine(p) → variations(p')` is correct
-- **Y-negation in affine transform is the ONLY coordinate conversion needed**
-- No negation in triangle coordinate conversion required
-- No display Y-flip required
+- **Y-negation ONLY for triangle visualization, NOT for iteration**
+- Triangle coordinate conversion (`to_triangle`/`from_triangle`) handles Y-down display
+- Shader affine transform uses standard mathematical formula (no Y-negation)
+- Triangle Editor canvas already has Y-flip for visualization (line 117 in triangle_editor.rs)
+
+## Debugging History
+
+### 2025-10-25: Major Breakthrough
+**Problem:** Fractals rendered differently than Apophysis despite matching affine coefficients.
+
+**Investigation:**
+1. Compared XML `coefs` values with Triangle Editor display
+2. Found Apophysis displays (a, -b), (-c, d), (e, -f) for X, Y, O points
+3. Realized Apophysis uses Y-down for triangle **display** but standard math for **iteration**
+4. Our code had it backwards: Y-negation in shader, none in triangle conversion
+
+**Solution:**
+1. Added Y-negation to `to_triangle()`/`from_triangle()` for display compatibility
+2. Removed Y-negation from shader `apply_affine()` to use standard math
+3. Result: Triangle Editor matches Apophysis exactly, complex fractals render very similarly
+
+**Key Insight:** Separate display coordinate system (Y-down) from iteration math (standard).
