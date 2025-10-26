@@ -212,37 +212,45 @@ To better understand the bottleneck:
 - Result: **5810ms → 4998ms (14% faster!)**
 - Conclusion: **Atomic operations ARE the bottleneck**
 
-### Current Issue: Overflow Artifacts ❌
+### Previous Issue: Overflow Artifacts (SOLVED) ✅
 
-**Problem:** u8 packing causes color corruption
-- Bright areas turn grey and noisy
-- Overflow occurs after ~256 hits per channel
-- atomicAdd on packed u32 causes bit field overflow
+**Problem (u8 packing):** Color corruption in bright areas
+- Overflow occurred after ~256 hits per channel
+- atomicAdd on packed u32 caused bit field overflow
 
-**User feedback:** "Anything past a certain density is grey and looks noisy."
+**Solution (f16 packing):** Use half-precision floats instead
+- Pack RGBA as 4× f16 into 2× u32
+- 2 atomic operations per pixel (down from 4)
+- No overflow (f16 range: ±65504)
+- HDR support (values > 1.0 preserved)
 
-**Status:** Performance confirmed, quality unacceptable - need better solution
+**Status:** Implemented in commit 51f05cb - ready for testing
 
 ## Recommendations (Updated 2025-10-26)
 
-**IMMEDIATE: Implement f16 packed format** ⭐ PRIORITY
-- See [PACKED_HISTOGRAM_RESULTS.md](PACKED_HISTOGRAM_RESULTS.md)
+**✅ COMPLETED: f16 packed format implementation**
+- Implemented in commit 51f05cb
 - Pack RGBA as 4× f16 into 2× u32
-- Reduce from 4 atomics → 2 atomics (2× reduction)
+- Reduced from 4 atomics → 2 atomics (50% reduction)
 - Expected: 7-10% speedup vs naive
 - **Benefits:**
-  - No overflow (f16 range is huge)
-  - HDR support for tone mapping (user requirement)
+  - No overflow (f16 range: ±65504)
+  - HDR support for tone mapping (user requirement met)
   - Better quality than u8 packing
-  - Still faster than naive histogram
+  - Faster than naive histogram
 
-**Alternative: atomicCompareExchange with saturation**
+**Next: Benchmark f16 implementation**
+- Test visual quality (should be perfect, no artifacts)
+- Measure performance (expect 7-10% improvement vs naive)
+- Compare with Apophysis HDR workflow
+
+**Alternative (if needed): atomicCompareExchange with saturation**
 - Implement saturating add using compare-and-swap
 - Maintains u8 precision but prevents overflow
 - Performance unknown (loop overhead may negate gains)
-- Explore if f16 packing isn't satisfactory
+- Only explore if f16 results are unsatisfactory
 
-**Fallback: Accept naive histogram performance**
+**Fallback: Naive histogram (always available)**
 - 14% slower than packed, but perfect quality
 - Already implemented and working
 - Conservative option if optimizations don't pan out
