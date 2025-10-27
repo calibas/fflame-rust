@@ -206,6 +206,11 @@ pub struct FlameBuffers {
     // Layout: [r, g, b, density] × (width × height) as u32 array
     pub histogram_buffer: Buffer,
 
+    // Per-pixel scale buffer for adaptive histogram scaling
+    // Layout: u16 scale value (1-100) per pixel, packed 2 per u32
+    // Size: width × height × sizeof(u16) = width × height × 2 bytes
+    pub scale_buffer: Buffer,
+
     // Palette texture (1D)
     pub palette_texture: Texture,
     pub palette_view: TextureView,
@@ -354,9 +359,9 @@ impl FlameBuffers {
         let (temp_samples_texture, temp_samples_view) = create_accum_texture("Temp Samples Texture");
 
         // Create histogram storage buffer for atomic color accumulation
-        // Buffer layout: F16 PACKED format - 2× u32 per pixel
-        //   u32[0]: [R_f16][G_f16]
-        //   u32[1]: [B_f16][Density_f16]
+        // Buffer layout: U16 PACKED format - 2× u32 per pixel
+        //   u32[0]: [R_u16][G_u16]
+        //   u32[1]: [B_u16][Density_u16]
         // Size: width × height × 2 × sizeof(u32)
         let histogram_buffer_size = (width * height * 2 * std::mem::size_of::<u32>() as u32) as u64;
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
@@ -364,6 +369,32 @@ impl FlameBuffers {
             size: histogram_buffer_size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
+        });
+
+        // Create per-pixel scale buffer
+        // Each pixel gets a u16 scale value (1-100), packed 2 per u32
+        // Initialize all pixels to scale=50 (balanced starting point)
+        let pixel_count = (width * height) as usize;
+        let initial_scale = 50u16;
+        let mut scale_data = vec![0u32; (pixel_count + 1) / 2]; // Round up for odd pixel counts
+
+        for i in 0..pixel_count {
+            let word_idx = i / 2;
+            let is_odd = (i % 2) == 1;
+
+            if is_odd {
+                // High 16 bits
+                scale_data[word_idx] |= (initial_scale as u32) << 16;
+            } else {
+                // Low 16 bits
+                scale_data[word_idx] |= initial_scale as u32;
+            }
+        }
+
+        let scale_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("Per-Pixel Scale Buffer"),
+            contents: bytemuck::cast_slice(&scale_data),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
         });
 
         // Create palette texture (1D, 256 samples)
@@ -494,6 +525,7 @@ impl FlameBuffers {
             temp_samples_texture,
             temp_samples_view,
             histogram_buffer,
+            scale_buffer,
             palette_texture,
             palette_view,
             curve_lut_texture,

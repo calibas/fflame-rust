@@ -72,20 +72,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
                 let base_idx = pixel_idx * 2u;
 
-                // Convert colors to u16 fixed-point
-                // Scale controlled by histogram_color_scale parameter (default: 10.0)
-                // Higher scale = more precision but less overflow protection
-                let color_scale = params.histogram_color_scale;
-                let r16 = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
-                let g16 = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
-                let b16 = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
+                // Load this pixel's current scale (u16 from packed u32)
+                let scale_word_idx = pixel_idx / 2u;
+                let scale_word = scale_buffer[scale_word_idx];
+                let pixel_scale = f32(select(
+                    scale_word & 0xFFFFu,          // Even pixel (low 16 bits)
+                    (scale_word >> 16u) & 0xFFFFu, // Odd pixel (high 16 bits)
+                    (pixel_idx % 2u) == 1u
+                ));
+
+                // Convert colors to u16 fixed-point using this pixel's scale
+                // Per-pixel adaptive scale: dense areas use lower scale, sparse areas use higher scale
+                let r16 = u32(clamp(final_color.r, 0.0, 1.0) * pixel_scale);
+                let g16 = u32(clamp(final_color.g, 0.0, 1.0) * pixel_scale);
+                let b16 = u32(clamp(final_color.b, 0.0, 1.0) * pixel_scale);
                 let d16 = 1u;  // Density increment
 
                 // Pack 2× u16 into each u32 using bit shifts
                 let packed_rg = r16 | (g16 << 16u);
                 let packed_bd = b16 | (d16 << 16u);
 
-                // Atomic add (let overflow wrap naturally, will be handled in accumulate)
+                // Atomic add (per-pixel scale prevents overflow)
                 atomicAdd(&histogram[base_idx + 0u], packed_rg);
                 atomicAdd(&histogram[base_idx + 1u], packed_bd);
             }
