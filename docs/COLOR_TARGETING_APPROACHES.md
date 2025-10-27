@@ -668,29 +668,50 @@ struct AccumulateParams {
 
 ## Recommendations
 
-### ⭐ NEW Recommended First Step: Approach 6A (Hyperbolic Compression)
+### ❌ Approach 6A (Hyperbolic Compression) - FAILED (2025-10-27)
 
-**Why this is the best starting point:**
-- ✅ Solves the actual problem (prevents saturation vs just darkening)
-- ✅ Single parameter (density_compression_strength)
-- ✅ Zero new infrastructure (one line change in accumulate.wgsl)
-- ✅ Zero performance cost
-- ✅ Simplest to implement and test
-- ✅ Can combine with existing tone curve adjustments
+**Status:** Implemented and tested - **does not work**
 
-**Implementation Steps:**
-1. Add `density_compression_strength: f32` to `AccumulateParams` struct
-2. Update GPU buffer binding
-3. Modify line 70 in `accumulate.wgsl` to apply hyperbolic compression
-4. Add UI slider in Settings panel (0.0 - 10.0, default 0.0)
-5. Test with various fractal types
+**Why it failed:**
+- Progressive accumulation makes per-frame blend adjustments imperceptible
+- Blend factors are already tiny (~0.1% per frame)
+- Compressing tiny values (0.1% → 0.001%) has no visible impact
+- Iteration count dominates convergence, not per-frame blend rate
+- Even at extreme settings (strength=100), images are near-identical
 
-**Expected result:** Dense areas stay visible longer without washing out, revealing hidden structure in bright cores.
+**What was tested:**
+- ✅ Parameter correctly passed to GPU (verified with debug visualization)
+- ✅ Math is correct (99% reduction in blend rate at strength=100)
+- ❌ No visible effect at any positive strength value (0-100)
+- ❌ Negative values cause corruption (amplified blending)
+
+**Conclusion:** Accumulation-time compression is architecturally incompatible with progressive rendering.
+
+See DENSITY_AWARE_COLOR_POC_RESULTS.md for complete test documentation.
 
 ---
 
-### Phase 2: Display-Time Adjustments (If Needed After Phase 1)
-**Approach 3: Parametric HSV Adjustments**
+### ⭐ Recommended Next Steps
+
+**Option A: Accept existing tools are sufficient**
+- Use existing `density_scale`, `tone curve`, `exposure`, `gamma` controls
+- These already provide significant artistic control over bright/dark balance
+- May be "good enough" without density-aware targeting
+
+**Option B: Try post-accumulation approaches (1-4)**
+- Return to Approach 3: Parametric HSV Adjustments (simplest)
+- Or Approach 1: Density-Conditional Curves (reuses existing infrastructure)
+- Accept that these are display-time adjustments, not accumulation-time
+
+**Option C: Explore different architecture entirely**
+- Non-progressive rendering (render full iteration count at once)
+- Would allow accumulation-time adjustments to be effective
+- But loses real-time preview capability
+
+---
+
+### Phase 2 (If Pursuing Post-Accumulation): Parametric HSV Adjustments
+**Approach 3**
 
 **Why:**
 - Complements accumulation-time control
