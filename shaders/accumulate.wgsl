@@ -28,28 +28,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Load previous accumulation
     let prev = textureLoad(previous_accumulation, pixel, 0);
 
-    // Read u16 packed histogram values for this pixel
+    // Read histogram values for this pixel (3 u32 words: RG, B, density)
     let pixel_idx = global_id.y * params.width + global_id.x;
-    let base_idx = pixel_idx * 2u;
+    let base_idx = pixel_idx * 3u;  // FIX: 3 words per pixel
 
-    // Load this pixel's current scale (u16 from packed u32)
-    let scale_word_idx = pixel_idx / 2u;
-    let scale_word = scale_buffer[scale_word_idx];
-    let pixel_scale = f32(select(
-        scale_word & 0xFFFFu,          // Even pixel (low 16 bits)
-        (scale_word >> 16u) & 0xFFFFu, // Odd pixel (high 16 bits)
-        (pixel_idx % 2u) == 1u
-    ));
+    // Load this pixel's current scale (unpacked u32, one per pixel)
+    let pixel_scale = f32(scale_buffer[pixel_idx]);
 
-    // Unpack 2× u32 into 4× u16 (RGBA + density)
+    // Unpack 3× u32 (RG packed, B packed, density u32)
     let packed_rg = histogram[base_idx + 0u];
-    let packed_bd = histogram[base_idx + 1u];
+    let packed_b = histogram[base_idx + 1u];
+    let density_u32 = histogram[base_idx + 2u];
 
-    // Extract u16 values using bit masks and shifts
+    // Extract values
     let r_sum = f32(packed_rg & 0xFFFFu);
     let g_sum = f32((packed_rg >> 16u) & 0xFFFFu);
-    let b_sum = f32(packed_bd & 0xFFFFu);
-    let density = f32((packed_bd >> 16u) & 0xFFFFu);
+    let b_sum = f32(packed_b & 0xFFFFu);  // Low 16 bits only
+    let density = f32(density_u32);  // FIX: Full u32 density, no overflow
 
     // Convert back to float color (average) using this pixel's scale
     // Per-pixel adaptive scale: each pixel was encoded with its own scale value

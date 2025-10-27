@@ -27,16 +27,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let pixel_idx = global_id.y * params.width + global_id.x;
 
-    // Load current scale
-    let scale_word_idx = pixel_idx / 2u;
-    let scale_word = scale_buffer[scale_word_idx];
-    let is_odd = (pixel_idx % 2u) == 1u;
-
-    let current_scale = f32(select(
-        scale_word & 0xFFFFu,          // Even pixel (low 16 bits)
-        (scale_word >> 16u) & 0xFFFFu, // Odd pixel (high 16 bits)
-        is_odd
-    ));
+    // Load current scale (unpacked u32, one per pixel)
+    let current_scale = f32(scale_buffer[pixel_idx]);
 
     // Read accumulated color and density from accumulation texture
     let pixel_color = textureLoad(accumulation_texture, vec2<i32>(global_id.xy), 0);
@@ -74,16 +66,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Clamp to valid range
     new_scale = clamp(new_scale, params.min_scale, params.max_scale);
 
-    // Write back to scale buffer
-    let new_scale_u16 = u32(new_scale);
-
-    if (is_odd) {
-        // Odd pixel: high 16 bits
-        let new_word = (scale_word & 0xFFFFu) | (new_scale_u16 << 16u);
-        scale_buffer[scale_word_idx] = new_word;
-    } else {
-        // Even pixel: low 16 bits
-        let new_word = (scale_word & 0xFFFF0000u) | new_scale_u16;
-        scale_buffer[scale_word_idx] = new_word;
-    }
+    // Write back to scale buffer (unpacked, direct write - no race condition)
+    scale_buffer[pixel_idx] = u32(new_scale);
 }
