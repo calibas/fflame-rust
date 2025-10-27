@@ -275,7 +275,7 @@ impl FlameRenderer {
         let buffer_size = pixel_count * std::mem::size_of::<u32>();
 
         let staging_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Scale Readback Staging"),
+            label: Some("Scale Buffer Readback"),
             size: buffer_size as u64,
             usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -300,7 +300,7 @@ impl FlameRenderer {
         let data = buffer_slice.get_mapped_range();
         let scale_data: &[u32] = bytemuck::cast_slice(&data);
 
-        // Compute stats (unpacked format: 1 u32 per pixel)
+        // Compute stats (scale values per pixel)
         let mut min_scale = u32::MAX;
         let mut max_scale = 0u32;
         let mut sum = 0u64;
