@@ -68,34 +68,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     final_color = color;
                 }
 
-                // Atomic accumulation to histogram buffer (U16 PACKED)
-                // Pack RGBA as 4× u16 into 2× u32 (fixed-point integers)
+                // Atomic accumulation to histogram buffer
+                // Pack RGB as 3× u32 (RG packed, B packed, density u32)
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
-                let base_idx = pixel_idx * 2u;
+                let base_idx = pixel_idx * 3u;  // FIX: 3 words per pixel (RG, B, density)
 
-                // Load this pixel's current scale (u16 from packed u32)
-                let scale_word_idx = pixel_idx / 2u;
-                let scale_word = scale_buffer[scale_word_idx];
-                let pixel_scale = f32(select(
-                    scale_word & 0xFFFFu,          // Even pixel (low 16 bits)
-                    (scale_word >> 16u) & 0xFFFFu, // Odd pixel (high 16 bits)
-                    (pixel_idx % 2u) == 1u
-                ));
+                // Load this pixel's current scale (unpacked u32, one per pixel)
+                let pixel_scale = f32(scale_buffer[pixel_idx]);
 
                 // Convert colors to u16 fixed-point using this pixel's scale
                 // Per-pixel adaptive scale: dense areas use lower scale, sparse areas use higher scale
                 let r16 = u32(clamp(final_color.r, 0.0, 1.0) * pixel_scale);
                 let g16 = u32(clamp(final_color.g, 0.0, 1.0) * pixel_scale);
                 let b16 = u32(clamp(final_color.b, 0.0, 1.0) * pixel_scale);
-                let d16 = 1u;  // Density increment
 
-                // Pack 2× u16 into each u32 using bit shifts
+                // Pack RGB as u16 values (3 u32 words per pixel: RG, B, density)
                 let packed_rg = r16 | (g16 << 16u);
-                let packed_bd = b16 | (d16 << 16u);
+                let packed_b = b16;  // Low 16 bits, high 16 unused
+                let density_u32 = u32(pixel_scale);  // FIX: Use u32 for density to prevent overflow
 
                 // Atomic add (per-pixel scale prevents overflow)
                 atomicAdd(&histogram[base_idx + 0u], packed_rg);
-                atomicAdd(&histogram[base_idx + 1u], packed_bd);
+                atomicAdd(&histogram[base_idx + 1u], packed_b);
+                atomicAdd(&histogram[base_idx + 2u], density_u32);
             }
         }
     }

@@ -391,11 +391,12 @@ impl FlameBuffers {
         let (temp_samples_texture, temp_samples_view) = create_accum_texture("Temp Samples Texture");
 
         // Create histogram storage buffer for atomic color accumulation
-        // Buffer layout: U16 PACKED format - 2× u32 per pixel
+        // Buffer layout: 3× u32 per pixel
         //   u32[0]: [R_u16][G_u16]
-        //   u32[1]: [B_u16][Density_u16]
-        // Size: width × height × 2 × sizeof(u32)
-        let histogram_buffer_size = (width * height * 2 * std::mem::size_of::<u32>() as u32) as u64;
+        //   u32[1]: [B_u16][unused]
+        //   u32[2]: Density (full u32, prevents overflow)
+        // Size: width × height × 3 × sizeof(u32)
+        let histogram_buffer_size = (width * height * 3 * std::mem::size_of::<u32>() as u32) as u64;
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Histogram Buffer"),
             size: histogram_buffer_size,
@@ -404,24 +405,11 @@ impl FlameBuffers {
         });
 
         // Create per-pixel scale buffer
-        // Each pixel gets a u16 scale value (1-100), packed 2 per u32
-        // Initialize all pixels to scale=10 (conservative to prevent overflow)
+        // FIX: Unpacked format (1 u32 per pixel) to prevent race conditions in adjust_scale
+        // Each pixel stores scale value (1-100) in dedicated u32 word
         let pixel_count = (width * height) as usize;
-        let initial_scale = 10u16;
-        let mut scale_data = vec![0u32; (pixel_count + 1) / 2]; // Round up for odd pixel counts
-
-        for i in 0..pixel_count {
-            let word_idx = i / 2;
-            let is_odd = (i % 2) == 1;
-
-            if is_odd {
-                // High 16 bits
-                scale_data[word_idx] |= (initial_scale as u32) << 16;
-            } else {
-                // Low 16 bits
-                scale_data[word_idx] |= initial_scale as u32;
-            }
-        }
+        let initial_scale = 10u32;
+        let scale_data = vec![initial_scale; pixel_count];
 
         let scale_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Per-Pixel Scale Buffer"),
@@ -636,19 +624,8 @@ impl FlameBuffers {
     /// Reset scale buffer to initial value (when switching presets or resetting)
     pub fn reset_scale_buffer(&self, queue: &Queue, width: u32, height: u32) {
         let pixel_count = (width * height) as usize;
-        let initial_scale = 10u16;
-        let mut scale_data = vec![0u32; (pixel_count + 1) / 2];
-
-        for i in 0..pixel_count {
-            let word_idx = i / 2;
-            let is_odd = (i % 2) == 1;
-
-            if is_odd {
-                scale_data[word_idx] |= (initial_scale as u32) << 16;
-            } else {
-                scale_data[word_idx] |= initial_scale as u32;
-            }
-        }
+        let initial_scale = 10u32;
+        let scale_data = vec![initial_scale; pixel_count];
 
         queue.write_buffer(&self.scale_buffer, 0, bytemuck::cast_slice(&scale_data));
     }
