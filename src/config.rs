@@ -39,6 +39,9 @@ pub struct FractalConfig {
     /// Blend factor for accumulation (0.01 = slow/smooth, 1.0 = fast/flickery, default: 0.1)
     #[serde(default = "default_blend_factor")]
     pub blend_factor: f32,
+    /// Per-pixel iteration limit (0 = disabled, default: 0)
+    #[serde(default)]
+    pub target_iterations_per_pixel: u32,
 
     /// Color settings
     pub color_mode: ColorMode,

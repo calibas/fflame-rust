@@ -28,6 +28,7 @@ pub struct FlameRenderer {
     density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression (default: 0.0)
     blend_factor: f32, // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
+    target_iterations_per_pixel: u32, // Per-pixel convergence: stop updating pixel after N iterations (0 = disabled)
 }
 
 impl FlameRenderer {
@@ -80,6 +81,7 @@ impl FlameRenderer {
             density_compression_strength: 0.0, // Linear accumulation default (no compression)
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
             use_dynamic_blend: true, // Default to exponential convergence (old behavior)
+            target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
         }
     }
 
@@ -205,12 +207,12 @@ impl FlameRenderer {
             histogram_color_scale: self.histogram_color_scale,
             low_density_smoothing: self.low_density_smoothing,
             density_compression_strength: self.density_compression_strength,
+            target_iterations_per_pixel: self.target_iterations_per_pixel,
             _pad0: 0.0,
             _pad1: 0.0,
             _pad2: 0.0,
             _pad3: 0.0,
             _pad4: 0.0,
-            _pad5: 0.0,
         };
 
         self.buffers.update_accumulate_params(queue, &params);
@@ -465,6 +467,11 @@ impl FlameRenderer {
     pub fn set_use_dynamic_blend(&mut self, use_dynamic: bool) {
         self.use_dynamic_blend = use_dynamic;
         // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
+    }
+
+    /// Set per-pixel iteration limit (0 = disabled)
+    pub fn set_target_iterations_per_pixel(&mut self, target: u32) {
+        self.target_iterations_per_pixel = target;
     }
 
     /// Update iterations per thread

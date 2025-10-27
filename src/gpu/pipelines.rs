@@ -90,7 +90,17 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Note: binding 6 removed (scale_buffer replaced with params.histogram_color_scale)
+                // Iteration count buffer (storage, read-write for atomics)
+                BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -198,7 +208,17 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Note: binding 4 removed (scale_buffer replaced with params.histogram_color_scale)
+                // Iteration count buffer (storage, read-only)
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -320,7 +340,10 @@ impl FlamePipelines {
                     binding: 5,
                     resource: buffers.variation_params_buffer.as_entire_binding(),
                 },
-                // Note: binding 6 removed (scale_buffer replaced with params.histogram_color_scale)
+                BindGroupEntry {
+                    binding: 6,
+                    resource: buffers.iteration_count_buffer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -351,7 +374,10 @@ impl FlamePipelines {
                     binding: 3,
                     resource: buffers.accumulate_params_buffer.as_entire_binding(),
                 },
-                // Note: binding 4 removed (scale_buffer replaced with params.histogram_color_scale)
+                BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.iteration_count_buffer.as_entire_binding(),
+                },
             ],
         })
     }

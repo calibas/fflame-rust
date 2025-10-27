@@ -120,6 +120,7 @@ impl EguiLayer {
         density_compression_strength: &mut f32,
         blend_factor: &mut f32,
         use_dynamic_blend: &mut bool,
+        target_iterations_per_pixel: &mut u32,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -137,6 +138,7 @@ impl EguiLayer {
         let mut density_compression_changed = false;
         let mut blend_factor_changed = false;
         let mut use_dynamic_blend_changed = false;
+        let mut target_iterations_changed = false;
         let mut add_transform = false;
         let mut delete_transform = None;
         let mut render_mode_changed = false;
@@ -232,6 +234,8 @@ impl EguiLayer {
                 &mut blend_factor_changed,
                 use_dynamic_blend,
                 &mut use_dynamic_blend_changed,
+                target_iterations_per_pixel,
+                &mut target_iterations_changed,
             );
 
             // Render View window
@@ -416,6 +420,7 @@ impl EguiLayer {
             density_compression_changed,
             blend_factor_changed,
             use_dynamic_blend_changed,
+            target_iterations_changed,
         }
     }
 }

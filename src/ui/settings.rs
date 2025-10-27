@@ -40,6 +40,8 @@ pub fn render_settings_window(
     blend_factor_changed: &mut bool,
     use_dynamic_blend: &mut bool,
     use_dynamic_blend_changed: &mut bool,
+    target_iterations_per_pixel: &mut u32,
+    target_iterations_changed: &mut bool,
 ) {
     egui::Window::new("Settings")
         .open(show_settings)
@@ -290,6 +292,43 @@ pub fn render_settings_window(
                         .changed()
                     {
                         *density_compression_changed = true;
+                    }
+
+                    // Per-pixel iteration limit
+                    // Use logarithmic slider for better control across large ranges
+                    let mut log_value = if *target_iterations_per_pixel == 0 {
+                        0.0  // 0 maps to log(0) special case
+                    } else {
+                        (*target_iterations_per_pixel as f64).log10()
+                    };
+
+                    if ui.add(egui::Slider::new(&mut log_value, 0.0..=6.0)
+                        .custom_formatter(|n, _| {
+                            if n < 0.5 {
+                                "Disabled".to_string()
+                            } else {
+                                format!("{}", format_iterations(10f64.powf(n) as u64))
+                            }
+                        })
+                        .text("Per-Pixel Iteration Limit"))
+                        .on_hover_text(
+                            "Stop accumulating a pixel after it receives N iterations.\n\
+                            Prevents over-sampling dense areas while sparse areas catch up.\n\n\
+                            Disabled: All pixels accumulate forever (default)\n\
+                            1,000: Very aggressive - stops early\n\
+                            10,000: Moderate - good for quick previews\n\
+                            100,000: Conservative - allows good convergence\n\
+                            1,000,000: Very conservative - high quality\n\n\
+                            Works independently of blend_factor and density compression."
+                        )
+                        .changed()
+                    {
+                        *target_iterations_per_pixel = if log_value < 0.5 {
+                            0  // Disabled
+                        } else {
+                            10f64.powf(log_value) as u32
+                        };
+                        *target_iterations_changed = true;
                     }
 
                     // Speed multiplier for frame rate (1x = 60 FPS, 2x = 120 FPS, etc.)
