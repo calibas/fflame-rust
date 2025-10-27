@@ -391,12 +391,14 @@ impl FlameBuffers {
         let (temp_samples_texture, temp_samples_view) = create_accum_texture("Temp Samples Texture");
 
         // Create histogram storage buffer for atomic color accumulation
-        // Buffer layout: 3× u32 per pixel
-        //   u32[0]: [R_u16][G_u16]
-        //   u32[1]: [B_u16][unused]
-        //   u32[2]: Density (full u32, prevents overflow)
-        // Size: width × height × 3 × sizeof(u32)
-        let histogram_buffer_size = (width * height * 3 * std::mem::size_of::<u32>() as u32) as u64;
+        // Buffer layout: 4× u32 per pixel (unpacked, no bit manipulation needed)
+        //   u32[0]: R (full u32)
+        //   u32[1]: G (full u32)
+        //   u32[2]: B (full u32)
+        //   u32[3]: Density (full u32)
+        // Size: width × height × 4 × sizeof(u32)
+        // Memory: ~7.7MB @ 800×600 (was ~5.8MB with packed format)
+        let histogram_buffer_size = (width * height * 4 * std::mem::size_of::<u32>() as u32) as u64;
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Histogram Buffer"),
             size: histogram_buffer_size,
