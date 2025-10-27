@@ -1,8 +1,27 @@
 # Density-Aware Color Targeting - POC Test Results
 
 **Date:** 2025-10-27
-**Status:** ❌ **Failed - Not Viable**
-**Conclusion:** Density-aware color adjustments cause unacceptable corruption in high-density areas
+**Status:** ⚠️ **INVALID TESTS - CONDUCTED ON WRONG COMMIT**
+**Conclusion:** All tests were conducted on commit 16b972c, which was BEFORE overflow fixes were merged. The observed "corruption" was actually u16 histogram overflow at scale=100, NOT a fundamental problem with density-aware adjustments.
+
+## ⚠️ CRITICAL ERROR IN TEST METHODOLOGY
+
+**The Problem:** Tests were conducted on an outdated commit that still had histogram overflow issues.
+
+**Timeline of Confusion:**
+1. User created PR #6 (batched-accumulation) which fixed overflow with true u32 unpacked histogram
+2. PR was merged to main on GitHub
+3. Tests were conducted on local commit 16b972c WITHOUT pulling the merged changes
+4. Commit 16b972c was still using u16 packed histogram with scale=100 (max 655 hits before overflow)
+5. All observed "corruption" was actually overflow wraparound, not density-aware adjustment issues
+
+**Current Status (after git fetch):**
+- HEAD is now at correct commit with true u32 unpacked histogram (4 words per pixel)
+- Overflow is actually fixed (can handle ~42M hits per pixel)
+- Test 2 (brightness compression) needs to be re-tested on correct commit
+- Previous conclusions about "double-application" and "mathematical imbalance" may be incorrect
+
+**Recommendation:** Re-run all tests on current HEAD with overflow actually fixed
 
 ---
 
@@ -166,12 +185,54 @@ In extremely dense areas (density >> 1.0):
 
 ---
 
-## Lessons Learned
+## Corrected Understanding (Post-Investigation)
+
+**The "corruption" was histogram overflow, not a fundamental problem with the approach.**
+
+### What Actually Happened
+
+**Test Environment (16b972c):**
+- Using u16 packed histogram (2× u32 with 16-bit channels)
+- Scale = 100
+- Max capacity = 65,535 / 100 = **655 hits before overflow**
+- Dense fractal areas easily exceed 655 hits → **u16 wraparound corruption**
+
+**Correct Environment (current HEAD after PR #6 merge):**
+- Using u32 unpacked histogram (4× u32 separate channels)
+- Scale = configurable via `histogram_color_scale` parameter
+- Max capacity = 4,294,967,295 / scale = **~42 million hits** (at default scale)
+- No overflow in practical use cases
+
+### Re-Evaluation Needed
+
+**Test 2 (Brightness Compression) showed promise** before "corruption" appeared:
+- Initial feedback: "Looks better"
+- Applied 20% darkening to dense areas
+- May actually work correctly on overflow-free histogram
+
+**The "double-application" theory may be incorrect:**
+- The math `color *= mix(1.0, 0.8, normalized_density)` is a simple post-process
+- Doesn't actually interact with the `color *= sqrt(density)` scaling at line 56
+- Those are sequential operations, not compounding
+- The "corruption" was overflow wraparound, not mathematical imbalance
+
+### Next Steps
+
+1. Re-test Test 2 on current HEAD with true u32 histogram
+2. Verify no corruption occurs with brightness compression
+3. If successful, parameterize the adjustment amount
+4. Add UI controls for density-aware brightness adjustment
+
+## Original (Invalid) Lessons Learned
+
+**NOTE: The following conclusions were based on faulty tests and may not be accurate:**
 
 1. **Density is already baked into the color pipeline**
    - Colors are averaged by density (accumulate shader)
    - Colors are scaled by density (tonemap shader)
    - Adding more density adjustments = double-application
+
+   **↑ This may be incorrect - needs re-evaluation with proper histogram**
 
 2. **Tone mapping math is fragile**
    - Carefully balanced transformations
