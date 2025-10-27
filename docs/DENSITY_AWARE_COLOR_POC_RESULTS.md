@@ -223,6 +223,77 @@ In extremely dense areas (density >> 1.0):
 3. If successful, parameterize the adjustment amount
 4. Add UI controls for density-aware brightness adjustment
 
+---
+
+## Test 5: Sublinear Accumulation (Approach 6A) - FAILED (2025-10-27)
+
+**Goal:** Modify accumulation pass to slow down density/color accumulation in dense areas, preventing saturation.
+
+**Implementation:** Added `density_compression_strength` parameter (0-100 range) with hyperbolic compression formula.
+
+### Attempts Made
+
+**5A: Compress Density Accumulation**
+```wgsl
+let accumulation_rate = 1.0 / (1.0 + prev.a * strength);
+alpha_accumulated = prev.a + (density * 0.01 * blend * accumulation_rate);
+```
+Result: No visible effect (0-100)
+
+**5B: Normalized Density**
+```wgsl
+let normalized = sqrt(prev.a * histogram_color_scale);
+let rate = 1.0 / (1.0 + normalized * strength * 0.01);
+```
+Result: No visible effect (0-100)
+
+**5C: Squared Density**
+```wgsl
+let rate = 1.0 / (1.0 + prev.a * prev.a * strength);
+```
+Result: No visible effect at positive values. Negative (-100) causes corruption.
+
+**5D: Compress Color Blending**
+```wgsl
+let compression = 1.0 / (1.0 + prev.a * prev.a * strength);
+let adjusted_blend = blend * density_factor * compression;
+rgb = prev.rgb * (1-adjusted_blend) + new_color * adjusted_blend;
+```
+Result: Near-identical images at all positive strengths. Only negative values show effect (corruption).
+
+### Debug Verification
+
+- Added visual debug (turn red if strength > 0.5): **Confirmed parameter passes to GPU correctly**
+- Tested extreme values (strength=100): **No visible difference from strength=0**
+- Math verified: At strength=100, density=1.0 → 99% reduction in blend rate
+
+### Why It Failed
+
+**Progressive accumulation renders the compression imperceptible:**
+
+1. **Blend factors are already tiny** - each frame adds ~0.1% of new samples
+2. **Compressing tiny values** - reducing 0.1% to 0.001% has no visual impact
+3. **Iteration count dominates convergence** - not per-frame blend rate
+4. **Density values are small** - prev.a typically < 1.0, so prev.a² is extremely small
+
+At strength=100:
+- Compression factor = 1/101 ≈ 0.01 (99% reduction)
+- But reducing an already-imperceptible per-frame change has no visible effect
+- The overall iteration count matters more than the blend rate curve
+
+**Why negative values work:**
+- Negative values amplify blend factor (compression_factor > 1.0)
+- Makes incremental changes large enough to be visible
+- But causes artifacts/corruption because changes are too large
+
+**User observation:** "Every positive setting produces near-identical images"
+
+### Verdict
+
+Accumulation-time compression is **not viable** for this use case. The progressive rendering architecture makes per-frame blend adjustments ineffective at producing visible results.
+
+**Recommendation:** Return to post-accumulation approaches (tone mapping adjustments) or explore completely different architectures.
+
 ## Original (Invalid) Lessons Learned
 
 **NOTE: The following conclusions were based on faulty tests and may not be accurate:**
