@@ -477,19 +477,103 @@ But density should still sum correctly: `(1×100) + (3×10) = 130`, color_sum sh
 - `shaders/accumulate.wgsl` lines 49-58
 - `src/renderer/compute_kernel.rs` lines 273-321
 
-### Next Investigation
+---
 
-The darkening happens progressively over many frames, suggesting cumulative error rather than a one-time math mistake. Possible causes:
+## Conclusion: Per-Pixel Adaptive Scaling Abandoned
 
-1. **Aggressive scale reduction in dense areas**
-   - adjust_scale may be dropping scales too quickly
-   - Could cause under-representation of dense area brightness
+### Date
+2025-10-27
 
-2. **Accumulation blending issue**
-   - The exponential moving average in accumulate.wgsl
-   - May not handle varying densities correctly
+### Final Test: Fixed Global Scale
 
-3. **Histogram clearing timing**
-   - Histogram cleared every 4 frames (batched)
-   - Scales updated every frame
-   - Potential for stale data
+**Test:** Disabled `adjust_scale_pass()` and used fixed global scale=100
+
+**Results:**
+- ✅ No darkening artifacts
+- ✅ Quality improves consistently over time
+- ✅ Excellent color depth (scale=100)
+- ❌ Still have original overflow problem in extremely dense areas
+
+### Root Cause of Per-Pixel Adaptive Failure
+
+**The fundamental problem:** Per-pixel adaptive scaling is **architecturally incompatible** with batched histogram accumulation.
+
+**Why it fails:**
+1. Histogram accumulates data over 4 frames (batch)
+2. Scales change every frame via adjust_scale
+3. Histogram contains mixed data encoded with different scales
+4. Decode can't know which frames used which scales
+5. Even with density encoding scale, timing mismatches create errors
+
+**Concrete example of the mismatch:**
+- Batch frames 1-4 accumulate into histogram
+- Frame 1: scale=100, writes data
+- adjust_scale runs: scale→50 (high density detected)
+- Frame 2: scale=50, writes data
+- Frame 3: scale=50, writes data
+- Frame 4: scale=50, writes data
+- Accumulate: Histogram has 1 frame @ scale=100 + 3 frames @ scale=50
+- Density sum = 100 + 50 + 50 + 50 = 250
+- But colors from frame 1 are 2× too large relative to frames 2-4
+- Over many iterations, this creates cumulative errors → darkening
+
+**Why fixed global scale works:**
+- All frames use same scale (no timing mismatch)
+- Encode and decode are perfectly consistent
+- Simple, predictable, no cumulative errors
+
+### What We Achieved
+
+Despite abandoning per-pixel adaptive, the work was not wasted:
+
+**Infrastructure improvements:**
+1. ✅ **U32 density buffer** - Prevents overflow (was u16, now u32)
+   - Old: 65K max density → overflow with 4× batching
+   - New: 4.2B max density → handles any batch size
+2. ✅ **Unpacked scale buffer** - Cleaner, no race conditions
+   - Old: Packed 2× u16 per u32 (race condition in adjust_scale)
+   - New: 1× u32 per pixel (each pixel has dedicated word)
+3. ✅ **3× u32 histogram layout** - Separated density for clarity
+   - Word 0: [R_u16][G_u16]
+   - Word 1: [B_u16][unused]
+   - Word 2: Density (u32)
+4. ✅ **Fixed decode math** - Single division by density
+
+**Memory cost:** ~2.9MB extra @ 800×600 (from 2× u32→3× u32 histogram + unpacked scales)
+
+### Current State: Fixed Global Scale = 100
+
+**Configuration:**
+- `initial_scale = 100` (maximum color depth)
+- `adjust_scale_pass()` disabled
+- All infrastructure improvements kept
+
+**Performance:** Same as before (~2M iterations/second @ 60 FPS)
+
+**Quality:** Excellent - 10× better color depth than scale=10
+
+**Remaining issue:** Original problem still exists - color overflow in extremely dense areas with 4× batching. Scale=100 maximizes color depth but provides no overflow protection.
+
+### The Core Dilemma
+
+With 4× batching (128 workgroups × 256 iterations × 4 frames = 131,072 iterations per batch):
+
+**U16 color channels max = 65,535**
+
+At scale=100:
+- Each hit adds: color (0-1) × 100 = 0-100 to u16
+- Overflow after: 65,535 / 100 = ~655 hits per pixel per batch
+- High-density pixels in some fractals easily exceed this
+
+**Trade-offs:**
+- Lower scale (10-50): Prevents overflow but reduces color precision
+- Higher scale (100): Maximum precision but overflows in dense areas
+- Per-pixel adaptive: Complex, buggy, incompatible with batching
+
+### Possible Solutions Going Forward
+
+1. **Accept overflow in extreme dense areas** - Most fractals won't hit it
+2. **Reduce batch size** - Go back to 1× or 2× batching (less overflow risk)
+3. **Use larger integer format** - U32 colors instead of U16 (12× memory)
+4. **Implement true floating-point accumulation** - Major architectural change
+5. **Hybrid approach** - User's new idea (to be discussed)
