@@ -722,33 +722,38 @@ Scale: 1.0, 10.0, 100.0
 
 ---
 
-## Open Questions
+## Open Questions ✅ RESOLVED
 
-1. **What was the original hardcoded scale value?** (100? 10? other?)
-   - Need to check git history before configurable parameter
+See [HISTOGRAM_INVESTIGATION_SUMMARY.md](HISTOGRAM_INVESTIGATION_SUMMARY.md) for complete answers.
 
-2. **What changes in ce58657 and ef0cdd8 improved quality?**
-   - User reported these commits as quality improvements
-   - Need to analyze diffs
+1. **What was the original hardcoded scale value?** ✅ ANSWERED
+   - Main branch: scale=100 (hardcoded)
+   - ef0cdd8 baseline: scale=10000 (hardcoded)
+   - Current experiment: scale=10 (default, configurable 1-100)
 
-3. **Is the default scale=10 the right choice?**
-   - Balances overflow vs precision
-   - But causes visible color banding
-   - Should default be higher (50?) with warnings about overflow?
+2. **What changes in ce58657 and ef0cdd8 improved quality?** ✅ ANSWERED
+   - ce58657: U16 packing (scale=100) - good quality
+   - ef0cdd8: Fixed alpha bug + increased scale to 10000 - excellent quality
+   - Only ONE meaningful change: color_scale 100 → 10000
 
-4. **Does batched accumulation fundamentally change color mixing?**
-   - Fewer blend operations (250 vs 1000 for same samples)
-   - Different statistical behavior
-   - Need rigorous testing to confirm
+3. **Is the default scale=10 the right choice?** ✅ ANSWERED
+   - No - causes severe color banding (10 levels)
+   - Recommendation: scale=100 (balance) or implement u8 packing (256 levels)
+   - Scale=10 was chosen for overflow protection but sacrifices too much quality
 
-5. **Is low-density smoothing worth the accuracy trade-off?**
-   - Reduces noise but slows convergence
-   - Mathematically less accurate
-   - User preference? Scene-dependent?
+4. **Does batched accumulation fundamentally change color mixing?** ✅ ANSWERED
+   - Mathematically correct with blend_factor scaling
+   - Different statistical behavior (fewer blend operations)
+   - Quality impact from lower defaults (scale, smoothing), not batching itself
+
+5. **Is low-density smoothing worth the accuracy trade-off?** ✅ ANSWERED
+   - Depends on use case (noise vs convergence)
+   - Recommendation: default=0.0 (no smoothing) for quality
+   - Let users enable if noise bothers them
 
 ---
 
-## Recommendations
+## Recommendations ✅ INVESTIGATION COMPLETE
 
 ### 1. Document Original Baseline
 
