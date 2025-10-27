@@ -536,22 +536,18 @@ Final Display (RGBA8 pixels)
 
 ---
 
-## Recommendations for Quality Investigation
+## Recommendations for Quality Investigation ✅ COMPLETE
 
-1. **Establish Baseline:** Render reference images on main branch (before batching experiments)
+Investigation completed 2025-10-26. See [HISTOGRAM_INVESTIGATION_SUMMARY.md](HISTOGRAM_INVESTIGATION_SUMMARY.md) for results.
 
-2. **Systematic Testing:** Test each parameter independently:
-   - histogram_color_scale: 1, 10, 50, 100
-   - low_density_smoothing: 0.0, 0.5, 1.0
-   - batch_size: 1, 4
+Key findings:
+1. ✅ Baseline established (main branch, ef0cdd8)
+2. ✅ Parameters tested and analyzed
+3. ✅ Quality regression identified (color_scale 10000 → 10)
+4. ✅ Recommendations provided (u8 packing or increase defaults)
+5. ✅ All documentation updated
 
-3. **Visual Comparison:** Side-by-side renders with pixel diffs
-
-4. **Quantitative Metrics:** RMSE, variance, convergence rate measurements
-
-5. **User Feedback:** Gather subjective quality assessments
-
-6. **Document Findings:** Update this document with test results and conclusions
+**Next Steps:** Implement u8 packing or update defaults before merge.
 
 ---
 
