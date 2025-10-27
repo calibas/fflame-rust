@@ -97,17 +97,7 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Per-pixel scale buffer (storage, read-only)
-                BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                // Note: binding 6 removed (scale_buffer replaced with params.histogram_color_scale)
             ],
         });
 
@@ -215,17 +205,7 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Per-pixel scale buffer (storage, read-only)
-                BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                // Note: binding 4 removed (scale_buffer replaced with params.histogram_color_scale)
             ],
         });
 
@@ -404,10 +384,7 @@ impl FlamePipelines {
                     binding: 5,
                     resource: buffers.variation_params_buffer.as_entire_binding(),
                 },
-                BindGroupEntry {
-                    binding: 6,
-                    resource: buffers.scale_buffer.as_entire_binding(),
-                },
+                // Note: binding 6 removed (scale_buffer replaced with params.histogram_color_scale)
             ],
         })
     }
