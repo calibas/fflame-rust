@@ -4,14 +4,33 @@
 **Status:** ⚠️ **POC Tests Invalidated - Re-Testing Required**
 **Goal:** Provide artistic control over how colors appear in sparse (dark) vs dense (bright) areas
 
-## ⚠️ UPDATE: POC Test Results Were Invalid
+## ⚠️ UPDATE: Wrong Problem Being Solved
 
-Initial POC tests (documented in DENSITY_AWARE_COLOR_POC_RESULTS.md) showed "corruption" but were conducted on wrong commit:
-- Tests used u16 packed histogram (max 655 hits before overflow)
-- Observed "corruption" was actually overflow wraparound
-- Current HEAD has true u32 unpacked histogram (42M+ hits capacity)
-- Approach 3 (Parametric HSV Adjustments) needs re-testing on correct commit
-- Brightness compression showed promise before overflow occurred
+Initial POC tests attempted **post-accumulation brightness darkening** (tone mapping adjustments):
+- Tests used u16 packed histogram and encountered overflow (documented separately)
+- Even with overflow fixed, post-accumulation darkening doesn't solve the real problem
+- **Real goal:** Slow down accumulation in dense areas to prevent saturation
+- **Wrong approach:** Darkening bright areas after accumulation (achievable with tone curves)
+
+## ✅ Corrected Understanding: Accumulation-Time Control
+
+**The actual need:** Control how density accumulates during the accumulation pass, not how it displays.
+
+**Current behavior (linear accumulation):**
+```wgsl
+// accumulate.wgsl line 70
+alpha_accumulated = prev.a + (density * 0.01 * params.blend_factor);
+```
+
+Every hit adds the same amount (0.01) regardless of existing density. Dense areas saturate quickly.
+
+**Desired behavior (sublinear accumulation):**
+Apply compression function so dense areas accumulate slower:
+- Sparse areas: Normal accumulation rate
+- Dense areas: Reduced accumulation rate (prevents saturation)
+- Result: More detail visible in bright cores without darkening display
+
+See "New Approach 6: Sublinear Density Accumulation" below for implementation details.
 
 ---
 
@@ -507,6 +526,133 @@ struct GpuParams {
 
 ---
 
+## New Approach 6: Sublinear Density Accumulation (Recommended)
+
+**Concept:** Modify how density accumulates in the accumulation pass itself, making dense areas accumulate slower to prevent saturation.
+
+**Key Difference from Approaches 1-5:**
+- Approaches 1-5: Post-accumulation display adjustments (tone mapping)
+- Approach 6: **Accumulation-time control** (changes how density grows)
+
+**Current Implementation (Linear):**
+```wgsl
+// shaders/accumulate.wgsl line 70
+alpha_accumulated = prev.a + (density * 0.01 * params.blend_factor);
+```
+
+Every hit adds the same `0.01` regardless of existing density. Dense areas saturate quickly.
+
+### Option 6A: Hyperbolic Compression (Recommended First)
+
+**Implementation:**
+```wgsl
+// Slow down accumulation based on existing accumulated density
+let accumulation_rate = 1.0 / (1.0 + prev.a * params.density_compression_strength);
+let new_density_contrib = density * 0.01 * params.blend_factor * accumulation_rate;
+alpha_accumulated = prev.a + new_density_contrib;
+```
+
+**Behavior:**
+- `compression_strength = 0.0`: Linear accumulation (current behavior)
+- `compression_strength = 1.0`: Moderate compression (dense areas accumulate at 50% rate when prev.a = 1.0)
+- `compression_strength = 5.0`: Strong compression (dense areas accumulate at ~17% rate when prev.a = 1.0)
+
+**Mathematical Properties:**
+- Never fully saturates (asymptotic approach to limit)
+- Smooth compression (no hard thresholds)
+- Preserves color ratios (only affects density, not color)
+
+### Option 6B: Logarithmic Accumulation
+
+**Implementation:**
+```wgsl
+// Logarithmic density growth
+let new_density_contrib = density * 0.01 * params.blend_factor;
+let log_scale = params.density_log_scale; // e.g., 10.0
+alpha_accumulated = log(exp(prev.a * log_scale) + exp(new_density_contrib * log_scale)) / log_scale;
+```
+
+**Behavior:**
+- Naturally compresses high densities
+- Similar to how human perception works (Weber-Fechner law)
+- More mathematically pure than hyperbolic
+
+### Option 6C: Power Law Compression
+
+**Implementation:**
+```wgsl
+// Parameterized power-law compression
+let new_density_linear = density * 0.01 * params.blend_factor;
+let total_density_linear = prev.a + new_density_linear;
+
+// Apply compression: alpha = total^power
+// power < 1.0 = compression (sqrt, cbrt, etc)
+// power = 1.0 = linear (current)
+// power > 1.0 = expansion (not useful here)
+alpha_accumulated = pow(total_density_linear, params.density_compression_power);
+```
+
+**Behavior:**
+- `power = 0.5`: Square root (gentle compression)
+- `power = 0.33`: Cube root (stronger compression)
+- `power = 1.0`: Linear (current behavior)
+
+### New GPU Parameters
+
+```rust
+// Add to accumulation params
+struct AccumulateParams {
+    // ... existing fields ...
+    density_compression_strength: f32,  // For hyperbolic (0.0 = off, 5.0 = strong)
+    // OR
+    density_log_scale: f32,             // For logarithmic (1.0 = linear, 10.0 = compressed)
+    // OR
+    density_compression_power: f32,     // For power law (0.5 = sqrt, 1.0 = linear)
+}
+```
+
+### UI Controls
+
+**Option A (Hyperbolic):**
+- ✅ "Density Compression" slider (0.0 - 10.0, default 0.0)
+  - Label: "0 = Linear, 5 = Strong Compression"
+
+**Option B (Logarithmic):**
+- ✅ "Density Log Scale" slider (1.0 - 20.0, default 1.0)
+  - Label: "1 = Linear, 10 = Moderate, 20 = Strong"
+
+**Option C (Power Law):**
+- ✅ "Density Power" slider (0.25 - 1.0, default 1.0)
+  - Label: "0.5 = Sqrt, 0.33 = Cube Root, 1.0 = Linear"
+
+### Pros
+- ✅ Solves the actual problem (prevents saturation, not just darkening)
+- ✅ Works during accumulation (affects how detail builds up)
+- ✅ Single parameter (simple to understand and tune)
+- ✅ No new textures or shaders needed
+- ✅ Zero performance cost (one multiply/divide per pixel per frame)
+- ✅ Preserves color ratios (only affects alpha/density channel)
+- ✅ Works with all existing tone mapping controls
+
+### Cons
+- ⚠️ Affects entire image uniformly (no per-region control)
+- ⚠️ May require re-tuning density_scale when compression is enabled
+- ⚠️ Changes accumulated density values (affects saved states if stored)
+
+### Comparison to Post-Accumulation Approaches
+
+| Aspect | Post-Accumulation (1-5) | Accumulation-Time (6) |
+|--------|------------------------|----------------------|
+| **What it changes** | Display brightness | Density growth rate |
+| **When it applies** | After accumulation | During accumulation |
+| **Effect on detail** | Darkens existing | Prevents saturation |
+| **Equivalent to** | Tone curves | Exposure bracketing |
+| **Reversible** | Yes (change tonemap) | No (changes accumulation) |
+
+**Recommendation:** Start with **Option 6A (Hyperbolic)** - simplest math, most intuitive behavior, easiest to tune.
+
+---
+
 ## Comparison Matrix
 
 | Approach | Complexity | Flexibility | Performance | UI Complexity | New Textures | Existing Infrastructure |
@@ -516,15 +662,38 @@ struct GpuParams {
 | **3. Parametric HSV** | Low | Medium | Medium | Low | None | ❌ Need HSV functions |
 | **4. Density Masks** | Medium | High | Medium | High | None | ⚠️ Complex UI |
 | **5. Pre-Accumulation** | High | Medium | Slow | Medium | None | ❌ Architecture change |
+| **6. Sublinear Accumulation** | **Low** | **Low** | **Fast** | **Low** | **None** | ✅ **Minimal change** |
 
 ---
 
 ## Recommendations
 
-### Phase 1: Quick Win (Easiest to Implement)
+### ⭐ NEW Recommended First Step: Approach 6A (Hyperbolic Compression)
+
+**Why this is the best starting point:**
+- ✅ Solves the actual problem (prevents saturation vs just darkening)
+- ✅ Single parameter (density_compression_strength)
+- ✅ Zero new infrastructure (one line change in accumulate.wgsl)
+- ✅ Zero performance cost
+- ✅ Simplest to implement and test
+- ✅ Can combine with existing tone curve adjustments
+
+**Implementation Steps:**
+1. Add `density_compression_strength: f32` to `AccumulateParams` struct
+2. Update GPU buffer binding
+3. Modify line 70 in `accumulate.wgsl` to apply hyperbolic compression
+4. Add UI slider in Settings panel (0.0 - 10.0, default 0.0)
+5. Test with various fractal types
+
+**Expected result:** Dense areas stay visible longer without washing out, revealing hidden structure in bright cores.
+
+---
+
+### Phase 2: Display-Time Adjustments (If Needed After Phase 1)
 **Approach 3: Parametric HSV Adjustments**
 
 **Why:**
+- Complements accumulation-time control
 - No new textures needed
 - Simple linear interpolation
 - Intuitive controls (6 sliders)
