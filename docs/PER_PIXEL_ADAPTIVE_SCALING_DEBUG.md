@@ -379,17 +379,117 @@ Dense areas darken because they hit overflow threshold first and drop scale to m
 - `shaders/accumulate.wgsl` lines 35-36
 - `shaders/adjust_scale.wgsl` lines 28-31, 69-70
 
-### Next Steps
+---
 
-Need to fix two issues:
+## Fix Attempt #4: Correct Decode Math + Debug Fixes
 
-1. **Fix decode math:** Remove `× pixel_scale` from denominator in accumulate.wgsl
-   - Change from: `color_sum / (density × pixel_scale)`
-   - Change to: `color_sum / density`
-   - This was attempted in Fix #1 but caused whole-fractal artifacts due to density overflow
-   - Now that we have u32 density, this should work correctly
+### Date
+2025-10-27
 
-2. **Fix scale buffer reset:** Ensure scales reset to initial value (10) when loading preset
-   - Investigate why min=0.0 instead of min=10.0
-   - Check if histogram is being cleared properly
-   - Verify reset_scale_buffer() is called at right time
+### Theory
+The "dense areas darkening over time" was caused by double scale multiplication in the decode logic. Since density now includes scale (`density_u32 = pixel_scale`), multiplying by scale again in the denominator caused massive over-division when scales changed.
+
+### Fixes Implemented
+
+**1. Fixed decode math (accumulate.wgsl lines 49-58):**
+- Changed from: `color_sum / (density × pixel_scale)`
+- Changed to: `color_sum / density`
+- Since density = sum of scales, we only divide once
+
+**2. Fixed debug_scale_stats (compute_kernel.rs lines 273-321):**
+- Updated buffer size: `((pixel_count + 1) / 2)` → `pixel_count` (unpacked format)
+- Updated reading logic: Removed bit unpacking, direct u32 access
+- Fixed off-by-one buffer overrun that caused panic
+
+**3. Verified scale buffer reset:**
+- reset_scale_buffer() is called correctly in load_config()
+- Scales properly reset to 10 on preset load (min=10.0 confirmed)
+
+### Result: PARTIAL SUCCESS
+
+**Symptoms fixed:**
+- ✅ Scale buffer properly resets on preset load (min=10.0, max=10.0)
+- ✅ Debug logging works correctly (no more min=0.0 from garbage reads)
+- ✅ No panic from buffer overrun
+
+**Symptoms remaining:**
+- ❌ Dense areas still darken over time after first few frames
+- ❌ Quality degrades instead of improving with more iterations
+
+### Root Cause Analysis - Accumulation Still Broken
+
+**User observation:**
+"The min is now 1.0 again. Everything appears to reset properly on Preset load. The issue where it darkens over time remains. Instead of each pass improving quality, that only happens the first few frames. Then everything goes downhill."
+
+**Symptoms:**
+1. First few frames: Quality improves normally
+2. Middle frames: Dense areas start getting darker
+3. Later frames: Dense areas significantly darker than surroundings
+4. Quality degrades instead of converging
+
+**The problem is more fundamental than just the math.**
+
+The decode formula `color_sum / density` assumes density tracks the sum of scales used during encoding. But there's a **timing mismatch**:
+
+**Batch N encoding (compute shader):**
+- Reads current `scale_buffer[pixel]` value (e.g., scale=50)
+- Accumulates: `color × 50` to histogram
+- Accumulates: `50` to density
+
+**Between batches:**
+- `adjust_scale` runs, changes scales based on density
+- High-density pixels drop to scale=1-10
+
+**Batch N+1 decoding (accumulate shader):**
+- Reads histogram with mixed scales: old data (scale=50) + new data (scale=10)
+- Reads current `scale_buffer[pixel]` = 10 (updated value)
+- But decode just uses `color_sum / density` with NO reference to current scale
+
+The issue: **When scales change mid-render, the histogram contains data encoded with DIFFERENT scales than what's currently in scale_buffer.**
+
+**Example:**
+- Frames 1-10: scale=100, add 100 hits → color_sum=100×(color×100), density=100×100=10,000
+- adjust_scale: High density → reduce to scale=10
+- Frame 11: scale=10, add 10 hits → color_sum+=10×(color×10), density+=10×10=100
+- Total: color_sum=(100×color×100)+(10×color×10) = 10,100×color, density=10,100
+- Decode: `10,100×color / 10,100` = `color` ✓ Math works!
+
+Wait, that should be correct... Let me reconsider.
+
+**Oh! The issue might be in how the histogram is cleared vs. when scales change.**
+
+The histogram is cleared every batch (4 compute frames), but scales are updated EVERY frame. So within a single batch accumulation:
+- Frame 1 of batch: scale=100, write data
+- adjust_scale runs: scale→10
+- Frame 2 of batch: scale=10, write data
+- Frame 3 of batch: scale=10, write data
+- Frame 4 of batch: scale=10, write data
+- Accumulate: Histogram has mixed data (1 frame at scale=100, 3 frames at scale=10)
+
+But density should still sum correctly: `(1×100) + (3×10) = 130`, color_sum should match.
+
+**Need more investigation into:**
+1. Is the histogram being cleared at the right time?
+2. Are scales changing too aggressively in dense areas?
+3. Is there an issue with the accumulation blending formula itself?
+
+### Files Modified
+- `shaders/accumulate.wgsl` lines 49-58
+- `src/renderer/compute_kernel.rs` lines 273-321
+
+### Next Investigation
+
+The darkening happens progressively over many frames, suggesting cumulative error rather than a one-time math mistake. Possible causes:
+
+1. **Aggressive scale reduction in dense areas**
+   - adjust_scale may be dropping scales too quickly
+   - Could cause under-representation of dense area brightness
+
+2. **Accumulation blending issue**
+   - The exponential moving average in accumulate.wgsl
+   - May not handle varying densities correctly
+
+3. **Histogram clearing timing**
+   - Histogram cleared every 4 frames (batched)
+   - Scales updated every frame
+   - Potential for stale data

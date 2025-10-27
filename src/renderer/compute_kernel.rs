@@ -270,9 +270,9 @@ impl FlameRenderer {
 
     /// Debug: Read back scale buffer and compute statistics
     pub fn debug_scale_stats(&self, device: &Device, queue: &Queue) -> (f32, f32, f32) {
-        // Create staging buffer for readback
+        // Create staging buffer for readback (unpacked format: 1 u32 per pixel)
         let pixel_count = (self.width * self.height) as usize;
-        let buffer_size = ((pixel_count + 1) / 2) * std::mem::size_of::<u32>();
+        let buffer_size = pixel_count * std::mem::size_of::<u32>();
 
         let staging_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Scale Readback Staging"),
@@ -298,21 +298,15 @@ impl FlameRenderer {
         rx.recv().unwrap().unwrap();
 
         let data = buffer_slice.get_mapped_range();
-        let scale_words: &[u32] = bytemuck::cast_slice(&data);
+        let scale_data: &[u32] = bytemuck::cast_slice(&data);
 
-        // Unpack and compute stats
-        let mut min_scale = u16::MAX;
-        let mut max_scale = 0u16;
+        // Compute stats (unpacked format: 1 u32 per pixel)
+        let mut min_scale = u32::MAX;
+        let mut max_scale = 0u32;
         let mut sum = 0u64;
 
         for i in 0..pixel_count {
-            let word_idx = i / 2;
-            let is_odd = (i % 2) == 1;
-            let scale = if is_odd {
-                ((scale_words[word_idx] >> 16) & 0xFFFF) as u16
-            } else {
-                (scale_words[word_idx] & 0xFFFF) as u16
-            };
+            let scale = scale_data[i];
 
             min_scale = min_scale.min(scale);
             max_scale = max_scale.max(scale);

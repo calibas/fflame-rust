@@ -46,14 +46,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let b_sum = f32(packed_b & 0xFFFFu);  // Low 16 bits only
     let density = f32(density_u32);  // FIX: Full u32 density, no overflow
 
-    // Convert back to float color (average) using this pixel's scale
-    // Per-pixel adaptive scale: each pixel was encoded with its own scale value
+    // Convert back to float color (average)
+    // FIX: Density now includes scale (density_u32 = pixel_scale per hit)
+    // So we divide by density only, not (density × pixel_scale)
     var new_color = vec3<f32>(0.0);
     if (density > 0.0) {
         new_color = vec3<f32>(
-            r_sum / (density * pixel_scale),
-            g_sum / (density * pixel_scale),
-            b_sum / (density * pixel_scale)
+            r_sum / density,
+            g_sum / density,
+            b_sum / density
         );
 
         // Clamp to valid range
