@@ -195,29 +195,286 @@ rgb_accumulated = prev.rgb * (1.0 - adjusted_blend) + new_color * adjusted_blend
 
 ---
 
-## Quality-Improving Commits (Per User Feedback)
-
-### Commit ce58657: Unknown Changes
-
-**User Feedback:** "appear to have improved quality"
-
-**Investigation Needed:** Check commit diff to see what changed
-
-```bash
-git show ce58657 --stat
-```
+## Quality Baseline Commits (Per User Feedback)
 
 ### Commit ef0cdd8: "FIX: Correct density accumulation in histogram shader"
 
-**User Feedback:** "appear to have improved quality"
+**User Feedback:** "The code at commits ce58657 and ef0cdd8 appear to have improved quality"
 
-**Changes:** (Need to investigate)
+**Algorithm at ef0cdd8:** (GOOD QUALITY BASELINE)
 
-```bash
-git show ef0cdd8
+**Compute Shader (main_2d.wgsl):**
+```wgsl
+// 4 separate atomic operations per pixel
+let color_scale = 10000.0;  // Hardcoded
+let r = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
+let g = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
+let b = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
+
+atomicAdd(&histogram[base_idx + 0u], r);  // R channel
+atomicAdd(&histogram[base_idx + 1u], g);  // G channel
+atomicAdd(&histogram[base_idx + 2u], b);  // B channel
+atomicAdd(&histogram[base_idx + 3u], 1u); // Density
+// 4 atomics per pixel, 4× u32 per pixel = 16 bytes
 ```
 
-**Note:** These commits should be analyzed to understand what quality improvements were made
+**Accumulate Shader (accumulate.wgsl):**
+```wgsl
+// Simple global blend factor for all pixels
+let color_scale = 10000.0;  // Hardcoded
+let r_sum = f32(histogram[base_idx + 0u]);
+let g_sum = f32(histogram[base_idx + 1u]);
+let b_sum = f32(histogram[base_idx + 2u]);
+let density = f32(histogram[base_idx + 3u]);
+
+new_color = vec3<f32>(
+    r_sum / (density * color_scale),
+    g_sum / (density * color_scale),
+    b_sum / (density * color_scale)
+);
+
+// Simple blend - ALL pixels use same blend_factor
+rgb_accumulated = prev.rgb * (1.0 - params.blend_factor) + new_color * params.blend_factor;
+
+// Simple density accumulation
+alpha_accumulated = prev.a + (density * 0.01);
+```
+
+**Characteristics:**
+- ✅ High precision (scale=10000, ~10000 color levels)
+- ✅ No adaptive smoothing (mathematically pure)
+- ✅ Simple, straightforward algorithm
+- ✅ 4 atomic operations per pixel
+- ❌ Slower performance (more atomic ops)
+- ❌ Would overflow at ~6.5 hits with scale=10000 (but acceptable in practice)
+
+**Performance:** Baseline before packing optimization
+
+**Quality:** GOOD (user confirmed)
+
+---
+
+## What Changed Since ef0cdd8 (Good Quality Baseline)
+
+### Summary of All Changes
+
+Between ef0cdd8 (good quality) and HEAD (current), the following changes were made:
+
+### 1. U16 Packing (Performance Optimization)
+
+**Motivation:** Reduce atomic operations from 4 to 2 per pixel
+
+**Changes:**
+- Pack RGBA into 2× u32 instead of 4× u32
+- R+G in first u32: `r16 | (g16 << 16)`
+- B+D in second u32: `b16 | (d16 << 16)`
+- **Reduced histogram buffer size:** 16 bytes → 8 bytes per pixel
+- **Reduced atomic operations:** 4 atomics → 2 atomics per pixel
+
+**Performance Impact:** ~13.8% improvement (measured)
+
+**Quality Impact:** None if scale remains same
+
+---
+
+### 2. Color Scale Reduced: 10000 → 10 (Overflow Fix)
+
+**Motivation:** Fix histogram overflow at high densities
+
+**Changes:**
+- **Before:** `color_scale = 10000.0` (hardcoded)
+- **After:** `color_scale = 10.0` (default value)
+- **Max hits before overflow:** 6.5 → 6553 (1000× improvement!)
+
+**Quality Impact:** **MAJOR REGRESSION** ⚠️
+- **Precision loss:** 10000 color levels → 10 color levels (1000× worse!)
+- **Visible color banding** due to severe quantization
+- Example: color 0.537 → stored as 5 → decoded as 0.5 (error: 0.037)
+
+**Trade-off Exposed:** This change sacrificed precision to fix overflow
+
+---
+
+### 3. Configurable histogram_color_scale (User Control)
+
+**Motivation:** Let user balance precision vs overflow
+
+**Changes:**
+- Made scale a runtime parameter (1.0-100.0, default 10.0)
+- UI slider added
+- User can increase scale for precision (risk overflow)
+- User can decrease scale for overflow protection (lose precision)
+
+**Quality Impact:** Neutral (user choice), but default=10 has severe quantization
+
+---
+
+### 4. Adaptive Low-Density Smoothing (Noise Fix)
+
+**Motivation:** Reduce noise in sparse areas from batched accumulation
+
+**Changes:**
+- **Before:** All pixels use global `blend_factor`
+- **After:** Low-density pixels get reduced blend weight
+
+```wgsl
+// Before
+rgb_accumulated = prev.rgb * (1.0 - blend_factor) + new_color * blend_factor;
+
+// After
+let density_factor = mix(1.0, min(prev.a / 0.1, 1.0), low_density_smoothing);
+let adjusted_blend = blend_factor * density_factor;
+rgb_accumulated = prev.rgb * (1.0 - adjusted_blend) + new_color * adjusted_blend;
+```
+
+**Quality Impact:** **POTENTIAL REGRESSION** ⚠️
+- ✅ Reduces sparkle artifacts in dark areas
+- ❌ Slower convergence in sparse areas
+- ❌ Less mathematically accurate
+- ❌ Can be disabled (smoothing=0.0), but default=0.5 enables it
+
+---
+
+### 5. Blend Factor Scaled by Batch Size (Batching Correctness)
+
+**Motivation:** Fix alpha accumulation in batched mode
+
+**Changes:**
+- **Before:** `alpha_accumulated = prev.a + (density * 0.01)`
+- **After:** `alpha_accumulated = prev.a + (density * 0.01 * blend_factor)`
+
+**Quality Impact:** Correctness fix (brightness was 4× too bright before)
+
+---
+
+### 6. Skip Blending if Density = 0 (Correctness Fix)
+
+**Motivation:** Don't pull low-density areas toward black
+
+**Changes:**
+- **Before:** Always blend, even if density=0 (blends with black)
+- **After:** Only blend if density > 0
+
+```wgsl
+// Before
+rgb_accumulated = prev.rgb * (1.0 - blend_factor) + new_color * blend_factor;
+// When density=0, new_color=0, so this dims the pixel!
+
+// After
+var rgb_accumulated = prev.rgb;  // Default to previous
+if (density > 0.0) {
+    // Only blend if pixel received hits
+    rgb_accumulated = prev.rgb * (1.0 - adjusted_blend) + new_color * adjusted_blend;
+}
+```
+
+**Quality Impact:** Correctness fix (was causing grey fog in dark areas)
+
+---
+
+## Direct Comparison: ef0cdd8 vs HEAD
+
+| Aspect | ef0cdd8 (Good Quality) | HEAD (Current) |
+|--------|------------------------|----------------|
+| **Atomic Ops** | 4 per pixel | 2 per pixel (2× faster) |
+| **Color Scale** | 10000 (hardcoded) | 10 (default, configurable) |
+| **Color Precision** | ~10000 levels | ~10 levels (1000× worse!) |
+| **Max Hits Before Overflow** | ~6.5 | ~6553 (1000× better) |
+| **Adaptive Smoothing** | No (pure average) | Yes (default 0.5) |
+| **Blending Logic** | Always blend | Conditional blend |
+| **Alpha Scaling** | Missing (bug) | Fixed with blend_factor |
+| **Performance** | Baseline | ~13.8% faster |
+| **Quality** | GOOD ✅ | **REGRESSED** ❌ (due to scale=10) |
+
+---
+
+## The Core Quality Regression
+
+**Root Cause:** Changing `color_scale` from 10000 to 10
+
+**Why it was changed:** To fix histogram overflow
+
+**The problem:**
+1. U16 can only hold values 0-65535
+2. With scale=10000, overflow happens at: 65535 / 10000 = 6.5 hits
+3. Zoomed-out scenes have hundreds/thousands of hits per pixel
+4. Result: Blown highlights (overflow artifacts)
+
+**The solution chosen:**
+- Reduce scale to 10 (overflow at 6553 hits)
+- **Side effect:** Severe color quantization (10 levels instead of 10000)
+
+**The trade-off:**
+- ✅ Fixed: Overflow in bright areas
+- ❌ Introduced: Color banding everywhere
+- ⚖️ User can adjust, but default is quantized
+
+---
+
+## Recommended Path to Restore Quality
+
+### Option 1: Increase Default Scale (Accept Overflow Risk)
+
+**Change:** `default_histogram_color_scale() -> f32 { 100.0 }` (currently 10.0)
+
+**Result:**
+- 100 color levels (10× better than current)
+- Overflow at 655 hits (still reasonable for most scenes)
+- User warned about overflow, can lower if needed
+
+**Trade-off:** May see overflow in extreme zoom-out cases
+
+---
+
+### Option 2: Disable Adaptive Smoothing by Default
+
+**Change:** `default_low_density_smoothing() -> f32 { 0.0 }` (currently 0.5)
+
+**Result:**
+- Mathematically pure blending (like ef0cdd8)
+- Faster convergence
+- May see sparkle in dark areas with batched accumulation
+
+**Trade-off:** Noisier sparse regions
+
+---
+
+### Option 3: Return to 4 Atomic Ops (Accept Performance Loss)
+
+**Change:** Revert u16 packing, use 4× u32 histogram like ef0cdd8
+
+**Result:**
+- Can use scale=10000 without overflow concerns (u32 holds up to 4.2 billion)
+- Perfect color accuracy
+- Simple algorithm
+
+**Trade-off:** ~13.8% slower performance
+
+---
+
+### Option 4: Use U32 Histogram (Best Quality)
+
+**Change:** Pack RGBA into 1× u32 using u8 (0-255) per channel
+
+**Result:**
+- 256 color levels (26× better than current default)
+- Overflow at 16.7M hits (essentially never)
+- Still 2 atomic ops per pixel
+
+**Trade-off:** Slightly more complex bit manipulation
+
+**Implementation:**
+```wgsl
+// Pack 4× u8 into 1× u32
+let r8 = u32(clamp(final_color.r, 0.0, 1.0) * 255.0);
+let g8 = u32(clamp(final_color.g, 0.0, 1.0) * 255.0);
+let b8 = u32(clamp(final_color.b, 0.0, 1.0) * 255.0);
+let packed_rgba = r8 | (g8 << 8u) | (b8 << 16u) | (255u << 24u);
+
+// Separate u32 for density (no overflow until 4.2B hits)
+atomicAdd(&histogram[base_idx + 0u], packed_rgba);
+atomicAdd(&histogram[base_idx + 1u], 1u);  // density
+```
 
 ---
 
