@@ -1,8 +1,17 @@
 # Color Targeting in Light/Dark Areas - Implementation Approaches
 
 **Date:** 2025-10-27
-**Status:** Research and Planning
+**Status:** ⚠️ **POC Tests Invalidated - Re-Testing Required**
 **Goal:** Provide artistic control over how colors appear in sparse (dark) vs dense (bright) areas
+
+## ⚠️ UPDATE: POC Test Results Were Invalid
+
+Initial POC tests (documented in DENSITY_AWARE_COLOR_POC_RESULTS.md) showed "corruption" but were conducted on wrong commit:
+- Tests used u16 packed histogram (max 655 hits before overflow)
+- Observed "corruption" was actually overflow wraparound
+- Current HEAD has true u32 unpacked histogram (42M+ hits capacity)
+- Approach 3 (Parametric HSV Adjustments) needs re-testing on correct commit
+- Brightness compression showed promise before overflow occurred
 
 ---
 
