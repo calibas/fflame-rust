@@ -28,6 +28,7 @@ impl App {
             gamma: self.gamma,
             deterministic_rng: self.deterministic_rng,
             histogram_color_scale: self.histogram_color_scale,
+            low_density_smoothing: self.low_density_smoothing,
         }
     }
 
@@ -54,6 +55,7 @@ impl App {
         self.gamma = config.gamma;
         self.deterministic_rng = config.deterministic_rng;
         self.histogram_color_scale = config.histogram_color_scale;
+        self.low_density_smoothing = config.low_density_smoothing;
 
         // If config includes a palette, add it to library or update existing
         if let Some(ref palette) = config.palette {

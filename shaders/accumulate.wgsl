@@ -6,6 +6,8 @@ struct AccumulateParams {
     height: u32,
     blend_factor: f32, // samples_this_frame / samples_accumulated
     histogram_color_scale: f32, // Must match compute shader value
+    low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing
+    _pad: vec3<f32>, // Padding for alignment
 }
 
 @group(0) @binding(0) var previous_accumulation: texture_2d<f32>;
@@ -57,8 +59,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Blend RGB with previous accumulation (weighted average by sample count)
-    // blend_factor = samples_this_frame / total_samples
-    let rgb_accumulated = prev.rgb * (1.0 - params.blend_factor) + new_color * params.blend_factor;
+    // IMPORTANT: Only blend if this pixel received hits this batch (density > 0)
+    // Otherwise we'd pull low-density areas toward black/grey
+    var rgb_accumulated = prev.rgb;
+    if (density > 0.0) {
+        // Adaptive blending based on accumulated density to reduce low-density noise
+        // Low-density pixels (prev.a ≈ 0) get reduced blend weight to suppress noise
+        // High-density pixels (prev.a >> 0) use full blend_factor for accurate accumulation
+
+        // Smoothing factor: 0.0 = no smoothing, 1.0 = maximum smoothing
+        // When smoothing = 0, density_factor = 1.0 (no reduction)
+        // When smoothing = 1, density_factor ramps from 0.0 to 1.0 as density increases
+        let density_threshold = 0.1; // Density at which full blending is reached
+        let density_factor = mix(1.0, min(prev.a / density_threshold, 1.0), params.low_density_smoothing);
+
+        let adjusted_blend = params.blend_factor * density_factor;
+        rgb_accumulated = prev.rgb * (1.0 - adjusted_blend) + new_color * adjusted_blend;
+    }
 
     // Alpha (density) accumulates additively, but needs to be scaled by blend_factor
     // to account for the fact that blend_factor represents samples_this_batch / total_samples

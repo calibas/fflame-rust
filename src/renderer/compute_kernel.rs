@@ -23,6 +23,7 @@ pub struct FlameRenderer {
     deterministic_rng: bool,
     frame_counter: u32, // For deterministic seed progression
     histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
+    low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
 }
 
 impl FlameRenderer {
@@ -69,6 +70,7 @@ impl FlameRenderer {
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
             histogram_color_scale: 10.0, // Balanced default
+            low_density_smoothing: 0.5, // Moderate smoothing default
         }
     }
 
@@ -181,6 +183,14 @@ impl FlameRenderer {
             height: self.height,
             blend_factor,
             histogram_color_scale: self.histogram_color_scale,
+            low_density_smoothing: self.low_density_smoothing,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+            _pad3: 0.0,
+            _pad4: 0.0,
+            _pad5: 0.0,
+            _pad6: 0.0,
         };
 
         self.buffers.update_accumulate_params(queue, &params);
@@ -257,6 +267,7 @@ impl FlameRenderer {
         self.current_render_mode = config.flame.render_mode;
         self.current_projection = config.flame.projection;
         self.histogram_color_scale = config.histogram_color_scale;
+        self.low_density_smoothing = config.low_density_smoothing;
 
         // 5. Update palette
         self.buffers.update_palette(queue, palette);
@@ -405,6 +416,11 @@ impl FlameRenderer {
         self.histogram_color_scale = scale;
         // Update GPU params immediately so new scale takes effect
         self.update_iterations(queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, speed_factor);
+    }
+
+    pub fn set_low_density_smoothing(&mut self, smoothing: f32) {
+        self.low_density_smoothing = smoothing;
+        // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
     }
 
     /// Update iterations per thread
