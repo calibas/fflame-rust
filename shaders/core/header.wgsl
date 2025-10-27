@@ -47,8 +47,8 @@ struct Params {
     perspective_strength: f32,  // Strength for perspective projection
     camera_rotation_x: f32,  // 3D camera pitch (rotation around X)
     camera_rotation_y: f32,  // 3D camera yaw (rotation around Y)
+    histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
     _pad3: f32,
-    _pad4: f32,
 }
 
 // Variation parameters for one transform
@@ -64,3 +64,4 @@ struct VariationParams {
 @group(0) @binding(3) var palette_texture: texture_1d<f32>;
 @group(0) @binding(4) var palette_sampler: sampler;
 @group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;
+// Note: binding 6 removed (scale_buffer replaced with params.histogram_color_scale)

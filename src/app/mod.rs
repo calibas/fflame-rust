@@ -58,6 +58,11 @@ pub struct App {
     pub(super) deterministic_rng: bool,
     pub(super) speed_multiplier: u32,  // 1x, 2x, 4x, 8x, 16x (target FPS = 60 * multiplier)
     pub(super) last_frame_time: Option<web_time::Instant>,
+    // Batched accumulation experiment
+    pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
+    pub(super) frames_since_accumulation: u32,
+    pub(super) histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
+    pub(super) low_density_smoothing: f32,  // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -102,6 +107,8 @@ impl App {
             exposure: 1.0,
             gamma: 2.2,
             deterministic_rng: false,
+            histogram_color_scale: 10.0,  // Balanced default
+            low_density_smoothing: 0.5,  // Moderate smoothing default
         };
 
         let mut app = Self {
@@ -140,6 +147,11 @@ impl App {
             deterministic_rng: true, // Enabled by default for reproducible rendering
             speed_multiplier: 1, // Default 1x (60 FPS)
             last_frame_time: None,
+            // Batched accumulation: 1 = normal (every frame), 4 = experimental batching
+            accumulation_batch_size: 4, // EXPERIMENT: Test batching
+            frames_since_accumulation: 0,
+            histogram_color_scale: 10.0, // Balanced default
+            low_density_smoothing: 0.5, // Moderate smoothing default
         };
 
         #[allow(deprecated)]
@@ -291,15 +303,35 @@ impl App {
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;
 
+                self.frames_since_accumulation += 1;
+
+                // Determine if we should accumulate this frame
+                let should_accumulate = self.frames_since_accumulation >= self.accumulation_batch_size;
+
                 let t0 = Instant::now();
                 // 1. Compute new samples with fresh random seed
-                let samples_this_frame = renderer.compute_pass(&mut encoder, &self.gpu.queue, NUM_WORKGROUPS, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                // Clear histogram only when starting a new batch (frame 1 of batch)
+                let clear_histogram = self.frames_since_accumulation == 1;
+                let samples_this_frame = renderer.compute_pass(&mut encoder, &self.gpu.queue, NUM_WORKGROUPS, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor, clear_histogram);
                 self.metrics.record_compute_time(t0.elapsed().as_secs_f64() * 1000.0);
 
                 let t1 = Instant::now();
-                // 2. Accumulate samples (blend with previous frames)
-                renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, samples_this_frame);
-                self.metrics.record_accumulate_time(t1.elapsed().as_secs_f64() * 1000.0);
+                // 2. Accumulate samples - but only every N frames if batching enabled
+                if should_accumulate {
+                    // samples_this_frame is only THIS frame's samples, but histogram contains
+                    // accumulated samples from all frames in the batch
+                    // Pass total samples for proper blend_factor calculation
+                    let total_samples_in_batch = samples_this_frame * self.accumulation_batch_size as u64;
+                    renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                    self.frames_since_accumulation = 0;
+                    self.metrics.record_accumulate_time(t1.elapsed().as_secs_f64() * 1000.0);
+                } else {
+                    self.metrics.record_accumulate_time(0.0);
+                }
+
+                // 3. Adjust per-pixel scales every frame (prevents temporal aliasing / vertical lines)
+                // TEST: Disable adaptive scaling to test fixed global scale
+                // renderer.adjust_scale_pass(&mut encoder);
             } else {
                 self.metrics.record_compute_time(0.0);
                 self.metrics.record_accumulate_time(0.0);
@@ -312,6 +344,10 @@ impl App {
             renderer.update_tonemap(&self.gpu.queue, self.tonemap_mode, self.use_curve, self.exposure, self.gamma);
             renderer.tonemap_pass(&mut encoder, &view);
             self.metrics.record_tonemap_time(t2.elapsed().as_secs_f64() * 1000.0);
+
+            // DEBUG: Log scale statistics every 60 frames
+            static mut DEBUG_FRAME_COUNT: u32 = 0;
+            // Note: debug_scale_stats() removed - scale is now a uniform constant
         }
 
         // Render UI on top and handle updates
@@ -355,6 +391,8 @@ impl App {
             &mut self.gamma,
             &mut self.deterministic_rng,
             &mut self.speed_multiplier,
+            &mut self.histogram_color_scale,
+            &mut self.low_density_smoothing,
         );
         self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
 
@@ -862,7 +900,8 @@ impl App {
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard || ui_response.camera_rotation_changed;
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
             || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed
-            || ui_response.triangle_drag_ended || ui_response.tonemap_curve_changed;
+            || ui_response.triangle_drag_ended || ui_response.tonemap_curve_changed || ui_response.histogram_color_scale_changed
+            || ui_response.low_density_smoothing_changed;
 
         // Note: density_changed and background_color_changed don't need encoder updates,
         // they're handled every frame before tonemap pass
@@ -912,6 +951,18 @@ impl App {
                     renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
+                if ui_response.histogram_color_scale_changed {
+                    // Update the renderer's histogram color scale and GPU params
+                    renderer.set_histogram_color_scale(&self.gpu.queue, self.histogram_color_scale, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                    // Reset will be triggered below in should_reset
+                }
+
+                if ui_response.low_density_smoothing_changed {
+                    // Update the renderer's low-density smoothing parameter
+                    renderer.set_low_density_smoothing(self.low_density_smoothing);
+                    // No reset needed - smoothing is applied during accumulation
+                }
+
                 // Note: density_scale and background_color are updated every frame before tonemap pass
                 // so we don't need to update them here
 
@@ -943,9 +994,14 @@ impl App {
                 // Tone mapping: reset on mode change (log vs linear affects accumulation), but not curve/exposure/gamma (post-processing only)
                 let should_reset = ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
                     || ui_response.background_color_changed || ui_response.tonemap_mode_changed || ui_response.triangle_drag_started || ui_response.triangle_drag_ended
+                    || ui_response.histogram_color_scale_changed  // New scale incompatible with old samples
+                    || ui_response.low_density_smoothing_changed  // New smoothing needs fresh samples to see effect
                     || (ui_response.flame_changed && !ui_response.triangle_dragging);
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                    if ui_response.histogram_color_scale_changed {
+                        self.frames_since_accumulation = 0;  // Reset batch counter
+                    }
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
