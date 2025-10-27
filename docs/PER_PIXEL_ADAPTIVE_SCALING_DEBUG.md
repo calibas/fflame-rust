@@ -801,3 +801,187 @@ We have three conflicting requirements:
 - Set threshold = 1,000 (just under overflow point for scale=50)
 - May need scale=30-40 to give more headroom
 - Simpler but compromises quality
+
+---
+
+## Decision: Implement U32 Histogram (Option A)
+
+### Date
+2025-10-27
+
+### Rationale
+
+After implementing and testing convergence masking, it's clear that **Option A (U32 histogram) is the only viable solution** that achieves the goal of "more iterations per pass" without quality loss.
+
+**Why convergence masking failed:**
+- The math fundamentally doesn't work with u16 histogram
+- To prevent overflow: threshold ≤ (65,535 / scale)
+- At scale=50: threshold ≤ 1,310
+- At scale=100: threshold ≤ 655
+- But low thresholds cause black patches (pixels stop accumulating before converging)
+
+**Why u32 histogram solves it:**
+- u32 max = 4,294,967,295
+- Supports: scale=100 × threshold=10,000 = 1,000,000 (plenty of headroom)
+- Allows 8×+ batching for maximum rendering speed
+- No quality compromise, no overflow artifacts
+
+**Memory cost:** 2× histogram (from 3× u32 to 4× u32 per pixel, ~7.7MB @ 800×600)
+
+**Performance:** Negligible - same atomic operations, just more memory bandwidth
+
+### Implementation Plan
+
+**New histogram layout (4× u32 per pixel):**
+- Word 0: R (u32) - Full 32-bit red channel
+- Word 1: G (u32) - Full 32-bit green channel
+- Word 2: B (u32) - Full 32-bit blue channel
+- Word 3: Density (u32) - Already u32
+
+**Changes needed:**
+1. `buffers.rs`: Change histogram size from `width × height × 3` to `width × height × 4`
+2. `main_2d.wgsl`, `main_3d.wgsl`: Write 4 separate u32 words instead of packing
+3. `accumulate.wgsl`: Read 4 separate u32 words instead of unpacking
+
+**Benefits:**
+- Simpler code (no packing/unpacking bit manipulation)
+- Supports any scale/threshold combination
+- Enables high-speed rendering (8×+ batching)
+- Future-proof for adaptive scaling or other optimizations
+
+---
+
+## Implementation Complete: U32 Histogram Success
+
+### Date
+2025-10-27
+
+### Changes Made
+
+**1. Histogram buffer size (buffers.rs):**
+```rust
+// OLD: 3× u32 per pixel (packed RGB + u32 density)
+let histogram_buffer_size = (width * height * 3 * std::mem::size_of::<u32>()) as u64;
+
+// NEW: 4× u32 per pixel (separate R, G, B, density)
+let histogram_buffer_size = (width * height * 4 * std::mem::size_of::<u32>()) as u64;
+```
+
+**2. Compute shaders (main_2d.wgsl, main_3d.wgsl):**
+```wgsl
+// OLD: Pack RGB into u16 values
+let r16 = u32(color.r * scale);
+let g16 = u32(color.g * scale);
+let b16 = u32(color.b * scale);
+let packed_rg = r16 | (g16 << 16u);
+let packed_b = b16;
+atomicAdd(&histogram[base_idx + 0u], packed_rg);
+atomicAdd(&histogram[base_idx + 1u], packed_b);
+atomicAdd(&histogram[base_idx + 2u], density);
+
+// NEW: Write full u32 values directly
+let r_u32 = u32(color.r * scale);
+let g_u32 = u32(color.g * scale);
+let b_u32 = u32(color.b * scale);
+atomicAdd(&histogram[base_idx + 0u], r_u32);
+atomicAdd(&histogram[base_idx + 1u], g_u32);
+atomicAdd(&histogram[base_idx + 2u], b_u32);
+atomicAdd(&histogram[base_idx + 3u], density);
+```
+
+**3. Accumulate shader (accumulate.wgsl):**
+```wgsl
+// OLD: Unpack u16 values from packed words
+let packed_rg = histogram[base_idx + 0u];
+let packed_b = histogram[base_idx + 1u];
+let r_sum = f32(packed_rg & 0xFFFFu);
+let g_sum = f32((packed_rg >> 16u) & 0xFFFFu);
+let b_sum = f32(packed_b & 0xFFFFu);
+
+// NEW: Read full u32 values directly
+let r_sum = f32(histogram[base_idx + 0u]);
+let g_sum = f32(histogram[base_idx + 1u]);
+let b_sum = f32(histogram[base_idx + 2u]);
+```
+
+### Test Results
+
+**✅ OVERFLOW ELIMINATED**
+- Tested with scale=50, 4× batching
+- Dense areas no longer wrap around to dark colors
+- Colors accumulate correctly to their true (bright) values
+- No artifacts, no darkening, no color corruption
+
+**Behavior change:**
+- **Before**: Dense areas overflowed u16 and wrapped to dark colors (artifacts)
+- **After**: Dense areas accumulate high values and appear very bright (correct HDR)
+- **Solution**: Use existing tone mapping controls (gamma, exposure, tone curve) to compress HDR
+
+### Memory Impact
+
+| Buffer | Old Size | New Size | Change |
+|--------|----------|----------|--------|
+| Histogram @ 800×600 | ~5.8 MB (3× u32) | ~7.7 MB (4× u32) | +33% |
+| Scale buffer | ~1.9 MB | ~1.9 MB | No change |
+| **Total increase** | - | **~1.9 MB** | Acceptable |
+
+### Performance Impact
+
+**Negligible:**
+- Same number of atomic operations (4 atomics per pixel per iteration)
+- Slightly more memory bandwidth (~33% more histogram data)
+- Compute shaders slightly simpler (no bit packing logic)
+- GPU memory bandwidth is rarely the bottleneck for this workload
+
+**Measured:** No observable FPS difference @ 60 FPS with 4× batching
+
+### Code Simplification
+
+**Lines removed:**
+- All bit packing/unpacking logic (shifts, masks, combines)
+- Comments explaining packed format
+- Mental overhead of understanding packed layout
+
+**Lines added:**
+- Simple, direct u32 reads/writes
+- Clearer comments about layout
+
+**Net:** Simpler, more maintainable code
+
+### Capacity Analysis
+
+**With u32 histogram:**
+- u32 max per channel: 4,294,967,295
+- With scale=100: 42,949,672 max hits per pixel
+- With 4× batching: 131,072 iterations/batch
+- **Overflow point**: 327,653 batches before overflow
+- **Time to overflow**: 327,653 batches ÷ 60 FPS = 91 minutes continuous rendering
+
+**Conclusion:** Overflow is now effectively impossible in practice.
+
+### Future Possibilities Enabled
+
+Now that overflow is solved, we can:
+
+1. **Increase batch factor** (4× → 8× → 16×) for even faster rendering
+2. **Increase scale** (50 → 100) for better color precision
+3. **Re-enable per-pixel adaptive scaling** (if desired) without overflow concerns
+4. **Long-duration renders** (hours/days) for ultra-high quality exports
+
+### Bright Dense Areas: Expected Behavior
+
+**User question:** "Instead of overflowing, the areas simply get too bright, which is much better. Is that what's supposed to happen?"
+
+**Answer:** Yes! This is correct behavior:
+- Dense areas accumulate many samples → high color values → bright HDR data
+- The brightness represents the true fractal structure (accurate accumulation)
+- Tone mapping controls (gamma, exposure, tone curve) compress HDR → displayable range
+- This is how proper HDR rendering should work
+
+**Additional controls we could add** (future enhancements):
+1. **Per-pixel adaptive tone mapping** - Stronger compression for high-density pixels
+2. **Density-based color scaling** - Automatically reduce color contribution in super-dense areas
+3. **Histogram clipping** - Soft limit on maximum accumulated value per channel
+4. **Logarithmic accumulation** - Log scale for very high densities
+
+**Current recommendation:** Use existing tone mapping controls (gamma, exposure, S-curve) to handle bright areas. They work well for this purpose.

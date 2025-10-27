@@ -28,23 +28,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Load previous accumulation
     let prev = textureLoad(previous_accumulation, pixel, 0);
 
-    // Read histogram values for this pixel (3 u32 words: RG, B, density)
+    // Read histogram values for this pixel (4 u32 words: R, G, B, density)
     let pixel_idx = global_id.y * params.width + global_id.x;
-    let base_idx = pixel_idx * 3u;  // 3 words per pixel
+    let base_idx = pixel_idx * 4u;  // 4 words per pixel
 
-    // Unpack 3× u32 (RG packed, B packed, density u32)
-    let packed_rg = histogram[base_idx + 0u];
-    let packed_b = histogram[base_idx + 1u];
-    let density_u32 = histogram[base_idx + 2u];
-
-    // Extract values
-    let r_sum = f32(packed_rg & 0xFFFFu);
-    let g_sum = f32((packed_rg >> 16u) & 0xFFFFu);
-    let b_sum = f32(packed_b & 0xFFFFu);  // Low 16 bits only
-    let density = f32(density_u32);  // U32 density prevents overflow
+    // Read 4 separate u32 values (no unpacking needed)
+    let r_sum = f32(histogram[base_idx + 0u]);
+    let g_sum = f32(histogram[base_idx + 1u]);
+    let b_sum = f32(histogram[base_idx + 2u]);
+    let density = f32(histogram[base_idx + 3u]);
 
     // Convert back to float color (average)
-    // Density includes scale (density_u32 = sum of pixel_scale per hit)
+    // Density includes scale (density = sum of pixel_scale per hit)
     // So we divide by density only, not (density × pixel_scale)
     var new_color = vec3<f32>(0.0);
     if (density > 0.0) {

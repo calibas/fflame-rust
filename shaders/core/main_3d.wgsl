@@ -69,27 +69,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
 
                 // Atomic accumulation to histogram buffer
-                // Pack RGB as 3× u32 (RG packed, B packed, density u32)
+                // Write RGB as 4× u32 (unpacked, full 32-bit precision)
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
-                let base_idx = pixel_idx * 3u;  // 3 words per pixel (RG, B, density)
+                let base_idx = pixel_idx * 4u;  // 4 words per pixel (R, G, B, density)
 
                 // Load this pixel's current scale (unpacked u32, one per pixel)
                 let pixel_scale = f32(scale_buffer[pixel_idx]);
 
-                // Convert colors to u16 fixed-point using this pixel's scale
-                let r16 = u32(clamp(final_color.r, 0.0, 1.0) * pixel_scale);
-                let g16 = u32(clamp(final_color.g, 0.0, 1.0) * pixel_scale);
-                let b16 = u32(clamp(final_color.b, 0.0, 1.0) * pixel_scale);
-
-                // Pack RGB as u16 values (3 u32 words per pixel: RG, B, density)
-                let packed_rg = r16 | (g16 << 16u);
-                let packed_b = b16;  // Low 16 bits, high 16 unused
+                // Convert colors to u32 using this pixel's scale
+                // No packing needed - each channel gets its own u32 word
+                let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * pixel_scale);
+                let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * pixel_scale);
+                let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * pixel_scale);
                 let density_u32 = u32(pixel_scale);  // Density includes scale (u32 prevents overflow)
 
-                // Atomic add to histogram
-                atomicAdd(&histogram[base_idx + 0u], packed_rg);
-                atomicAdd(&histogram[base_idx + 1u], packed_b);
-                atomicAdd(&histogram[base_idx + 2u], density_u32);
+                // Atomic add to histogram (4 separate u32 words)
+                atomicAdd(&histogram[base_idx + 0u], r_u32);
+                atomicAdd(&histogram[base_idx + 1u], g_u32);
+                atomicAdd(&histogram[base_idx + 2u], b_u32);
+                atomicAdd(&histogram[base_idx + 3u], density_u32);
             }
         }
     }
