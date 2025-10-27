@@ -98,8 +98,7 @@ pub async fn export_headless(
             let samples = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_frame as u64;
             renderer.accumulate_pass(&mut encoder, &queue, &device, samples);
 
-            // Adjust per-pixel scales based on accumulated density (after accumulation completes)
-            renderer.adjust_scale_pass(&mut encoder);
+            // Note: adjust_scale_pass() removed - using fixed global scale now
 
             total_rendered += samples;
 

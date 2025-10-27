@@ -347,17 +347,7 @@ impl App {
 
             // DEBUG: Log scale statistics every 60 frames
             static mut DEBUG_FRAME_COUNT: u32 = 0;
-            unsafe {
-                DEBUG_FRAME_COUNT += 1;
-                if DEBUG_FRAME_COUNT % 60 == 0 {
-                    self.gpu.queue.submit(std::iter::once(encoder.finish()));
-                    let (min, max, avg) = renderer.debug_scale_stats(&self.gpu.device, &self.gpu.queue);
-                    log::info!("Scale stats @ frame {}: min={:.0}, max={:.0}, avg={:.0}", DEBUG_FRAME_COUNT, min, max, avg);
-                    encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Main Encoder (continued)"),
-                    });
-                }
-            }
+            // Note: debug_scale_stats() removed - scale is now a uniform constant
         }
 
         // Render UI on top and handle updates

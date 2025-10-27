@@ -415,39 +415,12 @@ impl FlamePipelines {
                     binding: 3,
                     resource: buffers.accumulate_params_buffer.as_entire_binding(),
                 },
-                BindGroupEntry {
-                    binding: 4,
-                    resource: buffers.scale_buffer.as_entire_binding(),
-                },
+                // Note: binding 4 removed (scale_buffer replaced with params.histogram_color_scale)
             ],
         })
     }
 
-    /// Create bind group for adjust scale pass
-    pub fn create_adjust_scale_bind_group(
-        &self,
-        device: &Device,
-        buffers: &super::buffers::FlameBuffers,
-    ) -> BindGroup {
-        device.create_bind_group(&BindGroupDescriptor {
-            label: Some("Adjust Scale Bind Group"),
-            layout: &self.adjust_scale_bind_group_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::TextureView(buffers.previous_accumulation_view()),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: buffers.scale_buffer.as_entire_binding(),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: buffers.adjust_scale_params_buffer.as_entire_binding(),
-                },
-            ],
-        })
-    }
+    // Note: create_adjust_scale_bind_group() removed - adjust_scale pipeline unused
 
     /// Create bind group for tonemap pass
     pub fn create_tonemap_bind_group(
