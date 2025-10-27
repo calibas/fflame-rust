@@ -330,7 +330,8 @@ impl App {
                 }
 
                 // 3. Adjust per-pixel scales every frame (prevents temporal aliasing / vertical lines)
-                renderer.adjust_scale_pass(&mut encoder);
+                // TEST: Disable adaptive scaling to test fixed global scale
+                // renderer.adjust_scale_pass(&mut encoder);
             } else {
                 self.metrics.record_compute_time(0.0);
                 self.metrics.record_accumulate_time(0.0);
