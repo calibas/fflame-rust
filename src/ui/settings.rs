@@ -30,6 +30,10 @@ pub fn render_settings_window(
     iterations_changed: &mut bool,
     deterministic_rng: &mut bool,
     speed_multiplier: &mut u32,
+    histogram_color_scale: &mut f32,
+    histogram_color_scale_changed: &mut bool,
+    low_density_smoothing: &mut f32,
+    low_density_smoothing_changed: &mut bool,
 ) {
     egui::Window::new("Settings")
         .open(show_settings)
@@ -195,6 +199,39 @@ pub fn render_settings_window(
                     // Render settings
                     if ui.add(egui::Slider::new(iterations_per_thread, 64..=4096).text("Iterations per Thread")).changed() {
                         *iterations_changed = true;
+                    }
+
+                    // Histogram color scale
+                    if ui.add(egui::Slider::new(histogram_color_scale, 1.0..=100.0)
+                        .logarithmic(true)
+                        .text("Histogram Color Scale"))
+                        .on_hover_text(
+                            "Controls color precision vs overflow protection in histogram accumulation.\n\
+                            Lower values prevent artifacts in zoomed-out scenes.\n\
+                            Higher values give better color accuracy but overflow sooner.\n\n\
+                            1-5: Maximum overflow protection (65535+ hits), very low precision\n\
+                            10: Balanced (6553 hits, 10 color levels) - recommended default\n\
+                            50: Higher precision (1310 hits, 50 color levels)\n\
+                            100: Maximum precision (655 hits, 100 color levels) - classic"
+                        )
+                        .changed()
+                    {
+                        *histogram_color_scale_changed = true;
+                    }
+
+                    // Low-density smoothing
+                    if ui.add(egui::Slider::new(low_density_smoothing, 0.0..=1.0)
+                        .text("Low-Density Smoothing"))
+                        .on_hover_text(
+                            "Reduces noise in low-density (sparse) areas by limiting single-hit weight.\n\
+                            Higher values create smoother low-density regions but slower convergence.\n\n\
+                            0.0: No smoothing (accurate but noisy single hits)\n\
+                            0.5: Moderate smoothing (balanced) - recommended default\n\
+                            1.0: Maximum smoothing (very smooth but slow to converge)"
+                        )
+                        .changed()
+                    {
+                        *low_density_smoothing_changed = true;
                     }
 
                     // Speed multiplier for frame rate (1x = 60 FPS, 2x = 120 FPS, etc.)
