@@ -8,15 +8,19 @@ struct AccumulateParams {
     histogram_color_scale: f32, // Must match compute shader value
     low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing
     density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression
+    target_iterations_per_pixel: u32, // Per-pixel convergence threshold (0 = disabled)
     _pad0: f32,
     _pad1: f32, // Padding for alignment
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
 }
 
 @group(0) @binding(0) var previous_accumulation: texture_2d<f32>;
 @group(0) @binding(1) var<storage, read> histogram: array<u32>;
 @group(0) @binding(2) var output_texture: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var<uniform> params: AccumulateParams;
-@group(0) @binding(4) var<storage, read> scale_buffer: array<u32>;  // Per-pixel scales (unpacked)
+@group(0) @binding(4) var<storage, read> iteration_counts: array<u32>;  // Per-pixel iteration counts
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -56,6 +60,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     // Blend new samples with previous accumulation
+    // Check per-pixel convergence: has this pixel received enough iterations?
+    let pixel_iterations = iteration_counts[pixel_idx];
+
+    // Only apply convergence check if pixel has some accumulated density
+    // This prevents empty spots on first frame when dense pixels immediately hit the limit
+    let has_some_density = prev.a > 0.01;
+    let is_converged = params.target_iterations_per_pixel > 0u && has_some_density && pixel_iterations >= params.target_iterations_per_pixel;
+
+    // Gate blend_factor based on convergence (hard cutoff)
+    // If converged, stop all accumulation (convergence_gate = 0.0)
+    let convergence_gate = select(1.0, 0.0, is_converged);
+
     var rgb_accumulated = prev.rgb;
     var alpha_accumulated = prev.a;
 
@@ -69,12 +85,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Use linear term instead of squared to avoid saturation
         let compression_factor = 1.0 / (1.0 + prev.a * params.density_compression_strength * 0.01);
 
-        let adjusted_blend = params.blend_factor * density_factor * compression_factor;
+        // Multiply all factors together: global blend × density × compression × convergence
+        let adjusted_blend = params.blend_factor * density_factor * compression_factor * convergence_gate;
         rgb_accumulated = prev.rgb * (1.0 - adjusted_blend) + new_color * adjusted_blend;
-    }
 
-    // Alpha (density) accumulates additively
-    alpha_accumulated = prev.a + (density * 0.01 * params.blend_factor);
+        // Alpha (density) accumulates additively, also gated by convergence
+        alpha_accumulated = prev.a + (density * 0.01 * params.blend_factor * convergence_gate);
+    }
 
     // Write to output
     textureStore(output_texture, pixel, vec4<f32>(rgb_accumulated, alpha_accumulated));
