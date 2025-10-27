@@ -365,6 +365,7 @@ impl PresetLibrary {
                     exposure: 1.0,
                     gamma: 2.2,
                     deterministic_rng: false,
+                    histogram_color_scale: 10.0,
                 }
             },
         ];
@@ -415,6 +416,7 @@ impl PresetLibrary {
             exposure: 1.0,
             gamma: 2.2,
             deterministic_rng: false,
+            histogram_color_scale: 10.0,
         }
     }
 

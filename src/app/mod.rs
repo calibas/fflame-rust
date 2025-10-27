@@ -933,13 +933,16 @@ impl App {
                     renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
-                if ui_response.iterations_changed || ui_response.histogram_color_scale_changed || view_changed {
+                if ui_response.iterations_changed || view_changed {
                     renderer.set_deterministic_rng(self.deterministic_rng);
                     renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
                 if ui_response.histogram_color_scale_changed {
-                    renderer.reset(&self.gpu.device, &mut encoder, &self.gpu.queue, self.gpu.size.width, self.gpu.size.height, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                    // Update the renderer's histogram color scale
+                    // Note: Accumulation continues with new scale, old samples remain
+                    // User can manually reset if needed for consistent scaling
+                    renderer.set_histogram_color_scale(self.histogram_color_scale);
                 }
 
                 // Note: density_scale and background_color are updated every frame before tonemap pass
