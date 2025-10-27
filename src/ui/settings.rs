@@ -36,6 +36,10 @@ pub fn render_settings_window(
     low_density_smoothing_changed: &mut bool,
     density_compression_strength: &mut f32,
     density_compression_changed: &mut bool,
+    blend_factor: &mut f32,
+    blend_factor_changed: &mut bool,
+    use_dynamic_blend: &mut bool,
+    use_dynamic_blend_changed: &mut bool,
 ) {
     egui::Window::new("Settings")
         .open(show_settings)
@@ -236,19 +240,52 @@ pub fn render_settings_window(
                         *low_density_smoothing_changed = true;
                     }
 
+                    // Dynamic blend toggle
+                    if ui.checkbox(use_dynamic_blend, "Use Dynamic Blend (Exponential Convergence)")
+                        .on_hover_text(
+                            "Enabled: Classic exponential convergence - blend rate decreases over time.\n\
+                            Image converges to stable result, prevents overbrighten over time.\n\
+                            Formula: blend_factor = samples_this_frame / samples_accumulated\n\n\
+                            Disabled: Fixed blend rate - uses slider value constantly.\n\
+                            Useful for testing density compression effects.\n\
+                            Warning: May overbrighten if rendering for long periods."
+                        )
+                        .changed()
+                    {
+                        *use_dynamic_blend_changed = true;
+                    }
+
+                    // Blend factor (accumulation rate) - only when dynamic blend is OFF
+                    ui.add_enabled_ui(!*use_dynamic_blend, |ui| {
+                        if ui.add(egui::Slider::new(blend_factor, 0.01..=1.0)
+                            .logarithmic(true)
+                            .text("Fixed Blend Rate"))
+                            .on_hover_text(
+                                "Only used when Dynamic Blend is disabled.\n\
+                                Controls constant blend rate per frame.\n\n\
+                                0.01: Very smooth (1% per frame)\n\
+                                0.1: Balanced (10% per frame) - default\n\
+                                0.5: Fast (50% per frame)\n\
+                                1.0: Instant (100% per frame)"
+                            )
+                            .changed()
+                        {
+                            *blend_factor_changed = true;
+                        }
+                    });
+
                     // Density compression strength
-                    if ui.add(egui::Slider::new(density_compression_strength, -100.0..=100.0)
+                    if ui.add(egui::Slider::new(density_compression_strength, 0.0..=100.0)
                         .text("Density Compression"))
                         .on_hover_text(
-                            "Controls how quickly dense areas saturate during accumulation.\n\
-                            Positive values slow down accumulation in bright cores, revealing hidden detail.\n\
-                            Negative values speed up accumulation (experimental - may cause instability).\n\n\
-                            -100: Extreme acceleration (dense areas accumulate FASTER)\n\
-                            0: Linear accumulation (no compression) - default behavior\n\
-                            10: Gentle compression (dense areas accumulate at ~50% rate)\n\
-                            50: Strong compression (dense areas accumulate at ~2% rate)\n\
-                            100: Extreme compression (prevents saturation even in very bright areas)\n\n\
-                            Use this to reveal detail in bright fractal cores without darkening the display."
+                            "Slows accumulation in bright areas to reveal core detail.\n\
+                            Works with Blend Rate to control per-pixel accumulation speed.\n\n\
+                            0: No compression - uniform accumulation (default)\n\
+                            25: Gentle - bright areas accumulate at ~20% rate\n\
+                            50: Moderate - bright areas accumulate at ~2% rate\n\
+                            100: Strong - bright areas accumulate at ~1% rate\n\n\
+                            Higher Blend Rate makes compression effect more visible.\n\
+                            Use this to prevent bright cores from washing out detail."
                         )
                         .changed()
                     {

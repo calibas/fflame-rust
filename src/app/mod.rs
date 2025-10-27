@@ -64,6 +64,8 @@ pub struct App {
     pub(super) histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
     pub(super) low_density_smoothing: f32,  // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
     pub(super) density_compression_strength: f32,  // 0.0 = linear, 5.0 = strong compression (default: 0.0)
+    pub(super) blend_factor: f32,  // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
+    pub(super) use_dynamic_blend: bool,  // true = exponential convergence (old), false = fixed blend rate (new)
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -111,6 +113,7 @@ impl App {
             histogram_color_scale: 10.0,  // Balanced default
             low_density_smoothing: 0.5,  // Moderate smoothing default
             density_compression_strength: 0.0,  // Linear accumulation default (no compression)
+            blend_factor: 0.1,  // 10% blend rate - good balance between speed and smoothness
         };
 
         let mut app = Self {
@@ -155,6 +158,8 @@ impl App {
             histogram_color_scale: 10.0, // Balanced default
             low_density_smoothing: 0.5, // Moderate smoothing default
             density_compression_strength: 0.0, // Linear accumulation default (no compression)
+            blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
+            use_dynamic_blend: true, // Default to exponential convergence (old behavior)
         };
 
         #[allow(deprecated)]
@@ -397,6 +402,8 @@ impl App {
             &mut self.histogram_color_scale,
             &mut self.low_density_smoothing,
             &mut self.density_compression_strength,
+            &mut self.blend_factor,
+            &mut self.use_dynamic_blend,
         );
         self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
 
@@ -905,7 +912,8 @@ impl App {
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
             || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed
             || ui_response.triangle_drag_ended || ui_response.tonemap_curve_changed || ui_response.histogram_color_scale_changed
-            || ui_response.low_density_smoothing_changed || ui_response.density_compression_changed;
+            || ui_response.low_density_smoothing_changed || ui_response.density_compression_changed || ui_response.blend_factor_changed
+            || ui_response.use_dynamic_blend_changed;
 
         // Note: density_changed and background_color_changed don't need encoder updates,
         // they're handled every frame before tonemap pass
@@ -973,6 +981,18 @@ impl App {
                     // No reset needed - compression is applied during accumulation
                 }
 
+                if ui_response.blend_factor_changed {
+                    // Update the renderer's blend factor
+                    renderer.set_blend_factor(self.blend_factor);
+                    // No reset needed - blend factor is applied during accumulation
+                }
+
+                if ui_response.use_dynamic_blend_changed {
+                    // Update the renderer's dynamic blend setting
+                    renderer.set_use_dynamic_blend(self.use_dynamic_blend);
+                    // Reset needed to see effect immediately
+                }
+
                 // Note: density_scale and background_color are updated every frame before tonemap pass
                 // so we don't need to update them here
 
@@ -1007,6 +1027,8 @@ impl App {
                     || ui_response.histogram_color_scale_changed  // New scale incompatible with old samples
                     || ui_response.low_density_smoothing_changed  // New smoothing needs fresh samples to see effect
                     || ui_response.density_compression_changed  // New compression needs fresh samples to see effect
+                    || ui_response.blend_factor_changed  // New blend rate needs fresh start to see effect
+                    || ui_response.use_dynamic_blend_changed  // Switching blend modes needs fresh start
                     || (ui_response.flame_changed && !ui_response.triangle_dragging);
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);

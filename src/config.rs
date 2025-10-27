@@ -33,9 +33,12 @@ pub struct FractalConfig {
     /// Low-density smoothing (0.0 = no smoothing, 1.0 = maximum smoothing, default: 0.5)
     #[serde(default = "default_low_density_smoothing")]
     pub low_density_smoothing: f32,
-    /// Density compression strength (0.0 = linear, 5.0 = strong compression, default: 0.0)
+    /// Density compression strength (0.0 = linear, 100.0 = strong compression, default: 0.0)
     #[serde(default)]
     pub density_compression_strength: f32,
+    /// Blend factor for accumulation (0.01 = slow/smooth, 1.0 = fast/flickery, default: 0.1)
+    #[serde(default = "default_blend_factor")]
+    pub blend_factor: f32,
 
     /// Color settings
     pub color_mode: ColorMode,
@@ -86,6 +89,10 @@ fn default_histogram_color_scale() -> f32 {
 
 fn default_low_density_smoothing() -> f32 {
     0.5  // Moderate smoothing reduces noise without excessive blur
+}
+
+fn default_blend_factor() -> f32 {
+    0.1  // 10% blend rate - good balance between speed and smoothness
 }
 
 impl FractalConfig {
