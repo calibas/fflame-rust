@@ -61,6 +61,7 @@ pub struct App {
     // Batched accumulation experiment
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
+    pub(super) histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -105,6 +106,7 @@ impl App {
             exposure: 1.0,
             gamma: 2.2,
             deterministic_rng: false,
+            histogram_color_scale: 10.0,  // Balanced default
         };
 
         let mut app = Self {
@@ -146,6 +148,7 @@ impl App {
             // Batched accumulation: 1 = normal (every frame), 4 = experimental batching
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
+            histogram_color_scale: 10.0, // Balanced default
         };
 
         #[allow(deprecated)]
@@ -377,6 +380,7 @@ impl App {
             &mut self.gamma,
             &mut self.deterministic_rng,
             &mut self.speed_multiplier,
+            &mut self.histogram_color_scale,
         );
         self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
 
@@ -929,9 +933,13 @@ impl App {
                     renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
-                if ui_response.iterations_changed || view_changed {
+                if ui_response.iterations_changed || ui_response.histogram_color_scale_changed || view_changed {
                     renderer.set_deterministic_rng(self.deterministic_rng);
                     renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                }
+
+                if ui_response.histogram_color_scale_changed {
+                    renderer.reset(&self.gpu.device, &mut encoder, &self.gpu.queue, self.gpu.size.width, self.gpu.size.height, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
                 // Note: density_scale and background_color are updated every frame before tonemap pass
