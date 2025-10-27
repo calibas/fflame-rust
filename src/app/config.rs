@@ -27,6 +27,7 @@ impl App {
             exposure: self.exposure,
             gamma: self.gamma,
             deterministic_rng: self.deterministic_rng,
+            histogram_color_scale: self.histogram_color_scale,
         }
     }
 
@@ -52,6 +53,7 @@ impl App {
         self.exposure = config.exposure;
         self.gamma = config.gamma;
         self.deterministic_rng = config.deterministic_rng;
+        self.histogram_color_scale = config.histogram_color_scale;
 
         // If config includes a palette, add it to library or update existing
         if let Some(ref palette) = config.palette {
