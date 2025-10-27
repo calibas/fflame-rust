@@ -73,15 +73,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
                 let base_idx = pixel_idx * 4u;  // 4 words per pixel (R, G, B, density)
 
-                // Load this pixel's current scale (unpacked u32, one per pixel)
-                let pixel_scale = f32(scale_buffer[pixel_idx]);
+                // Use global color scale from params (uniform constant, fast access)
+                let color_scale = params.histogram_color_scale;
 
-                // Convert colors to u32 using this pixel's scale
+                // Convert colors to u32 using global scale
                 // No packing needed - each channel gets its own u32 word
-                let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * pixel_scale);
-                let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * pixel_scale);
-                let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * pixel_scale);
-                let density_u32 = u32(pixel_scale);  // Density includes scale (u32 prevents overflow)
+                let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
+                let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
+                let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
+                let density_u32 = u32(color_scale);  // Density includes scale (u32 prevents overflow)
 
                 // Atomic add to histogram (4 separate u32 words)
                 atomicAdd(&histogram[base_idx + 0u], r_u32);

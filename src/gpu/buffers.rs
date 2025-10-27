@@ -222,9 +222,7 @@ pub struct FlameBuffers {
     pub histogram_buffer: Buffer,
 
     // Per-pixel scale buffer for adaptive histogram scaling
-    // Layout: u16 scale value (1-100) per pixel, packed 2 per u32
-    // Size: width × height × sizeof(u16) = width × height × 2 bytes
-    pub scale_buffer: Buffer,
+    // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
 
     // Palette texture (1D)
     pub palette_texture: Texture,
@@ -406,17 +404,7 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Create per-pixel scale buffer (unpacked, u32 per pixel)
-        // Fixed global scale for now (adjust_scale disabled)
-        let pixel_count = (width * height) as usize;
-        let initial_scale = 50u32;  // Fixed scale=50 for quality without overflow
-        let scale_data = vec![initial_scale; pixel_count];
-
-        let scale_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("Per-Pixel Scale Buffer"),
-            contents: bytemuck::cast_slice(&scale_data),
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
-        });
+        // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
 
         // Create palette texture (1D, 256 samples)
         // Use Rgba8Unorm for efficient, standard color storage
@@ -547,7 +535,7 @@ impl FlameBuffers {
             temp_samples_texture,
             temp_samples_view,
             histogram_buffer,
-            scale_buffer,
+            // scale_buffer removed - using params.histogram_color_scale instead
             palette_texture,
             palette_view,
             curve_lut_texture,
@@ -622,14 +610,7 @@ impl FlameBuffers {
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
     }
 
-    /// Reset iteration counter to zero (when switching presets or resetting)
-    pub fn reset_scale_buffer(&self, queue: &Queue, width: u32, height: u32) {
-        let pixel_count = (width * height) as usize;
-        let initial_scale = 50u32;  // Reset to fixed scale=50
-        let scale_data = vec![initial_scale; pixel_count];
-
-        queue.write_buffer(&self.scale_buffer, 0, bytemuck::cast_slice(&scale_data));
-    }
+    // Note: reset_scale_buffer() removed - scale is now a uniform constant
 
     /// Get the current accumulation texture view (for display)
     pub fn current_accumulation_view(&self) -> &TextureView {
