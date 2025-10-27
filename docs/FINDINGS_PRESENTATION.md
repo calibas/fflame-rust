@@ -155,7 +155,7 @@ Result: Good quality by default
 Trade-off: Users must lower if overflow occurs
 ```
 
-### Option 3: Implement u8 Packing (Recommended)
+### Option 3: Implement u8 Packing (REJECTED)
 ```wgsl
 // Pack RGBA as 4× u8 into 1× u32
 let r8 = u32(color.r * 255.0);
@@ -166,9 +166,24 @@ let packed = r8 | (g8 << 8u) | (b8 << 16u);
 atomicAdd(&histogram[idx], packed);      // RGBA color
 atomicAdd(&histogram[idx+1], 1u);        // Density (separate)
 
-Result: 256 color levels, no overflow possible
-Performance: Same (2 atomics per pixel)
-Quality: ⭐⭐⭐⭐ Near-perfect
+UPDATE: This has SAME overflow problem as u16 packing!
+- R overflows into G after 256 hits at full brightness
+- Bit-packing fundamentally can't prevent overflow
+```
+
+### Option 4: Adaptive Scale (RECOMMENDED) ⭐
+```rust
+// After each batch, scan histogram for overflow risk
+if max_channel_value > 60000 {
+    histogram_color_scale *= 0.5;  // Reduce precision
+} else if max_channel_value < 15000 {
+    histogram_color_scale *= 1.5;  // Increase precision
+}
+
+Result: Auto-balances precision vs overflow
+Performance: Same + small scan cost per batch
+Quality: ⭐⭐⭐⭐⭐ Adaptive
+Integration: Perfect fit for batched accumulation
 ```
 
 ---
@@ -265,9 +280,12 @@ Batched (scale=100 or u8)    │25.08 Giter/sec │ Quality: ⭐⭐⭐⭐
 | **4× u32 atomic (ef0cdd8)** | ⭐⭐⭐⭐⭐ (10k levels) | ⭐⭐ (6.5 hits) | ⭐⭐⭐ (6.43 Giter/s) | ⭐⭐ (31 MB) |
 | **2× u32 u16 (scale=100)** | ⭐⭐⭐⭐ (100 levels) | ⭐⭐⭐ (655 hits) | ⭐⭐⭐⭐ (7.46 Giter/s) | ⭐⭐⭐⭐ (16 MB) |
 | **2× u32 u16 (scale=10)** | ⭐⭐ (10 levels) | ⭐⭐⭐⭐⭐ (6.5k hits) | ⭐⭐⭐⭐ (7.46 Giter/s) | ⭐⭐⭐⭐ (16 MB) |
-| **2× u32 u8 (scale=255)** | ⭐⭐⭐⭐ (256 levels) | ⭐⭐⭐⭐⭐ (16.7M hits) | ⭐⭐⭐⭐ (7.46 Giter/s) | ⭐⭐⭐⭐ (16 MB) |
+| **~~2× u32 u8 (scale=255)~~** | ~~⭐⭐⭐⭐ (256 levels)~~ | ~~❌ Overflows into G~~ | ~~⭐⭐⭐⭐~~ | ~~⭐⭐⭐⭐~~ |
+| **2× u32 u16 + Adaptive** | ⭐⭐⭐⭐⭐ (10-100 dynamic) | ⭐⭐⭐⭐⭐ (auto-adjust) | ⭐⭐⭐⭐ (+ scan cost) | ⭐⭐⭐⭐ (16 MB) |
 
-**Winner:** u8 packing (best balance) ✅
+**Winner:** u16 + Adaptive Scale ✅
+
+**Note:** u8 packing REJECTED - has same bit-overflow problem as u16 (R overflows into G channel)
 
 ---
 
@@ -285,7 +303,7 @@ The quality regression from ef0cdd8 to HEAD is **fully understood**:
 
 **Solution:**
 - **Short-term:** Update defaults (scale=100, smoothing=0.0)
-- **Long-term:** Implement u8 packing (256 levels, no overflow)
+- **Long-term:** Implement adaptive scale (auto-adjusts, fits batched architecture)
 
 **Status:** ✅ Investigation complete, recommendations provided, documentation comprehensive
 

@@ -218,39 +218,64 @@ Revert u16 packing, use 4× u32 histogram like ef0cdd8
 - ~13.8% slower performance
 - 2× memory usage (31 MB vs 16 MB @ 1080p)
 
-#### Code Fix Option 4: Use u8 Packing (RECOMMENDED)
+#### Code Fix Option 4: Use u8 Packing (REJECTED - SAME PROBLEM)
 Pack RGBA into 1× u32 using 4× u8 (0-255)
 
+**UPDATE 2025-10-26:** This approach has the **SAME overflow problem** as u16 packing!
+
+**The Problem:**
+```wgsl
+// Red channel hits 256 times at full brightness (255)
+let r8 = 255u;
+// After 256 hits: 256 × 255 = 65,280
+// Packed as bits 0-15: 0xFEFF
+// Red (bits 0-7):   0xFF (255) ✓ Looks correct
+// Green (bits 8-15): 0xFE (254) ❌ CORRUPTED by R overflow!
+```
+
+**Why It Fails:**
+- When R channel overflows its 8-bit region, it "carries" into G
+- Same bit-packing overflow as u16 approach
+- Only difference is threshold (256 hits vs 655 hits)
+- Dividing by density doesn't fix the corruption
+
+**Conclusion:** Any bit-packed approach has overflow issues. Need different solution.
+
+#### Code Fix Option 5: Adaptive Scale (RECOMMENDED) ⭐
+Dynamically adjust `histogram_color_scale` based on detected overflow risk
+
+**Approach:**
+```rust
+// After accumulation pass, check histogram max values
+let max_channel_value = scan_histogram_max();
+let overflow_threshold = 60000;  // Safety margin below 65535
+
+if max_channel_value > overflow_threshold {
+    // Reduce scale for next batch
+    histogram_color_scale *= 0.5;
+    clear_histogram();  // Start fresh with new scale
+} else if max_channel_value < overflow_threshold / 4 {
+    // Increase scale for better precision
+    histogram_color_scale = min(histogram_color_scale * 1.5, 100.0);
+}
+```
+
 **Pros:**
-- 256 color levels (26× better than current default)
-- Overflow at 16.7M hits (essentially impossible)
-- Still 2 atomic ops per pixel (same speed as current)
-- Simple bit manipulation
+- ✅ Automatically balances precision vs overflow
+- ✅ Starts with high precision (scale=100)
+- ✅ Adapts to scene density dynamically
+- ✅ Fits perfectly with batched accumulation architecture
+- ✅ Users still have manual control via slider
 
 **Cons:**
-- Slightly more complex packing logic
-- 8-bit quantization (but much better than 10 levels!)
+- Requires extra GPU pass to scan histogram
+- Adds complexity to accumulation logic
+- May cause visible scale transitions (can smooth with blend)
 
-**Implementation:**
-```wgsl
-// Compute shader
-let r8 = u32(clamp(final_color.r, 0.0, 1.0) * 255.0);
-let g8 = u32(clamp(final_color.g, 0.0, 1.0) * 255.0);
-let b8 = u32(clamp(final_color.b, 0.0, 1.0) * 255.0);
-let packed_rgba = r8 | (g8 << 8u) | (b8 << 16u) | (255u << 24u);
-
-atomicAdd(&histogram[base_idx + 0u], packed_rgba);  // RGBA color
-atomicAdd(&histogram[base_idx + 1u], 1u);           // Density (separate u32, no overflow)
-
-// Accumulate shader
-let r_sum = f32(packed_rgba & 0xFFu);
-let g_sum = f32((packed_rgba >> 8u) & 0xFFu);
-let b_sum = f32((packed_rgba >> 16u) & 0xFFu);
-let density = f32(histogram[base_idx + 1u]);
-
-new_color.r = r_sum / (density * 255.0);
-// ...
-```
+**Fits Your Architecture:**
+- Already doing batched accumulation (fewer passes)
+- Histogram scan is cheap (parallel reduction)
+- Scale adjustment happens between batches (no mid-batch disruption)
 
 ---
 
