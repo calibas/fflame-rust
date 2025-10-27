@@ -116,10 +116,10 @@ fractal_flame_wgpu/
 │       └── buffers.rs          FlameBuffers + GPU data structures
 │                               - Transform buffer (storage, 32 slots)
 │                               - Variation params buffer (storage, 400 floats: 50 variations × 8 params)
+│                               - Histogram buffer (storage, 4× u32 per pixel for atomic color accumulation)
 │                               - Palette texture (1D)
 │                               - Params uniform buffers
 │                               - Accumulation textures (ping-pong)
-│                               - Temp samples texture
 │                               - GpuTransform, GpuParams, TonemapParams, GpuVariationParams
 │
 ├── Renderer Layer
@@ -288,18 +288,20 @@ WindowEvent::RedrawRequested
 
   → app.render()
     ┌─────────────────────────────────────────────────┐
-    │ 1. COMPUTE PASS (trajectory.wgsl)               │
+    │ 1. COMPUTE PASS (main_2d.wgsl / main_3d.wgsl)   │
     │    - Generate random samples (128 workgroups)   │
     │    - Each thread: N iterations (e.g., 256)      │
     │    - Apply transforms + variations              │
-    │    - Write color to temp texture                │
+    │    - Write to histogram buffer (atomic u32)     │
     └─────────────────────────────────────────────────┘
               ↓
     ┌─────────────────────────────────────────────────┐
     │ 2. ACCUMULATE PASS (accumulate.wgsl)            │
-    │    - Read temp samples                          │
+    │    - Read histogram buffer (u32 → f32)          │
+    │    - Decode colors (sum / density)              │
     │    - Blend with previous accumulation           │
     │    - blend_factor = 1.0 / sample_count          │
+    │    - Clear histogram (write zeros)              │
     │    - Write to current accumulation              │
     │    - Swap textures (ping-pong)                  │
     └─────────────────────────────────────────────────┘
@@ -383,15 +385,15 @@ In render():
 ```
 @group(0) @binding(0) - transforms: array<GpuTransform>      (storage buffer, read)
 @group(0) @binding(1) - params: GpuParams                   (uniform buffer, read)
-@group(0) @binding(2) - palette_texture: texture_1d         (texture, sample)
-@group(0) @binding(3) - palette_sampler: sampler            (sampler)
-@group(0) @binding(4) - temp_samples: texture_storage_2d    (texture, write)
+@group(0) @binding(2) - histogram: array<atomic<u32>>       (storage buffer, read_write)
+@group(0) @binding(3) - palette_texture: texture_1d         (texture, sample)
+@group(0) @binding(4) - palette_sampler: sampler            (sampler)
 @group(0) @binding(5) - variation_params: array<VariationParams> (storage buffer, read)
 ```
 
 ### Bind Group 0 (Accumulate Pass)
 ```
-@group(0) @binding(0) - temp_samples: texture_2d         (texture, sample)
+@group(0) @binding(0) - histogram: array<u32>            (storage buffer, read)
 @group(0) @binding(1) - prev_accumulation: texture_2d    (texture, sample)
 @group(0) @binding(2) - accumulation: texture_storage_2d (texture, write)
 @group(0) @binding(3) - sampler_linear: sampler          (sampler)
@@ -470,6 +472,147 @@ struct TonemapParams {
 
 ---
 
+## 🎨 Histogram Color Accumulation System (Added 2025-10-27)
+
+### Overview
+The renderer uses a **histogram-based atomic accumulation** system to safely collect color data from thousands of parallel GPU threads. This replaced the previous direct texture writes which couldn't safely handle concurrent access.
+
+### Architecture
+
+**3-Stage Pipeline:**
+```
+1. Compute Pass (main_2d.wgsl / main_3d.wgsl)
+   - Each thread generates 256-1024 iterations
+   - Converts final_color (RGB f32) to u32 with fixed scale
+   - Atomically adds to histogram buffer
+
+2. Accumulate Pass (accumulate.wgsl)
+   - Reads histogram buffer (non-atomic)
+   - Decodes u32 back to f32 RGB
+   - Blends with previous accumulation (exponential moving average)
+   - Clears histogram for next frame
+
+3. Tonemap Pass (tonemap.wgsl)
+   - Reads accumulation texture
+   - Applies tone mapping, gamma, background blending
+   - Outputs to screen
+```
+
+### Histogram Format (U32 Unpacked - Current)
+
+**Layout:** 4× u32 per pixel (separate R, G, B, Density channels)
+```
+Pixel Index: i = y * width + x
+Base Index:  base = i * 4
+
+histogram[base + 0] = R (u32, 0 to 4,294,967,295)
+histogram[base + 1] = G (u32, 0 to 4,294,967,295)
+histogram[base + 2] = B (u32, 0 to 4,294,967,295)
+histogram[base + 3] = Density (u32, count of hits)
+```
+
+**Memory Usage:** `width × height × 4 × 4 bytes`
+- 1920×1080: ~31.5 MB
+- 800×600: ~9.2 MB
+
+**Encoding (Compute Shader):**
+```wgsl
+let color_scale = params.histogram_color_scale;  // Default: 100.0
+
+let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
+let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
+let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
+let density_u32 = u32(color_scale);
+
+atomicAdd(&histogram[base_idx + 0u], r_u32);
+atomicAdd(&histogram[base_idx + 1u], g_u32);
+atomicAdd(&histogram[base_idx + 2u], b_u32);
+atomicAdd(&histogram[base_idx + 3u], density_u32);
+```
+
+**Decoding (Accumulate Shader):**
+```wgsl
+let r_sum = f32(histogram[base_idx + 0u]);
+let g_sum = f32(histogram[base_idx + 1u]);
+let b_sum = f32(histogram[base_idx + 2u]);
+let density = f32(histogram[base_idx + 3u]);
+
+let color = vec3(r_sum, g_sum, b_sum) / (density + 1e-6);
+```
+
+### Evolution History
+
+**Original (Removed):** Direct texture writes
+- Used `textureStore()` to write colors directly
+- **Problem:** Race conditions with concurrent writes (undefined behavior per WebGPU spec)
+- **Symptom:** Visual artifacts, incorrect colors
+
+**First Histogram (2025-10-26):** U16 packed RGB + U32 density
+- Format: `[u32: (R16|G16), u32: B16, u32: density]` (3× u32 per pixel)
+- **Problem:** RGB channels overflow after ~1,310 hits at scale=50
+- **Symptom:** Bright areas wrap to dark colors (0xFFFF → 0x0000)
+- Capacity: 65,535 max value per channel
+
+**Second Histogram (2025-10-27):** U32 unpacked (current)
+- Format: `[R32, G32, B32, density32]` (4× u32 per pixel)
+- **Benefit:** Eliminates overflow - 4.2 billion max value per channel
+- **Tradeoff:** 33% larger memory footprint (3→4 words)
+- Capacity: 42.9M hits before overflow (at scale=100) = 91 minutes continuous rendering
+
+### Performance Characteristics
+
+**Benchmark Results (simple3 @ 1920×1080, 1024 iters/thread):**
+```
+Commit    Description                  Time (ms)  Throughput (Giter/s)
+------    -----------                  ---------  --------------------
+dd80003   textureStore (baseline)      ~6800      ~5.86  [had race conditions]
+9ac278a   u16 packed histogram         1570       25.36  [overflow issues]
+a8301de   u32 unpacked histogram       1607       24.76  [current, no overflow]
+```
+
+**Performance vs Baseline:**
+- U32 histogram: **2.4% slower** than u16 packed (acceptable tradeoff)
+- 76% of memory bandwidth: 4 words vs 3 words, but better cache locality
+
+**Why Acceptable:**
+- Eliminates visual artifacts (overflow wraparound)
+- Proper HDR behavior (bright areas stay bright)
+- Clean, maintainable codebase (no complex workarounds)
+- Future-proof for high iteration counts
+
+### Key Design Decisions
+
+**Why U32 instead of F32?**
+- Atomic operations on f32 are undefined in WGSL/WebGPU
+- Integer atomics are guaranteed to be safe and correct
+- Scale factor provides adequate precision for color accumulation
+
+**Why Global Scale instead of Per-Pixel Adaptive?**
+- Simpler implementation (single uniform constant)
+- Faster access (uniform vs storage buffer read)
+- Eliminated 1.9 MB scale_buffer overhead
+- Avoids complex convergence detection logic
+
+**Why Separate Density Channel?**
+- Allows correct averaging: `color = sum / density`
+- Preserves HDR information for tone mapping
+- Matches traditional flame renderer architecture
+
+### UI Control
+
+**Location:** Settings window → Rendering section → "Histogram Color Scale" slider
+- Range: 1.0 to 1000.0
+- Default: 100.0
+- Higher values: Better precision, faster overflow (not an issue with u32)
+- Lower values: Less precision, more headroom (unnecessary with u32)
+
+### Related Documentation
+- [HISTOGRAM_OPTIMIZATION_ATTEMPTS.md](HISTOGRAM_OPTIMIZATION_ATTEMPTS.md) - Failed optimization attempts
+- [PER_PIXEL_ADAPTIVE_SCALING_DEBUG.md](PER_PIXEL_ADAPTIVE_SCALING_DEBUG.md) - Why adaptive scaling was abandoned
+- [U32_HISTOGRAM_CLEANUP.md](U32_HISTOGRAM_CLEANUP.md) - Cleanup plan after u32 implementation
+
+---
+
 ## 🔥 Flame Algorithm (GPU Implementation)
 
 ### Trajectory Shader Logic (2D Mode)
@@ -507,9 +650,14 @@ struct TonemapParams {
      // Project to screen space with view transform
      screen_pos = world_to_screen(p'', zoom, pan, rotation)
 
-     // Write to texture (additive blend)
+     // Write to histogram buffer (atomic accumulation)
      if in_bounds(screen_pos):
-       temp_samples[screen_pos] += vec4(color, 1.0)
+       pixel_idx = screen_pos.y * width + screen_pos.x
+       base_idx = pixel_idx * 4
+       atomicAdd(&histogram[base_idx + 0], u32(color.r * scale))
+       atomicAdd(&histogram[base_idx + 1], u32(color.g * scale))
+       atomicAdd(&histogram[base_idx + 2], u32(color.b * scale))
+       atomicAdd(&histogram[base_idx + 3], u32(scale))
 
      p = p''
 ```
@@ -556,9 +704,14 @@ struct TonemapParams {
      // Project to screen space with view transform
      screen_pos = world_to_screen(screen_pos_2d, zoom, pan, rotation)
 
-     // Write to texture (additive blend)
+     // Write to histogram buffer (atomic accumulation)
      if in_bounds(screen_pos):
-       temp_samples[screen_pos] += vec4(color, 1.0)
+       pixel_idx = screen_pos.y * width + screen_pos.x
+       base_idx = pixel_idx * 4
+       atomicAdd(&histogram[base_idx + 0], u32(color.r * scale))
+       atomicAdd(&histogram[base_idx + 1], u32(color.g * scale))
+       atomicAdd(&histogram[base_idx + 2], u32(color.b * scale))
+       atomicAdd(&histogram[base_idx + 3], u32(scale))
 
      p = p''
 ```
@@ -566,14 +719,31 @@ struct TonemapParams {
 ### Accumulate Shader Logic
 ```
 For each pixel:
-  new_sample = temp_samples[pixel]
+  // Read histogram values (4 u32 words per pixel)
+  base_idx = pixel_idx * 4
+  r_sum = f32(histogram[base_idx + 0])
+  g_sum = f32(histogram[base_idx + 1])
+  b_sum = f32(histogram[base_idx + 2])
+  density = f32(histogram[base_idx + 3])
+
+  // Decode to color (average accumulated values)
+  color = vec3(r_sum, g_sum, b_sum) / (density + 1e-6)
+
+  // Read previous accumulation
   prev_accum = prev_accumulation[pixel]
 
   // Exponential moving average
   blend_factor = 1.0 / samples_accumulated
-  current = mix(prev_accum, new_sample, blend_factor)
+  current = mix(prev_accum, vec4(color, density), blend_factor)
 
+  // Write to current accumulation
   accumulation[pixel] = current
+
+  // Clear histogram for next frame (write zeros)
+  histogram[base_idx + 0] = 0
+  histogram[base_idx + 1] = 0
+  histogram[base_idx + 2] = 0
+  histogram[base_idx + 3] = 0
 ```
 
 ### Tonemap Shader Logic
@@ -856,10 +1026,15 @@ Result: Variable throughput based on motion, but constant visual quality.
 
 ---
 
-**Last Updated:** 2025-10-25
+**Last Updated:** 2025-10-27
 **Project:** fflame-rust
 
 **Major Recent Changes:**
+- **U32 histogram color accumulation** for overflow-free rendering (2025-10-27)
+  - Atomic u32 accumulation eliminates RGB overflow artifacts
+  - 4× u32 per pixel: separate R, G, B, Density channels
+  - 2.4% performance cost vs u16 packed, but eliminates visual artifacts
+  - Cleaned up all failed optimization attempts (per-pixel adaptive scaling, convergence masking)
 - **Speed multiplier system** for quality-independent throughput control (2025-10-25)
   - Frame rate control (interactive app) and iteration chunking (export)
   - Pixel-perfect quality at any iterations_per_thread setting

@@ -529,6 +529,66 @@ Full pseudo-3D rendering inspired by Apophysis 7X:
 - Pipeline selected at runtime based on `flame.render_mode`
 - Same accumulation/tonemap passes for both modes
 
+### Histogram Color Accumulation System (Added 2025-10-27)
+
+**Overview:** The renderer uses a u32 histogram buffer for thread-safe atomic color accumulation on the GPU.
+
+**Architecture:**
+```
+1. Compute Pass → Write to histogram (atomic u32 adds)
+2. Accumulate Pass → Read histogram, decode, blend, clear
+3. Tonemap Pass → Display
+```
+
+**Format (U32 Unpacked):**
+- 4× u32 per pixel: R, G, B, Density (separate channels)
+- Memory: width × height × 16 bytes (e.g., 9.2 MB @ 800×600)
+- No bit packing - simpler, more robust
+
+**Evolution:**
+1. **textureStore (original):** Race conditions, undefined behavior
+2. **U16 packed (2025-10-26):** 3× u32 per pixel, RGB overflow after ~1,310 hits
+3. **U32 unpacked (2025-10-27, current):** 4× u32 per pixel, overflow eliminated
+
+**Key Benefits:**
+- ✅ Overflow eliminated (4.2B max vs 65K)
+- ✅ Bright areas stay bright (proper HDR)
+- ✅ 2.4% performance cost (acceptable tradeoff)
+- ✅ Clean codebase (failed optimizations removed)
+
+**Encoding (Compute Shader):**
+```wgsl
+let color_scale = params.histogram_color_scale;  // Default: 100.0
+atomicAdd(&histogram[base + 0u], u32(color.r * color_scale));
+atomicAdd(&histogram[base + 1u], u32(color.g * color_scale));
+atomicAdd(&histogram[base + 2u], u32(color.b * color_scale));
+atomicAdd(&histogram[base + 3u], u32(color_scale));
+```
+
+**Decoding (Accumulate Shader):**
+```wgsl
+let r_sum = f32(histogram[base + 0u]);
+let g_sum = f32(histogram[base + 1u]);
+let b_sum = f32(histogram[base + 2u]);
+let density = f32(histogram[base + 3u]);
+let color = vec3(r_sum, g_sum, b_sum) / density;  // Scale cancels out
+```
+
+**UI Control:**
+- Settings window → "Histogram Color Scale" slider (1.0-1000.0, default 100.0)
+- Higher scale = better precision, still safe from overflow
+- Recommend ≥100 for smooth gradients
+
+**Performance:**
+- U32 unpacked: 1607ms @ 1920×1080 (24.76 Giter/s)
+- U16 packed: 1570ms (25.36 Giter/s) but had overflow artifacts
+- Gap: 2.4% slower, acceptable for correct visual output
+
+**Documentation:**
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Detailed histogram section
+- [docs/COLOR_PIPELINE.md](docs/COLOR_PIPELINE.md) - Complete color pipeline with u32 updates
+- [docs/HISTOGRAM_OPTIMIZATION_ATTEMPTS.md](docs/HISTOGRAM_OPTIMIZATION_ATTEMPTS.md) - Failed attempts (per-pixel adaptive scaling, convergence masking)
+
 ## Known Issues
 - Julia variation uses CPU `rand::random()` which doesn't work on GPU (needs RNG passed in)
 - WASM PNG export uses `unsafe` lifetime extension (safe in practice, GPU resources live for program lifetime)
