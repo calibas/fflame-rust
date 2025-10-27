@@ -95,13 +95,16 @@ impl FlameRenderer {
     }
 
     /// Reset accumulation buffer and sample count
-    pub fn reset(&mut self, encoder: &mut CommandEncoder, _queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _speed_factor: f32) {
+    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _speed_factor: f32) {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
 
         // Clear accumulation buffers
-        self.buffers.clear_all(encoder, _queue);
+        self.buffers.clear_all(encoder, queue);
+
+        // Reset scale buffer to initial values
+        self.buffers.reset_scale_buffer(queue, self.width, self.height);
 
         // Note: We don't update params here because update_flame() already set them correctly.
         // Updating params here would overwrite num_transforms which was just set by update_flame().
@@ -237,6 +240,7 @@ impl FlameRenderer {
 
         // Recreate bind groups to point to the new current/previous textures
         self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+        self.adjust_scale_bind_group = self.pipelines.create_adjust_scale_bind_group(device, &self.buffers);
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
     }
 
@@ -262,6 +266,65 @@ impl FlameRenderer {
         render_pass.draw(0..3, 0..1); // Fullscreen triangle
 
         drop(render_pass);
+    }
+
+    /// Debug: Read back scale buffer and compute statistics
+    pub fn debug_scale_stats(&self, device: &Device, queue: &Queue) -> (f32, f32, f32) {
+        // Create staging buffer for readback
+        let pixel_count = (self.width * self.height) as usize;
+        let buffer_size = ((pixel_count + 1) / 2) * std::mem::size_of::<u32>();
+
+        let staging_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Scale Readback Staging"),
+            size: buffer_size as u64,
+            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Copy scale buffer to staging
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Scale Readback"),
+        });
+        encoder.copy_buffer_to_buffer(&self.buffers.scale_buffer, 0, &staging_buffer, 0, buffer_size as u64);
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map and read
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        device.poll(wgpu::Maintain::Wait);
+        rx.recv().unwrap().unwrap();
+
+        let data = buffer_slice.get_mapped_range();
+        let scale_words: &[u32] = bytemuck::cast_slice(&data);
+
+        // Unpack and compute stats
+        let mut min_scale = u16::MAX;
+        let mut max_scale = 0u16;
+        let mut sum = 0u64;
+
+        for i in 0..pixel_count {
+            let word_idx = i / 2;
+            let is_odd = (i % 2) == 1;
+            let scale = if is_odd {
+                ((scale_words[word_idx] >> 16) & 0xFFFF) as u16
+            } else {
+                (scale_words[word_idx] & 0xFFFF) as u16
+            };
+
+            min_scale = min_scale.min(scale);
+            max_scale = max_scale.max(scale);
+            sum += scale as u64;
+        }
+
+        drop(data);
+        staging_buffer.unmap();
+
+        let avg_scale = sum as f32 / pixel_count as f32;
+
+        (min_scale as f32, max_scale as f32, avg_scale)
     }
 
     /// Load a complete FractalConfig (preset or imported config)
@@ -293,6 +356,9 @@ impl FlameRenderer {
 
         // 5. Update palette
         self.buffers.update_palette(queue, palette);
+
+        // 5.5. Reset scale buffer to initial values (prevent residual scales from previous preset)
+        self.buffers.reset_scale_buffer(queue, self.width, self.height);
 
         // 6. Update ALL GPU params with correct num_transforms, render_mode, projection
         let (projection_type, perspective_strength) = match self.current_projection {

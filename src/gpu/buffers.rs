@@ -405,9 +405,9 @@ impl FlameBuffers {
 
         // Create per-pixel scale buffer
         // Each pixel gets a u16 scale value (1-100), packed 2 per u32
-        // Initialize all pixels to scale=50 (balanced starting point)
+        // Initialize all pixels to scale=10 (conservative to prevent overflow)
         let pixel_count = (width * height) as usize;
-        let initial_scale = 50u16;
+        let initial_scale = 10u16;
         let mut scale_data = vec![0u32; (pixel_count + 1) / 2]; // Round up for odd pixel counts
 
         for i in 0..pixel_count {
@@ -426,7 +426,7 @@ impl FlameBuffers {
         let scale_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Per-Pixel Scale Buffer"),
             contents: bytemuck::cast_slice(&scale_data),
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
         });
 
         // Create palette texture (1D, 256 samples)
@@ -631,6 +631,26 @@ impl FlameBuffers {
     pub fn clear_histogram(&self, encoder: &mut CommandEncoder) {
         // Clear histogram buffer to zero for new frame
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
+    }
+
+    /// Reset scale buffer to initial value (when switching presets or resetting)
+    pub fn reset_scale_buffer(&self, queue: &Queue, width: u32, height: u32) {
+        let pixel_count = (width * height) as usize;
+        let initial_scale = 10u16;
+        let mut scale_data = vec![0u32; (pixel_count + 1) / 2];
+
+        for i in 0..pixel_count {
+            let word_idx = i / 2;
+            let is_odd = (i % 2) == 1;
+
+            if is_odd {
+                scale_data[word_idx] |= (initial_scale as u32) << 16;
+            } else {
+                scale_data[word_idx] |= initial_scale as u32;
+            }
+        }
+
+        queue.write_buffer(&self.scale_buffer, 0, bytemuck::cast_slice(&scale_data));
     }
 
     /// Get the current accumulation texture view (for display)

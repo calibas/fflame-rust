@@ -248,14 +248,14 @@ impl FlamePipelines {
         let adjust_scale_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Adjust Scale Bind Group Layout"),
             entries: &[
-                // Histogram buffer (storage, read-only)
+                // Accumulation texture (sampled texture, read-only)
                 BindGroupLayoutEntry {
                     binding: 0,
                     visibility: ShaderStages::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -458,7 +458,7 @@ impl FlamePipelines {
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: buffers.histogram_buffer.as_entire_binding(),
+                    resource: BindingResource::TextureView(buffers.previous_accumulation_view()),
                 },
                 BindGroupEntry {
                     binding: 1,
