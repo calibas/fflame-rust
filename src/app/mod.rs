@@ -316,10 +316,7 @@ impl App {
                 self.metrics.record_compute_time(t0.elapsed().as_secs_f64() * 1000.0);
 
                 let t1 = Instant::now();
-                // 2. Adjust per-pixel scales based on histogram density
-                renderer.adjust_scale_pass(&mut encoder);
-
-                // 3. Accumulate samples - but only every N frames if batching enabled
+                // 2. Accumulate samples - but only every N frames if batching enabled
                 if should_accumulate {
                     // samples_this_frame is only THIS frame's samples, but histogram contains
                     // accumulated samples from all frames in the batch
@@ -331,6 +328,9 @@ impl App {
                 } else {
                     self.metrics.record_accumulate_time(0.0);
                 }
+
+                // 3. Adjust per-pixel scales every frame (prevents temporal aliasing / vertical lines)
+                renderer.adjust_scale_pass(&mut encoder);
             } else {
                 self.metrics.record_compute_time(0.0);
                 self.metrics.record_accumulate_time(0.0);
@@ -343,6 +343,20 @@ impl App {
             renderer.update_tonemap(&self.gpu.queue, self.tonemap_mode, self.use_curve, self.exposure, self.gamma);
             renderer.tonemap_pass(&mut encoder, &view);
             self.metrics.record_tonemap_time(t2.elapsed().as_secs_f64() * 1000.0);
+
+            // DEBUG: Log scale statistics every 60 frames
+            static mut DEBUG_FRAME_COUNT: u32 = 0;
+            unsafe {
+                DEBUG_FRAME_COUNT += 1;
+                if DEBUG_FRAME_COUNT % 60 == 0 {
+                    self.gpu.queue.submit(std::iter::once(encoder.finish()));
+                    let (min, max, avg) = renderer.debug_scale_stats(&self.gpu.device, &self.gpu.queue);
+                    log::info!("Scale stats @ frame {}: min={:.1}, max={:.1}, avg={:.1}", DEBUG_FRAME_COUNT, min, max, avg);
+                    encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("Main Encoder (continued)"),
+                    });
+                }
+            }
         }
 
         // Render UI on top and handle updates

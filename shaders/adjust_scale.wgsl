@@ -1,4 +1,4 @@
-// Adjust per-pixel scale values based on histogram density
+// Adjust per-pixel scale values based on accumulated density
 // Runs after compute pass, before accumulate pass
 // Prevents overflow by reducing scale in high-density areas
 // Maximizes precision by increasing scale in low-density areas
@@ -14,7 +14,7 @@ struct AdjustScaleParams {
     max_scale: f32,               // Maximum allowed scale (default: 100.0)
 }
 
-@group(0) @binding(0) var<storage, read> histogram: array<u32>;
+@group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
 @group(0) @binding(1) var<storage, read_write> scale_buffer: array<u32>;
 @group(0) @binding(2) var<uniform> params: AdjustScaleParams;
 
@@ -26,7 +26,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let pixel_idx = global_id.y * params.width + global_id.x;
-    let base_idx = pixel_idx * 2u;
 
     // Load current scale
     let scale_word_idx = pixel_idx / 2u;
@@ -39,17 +38,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         is_odd
     ));
 
-    // Read histogram values
-    let packed_rg = histogram[base_idx + 0u];
-    let packed_bd = histogram[base_idx + 1u];
+    // Read accumulated color and density from accumulation texture
+    let pixel_color = textureLoad(accumulation_texture, vec2<i32>(global_id.xy), 0);
 
-    let r_sum = f32(packed_rg & 0xFFFFu);
-    let g_sum = f32((packed_rg >> 16u) & 0xFFFFu);
-    let b_sum = f32(packed_bd & 0xFFFFu);
-    let density = f32((packed_bd >> 16u) & 0xFFFFu);
+    // Alpha channel contains accumulated density (normalized, 0-1 range)
+    // Values typically range from 0.0 (no hits) to ~1.0 (high density over time)
+    let density = pixel_color.a * 100.0;  // Scale to 0-100 range for threshold comparison
 
-    // Calculate maximum accumulated value
-    let max_accumulated = max(max(r_sum, g_sum), b_sum);
+    // RGB channels contain accumulated color (already tone-mapped in accumulation buffer)
+    // Estimate overflow risk from color intensity
+    let max_color = max(max(pixel_color.r, pixel_color.g), pixel_color.b);
+    let max_accumulated = max_color * 65535.0;  // Approximate accumulated value
 
     // Determine new scale based on density and overflow risk
     var new_scale = current_scale;
