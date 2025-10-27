@@ -26,6 +26,8 @@ pub struct FlameRenderer {
     histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
     low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
     density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression (default: 0.0)
+    blend_factor: f32, // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
+    use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
 }
 
 impl FlameRenderer {
@@ -76,6 +78,8 @@ impl FlameRenderer {
             histogram_color_scale: 10.0, // Balanced default
             low_density_smoothing: 0.5, // Moderate smoothing default
             density_compression_strength: 0.0, // Linear accumulation default (no compression)
+            blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
+            use_dynamic_blend: true, // Default to exponential convergence (old behavior)
         }
     }
 
@@ -183,10 +187,16 @@ impl FlameRenderer {
     pub fn accumulate_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, device: &Device, samples_this_frame: u64) {
         self.samples_accumulated += samples_this_frame;
 
-        // Calculate blend factor for exponential moving average
-        // blend_factor = samples_this_frame / samples_accumulated
-        // This properly weights each frame by the number of samples it contributes
-        let blend_factor = samples_this_frame as f32 / self.samples_accumulated as f32;
+        // Calculate blend_factor based on mode
+        let blend_factor = if self.use_dynamic_blend {
+            // Exponential convergence (old behavior): blend_factor decreases over time
+            // Prevents overbright over time, converges to stable image
+            samples_this_frame as f32 / self.samples_accumulated as f32
+        } else {
+            // Fixed blend rate (new behavior): constant blend per frame
+            // Useful for testing density compression effects
+            self.blend_factor
+        };
 
         let params = AccumulateParams {
             width: self.width,
@@ -439,9 +449,21 @@ impl FlameRenderer {
         // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
     }
 
-    /// Set density compression strength (0.0 = linear, 5.0 = strong compression)
+    /// Set density compression strength (0.0 = linear, 100.0 = strong compression)
     pub fn set_density_compression_strength(&mut self, strength: f32) {
         self.density_compression_strength = strength;
+        // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
+    }
+
+    /// Set blend factor for accumulation (0.01 = slow/smooth, 1.0 = fast/flickery)
+    pub fn set_blend_factor(&mut self, blend_factor: f32) {
+        self.blend_factor = blend_factor;
+        // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
+    }
+
+    /// Set whether to use dynamic blend (exponential convergence) or fixed blend rate
+    pub fn set_use_dynamic_blend(&mut self, use_dynamic: bool) {
+        self.use_dynamic_blend = use_dynamic;
         // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
     }
 

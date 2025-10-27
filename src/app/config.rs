@@ -30,6 +30,7 @@ impl App {
             histogram_color_scale: self.histogram_color_scale,
             low_density_smoothing: self.low_density_smoothing,
             density_compression_strength: self.density_compression_strength,
+            blend_factor: self.blend_factor,
         }
     }
 
@@ -57,6 +58,8 @@ impl App {
         self.deterministic_rng = config.deterministic_rng;
         self.histogram_color_scale = config.histogram_color_scale;
         self.low_density_smoothing = config.low_density_smoothing;
+        self.density_compression_strength = config.density_compression_strength;
+        self.blend_factor = config.blend_factor;
 
         // If config includes a palette, add it to library or update existing
         if let Some(ref palette) = config.palette {
