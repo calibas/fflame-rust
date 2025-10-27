@@ -22,6 +22,7 @@ pub struct FlameRenderer {
     current_projection: crate::scene::transforms::ProjectionType,
     deterministic_rng: bool,
     frame_counter: u32, // For deterministic seed progression
+    histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
 }
 
 impl FlameRenderer {
@@ -67,6 +68,7 @@ impl FlameRenderer {
             current_projection: flame.projection,
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
+            histogram_color_scale: 10.0, // Balanced default
         }
     }
 
@@ -132,7 +134,7 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
-            histogram_color_scale: 10.0, // TODO: Get from config
+            histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
         };
         self.buffers.update_params(queue, &params);
@@ -178,7 +180,7 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             blend_factor,
-            histogram_color_scale: 10.0, // TODO: Get from config
+            histogram_color_scale: self.histogram_color_scale,
         };
 
         self.buffers.update_accumulate_params(queue, &params);
@@ -254,6 +256,7 @@ impl FlameRenderer {
         // 4. Update render mode and projection
         self.current_render_mode = config.flame.render_mode;
         self.current_projection = config.flame.projection;
+        self.histogram_color_scale = config.histogram_color_scale;
 
         // 5. Update palette
         self.buffers.update_palette(queue, palette);
@@ -286,8 +289,8 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x: config.camera_rotation_x,
             camera_rotation_y: config.camera_rotation_y,
+            histogram_color_scale: config.histogram_color_scale,
             _pad3: 0.0,
-            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
 
@@ -348,7 +351,7 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
-            histogram_color_scale: 10.0, // TODO: Get from config
+            histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
         };
 
@@ -398,6 +401,10 @@ impl FlameRenderer {
         self.deterministic_rng = deterministic;
     }
 
+    pub fn set_histogram_color_scale(&mut self, scale: f32) {
+        self.histogram_color_scale = scale;
+    }
+
     /// Update iterations per thread
     pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
         let (projection_type, perspective_strength) = match self.current_projection {
@@ -427,7 +434,7 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
-            histogram_color_scale: 10.0, // TODO: Get from config
+            histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
         };
         self.buffers.update_params(queue, &params);
@@ -520,7 +527,7 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
-            histogram_color_scale: 10.0, // TODO: Get from config
+            histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
         };
         self.buffers.update_params(queue, &params);
