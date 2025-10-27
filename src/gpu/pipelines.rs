@@ -7,6 +7,8 @@ pub struct FlamePipelines {
     pub compute_bind_group_layout: BindGroupLayout,
     pub accumulate_pipeline: ComputePipeline,
     pub accumulate_bind_group_layout: BindGroupLayout,
+    pub adjust_scale_pipeline: ComputePipeline,
+    pub adjust_scale_bind_group_layout: BindGroupLayout,
     pub tonemap_pipeline: RenderPipeline,
     pub tonemap_bind_group_layout: BindGroupLayout,
 }
@@ -17,6 +19,11 @@ impl FlamePipelines {
         let accumulate_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Accumulate Shader"),
             source: ShaderSource::Wgsl(include_str!("../../shaders/accumulate.wgsl").into()),
+        });
+
+        let adjust_scale_shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Adjust Scale Shader"),
+            source: ShaderSource::Wgsl(include_str!("../../shaders/adjust_scale.wgsl").into()),
         });
 
         let tonemap_shader = device.create_shader_module(ShaderModuleDescriptor {
@@ -237,6 +244,61 @@ impl FlamePipelines {
             cache: None,
         });
 
+        // Create adjust scale bind group layout
+        let adjust_scale_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Adjust Scale Bind Group Layout"),
+            entries: &[
+                // Histogram buffer (storage, read-only)
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Scale buffer (storage, read-write)
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Params uniform
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let adjust_scale_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Adjust Scale Pipeline Layout"),
+            bind_group_layouts: &[&adjust_scale_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let adjust_scale_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Adjust Scale Compute Pipeline"),
+            layout: Some(&adjust_scale_pipeline_layout),
+            module: &adjust_scale_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         // Create tonemap render pipeline
         let tonemap_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Tonemap Pipeline Layout"),
@@ -287,6 +349,8 @@ impl FlamePipelines {
             compute_bind_group_layout,
             accumulate_pipeline,
             accumulate_bind_group_layout,
+            adjust_scale_pipeline,
+            adjust_scale_bind_group_layout,
             tonemap_pipeline,
             tonemap_bind_group_layout,
         }
@@ -377,6 +441,32 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 4,
                     resource: buffers.scale_buffer.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    /// Create bind group for adjust scale pass
+    pub fn create_adjust_scale_bind_group(
+        &self,
+        device: &Device,
+        buffers: &super::buffers::FlameBuffers,
+    ) -> BindGroup {
+        device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Adjust Scale Bind Group"),
+            layout: &self.adjust_scale_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: buffers.histogram_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: buffers.scale_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: buffers.adjust_scale_params_buffer.as_entire_binding(),
                 },
             ],
         })
