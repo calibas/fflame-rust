@@ -14,6 +14,7 @@ struct AccumulateParams {
 @group(0) @binding(1) var<storage, read> histogram: array<u32>;
 @group(0) @binding(2) var output_texture: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var<uniform> params: AccumulateParams;
+@group(0) @binding(4) var<storage, read> scale_buffer: array<u32>;  // Per-pixel scales (u16 packed)
 
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -31,6 +32,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let pixel_idx = global_id.y * params.width + global_id.x;
     let base_idx = pixel_idx * 2u;
 
+    // Load this pixel's current scale (u16 from packed u32)
+    let scale_word_idx = pixel_idx / 2u;
+    let scale_word = scale_buffer[scale_word_idx];
+    let pixel_scale = f32(select(
+        scale_word & 0xFFFFu,          // Even pixel (low 16 bits)
+        (scale_word >> 16u) & 0xFFFFu, // Odd pixel (high 16 bits)
+        (pixel_idx % 2u) == 1u
+    ));
+
     // Unpack 2× u32 into 4× u16 (RGBA + density)
     let packed_rg = histogram[base_idx + 0u];
     let packed_bd = histogram[base_idx + 1u];
@@ -41,17 +51,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let b_sum = f32(packed_bd & 0xFFFFu);
     let density = f32((packed_bd >> 16u) & 0xFFFFu);
 
-    // Convert back to float color (average)
-    // Note: Values were scaled by histogram_color_scale during accumulation
-    let color_scale = params.histogram_color_scale;
+    // Convert back to float color (average) using this pixel's scale
+    // Per-pixel adaptive scale: each pixel was encoded with its own scale value
     var new_color = vec3<f32>(0.0);
     if (density > 0.0) {
-        // Simple division - just accept that overflow will cause color wrapping
-        // This is a known limitation of the u16 packing approach
         new_color = vec3<f32>(
-            r_sum / (density * color_scale),
-            g_sum / (density * color_scale),
-            b_sum / (density * color_scale)
+            r_sum / (density * pixel_scale),
+            g_sum / (density * pixel_scale),
+            b_sum / (density * pixel_scale)
         );
 
         // Clamp to valid range

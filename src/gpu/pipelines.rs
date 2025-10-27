@@ -208,6 +208,17 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Per-pixel scale buffer (storage, read-only)
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -362,6 +373,10 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 3,
                     resource: buffers.accumulate_params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: buffers.scale_buffer.as_entire_binding(),
                 },
             ],
         })
