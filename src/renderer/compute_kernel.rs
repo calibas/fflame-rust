@@ -10,7 +10,7 @@ pub struct FlameRenderer {
     buffers: FlameBuffers,
     compute_bind_group: BindGroup,
     accumulate_bind_group: BindGroup,
-    adjust_scale_bind_group: BindGroup,
+    // adjust_scale_bind_group removed - pipeline unused
     tonemap_bind_group: BindGroup,
     pub width: u32,
     pub height: u32,
@@ -41,7 +41,7 @@ impl FlameRenderer {
 
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
         let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
-        let adjust_scale_bind_group = pipelines.create_adjust_scale_bind_group(device, &buffers);
+        // adjust_scale_bind_group removed - pipeline unused
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
 
         // DEBUG: Log renderer initialization
@@ -59,7 +59,7 @@ impl FlameRenderer {
             buffers,
             compute_bind_group,
             accumulate_bind_group,
-            adjust_scale_bind_group,
+            // adjust_scale_bind_group removed
             tonemap_bind_group,
             width,
             height,
@@ -103,9 +103,7 @@ impl FlameRenderer {
         // Clear accumulation buffers
         self.buffers.clear_all(encoder, queue);
 
-        // Reset scale buffer to initial values
-        self.buffers.reset_scale_buffer(queue, self.width, self.height);
-
+        // Note: scale_buffer removed - scale is now in params.histogram_color_scale
         // Note: We don't update params here because update_flame() already set them correctly.
         // Updating params here would overwrite num_transforms which was just set by update_flame().
     }
@@ -177,22 +175,7 @@ impl FlameRenderer {
 
     /// Run adjust scale pass to dynamically adjust per-pixel scales based on density
     /// This prevents overflow in high-density areas and maximizes precision in low-density areas
-    pub fn adjust_scale_pass(&mut self, encoder: &mut CommandEncoder) {
-        let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-            label: Some("Adjust Scale Pass"),
-            timestamp_writes: None,
-        });
-
-        compute_pass.set_pipeline(&self.pipelines.adjust_scale_pipeline);
-        compute_pass.set_bind_group(0, &self.adjust_scale_bind_group, &[]);
-
-        // Dispatch one thread per 8x8 tile (same as accumulate)
-        let workgroups_x = (self.width + 7) / 8;
-        let workgroups_y = (self.height + 7) / 8;
-        compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-
-        drop(compute_pass);
-    }
+    // Note: adjust_scale_pass() removed - pipeline unused
 
     /// Run accumulation pass to blend new samples with previous accumulation
     pub fn accumulate_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, device: &Device, samples_this_frame: u64) {
@@ -240,7 +223,7 @@ impl FlameRenderer {
 
         // Recreate bind groups to point to the new current/previous textures
         self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
-        self.adjust_scale_bind_group = self.pipelines.create_adjust_scale_bind_group(device, &self.buffers);
+        // adjust_scale_bind_group removed - pipeline unused
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
     }
 
@@ -269,57 +252,7 @@ impl FlameRenderer {
     }
 
     /// Debug: Read back scale buffer and compute statistics
-    pub fn debug_scale_stats(&self, device: &Device, queue: &Queue) -> (f32, f32, f32) {
-        // Create staging buffer for readback (unpacked format: 1 u32 per pixel)
-        let pixel_count = (self.width * self.height) as usize;
-        let buffer_size = pixel_count * std::mem::size_of::<u32>();
-
-        let staging_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Scale Buffer Readback"),
-            size: buffer_size as u64,
-            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Copy scale buffer to staging
-        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Scale Readback"),
-        });
-        encoder.copy_buffer_to_buffer(&self.buffers.scale_buffer, 0, &staging_buffer, 0, buffer_size as u64);
-        queue.submit(std::iter::once(encoder.finish()));
-
-        // Map and read
-        let buffer_slice = staging_buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        buffer_slice.map_async(MapMode::Read, move |result| {
-            tx.send(result).unwrap();
-        });
-        device.poll(wgpu::Maintain::Wait);
-        rx.recv().unwrap().unwrap();
-
-        let data = buffer_slice.get_mapped_range();
-        let scale_data: &[u32] = bytemuck::cast_slice(&data);
-
-        // Compute stats (scale values per pixel)
-        let mut min_scale = u32::MAX;
-        let mut max_scale = 0u32;
-        let mut sum = 0u64;
-
-        for i in 0..pixel_count {
-            let scale = scale_data[i];
-
-            min_scale = min_scale.min(scale);
-            max_scale = max_scale.max(scale);
-            sum += scale as u64;
-        }
-
-        drop(data);
-        staging_buffer.unmap();
-
-        let avg_scale = sum as f32 / pixel_count as f32;
-
-        (min_scale as f32, max_scale as f32, avg_scale)
-    }
+    // Note: debug_scale_stats() removed - scale_buffer no longer exists
 
     /// Load a complete FractalConfig (preset or imported config)
     /// This ensures all GPU state is properly synchronized
@@ -351,8 +284,7 @@ impl FlameRenderer {
         // 5. Update palette
         self.buffers.update_palette(queue, palette);
 
-        // 5.5. Reset scale buffer to initial values (prevent residual scales from previous preset)
-        self.buffers.reset_scale_buffer(queue, self.width, self.height);
+        // Note: scale_buffer removed - scale is now in params.histogram_color_scale
 
         // 6. Update ALL GPU params with correct num_transforms, render_mode, projection
         let (projection_type, perspective_strength) = match self.current_projection {
