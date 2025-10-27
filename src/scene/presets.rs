@@ -366,6 +366,7 @@ impl PresetLibrary {
                     gamma: 2.2,
                     deterministic_rng: false,
                     histogram_color_scale: 10.0,
+                    low_density_smoothing: 0.5,
                 }
             },
         ];
@@ -417,6 +418,7 @@ impl PresetLibrary {
             gamma: 2.2,
             deterministic_rng: false,
             histogram_color_scale: 10.0,
+            low_density_smoothing: 0.5,
         }
     }
 

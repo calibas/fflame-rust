@@ -174,6 +174,14 @@ pub struct AccumulateParams {
     pub height: u32,
     pub blend_factor: f32,
     pub histogram_color_scale: f32, // Must match compute shader value
+    pub low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing
+    pub _pad0: f32,  // Padding before vec3
+    pub _pad1: f32,  // Align vec3 to 16-byte boundary (offset 32)
+    pub _pad2: f32,
+    pub _pad3: f32,  // vec3<f32> in WGSL std140 layout
+    pub _pad4: f32,
+    pub _pad5: f32,
+    pub _pad6: f32,  // Total 12 fields = 48 bytes
 }
 
 /// Manages GPU buffers and textures for fractal flame rendering
@@ -295,6 +303,14 @@ impl FlameBuffers {
             height,
             blend_factor: 1.0,
             histogram_color_scale: 10.0, // Must match compute shader
+            low_density_smoothing: 0.5, // Default moderate smoothing
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+            _pad3: 0.0,
+            _pad4: 0.0,
+            _pad5: 0.0,
+            _pad6: 0.0,
         };
         let accumulate_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Accumulate Params Buffer"),
