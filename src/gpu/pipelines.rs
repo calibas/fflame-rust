@@ -97,7 +97,7 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Per-pixel scale buffer (storage, read-only in compute)
+                // Per-pixel scale buffer (storage, read-only)
                 BindGroupLayoutEntry {
                     binding: 6,
                     visibility: ShaderStages::COMPUTE,

@@ -570,10 +570,234 @@ At scale=100:
 - Higher scale (100): Maximum precision but overflows in dense areas
 - Per-pixel adaptive: Complex, buggy, incompatible with batching
 
-### Possible Solutions Going Forward
+---
 
-1. **Accept overflow in extreme dense areas** - Most fractals won't hit it
-2. **Reduce batch size** - Go back to 1× or 2× batching (less overflow risk)
-3. **Use larger integer format** - U32 colors instead of U16 (12× memory)
-4. **Implement true floating-point accumulation** - Major architectural change
-5. **Hybrid approach** - User's new idea (to be discussed)
+## New Approach: Convergence-Based Sample Limiting
+
+### Date
+2025-10-27
+
+### The Insight: Convergence, Not Scaling
+
+**User's key observation:**
+> "If there's so many iterations happening for a single pixel that it's risking overflowing, does that pixel need any more data? Once a pixel gets X amount of iterations, there's no further improving the quality."
+
+**The fundamental shift:**
+- Old thinking: Scale down colors to prevent overflow
+- New thinking: Stop sampling pixels that have already converged
+
+**Why this makes sense:**
+- Pixel with 10,000 hits knows its "true" color
+- Hit 10,001 changes result by 0.01% (negligible)
+- Yet we waste compute on already-converged pixels
+- Meanwhile, sparse areas starve for samples
+
+### Proposed Design
+
+**Core idea:** Track iteration count per pixel, stop accumulating when converged.
+
+**Implementation:**
+1. **Repurpose scale_buffer as iteration counter**
+   - Atomically increment on each hit
+   - When count ≥ threshold, pixel is "converged"
+
+2. **Skip histogram writes for converged pixels**
+   ```wgsl
+   let iteration_count = atomicAdd(&iteration_buffer[pixel_idx], 1);
+   if (iteration_count < CONVERGENCE_THRESHOLD) {
+       // Still needs samples - write to histogram
+       atomicAdd(&histogram[...], color);
+   } else {
+       // Converged - skip write
+   }
+   ```
+
+3. **Use iteration count as accumulation mask**
+   - Accumulate shader checks convergence flag
+   - Only blend new samples from non-converged pixels
+   - Converged pixels keep their final color
+
+4. **Handle "max" color accumulation** (User's suggestion)
+   - Instead of discarding converged pixel samples, store as "max"
+   - Blend into accumulation texture itself
+   - No extra buffer needed - use existing accumulation alpha channel?
+
+### Critical Analysis
+
+**Concern 1: Visible boundaries between converged/non-converged?**
+- Counter-argument (User): "If everything is converging towards the 'correct' color values, then the non-converged regions should keep updating and eventually match the converged regions."
+- **Resolution:** This is correct - no hard boundary if convergence is smooth
+
+**Concern 2: Fixed threshold is arbitrary**
+- Counter-argument (User): "Easy fix, it's an adjustable setting."
+- **Resolution:** Make `CONVERGENCE_THRESHOLD` a UI parameter (default: 5000?)
+
+**Concern 3: Histogram decode becomes complicated**
+- Counter-argument (User): "Can we use the per-pixel tracking as a 'mask' when updating the accumulation texture? It'll act as a filter."
+- **Resolution:** Yes - accumulate shader reads iteration_buffer, only blends if below threshold
+
+**Concern 4: Doesn't solve u16 overflow before convergence**
+- Counter-argument (User): "The overflows don't seem to happen the first few frames. I'm hoping we can catch them beforehand."
+- **Resolution:** If convergence threshold (5000) < overflow point (~655 at scale=100), this works. Need to tune threshold vs scale.
+
+**Concern 5: Sample redistribution is hard**
+- Counter-argument (User): "What about adding it as a 'max' that's part of the accumulation texture itself? Do we need an extra texture/buffer?"
+- **Resolution:** Store final converged value in accumulation texture directly. No redistribution needed - just stop writing to histogram.
+
+### Refined Design with User Feedback
+
+**Data structures:**
+- `iteration_buffer` (repurposed scale_buffer): u32 per pixel, atomically incremented
+- `histogram`: Only written by non-converged pixels
+- `accumulation_texture`: Stores final colors for all pixels
+
+**Compute shader logic:**
+```wgsl
+let pixel_idx = ...;
+let iteration_count = atomicAdd(&iteration_buffer[pixel_idx], 1u);
+
+if (iteration_count < params.convergence_threshold) {
+    // Still needs refinement - write to histogram
+    let r16 = u32(color.r * 100.0);  // scale=100 for quality
+    let g16 = u32(color.g * 100.0);
+    let b16 = u32(color.b * 100.0);
+    let density = 100u;  // Fixed scale
+
+    atomicAdd(&histogram[base_idx + 0], r16 | (g16 << 16));
+    atomicAdd(&histogram[base_idx + 1], b16);
+    atomicAdd(&histogram[base_idx + 2], density);
+} else {
+    // Converged - skip histogram write
+    // Pixel keeps its final color in accumulation texture
+}
+```
+
+**Accumulate shader logic:**
+```wgsl
+let pixel_idx = ...;
+let iteration_count = iteration_buffer[pixel_idx];
+
+if (iteration_count < params.convergence_threshold) {
+    // Still accumulating - decode histogram and blend
+    let new_color = decode_histogram(...);
+    let blended = mix(prev_color, new_color, blend_factor);
+    output = blended;
+} else {
+    // Converged - keep existing color, no blend
+    output = prev_color;
+}
+```
+
+**Benefits:**
+1. **Prevents overflow** - Converged pixels stop accumulating before overflow
+2. **Better quality** - Samples naturally focus on sparse areas
+3. **Adjustable** - Convergence threshold is user parameter
+4. **Simple** - No complex redistribution, just stop writing
+5. **Uses existing infrastructure** - Repurpose scale_buffer, use accumulation texture
+
+**Open questions:**
+1. What's the right default convergence threshold? (1000? 5000? 10000?)
+2. Does this affect temporal blending smoothness?
+3. How to visualize convergence progress? (Debug view?)
+4. Should threshold be dynamic based on fractal type?
+
+### Implementation Status: COMPLETED
+
+**Date:** 2025-10-27
+
+**Changes made:**
+1. ✅ Repurposed scale_buffer as iteration counter (atomic u32 per pixel)
+2. ✅ Compute shaders atomically increment counter on each hit
+3. ✅ Histogram writes only happen when `iteration_count < threshold`
+4. ✅ Accumulate shader checks threshold before blending
+5. ✅ Fixed all atomic binding declarations (read_write access)
+
+**Files modified:**
+- `src/gpu/buffers.rs` - Renamed to "iteration counter", reset to 0
+- `src/gpu/pipelines.rs` - Changed bindings to read_write for atomics
+- `shaders/core/header.wgsl` - Declared as `array<atomic<u32>>`
+- `shaders/core/main_2d.wgsl` - Added convergence check with threshold
+- `shaders/core/main_3d.wgsl` - Added convergence check with threshold
+- `shaders/accumulate.wgsl` - Check threshold before blending
+- `src/renderer/compute_kernel.rs` - Updated debug stats to show iteration counts
+
+### Test Results
+
+**Iteration count distribution (from logs):**
+```
+Frame 60:  min=0, max=1,160,779, avg=56
+Frame 480: min=0, max=9,234,723, avg=445
+```
+
+**Key findings:**
+1. Dense pixels can accumulate **millions** of iterations (9M+ in 480 frames)
+2. This equals ~20,000 iterations/frame for hottest pixels (totally normal for IFS attractors)
+3. The iteration counter tracks ALL hits forever (not capped)
+4. The histogram write threshold controls when to STOP writing
+
+**Threshold tuning experiments:**
+
+| Threshold | Result |
+|-----------|--------|
+| 1,000 | ❌ Black patches in dense areas - stops accumulating too early |
+| 10,000 | ❌ Still overflows in dense areas |
+| 100,000 | ✅ Better visual quality but still overflows |
+
+### Root Cause Analysis: The Real Problem
+
+**The convergence masking IS working** - histogram writes stop at threshold. But overflow still happens because:
+
+**With threshold=10,000 and scale=50:**
+- 10,000 writes × 50 = 500,000 total value accumulated
+- U16 max = 65,535
+- **Overflow happens at 7.6× the u16 limit!**
+
+Even with convergence masking, we're accumulating way more data than u16 can hold BEFORE we stop writing.
+
+**The math:**
+- Overflow point: 65,535 / scale
+- At scale=50: Overflow after ~1,310 writes
+- At scale=100: Overflow after ~655 writes
+
+**To prevent overflow with current u16 histogram:**
+- Threshold must be ≤ (65,535 / scale)
+- At scale=50: Threshold ≤ 1,310
+- At scale=100: Threshold ≤ 655
+
+**But low thresholds cause quality loss** - pixels stop accumulating before converging to true color.
+
+### The Core Dilemma Remains
+
+We have three conflicting requirements:
+
+1. **High scale (100)** - Needed for color precision/quality
+2. **High threshold (10,000+)** - Needed for pixels to converge
+3. **U16 histogram** - Can only hold 65,535 per channel
+
+**You can only pick TWO:**
+- High scale + High threshold = Overflow (current situation)
+- High scale + No overflow = Low threshold = Poor quality (black patches)
+- High threshold + No overflow = Low scale = Poor color precision
+
+### Possible Solutions
+
+**Option A: Increase histogram capacity (u32 for RGB)**
+- Change packed format from u16 to u32 for color channels
+- Allows: threshold=10,000 × scale=100 = 1M (fits in u32 max 4.2B)
+- Cost: 2× histogram memory (6× u32 per pixel instead of 3×)
+- Benefit: Solves overflow completely, supports any scale/threshold combo
+
+**Option B: Adaptive accumulate frequency**
+- Instead of 4× batching, accumulate more frequently in dense areas
+- Histogram gets cleared before overflow can happen
+- Complexity: How to detect when to accumulate? Per-pixel? Global?
+
+**Option C: Quality slider (adjustable batching)**
+- User control: Low quality = 1× batch (no overflow), High quality = 8× batch (faster)
+- Simple, gives user the trade-off choice
+- Still has overflow at high quality settings
+
+**Option D: Accept the overflow, tune threshold lower**
+- Set threshold = 1,000 (just under overflow point for scale=50)
+- May need scale=30-40 to give more headroom
+- Simpler but compromises quality

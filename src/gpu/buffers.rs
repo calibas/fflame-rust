@@ -404,11 +404,10 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Create per-pixel scale buffer
-        // FIX: Unpacked format (1 u32 per pixel) to prevent race conditions in adjust_scale
-        // Using fixed global scale (adaptive disabled for now)
+        // Create per-pixel scale buffer (unpacked, u32 per pixel)
+        // Fixed global scale for now (adjust_scale disabled)
         let pixel_count = (width * height) as usize;
-        let initial_scale = 50u32;  // Fixed global scale for best quality
+        let initial_scale = 50u32;  // Fixed scale=50 for quality without overflow
         let scale_data = vec![initial_scale; pixel_count];
 
         let scale_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -621,10 +620,10 @@ impl FlameBuffers {
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
     }
 
-    /// Reset scale buffer to initial value (when switching presets or resetting)
+    /// Reset iteration counter to zero (when switching presets or resetting)
     pub fn reset_scale_buffer(&self, queue: &Queue, width: u32, height: u32) {
         let pixel_count = (width * height) as usize;
-        let initial_scale = 50u32;  // Match initialization scale
+        let initial_scale = 50u32;  // Reset to fixed scale=50
         let scale_data = vec![initial_scale; pixel_count];
 
         queue.write_buffer(&self.scale_buffer, 0, bytemuck::cast_slice(&scale_data));

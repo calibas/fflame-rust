@@ -64,4 +64,4 @@ struct VariationParams {
 @group(0) @binding(3) var palette_texture: texture_1d<f32>;
 @group(0) @binding(4) var palette_sampler: sampler;
 @group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;
-@group(0) @binding(6) var<storage, read> scale_buffer: array<u32>;  // Per-pixel scales (u16 packed, 2 per u32)
+@group(0) @binding(6) var<storage, read> scale_buffer: array<u32>;  // Per-pixel scales (unpacked, u32 per pixel)
