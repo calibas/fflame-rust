@@ -316,7 +316,10 @@ impl App {
                 self.metrics.record_compute_time(t0.elapsed().as_secs_f64() * 1000.0);
 
                 let t1 = Instant::now();
-                // 2. Accumulate samples - but only every N frames if batching enabled
+                // 2. Adjust per-pixel scales based on histogram density
+                renderer.adjust_scale_pass(&mut encoder);
+
+                // 3. Accumulate samples - but only every N frames if batching enabled
                 if should_accumulate {
                     // samples_this_frame is only THIS frame's samples, but histogram contains
                     // accumulated samples from all frames in the batch

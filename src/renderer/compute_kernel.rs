@@ -10,6 +10,7 @@ pub struct FlameRenderer {
     buffers: FlameBuffers,
     compute_bind_group: BindGroup,
     accumulate_bind_group: BindGroup,
+    adjust_scale_bind_group: BindGroup,
     tonemap_bind_group: BindGroup,
     pub width: u32,
     pub height: u32,
@@ -40,6 +41,7 @@ impl FlameRenderer {
 
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
         let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
+        let adjust_scale_bind_group = pipelines.create_adjust_scale_bind_group(device, &buffers);
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
 
         // DEBUG: Log renderer initialization
@@ -57,6 +59,7 @@ impl FlameRenderer {
             buffers,
             compute_bind_group,
             accumulate_bind_group,
+            adjust_scale_bind_group,
             tonemap_bind_group,
             width,
             height,
@@ -167,6 +170,25 @@ impl FlameRenderer {
         drop(compute_pass);
 
         samples_this_frame
+    }
+
+    /// Run adjust scale pass to dynamically adjust per-pixel scales based on density
+    /// This prevents overflow in high-density areas and maximizes precision in low-density areas
+    pub fn adjust_scale_pass(&mut self, encoder: &mut CommandEncoder) {
+        let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("Adjust Scale Pass"),
+            timestamp_writes: None,
+        });
+
+        compute_pass.set_pipeline(&self.pipelines.adjust_scale_pipeline);
+        compute_pass.set_bind_group(0, &self.adjust_scale_bind_group, &[]);
+
+        // Dispatch one thread per 8x8 tile (same as accumulate)
+        let workgroups_x = (self.width + 7) / 8;
+        let workgroups_y = (self.height + 7) / 8;
+        compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+
+        drop(compute_pass);
     }
 
     /// Run accumulation pass to blend new samples with previous accumulation
