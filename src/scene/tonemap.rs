@@ -7,6 +7,9 @@ pub enum ToneMapMode {
     Linear,
     /// Logarithmic tone mapping (compresses bright areas)
     Logarithmic,
+    /// Raw density visualization (shows accumulated density as grayscale)
+    /// Useful for analyzing density distribution and fine detail
+    DensityVisualization,
 }
 
 impl Default for ToneMapMode {

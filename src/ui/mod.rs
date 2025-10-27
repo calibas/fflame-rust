@@ -117,6 +117,7 @@ impl EguiLayer {
         speed_multiplier: &mut u32,
         histogram_color_scale: &mut f32,
         low_density_smoothing: &mut f32,
+        density_compression_strength: &mut f32,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -131,6 +132,7 @@ impl EguiLayer {
         let mut preset_changed = false;
         let mut histogram_color_scale_changed = false;
         let mut low_density_smoothing_changed = false;
+        let mut density_compression_changed = false;
         let mut add_transform = false;
         let mut delete_transform = None;
         let mut render_mode_changed = false;
@@ -220,6 +222,8 @@ impl EguiLayer {
                 &mut histogram_color_scale_changed,
                 low_density_smoothing,
                 &mut low_density_smoothing_changed,
+                density_compression_strength,
+                &mut density_compression_changed,
             );
 
             // Render View window
@@ -401,6 +405,7 @@ impl EguiLayer {
             gamma_changed,
             histogram_color_scale_changed,
             low_density_smoothing_changed,
+            density_compression_changed,
         }
     }
 }

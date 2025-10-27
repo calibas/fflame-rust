@@ -63,6 +63,7 @@ pub struct App {
     pub(super) frames_since_accumulation: u32,
     pub(super) histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
     pub(super) low_density_smoothing: f32,  // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
+    pub(super) density_compression_strength: f32,  // 0.0 = linear, 5.0 = strong compression (default: 0.0)
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -109,6 +110,7 @@ impl App {
             deterministic_rng: false,
             histogram_color_scale: 10.0,  // Balanced default
             low_density_smoothing: 0.5,  // Moderate smoothing default
+            density_compression_strength: 0.0,  // Linear accumulation default (no compression)
         };
 
         let mut app = Self {
@@ -152,6 +154,7 @@ impl App {
             frames_since_accumulation: 0,
             histogram_color_scale: 10.0, // Balanced default
             low_density_smoothing: 0.5, // Moderate smoothing default
+            density_compression_strength: 0.0, // Linear accumulation default (no compression)
         };
 
         #[allow(deprecated)]
@@ -393,6 +396,7 @@ impl App {
             &mut self.speed_multiplier,
             &mut self.histogram_color_scale,
             &mut self.low_density_smoothing,
+            &mut self.density_compression_strength,
         );
         self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
 
@@ -901,7 +905,7 @@ impl App {
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
             || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed
             || ui_response.triangle_drag_ended || ui_response.tonemap_curve_changed || ui_response.histogram_color_scale_changed
-            || ui_response.low_density_smoothing_changed;
+            || ui_response.low_density_smoothing_changed || ui_response.density_compression_changed;
 
         // Note: density_changed and background_color_changed don't need encoder updates,
         // they're handled every frame before tonemap pass
@@ -963,6 +967,12 @@ impl App {
                     // No reset needed - smoothing is applied during accumulation
                 }
 
+                if ui_response.density_compression_changed {
+                    // Update the renderer's density compression strength
+                    renderer.set_density_compression_strength(self.density_compression_strength);
+                    // No reset needed - compression is applied during accumulation
+                }
+
                 // Note: density_scale and background_color are updated every frame before tonemap pass
                 // so we don't need to update them here
 
@@ -996,6 +1006,7 @@ impl App {
                     || ui_response.background_color_changed || ui_response.tonemap_mode_changed || ui_response.triangle_drag_started || ui_response.triangle_drag_ended
                     || ui_response.histogram_color_scale_changed  // New scale incompatible with old samples
                     || ui_response.low_density_smoothing_changed  // New smoothing needs fresh samples to see effect
+                    || ui_response.density_compression_changed  // New compression needs fresh samples to see effect
                     || (ui_response.flame_changed && !ui_response.triangle_dragging);
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);

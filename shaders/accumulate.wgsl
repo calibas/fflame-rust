@@ -7,7 +7,9 @@ struct AccumulateParams {
     blend_factor: f32, // samples_this_frame / samples_accumulated
     histogram_color_scale: f32, // Must match compute shader value
     low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing
-    _pad: vec3<f32>, // Padding for alignment
+    density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression
+    _pad0: f32,
+    _pad1: f32, // Padding for alignment
 }
 
 @group(0) @binding(0) var previous_accumulation: texture_2d<f32>;
@@ -62,7 +64,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let density_threshold = 0.1;
         let density_factor = mix(1.0, min(prev.a / density_threshold, 1.0), params.low_density_smoothing);
 
-        let adjusted_blend = params.blend_factor * density_factor;
+        // Apply density compression to slow accumulation in bright areas
+        // Formula adjusted for actual density scale (0-100+)
+        // Use linear term instead of squared to avoid saturation
+        let compression_factor = 1.0 / (1.0 + prev.a * params.density_compression_strength * 0.01);
+
+        let adjusted_blend = params.blend_factor * density_factor * compression_factor;
         rgb_accumulated = prev.rgb * (1.0 - adjusted_blend) + new_color * adjusted_blend;
     }
 

@@ -40,6 +40,7 @@ pub struct UiResponse {
     pub gamma_changed: bool,
     pub histogram_color_scale_changed: bool,
     pub low_density_smoothing_changed: bool,
+    pub density_compression_changed: bool,
 }
 
 impl Default for UiResponse {
@@ -85,6 +86,7 @@ impl Default for UiResponse {
             gamma_changed: false,
             histogram_color_scale_changed: false,
             low_density_smoothing_changed: false,
+            density_compression_changed: false,
         }
     }
 }

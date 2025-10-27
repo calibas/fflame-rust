@@ -33,6 +33,9 @@ pub struct FractalConfig {
     /// Low-density smoothing (0.0 = no smoothing, 1.0 = maximum smoothing, default: 0.5)
     #[serde(default = "default_low_density_smoothing")]
     pub low_density_smoothing: f32,
+    /// Density compression strength (0.0 = linear, 5.0 = strong compression, default: 0.0)
+    #[serde(default)]
+    pub density_compression_strength: f32,
 
     /// Color settings
     pub color_mode: ColorMode,

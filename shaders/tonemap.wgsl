@@ -10,7 +10,7 @@ struct TonemapParams {
     exposure: f32,
     gamma: f32,
     density_scale: f32,
-    tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic
+    tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic, 2 = DensityVisualization
     background_color: vec3<f32>,
     use_curve: u32,  // 0 = disabled, 1 = enabled
 }
@@ -63,9 +63,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if (tonemap_params.tonemap_mode == 0u) {
         // Linear tone mapping: simple clamping
         color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-    } else {
+    } else if (tonemap_params.tonemap_mode == 1u) {
         // Logarithmic tone mapping: compress bright areas
         color = log(color + 1.0) / log(10.0);
+    } else if (tonemap_params.tonemap_mode == 2u) {
+        // Density visualization: show raw accumulated density as grayscale
+        // Scale by 0.01 so density=100 shows as white
+        color = vec3<f32>(density * 0.01);
     }
 
     // Gamma correction
