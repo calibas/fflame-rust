@@ -888,7 +888,7 @@ impl App {
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard || ui_response.camera_rotation_changed;
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
             || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed
-            || ui_response.triangle_drag_ended || ui_response.tonemap_curve_changed;
+            || ui_response.triangle_drag_ended || ui_response.tonemap_curve_changed || ui_response.histogram_color_scale_changed;
 
         // Note: density_changed and background_color_changed don't need encoder updates,
         // they're handled every frame before tonemap pass
@@ -939,10 +939,9 @@ impl App {
                 }
 
                 if ui_response.histogram_color_scale_changed {
-                    // Update the renderer's histogram color scale
-                    // Note: Accumulation continues with new scale, old samples remain
-                    // User can manually reset if needed for consistent scaling
-                    renderer.set_histogram_color_scale(self.histogram_color_scale);
+                    // Update the renderer's histogram color scale and GPU params
+                    renderer.set_histogram_color_scale(&self.gpu.queue, self.histogram_color_scale, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                    // Reset will be triggered below in should_reset
                 }
 
                 // Note: density_scale and background_color are updated every frame before tonemap pass
@@ -976,9 +975,13 @@ impl App {
                 // Tone mapping: reset on mode change (log vs linear affects accumulation), but not curve/exposure/gamma (post-processing only)
                 let should_reset = ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
                     || ui_response.background_color_changed || ui_response.tonemap_mode_changed || ui_response.triangle_drag_started || ui_response.triangle_drag_ended
+                    || ui_response.histogram_color_scale_changed  // New scale incompatible with old samples
                     || (ui_response.flame_changed && !ui_response.triangle_dragging);
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                    if ui_response.histogram_color_scale_changed {
+                        self.frames_since_accumulation = 0;  // Reset batch counter
+                    }
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));

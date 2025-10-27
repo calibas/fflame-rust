@@ -401,8 +401,10 @@ impl FlameRenderer {
         self.deterministic_rng = deterministic;
     }
 
-    pub fn set_histogram_color_scale(&mut self, scale: f32) {
+    pub fn set_histogram_color_scale(&mut self, queue: &Queue, scale: f32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
         self.histogram_color_scale = scale;
+        // Update GPU params immediately so new scale takes effect
+        self.update_iterations(queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, speed_factor);
     }
 
     /// Update iterations per thread
