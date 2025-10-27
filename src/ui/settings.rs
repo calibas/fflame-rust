@@ -34,6 +34,8 @@ pub fn render_settings_window(
     histogram_color_scale_changed: &mut bool,
     low_density_smoothing: &mut f32,
     low_density_smoothing_changed: &mut bool,
+    density_compression_strength: &mut f32,
+    density_compression_changed: &mut bool,
 ) {
     egui::Window::new("Settings")
         .open(show_settings)
@@ -232,6 +234,25 @@ pub fn render_settings_window(
                         .changed()
                     {
                         *low_density_smoothing_changed = true;
+                    }
+
+                    // Density compression strength
+                    if ui.add(egui::Slider::new(density_compression_strength, -100.0..=100.0)
+                        .text("Density Compression"))
+                        .on_hover_text(
+                            "Controls how quickly dense areas saturate during accumulation.\n\
+                            Positive values slow down accumulation in bright cores, revealing hidden detail.\n\
+                            Negative values speed up accumulation (experimental - may cause instability).\n\n\
+                            -100: Extreme acceleration (dense areas accumulate FASTER)\n\
+                            0: Linear accumulation (no compression) - default behavior\n\
+                            10: Gentle compression (dense areas accumulate at ~50% rate)\n\
+                            50: Strong compression (dense areas accumulate at ~2% rate)\n\
+                            100: Extreme compression (prevents saturation even in very bright areas)\n\n\
+                            Use this to reveal detail in bright fractal cores without darkening the display."
+                        )
+                        .changed()
+                    {
+                        *density_compression_changed = true;
                     }
 
                     // Speed multiplier for frame rate (1x = 60 FPS, 2x = 120 FPS, etc.)

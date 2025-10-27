@@ -25,6 +25,7 @@ pub struct FlameRenderer {
     frame_counter: u32, // For deterministic seed progression
     histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
     low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
+    density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression (default: 0.0)
 }
 
 impl FlameRenderer {
@@ -74,6 +75,7 @@ impl FlameRenderer {
             frame_counter: 0,
             histogram_color_scale: 10.0, // Balanced default
             low_density_smoothing: 0.5, // Moderate smoothing default
+            density_compression_strength: 0.0, // Linear accumulation default (no compression)
         }
     }
 
@@ -192,13 +194,13 @@ impl FlameRenderer {
             blend_factor,
             histogram_color_scale: self.histogram_color_scale,
             low_density_smoothing: self.low_density_smoothing,
+            density_compression_strength: self.density_compression_strength,
             _pad0: 0.0,
             _pad1: 0.0,
             _pad2: 0.0,
             _pad3: 0.0,
             _pad4: 0.0,
             _pad5: 0.0,
-            _pad6: 0.0,
         };
 
         self.buffers.update_accumulate_params(queue, &params);
@@ -437,6 +439,12 @@ impl FlameRenderer {
         // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
     }
 
+    /// Set density compression strength (0.0 = linear, 5.0 = strong compression)
+    pub fn set_density_compression_strength(&mut self, strength: f32) {
+        self.density_compression_strength = strength;
+        // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
+    }
+
     /// Update iterations per thread
     pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
         let (projection_type, perspective_strength) = match self.current_projection {
@@ -502,6 +510,7 @@ impl FlameRenderer {
         let tonemap_mode_u32 = match tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,
             crate::scene::tonemap::ToneMapMode::Logarithmic => 1u32,
+            crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
         };
 
         let params = TonemapParams {

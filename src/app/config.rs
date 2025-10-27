@@ -29,6 +29,7 @@ impl App {
             deterministic_rng: self.deterministic_rng,
             histogram_color_scale: self.histogram_color_scale,
             low_density_smoothing: self.low_density_smoothing,
+            density_compression_strength: self.density_compression_strength,
         }
     }
 

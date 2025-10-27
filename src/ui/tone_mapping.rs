@@ -39,13 +39,16 @@ pub fn render_tone_mapping_window(
                 .show(ui, |ui| {
                     ui.label("Tone Map Mode");
                     ui.horizontal(|ui| {
-                        let is_linear = matches!(*tonemap_mode, ToneMapMode::Linear);
-                        if ui.selectable_label(is_linear, "Linear").clicked() {
+                        if ui.selectable_label(matches!(*tonemap_mode, ToneMapMode::Linear), "Linear").clicked() {
                             *tonemap_mode = ToneMapMode::Linear;
                             *tonemap_mode_changed = true;
                         }
-                        if ui.selectable_label(!is_linear, "Logarithmic").clicked() {
+                        if ui.selectable_label(matches!(*tonemap_mode, ToneMapMode::Logarithmic), "Logarithmic").clicked() {
                             *tonemap_mode = ToneMapMode::Logarithmic;
+                            *tonemap_mode_changed = true;
+                        }
+                        if ui.selectable_label(matches!(*tonemap_mode, ToneMapMode::DensityVisualization), "Density").clicked() {
+                            *tonemap_mode = ToneMapMode::DensityVisualization;
                             *tonemap_mode_changed = true;
                         }
                     });
