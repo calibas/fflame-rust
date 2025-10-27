@@ -184,20 +184,6 @@ pub struct AccumulateParams {
     pub _pad6: f32,  // Total 12 fields = 48 bytes
 }
 
-/// Parameters for adaptive per-pixel scale adjustment shader
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct AdjustScaleParams {
-    pub width: u32,
-    pub height: u32,
-    pub overflow_threshold: f32,      // Max safe accumulated value (default: 50000)
-    pub high_density_threshold: f32,  // Density to trigger scale reduction (default: 100)
-    pub low_density_threshold: f32,   // Density to trigger scale increase (default: 10)
-    pub scale_adjust_rate: f32,       // How aggressively to adjust (default: 0.1)
-    pub min_scale: f32,               // Minimum allowed scale (default: 1.0)
-    pub max_scale: f32,               // Maximum allowed scale (default: 100.0)
-}
-
 /// Manages GPU buffers and textures for fractal flame rendering
 pub struct FlameBuffers {
     pub transform_buffer: Buffer,
@@ -205,7 +191,6 @@ pub struct FlameBuffers {
     pub params_buffer: Buffer,
     pub tonemap_params_buffer: Buffer,
     pub accumulate_params_buffer: Buffer,
-    pub adjust_scale_params_buffer: Buffer,
 
     // Dual textures for ping-pong accumulation
     pub accumulation_texture_a: Texture,
@@ -333,23 +318,6 @@ impl FlameBuffers {
         let accumulate_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Accumulate Params Buffer"),
             contents: bytemuck::cast_slice(&[accumulate_params]),
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-        });
-
-        // Create adjust scale params buffer
-        let adjust_scale_params = AdjustScaleParams {
-            width,
-            height,
-            overflow_threshold: 50000.0,
-            high_density_threshold: 100.0,
-            low_density_threshold: 10.0,
-            scale_adjust_rate: 0.1,
-            min_scale: 1.0,
-            max_scale: 100.0,
-        };
-        let adjust_scale_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
-            label: Some("Adjust Scale Params Buffer"),
-            contents: bytemuck::cast_slice(&[adjust_scale_params]),
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
         });
 
@@ -527,7 +495,6 @@ impl FlameBuffers {
             params_buffer,
             tonemap_params_buffer,
             accumulate_params_buffer,
-            adjust_scale_params_buffer,
             accumulation_texture_a,
             accumulation_texture_b,
             accumulation_view_a,
