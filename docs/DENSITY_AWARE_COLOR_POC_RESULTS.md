@@ -294,6 +294,148 @@ Accumulation-time compression is **not viable** for this use case. The progressi
 
 **Recommendation:** Return to post-accumulation approaches (tone mapping adjustments) or explore completely different architectures.
 
+---
+
+## Deep Dive: Why Convergence Makes Compression Ineffective
+
+### The Convergence Formula
+
+The accumulate shader uses exponential moving average:
+```rust
+blend_factor = samples_this_frame / samples_accumulated
+```
+
+This ensures proper convergence:
+- Frame 1: `32,768 / 32,768 = 1.0` (100% new samples)
+- Frame 100: `32,768 / 3,276,800 = 0.01` (1% new samples)
+- Frame 1000: `32,768 / 32,768,000 = 0.001` (0.1% new samples)
+
+**This is correct behavior** - as we accumulate more samples, each new frame should contribute less.
+
+### Why Compression Fails
+
+Our compression formula:
+```wgsl
+let compression_factor = 1.0 / (1.0 + prev.a * prev.a * strength);
+let adjusted_blend = blend_factor * compression_factor;
+```
+
+At frame 1000 with strength=100 and prev.a=1.0:
+- `blend_factor = 0.001` (0.1% - already converged)
+- `compression_factor = 0.01` (99% reduction)
+- `adjusted_blend = 0.001 * 0.01 = 0.00001` (0.001%)
+
+**The problem:** Reducing 0.1% to 0.001% is imperceptible!
+
+### The Catch-22
+
+1. **Early frames** (when blend_factor is large): Pixels aren't bright yet, so compression doesn't activate
+2. **Late frames** (when pixels are bright): blend_factor is already tiny, so compression is imperceptible
+
+**By the time compression would matter (bright pixels), the system has already converged and further reductions are invisible.**
+
+### Why Negative Values "Work"
+
+Negative strength creates `compression_factor > 1.0`:
+- At strength=-100, prev.a=1.0: `compression_factor = 1.0 / (1.0 - 100) = -0.01`
+- This amplifies the blend: `0.001 * (-0.01)` produces negative/corrupted values
+- Corruption is visible because it breaks the convergence formula
+
+**Negative values work by breaking the math**, not by improving it.
+
+### The Fundamental Flaw (INCORRECT ANALYSIS)
+
+**Original claim:** "We're trying to modify a converged system." The exponential moving average ensures each pixel converges to its correct value over time. By the time a pixel is bright enough for density-based compression to matter, it has already converged and is receiving only tiny incremental updates.
+
+**CORRECTION:** This analysis incorrectly assumed `blend_factor` was fixed/unchangeable. In reality, `blend_factor` is a parameter we control. We can:
+- Add a UI slider to adjust blend rate
+- Disable convergence entirely (constant blend_factor = 1.0)
+- Use different blend strategies (e.g., density-aware blend_factor)
+
+The tests showed no effect because we tested compression **within the constraints of exponential convergence**. The density compression approach may still be viable with different blend_factor settings.
+
+---
+
+## Diagnostic Test Plan
+
+**NOTE:** These tests were designed to verify the "convergence blocks compression" hypothesis. However, this hypothesis was based on incorrect assumptions about `blend_factor` being fixed. The real next step is to add blend_factor control to the UI and retest compression with various blend settings.
+
+### Test A: Early-Frame Compression (NOT IMPLEMENTED)
+**Setup:** Apply extreme compression (strength=100) at frame 10 (when blend_factor ≈ 0.1)
+**Expected:** Should see SOME effect because blend is still significant (10% → 0.1%)
+**Implementation:** Add frame counter check, only apply compression if frame < 20
+
+### Test B: Late-Frame Compression (NOT IMPLEMENTED)
+**Setup:** Apply extreme compression at frame 1000 (when blend_factor ≈ 0.001)
+**Expected:** Should see NO effect because blend is tiny (0.1% → 0.001%)
+**Implementation:** Default behavior (current state)
+
+### Test C: Non-Converging Accumulation (ATTEMPTED, SHOWED FORMULA SATURATION)
+**Setup:** Force blend_factor = 1.0 (always 100% new samples, no convergence)
+**Expected:** Compression should be HIGHLY visible (100% → 1% is dramatic)
+**Result:** Flickering in low-density areas, but formula saturates too quickly
+**Status:** Revealed squared formula was too aggressive, but didn't properly test linear formula
+
+### Test D: Blend Factor Visualization (NOT IMPLEMENTED)
+**Setup:** Visualize adjusted_blend values as colors (0=black, 1=white)
+**Expected:** Dense/bright areas will be nearly black (tiny blend values)
+**Implementation:** `rgb = vec3(adjusted_blend * 1000.0)` to amplify for visibility
+
+### Test E: Convergence Point Detection (NOT IMPLEMENTED)
+**Setup:** Track when pixels reach "converged" state (blend_factor < 0.001)
+**Expected:** Most visible pixels converge within 100-200 frames
+**Implementation:** Color pixels red once they cross convergence threshold
+
+**Revised Recommendation:** Add blend_factor UI control first, then retest density compression with various blend settings to see if it produces useful artistic effects.
+
+---
+
+## Test D Results: Density Scale Investigation
+
+**Goal:** Determine actual `prev.a` (density) values to understand why compression formula saturates
+
+**Implementation:**
+```wgsl
+// Visualize density directly as grayscale
+rgb_accumulated = vec3<f32>(prev.a * 0.01);  // Scale: density=100 → white
+```
+
+**Findings:**
+- **Density range:** 0-100+ in typical fractals
+- **Bright cores:** Exceed density=100 (blow out even at 0.01 scale)
+- **Mid-tones:** density=20-50
+- **Sparse areas:** density=0-10
+
+**Why Original Formula Failed:**
+```wgsl
+// Original: prev.a * prev.a (squared term)
+compression_factor = 1.0 / (1.0 + prev.a * prev.a * strength);
+
+// With prev.a=100, strength=1.0:
+// = 1.0 / (1.0 + 100*100*1) = 1.0 / 10001 ≈ 0.0001 (black!)
+```
+
+The squared term causes immediate saturation with density values in the 10-100 range.
+
+**Test D2: Linear Formula (Still Failed)**
+```wgsl
+// Adjusted: linear term instead of squared
+compression_factor = 1.0 / (1.0 + prev.a * strength * 0.01);
+
+// With prev.a=100, strength=100:
+// = 1.0 / (1.0 + 100*100*0.01) = 1.0 / 101 ≈ 0.01 (99% compression)
+```
+
+**Result:** No visible difference between strength=0 and strength=100 across multiple fractals.
+
+**Initial Conclusion (INCORRECT):** Even with appropriate formula for density scale, **convergence still dominates**. By the time pixels are bright (prev.a=100), blend_factor is already tiny (0.001), and compressing it further produces imperceptible changes.
+
+**CORRECTION:** This conclusion was based on a flawed assumption. The `blend_factor` is not a fundamental limitation - it's a configurable parameter we have full control over. It can be adjusted or even disabled entirely (set to constant 1.0 for no convergence). The real issue is that we tested compression **within the constraints of normal convergence**, which made the effect imperceptible. Testing with different blend_factor settings (via a UI slider) would likely produce visible results.
+
+**Useful Side Effect:** The density visualization mode (`prev.a * 0.01`) produces exceptionally fine detail by showing raw accumulated density without tone mapping. This has been implemented as a new tonemap mode (see commit).
+
+---
+
 ## Original (Invalid) Lessons Learned
 
 **NOTE: The following conclusions were based on faulty tests and may not be accurate:**
