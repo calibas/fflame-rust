@@ -90,6 +90,7 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Note: binding 6 removed (scale_buffer replaced with params.histogram_color_scale)
             ],
         });
 
@@ -197,6 +198,7 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Note: binding 4 removed (scale_buffer replaced with params.histogram_color_scale)
             ],
         });
 
@@ -318,6 +320,7 @@ impl FlamePipelines {
                     binding: 5,
                     resource: buffers.variation_params_buffer.as_entire_binding(),
                 },
+                // Note: binding 6 removed (scale_buffer replaced with params.histogram_color_scale)
             ],
         })
     }
@@ -348,9 +351,12 @@ impl FlamePipelines {
                     binding: 3,
                     resource: buffers.accumulate_params_buffer.as_entire_binding(),
                 },
+                // Note: binding 4 removed (scale_buffer replaced with params.histogram_color_scale)
             ],
         })
     }
+
+    // Note: create_adjust_scale_bind_group() removed - adjust_scale pipeline unused
 
     /// Create bind group for tonemap pass
     pub fn create_tonemap_bind_group(

@@ -10,6 +10,7 @@ pub struct FlameRenderer {
     buffers: FlameBuffers,
     compute_bind_group: BindGroup,
     accumulate_bind_group: BindGroup,
+    // adjust_scale_bind_group removed - pipeline unused
     tonemap_bind_group: BindGroup,
     pub width: u32,
     pub height: u32,
@@ -22,6 +23,8 @@ pub struct FlameRenderer {
     current_projection: crate::scene::transforms::ProjectionType,
     deterministic_rng: bool,
     frame_counter: u32, // For deterministic seed progression
+    histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
+    low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
 }
 
 impl FlameRenderer {
@@ -38,6 +41,7 @@ impl FlameRenderer {
 
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
         let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
+        // adjust_scale_bind_group removed - pipeline unused
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
 
         // DEBUG: Log renderer initialization
@@ -55,6 +59,7 @@ impl FlameRenderer {
             buffers,
             compute_bind_group,
             accumulate_bind_group,
+            // adjust_scale_bind_group removed
             tonemap_bind_group,
             width,
             height,
@@ -67,6 +72,8 @@ impl FlameRenderer {
             current_projection: flame.projection,
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
+            histogram_color_scale: 10.0, // Balanced default
+            low_density_smoothing: 0.5, // Moderate smoothing default
         }
     }
 
@@ -88,21 +95,22 @@ impl FlameRenderer {
     }
 
     /// Reset accumulation buffer and sample count
-    pub fn reset(&mut self, encoder: &mut CommandEncoder, _queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _speed_factor: f32) {
+    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _speed_factor: f32) {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
 
         // Clear accumulation buffers
-        self.buffers.clear_all(encoder, _queue);
+        self.buffers.clear_all(encoder, queue);
 
+        // Note: scale_buffer removed - scale is now in params.histogram_color_scale
         // Note: We don't update params here because update_flame() already set them correctly.
         // Updating params here would overwrite num_transforms which was just set by update_flame().
     }
 
     /// Run compute pass to generate flame samples
     /// Returns the number of samples generated this frame
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) -> u64 {
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32, clear_histogram: bool) -> u64 {
         // Update seed for new random samples each frame
         let (projection_type, perspective_strength) = match self.current_projection {
             crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
@@ -132,8 +140,8 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
-            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
 
@@ -143,8 +151,10 @@ impl FlameRenderer {
         let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
         self.total_iterations += samples_this_frame;
 
-        // Clear histogram buffer before rendering new samples
-        self.buffers.clear_histogram(encoder);
+        // Clear histogram buffer before rendering new samples (optional for batched accumulation)
+        if clear_histogram {
+            self.buffers.clear_histogram(encoder);
+        }
 
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
             label: Some("Flame Compute Pass"),
@@ -163,6 +173,10 @@ impl FlameRenderer {
         samples_this_frame
     }
 
+    /// Run adjust scale pass to dynamically adjust per-pixel scales based on density
+    /// This prevents overflow in high-density areas and maximizes precision in low-density areas
+    // Note: adjust_scale_pass() removed - pipeline unused
+
     /// Run accumulation pass to blend new samples with previous accumulation
     pub fn accumulate_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, device: &Device, samples_this_frame: u64) {
         self.samples_accumulated += samples_this_frame;
@@ -176,7 +190,15 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             blend_factor,
+            histogram_color_scale: self.histogram_color_scale,
+            low_density_smoothing: self.low_density_smoothing,
             _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
+            _pad3: 0.0,
+            _pad4: 0.0,
+            _pad5: 0.0,
+            _pad6: 0.0,
         };
 
         self.buffers.update_accumulate_params(queue, &params);
@@ -201,6 +223,7 @@ impl FlameRenderer {
 
         // Recreate bind groups to point to the new current/previous textures
         self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+        // adjust_scale_bind_group removed - pipeline unused
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
     }
 
@@ -228,6 +251,9 @@ impl FlameRenderer {
         drop(render_pass);
     }
 
+    /// Debug: Read back scale buffer and compute statistics
+    // Note: debug_scale_stats() removed - scale_buffer no longer exists
+
     /// Load a complete FractalConfig (preset or imported config)
     /// This ensures all GPU state is properly synchronized
     pub fn load_config(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32) {
@@ -252,9 +278,13 @@ impl FlameRenderer {
         // 4. Update render mode and projection
         self.current_render_mode = config.flame.render_mode;
         self.current_projection = config.flame.projection;
+        self.histogram_color_scale = config.histogram_color_scale;
+        self.low_density_smoothing = config.low_density_smoothing;
 
         // 5. Update palette
         self.buffers.update_palette(queue, palette);
+
+        // Note: scale_buffer removed - scale is now in params.histogram_color_scale
 
         // 6. Update ALL GPU params with correct num_transforms, render_mode, projection
         let (projection_type, perspective_strength) = match self.current_projection {
@@ -284,8 +314,8 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x: config.camera_rotation_x,
             camera_rotation_y: config.camera_rotation_y,
+            histogram_color_scale: config.histogram_color_scale,
             _pad3: 0.0,
-            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
 
@@ -346,8 +376,8 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
-            _pad4: 0.0,
         };
 
         self.buffers.update_params(queue, &params);
@@ -396,6 +426,17 @@ impl FlameRenderer {
         self.deterministic_rng = deterministic;
     }
 
+    pub fn set_histogram_color_scale(&mut self, queue: &Queue, scale: f32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
+        self.histogram_color_scale = scale;
+        // Update GPU params immediately so new scale takes effect
+        self.update_iterations(queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, speed_factor);
+    }
+
+    pub fn set_low_density_smoothing(&mut self, smoothing: f32) {
+        self.low_density_smoothing = smoothing;
+        // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
+    }
+
     /// Update iterations per thread
     pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
         let (projection_type, perspective_strength) = match self.current_projection {
@@ -425,8 +466,8 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
-            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -518,8 +559,8 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
-            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }

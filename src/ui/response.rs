@@ -38,6 +38,8 @@ pub struct UiResponse {
     pub tonemap_curve_changed: bool,
     pub exposure_changed: bool,
     pub gamma_changed: bool,
+    pub histogram_color_scale_changed: bool,
+    pub low_density_smoothing_changed: bool,
 }
 
 impl Default for UiResponse {
@@ -81,6 +83,8 @@ impl Default for UiResponse {
             tonemap_curve_changed: false,
             exposure_changed: false,
             gamma_changed: false,
+            histogram_color_scale_changed: false,
+            low_density_smoothing_changed: false,
         }
     }
 }

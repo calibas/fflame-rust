@@ -37,8 +37,8 @@ enum Commands {
         #[arg(short, long)]
         category: Option<String>,
 
-        /// Iterations per thread (default: 256, range: 64-4096)
-        #[arg(long, default_value_t = 256)]
+        /// Iterations per thread (default: 1024 for batched accumulation, range: 64-4096)
+        #[arg(long, default_value_t = 1024)]
         iterations_per_thread: u32,
 
         /// Speed multiplier for accumulation frequency (1, 2, 4, 8, 16)

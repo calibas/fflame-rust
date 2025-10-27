@@ -67,27 +67,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     final_color = color;
                 }
 
-                // Atomic accumulation to histogram buffer (U16 PACKED)
-                // Pack RGBA as 4× u16 into 2× u32 (fixed-point integers)
+                // Atomic accumulation to histogram buffer
+                // Write RGB as 4× u32 (unpacked, full 32-bit precision)
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
-                let base_idx = pixel_idx * 2u;
+                let base_idx = pixel_idx * 4u;  // 4 words per pixel (R, G, B, density)
 
-                // Convert colors to u16 fixed-point (0-100 range)
-                // Scale chosen to prevent overflow: 65535 / 100 = 655 max hits
-                // At full brightness (1.0), can accumulate 655 hits before overflow
-                let color_scale = 100.0;
-                let r16 = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
-                let g16 = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
-                let b16 = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
-                let d16 = 1u;  // Density increment
+                // Use global color scale from params (uniform constant, fast access)
+                let color_scale = params.histogram_color_scale;
 
-                // Pack 2× u16 into each u32 using bit shifts
-                let packed_rg = r16 | (g16 << 16u);
-                let packed_bd = b16 | (d16 << 16u);
+                // Convert colors to u32 using global scale
+                // No packing needed - each channel gets its own u32 word
+                let r_u32 = u32(clamp(final_color.r, 0.0, 1.0) * color_scale);
+                let g_u32 = u32(clamp(final_color.g, 0.0, 1.0) * color_scale);
+                let b_u32 = u32(clamp(final_color.b, 0.0, 1.0) * color_scale);
+                let density_u32 = u32(color_scale);  // Density includes scale (u32 prevents overflow)
 
-                // Two atomic operations (atomicAdd works correctly on packed u16!)
-                atomicAdd(&histogram[base_idx + 0u], packed_rg);
-                atomicAdd(&histogram[base_idx + 1u], packed_bd);
+                // Atomic add to histogram (4 separate u32 words)
+                atomicAdd(&histogram[base_idx + 0u], r_u32);
+                atomicAdd(&histogram[base_idx + 1u], g_u32);
+                atomicAdd(&histogram[base_idx + 2u], b_u32);
+                atomicAdd(&histogram[base_idx + 3u], density_u32);
             }
         }
     }
