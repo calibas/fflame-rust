@@ -2,6 +2,9 @@
 
 Quick reference guide to understanding the codebase structure and data flow.
 
+**Detailed Documentation:**
+- [UI.md](main/UI.md) - Windows, panels, input handling, UiResponse system
+
 ---
 
 ## 🏗️ Module Organization
@@ -821,44 +824,12 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 
 ## 🖼️ UI Organization
 
-### Window Layout (Menu Bar + 5 Windows)
-```
-┌─────────────────────────────────────────────────────────┐
-│ Menu Bar: View ▼                                        │
-│   ☑ Performance  ☑ Transforms  ☑ Settings              │
-│   ☑ Triangle Editor  ☑ Palette Editor                  │
-└─────────────────────────────────────────────────────────┘
-
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ Performance  │  │  Transforms  │  │   Settings   │
-│              │  │              │  │              │
-│ - FPS/timing │  │ - Add/Delete │  │ - View (zoom │
-│ - Iterations │  │ - Affine     │  │   pan, rot)  │
-│ - Resolution │  │ - Variations │  │ - Color mode │
-│ - Preset ▼   │  │ - Color      │  │ - Palette ▼  │
-│ - 3D mode    │  │ - Weight     │  │ - Global     │
-│ - Camera     │  │ - Z offset   │  │   params     │
-│ - Projection │  │ - Params 🆕  │  │ - Export PNG │
-└──────────────┘  └──────────────┘  └──────────────┘
-
-┌──────────────────────┐  ┌──────────────────────┐
-│   Triangle Editor    │  │   Palette Editor     │
-│                      │  │                      │
-│ - Visual transform   │  │ - Gradient preview   │
-│   editor with drag   │  │ - Color stops        │
-│ - Real-time updates  │  │ - Import/export      │
-│ - Bounding boxes     │  │ - Built-in library   │
-│ - Smart accumulation │  │                      │
-└──────────────────────┘  └──────────────────────┘
-```
-
-### Key UI Features
-- **Menu Bar** - Toggle window visibility (Added 2025-10-21)
-- **Collapsible Sections** - All sections can be collapsed to save space
-- **Real-time Updates** - Most changes update immediately without reset
-- **Smart Accumulation** - Triangle editor only resets when dragging stops
-- **Undo/Redo** - Ctrl+Z/Ctrl+Y for all state changes
-- **Variation Parameters** - Float/Integer/Angle sliders appear below active variations (Added 2025-10-22)
+**See [UI.md](main/UI.md)** for complete UI documentation including:
+- Window layout (5 windows + menu bar)
+- All panels and controls
+- Input handling (keyboard, mouse, wheel)
+- UiResponse system
+- Common UI modification tasks
 
 ---
 
