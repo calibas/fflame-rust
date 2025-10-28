@@ -4,6 +4,7 @@ Quick reference guide to understanding the codebase structure and data flow.
 
 **Detailed Documentation:**
 - [UI.md](main/UI.md) - Windows, panels, input handling, UiResponse system
+- [BUFFERS.md](main/BUFFERS.md) - GPU layouts, bind groups, data structures
 
 ---
 
@@ -384,7 +385,14 @@ In render():
 
 ## 💾 GPU Buffer Layout
 
-### Bind Group 0 (Compute Pass)
+**See [BUFFERS.md](main/BUFFERS.md)** for complete buffer documentation including:
+- Bind group layouts (Compute, Accumulate, Tonemap)
+- GPU data structures (GpuTransform, GpuParams, TonemapParams, AccumulateParams)
+- Memory layout rules (std140 vs std430)
+- Buffer update patterns
+- Common modification tasks
+
+**Quick reference - Bind Group 0 (Compute Pass):**
 ```
 @group(0) @binding(0) - transforms: array<GpuTransform>      (storage buffer, read)
 @group(0) @binding(1) - params: GpuParams                   (uniform buffer, read)
@@ -394,110 +402,6 @@ In render():
 @group(0) @binding(5) - variation_params: array<VariationParams> (storage buffer, read)
 ```
 
-### Bind Group 0 (Accumulate Pass)
-```
-@group(0) @binding(0) - prev_accumulation: texture_2d       (texture, sample)
-@group(0) @binding(1) - histogram: array<u32>               (storage buffer, read)
-@group(0) @binding(2) - output_texture: texture_storage_2d  (texture, write)
-@group(0) @binding(3) - params: AccumulateParams            (uniform buffer, read)
-@group(0) @binding(4) - iteration_counts: array<u32>        (storage buffer, read)
-```
-
-### Bind Group 0 (Tonemap Pass)
-```
-@group(0) @binding(0) - accumulation: texture_2d    (texture, sample)
-@group(0) @binding(1) - palette: texture_1d         (texture, sample)
-@group(0) @binding(2) - sampler_linear: sampler     (sampler)
-@group(0) @binding(3) - params: TonemapParams       (uniform buffer, read)
-```
-
----
-
-## 🎨 GPU Data Structures
-
-### GpuTransform (std140 layout)
-```rust
-struct GpuTransform {
-    affine: mat2x2<f32>,    // 2x2 linear transform
-    offset: vec2<f32>,      // Translation (e, f)
-    g: f32,                 // Z offset (3D mode only)
-    weight: f32,            // Selection probability
-    variations: [f32; 24],  // Variation weights (16 basic 2D + 8 3D + 2 parameterized)
-    color: vec3<f32>,       // RGB color
-    color_speed: f32,       // Color blend factor
-}
-```
-
-### GpuVariationParams (std140 layout)
-```rust
-struct GpuVariationParams {
-    params: [f32; 192],  // 24 variations × 8 params each
-}
-
-// Access pattern:
-// param = variation_params[xform_id].params[variation_id * 8 + param_slot]
-// Example: julian power = variation_params[0].params[14 * 8 + 0]
-```
-
-### GpuParams
-```rust
-struct GpuParams {
-    num_transforms: u32,
-    iterations_per_thread: u32,
-    burn_in: u32,
-    width: u32,
-    height: u32,
-    seed: u32,               // Random seed per frame
-    color_mode: u32,         // 0=Transform, 1=Palette, 2=Speed
-    splat_size: f32,
-    zoom: f32,               // View transform
-    pan_x: f32,
-    pan_y: f32,
-    rotation: f32,           // 2D rotation
-    speed_factor: f32,       // Speed color blend
-    // 3D mode fields (added 2025-10-21)
-    camera_pitch: f32,       // Camera X-axis rotation (up/down)
-    camera_yaw: f32,         // Camera Y-axis rotation (left/right)
-    projection_type: u32,    // 0=Orthographic, 1=Perspective
-    perspective_strength: f32, // Perspective intensity
-}
-```
-
-### TonemapParams
-```rust
-struct TonemapParams {
-    exposure: f32,
-    gamma: f32,
-    density_scale: f32,      // Alpha multiplier
-    background_color: vec3<f32>,
-}
-```
-
-### AccumulateParams
-```rust
-struct AccumulateParams {
-    width: u32,
-    height: u32,
-    blend_factor: f32,                    // Blend rate (samples_this_frame / samples_accumulated)
-    histogram_color_scale: f32,           // Must match compute shader value
-    low_density_smoothing: f32,           // 0.0-1.0, reduces noise in sparse areas
-    density_compression_strength: f32,    // 0.0-100.0, slows accumulation in bright areas
-    target_iterations_per_pixel: u32,     // Per-pixel iteration limit (0 = disabled)
-    _pad0: f32,                           // Alignment padding (48 bytes total)
-    _pad1: f32,
-    _pad2: f32,
-    _pad3: f32,
-    _pad4: f32,
-}
-```
-
-**Accumulation Formula:**
-```rust
-adjusted_blend = blend_factor
-    × density_factor           // Low-density smoothing
-    × compression_factor       // Density compression
-    × convergence_gate;        // Per-pixel iteration limiting (0 or 1)
-```
 
 ---
 
