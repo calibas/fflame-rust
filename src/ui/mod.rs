@@ -1,6 +1,7 @@
 mod config_dialog;
 mod formatting;
 mod help;
+mod helpers;
 mod menu_bar;
 mod palette_editor;
 mod performance;
@@ -9,6 +10,8 @@ mod settings;
 mod tone_mapping;
 mod transforms;
 mod triangle_editor;
+mod variation_controls;
+mod variation_params;
 mod view;
 
 pub use palette_editor::PaletteEditor;
