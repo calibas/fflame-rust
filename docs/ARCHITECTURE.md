@@ -437,9 +437,10 @@ a8301de   u32 unpacked histogram       1607       24.76  [current, no overflow]
 - Lower values: Less precision, more headroom (unnecessary with u32)
 
 ### Related Documentation
-- [HISTOGRAM_OPTIMIZATION_ATTEMPTS.md](HISTOGRAM_OPTIMIZATION_ATTEMPTS.md) - Failed optimization attempts
-- [PER_PIXEL_ADAPTIVE_SCALING_DEBUG.md](PER_PIXEL_ADAPTIVE_SCALING_DEBUG.md) - Why adaptive scaling was abandoned
-- [U32_HISTOGRAM_CLEANUP.md](U32_HISTOGRAM_CLEANUP.md) - Cleanup plan after u32 implementation
+- [archive/histogram/](archive/histogram/) - Complete histogram evolution and optimization attempts (15 historical docs)
+  - HISTOGRAM_FINAL.md - Complete evolution timeline
+  - HISTOGRAM_OPTIMIZATION_ATTEMPTS.md - Failed optimization attempts
+  - U32_HISTOGRAM_CLEANUP.md - Cleanup plan (completed)
 
 ---
 

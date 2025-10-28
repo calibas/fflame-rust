@@ -578,9 +578,10 @@ adjusted_blend = blend_factor * compression_factor;
 
 ## Related Documentation
 
-- [HISTOGRAM_OPTIMIZATION_ATTEMPTS.md](../HISTOGRAM_OPTIMIZATION_ATTEMPTS.md) - Failed optimization attempts
+- [archive/histogram/](../archive/histogram/) - Complete histogram evolution (15 historical docs)
+  - HISTOGRAM_FINAL.md - Complete evolution timeline and final solution
+  - HISTOGRAM_OPTIMIZATION_ATTEMPTS.md - Failed optimization attempts
 - [COLOR_PIPELINE.md](../COLOR_PIPELINE.md) - Complete color pipeline documentation
-- [U32_HISTOGRAM_CLEANUP.md](../U32_HISTOGRAM_CLEANUP.md) - Cleanup plan after u32 implementation
 
 ---
 
