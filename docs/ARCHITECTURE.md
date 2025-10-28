@@ -5,6 +5,7 @@ Quick reference guide to understanding the codebase structure and data flow.
 **Detailed Documentation:**
 - [UI.md](main/UI.md) - Windows, panels, input handling, UiResponse system
 - [BUFFERS.md](main/BUFFERS.md) - GPU layouts, bind groups, data structures
+- [TRANSFORMS.md](main/TRANSFORMS.md) - Flame algorithm, affine math, IFS implementation
 
 ---
 
@@ -549,163 +550,29 @@ a8301de   u32 unpacked histogram       1607       24.76  [current, no overflow]
 
 ---
 
-## 🔥 Flame Algorithm (GPU Implementation)
+## 🔥 Flame Algorithm
 
-### Trajectory Shader Logic (2D Mode)
+**See [TRANSFORMS.md](main/TRANSFORMS.md)** for complete flame algorithm documentation including:
+- What is a fractal flame (IFS explanation)
+- Transform structure (affine + variations + color)
+- Flame algorithm (CPU reference + GPU implementation)
+- Point calculations (r, θ, φ)
+- Render modes (2D vs 3D)
+- Transform selection (weighted random)
+- Variation blending (additive)
+- Color modes (Transform, Palette, Speed)
+- View transformation (world to screen)
+
+**Quick reference - Algorithm overview:**
+
 ```
-1. Initialize RNG with unique seed:
-   seed = params.seed + global_invocation_id
-
-2. Generate random starting point:
-   p = random_point_in_circle()  // vec2
-
-3. Burn-in iterations (discard):
-   for i in 0..burn_in:
-     p = iterate_flame(p)
-
-4. Accumulation iterations:
-   for i in 0..iterations_per_thread:
-     // Select transform weighted by probability
-     transform_idx = select_transform(rng)
-
-     // Apply affine transformation (2D)
-     p' = transform.affine * p + transform.offset
-
-     // Apply variation functions (16 2D variations)
-     p'' = sum(weight[i] * variation[i](p'))
-
-     // Update color based on mode:
-     if mode == Transform:
-       color = blend(color, transform.color, transform.color_speed)
-     elif mode == Palette:
-       color = palette_lookup(color_index)
-     elif mode == Speed:
-       speed = length(p'' - p')
-       color = palette_lookup(speed)
-
-     // Project to screen space with view transform
-     screen_pos = world_to_screen(p'', zoom, pan, rotation)
-
-     // Write to histogram buffer (atomic accumulation)
-     if in_bounds(screen_pos):
-       pixel_idx = screen_pos.y * width + screen_pos.x
-       base_idx = pixel_idx * 4
-       atomicAdd(&histogram[base_idx + 0], u32(color.r * scale))
-       atomicAdd(&histogram[base_idx + 1], u32(color.g * scale))
-       atomicAdd(&histogram[base_idx + 2], u32(color.b * scale))
-       atomicAdd(&histogram[base_idx + 3], u32(scale))
-
-     p = p''
-```
-
-### Trajectory Shader Logic (3D Mode)
-```
-1. Initialize RNG with unique seed:
-   seed = params.seed + global_invocation_id
-
-2. Generate random starting point:
-   p = random_point_in_sphere()  // vec3
-
-3. Burn-in iterations (discard):
-   for i in 0..burn_in:
-     p = iterate_flame_3d(p)
-
-4. Accumulation iterations:
-   for i in 0..iterations_per_thread:
-     // Select transform weighted by probability
-     transform_idx = select_transform(rng)
-
-     // Apply affine transformation (2D XY, with Z offset)
-     p'.xy = transform.affine * p.xy + transform.offset
-     p'.z = p.z + transform.g  // Z offset
-
-     // Apply variation functions (24 total: 16 2D + 8 3D)
-     // - 2D variations (0-15): Pass Z through unchanged
-     // - Z-only variations (16,17,23): Modify result.z directly
-     // - Full 3D variations (18-22): Modify all axes
-     p'' = apply_all_variations(p', transform.variations)
-
-     // Update color (same as 2D)
-     color = update_color(color, transform, p', p'')
-
-     // Apply camera rotation (pitch, yaw)
-     p_rotated = rotate_camera(p'', camera_pitch, camera_yaw)
-
-     // Apply projection (orthographic or perspective)
-     if projection_type == Orthographic:
-       screen_pos_2d = p_rotated.xy
-     else:  // Perspective
-       screen_pos_2d = p_rotated.xy / (1.0 + p_rotated.z * perspective_strength)
-
-     // Project to screen space with view transform
-     screen_pos = world_to_screen(screen_pos_2d, zoom, pan, rotation)
-
-     // Write to histogram buffer (atomic accumulation)
-     if in_bounds(screen_pos):
-       pixel_idx = screen_pos.y * width + screen_pos.x
-       base_idx = pixel_idx * 4
-       atomicAdd(&histogram[base_idx + 0], u32(color.r * scale))
-       atomicAdd(&histogram[base_idx + 1], u32(color.g * scale))
-       atomicAdd(&histogram[base_idx + 2], u32(color.b * scale))
-       atomicAdd(&histogram[base_idx + 3], u32(scale))
-
-     p = p''
-```
-
-### Accumulate Shader Logic
-```
-For each pixel:
-  // Read histogram values (4 u32 words per pixel)
-  base_idx = pixel_idx * 4
-  r_sum = f32(histogram[base_idx + 0])
-  g_sum = f32(histogram[base_idx + 1])
-  b_sum = f32(histogram[base_idx + 2])
-  density = f32(histogram[base_idx + 3])
-
-  // Decode to color (average accumulated values)
-  color = vec3(r_sum, g_sum, b_sum) / (density + 1e-6)
-
-  // Read previous accumulation
-  prev_accum = prev_accumulation[pixel]
-
-  // Exponential moving average
-  blend_factor = 1.0 / samples_accumulated
-  current = mix(prev_accum, vec4(color, density), blend_factor)
-
-  // Write to current accumulation
-  accumulation[pixel] = current
-
-  // Clear histogram for next frame (write zeros)
-  histogram[base_idx + 0] = 0
-  histogram[base_idx + 1] = 0
-  histogram[base_idx + 2] = 0
-  histogram[base_idx + 3] = 0
-```
-
-### Tonemap Shader Logic
-```
-For each pixel:
-  accum = accumulation[pixel]
-
-  // Log-scale tone mapping
-  intensity = dot(accum.rgb, vec3(0.3, 0.59, 0.11))
-  log_intensity = log(1.0 + intensity * exposure)
-  scale = log_intensity / (intensity + 1e-6)
-
-  color = accum.rgb * scale
-
-  // Speed mode: lookup palette
-  if color_mode == Speed:
-    color = palette_lookup(color.r)
-
-  // Gamma correction
-  color = pow(color, vec3(1.0 / gamma))
-
-  // Alpha blending with background
-  alpha = accum.a * density_scale
-  color = mix(background_color, color, alpha)
-
-  return vec4(color, 1.0)
+1. Random starting point → Burn-in (settle) → Accumulation loop:
+   - Select transform (weighted random)
+   - Apply affine (2D matrix + translation, + Z offset in 3D)
+   - Apply variations (additive blending)
+   - Update color (Transform/Palette/Speed mode)
+   - Project to screen (view transform + camera rotation in 3D)
+   - Write to histogram (atomic u32 accumulation)
 ```
 
 ---
