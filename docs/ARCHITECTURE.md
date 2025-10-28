@@ -11,6 +11,7 @@ Quick reference guide to understanding the codebase structure and data flow.
 - [VARIATIONS.md](main/VARIATIONS.md) - Variation registry, all 26 core variations, parameters
 - [COLOR.md](main/COLOR.md) - Color modes, palette system, histogram accumulation
 - [CONFIG.md](main/CONFIG.md) - FractalConfig, presets, undo/redo, serialization
+- [EXPORT.md](main/EXPORT.md) - PNG export (transparent/opaque), metadata, CLI batch mode
 
 ---
 
@@ -529,20 +530,13 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 4. [undo.rs:19-31](undo.rs#L19-L31) - Push to undo stack
 
 ### PNG Export Path
-**Transparent Export** (preserves alpha):
-1. [compute_kernel.rs:351-453](src/renderer/compute_kernel.rs#L351-L453) - `capture_from_accumulation_buffer()`
-2. Copy Rgba16Float accumulation buffer → CPU buffer
-3. CPU reads f16 values, applies tone mapping (log + gamma)
-4. Calculate alpha = density × density_scale
-5. Convert to Rgba8 → PNG encoder
 
-**Opaque Export** (background blended):
-1. [compute_kernel.rs:455-543](src/renderer/compute_kernel.rs#L455-L543) - `capture_from_tonemap_render()`
-2. Render via tonemap_pass() → temp Rgba8 texture
-3. Copy texture → CPU buffer
-4. PNG encoder
+**See [EXPORT.md](main/EXPORT.md)** for complete PNG export documentation.
 
-**Why dual paths?** The tonemap shader mixes RGB with background_color before outputting, so even though it outputs alpha, the RGB channels are already blended. For transparency, we need the raw accumulation buffer colors.
+**Quick overview:** Dual export paths for different use cases:
+- **Transparent:** Read from accumulation buffer, apply CPU tone mapping, preserve alpha
+- **Opaque:** Render via tonemap shader, background pre-blended, faster
+- **Metadata:** All PNGs include build info, config JSON, render stats in tEXt chunks
 
 ---
 
