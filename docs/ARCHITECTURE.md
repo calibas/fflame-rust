@@ -6,6 +6,7 @@ Quick reference guide to understanding the codebase structure and data flow.
 - [UI.md](main/UI.md) - Windows, panels, input handling, UiResponse system
 - [BUFFERS.md](main/BUFFERS.md) - GPU layouts, bind groups, data structures
 - [TRANSFORMS.md](main/TRANSFORMS.md) - Flame algorithm, affine math, IFS implementation
+- [RENDERER.md](main/RENDERER.md) - 3-pass pipeline, FlameRenderer, PNG export
 
 ---
 
@@ -286,61 +287,16 @@ main()
 ```
 
 ### Per-Frame Render Flow
-```
-WindowEvent::RedrawRequested
-  → app.update()
-    → metrics.update()  // FPS tracking
 
-  → app.render()
-    ┌─────────────────────────────────────────────────┐
-    │ 1. COMPUTE PASS (main_2d.wgsl / main_3d.wgsl)   │
-    │    - Generate random samples (128 workgroups)   │
-    │    - Each thread: N iterations (e.g., 256)      │
-    │    - Apply transforms + variations              │
-    │    - Write to histogram buffer (atomic u32)     │
-    └─────────────────────────────────────────────────┘
-              ↓
-    ┌─────────────────────────────────────────────────┐
-    │ 2. ACCUMULATE PASS (accumulate.wgsl)            │
-    │    - Read histogram buffer (u32 → f32)          │
-    │    - Decode colors (sum / density)              │
-    │    - Blend with previous accumulation           │
-    │    - blend_factor = 1.0 / sample_count          │
-    │    - Clear histogram (write zeros)              │
-    │    - Write to current accumulation              │
-    │    - Swap textures (ping-pong)                  │
-    └─────────────────────────────────────────────────┘
-              ↓
-    ┌─────────────────────────────────────────────────┐
-    │ 3. TONEMAP PASS (tonemap.wgsl)                  │
-    │    - Read current accumulation                  │
-    │    - Apply log tone mapping                     │
-    │    - Palette lookup (if needed)                 │
-    │    - Gamma correction                           │
-    │    - Background blending                        │
-    │    - Output to screen                           │
-    └─────────────────────────────────────────────────┘
-              ↓
-    ┌─────────────────────────────────────────────────┐
-    │ 4. UI PASS (egui)                               │
-    │    - Render UI panels on top                    │
-    │    - Return UiResponse with change flags        │
-    └─────────────────────────────────────────────────┘
-              ↓
-    Handle UI responses
-      - If add_transform → create default transform, push to flame
-      - If delete_transform → remove transform by index
-      - If flame_changed → update_flame()
-      - If view_changed → update_iterations()
-      - If palette_changed → update_palette()
-      - If reset_requested → reset()
-      - If undo/redo → import_config()
-      - If config_export → save .fflame file
-      - If config_import → load .fflame file
-      - If palette_export → save .palette file
-      - If palette_import → load .palette file
-      - If preset_changed → load_config()
-      - If export → capture_png()
+**See [RENDERER.md](main/RENDERER.md)** for detailed pipeline documentation.
+
+**Quick overview:**
+```
+1. Compute Pass → Generate samples (write to histogram)
+2. Accumulate Pass → Blend with history (ping-pong buffers)
+3. Tonemap Pass → Display rendering (log/linear + gamma)
+4. UI Pass → Render egui panels
+5. Handle UI responses → Update state
 ```
 
 ### Event Handling Flow
