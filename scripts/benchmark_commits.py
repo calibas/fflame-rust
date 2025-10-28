@@ -205,7 +205,7 @@ def main():
         # {'hash': 'ef0cdd8', 'name': 'Histogram Fixed (naive atomic)'},
         # {'hash': '06bfcab', 'name': 'Histogram + Local Cache (reverted)'},  # Commented out - catastrophic regression
         # {'hash': 'ce58657', 'name': 'u16 packed histogram (merged)'},
-        {'hash': '9ac278a', 'name': 'Overflow fix (u32 hist, unoptimized)'},
+        # {'hash': '9ac278a', 'name': 'Overflow fix (u32 hist, unoptimized)'},
     ]
 
     # Setup
