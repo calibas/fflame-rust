@@ -9,6 +9,8 @@ Quick reference guide to understanding the codebase structure and data flow.
 - [RENDERER.md](main/RENDERER.md) - 3-pass pipeline, FlameRenderer, PNG export
 - [SHADERS.md](main/SHADERS.md) - WGSL modular system, ShaderBuilder, dynamic compilation
 - [VARIATIONS.md](main/VARIATIONS.md) - Variation registry, all 26 core variations, parameters
+- [COLOR.md](main/COLOR.md) - Color modes, palette system, histogram accumulation
+- [CONFIG.md](main/CONFIG.md) - FractalConfig, presets, undo/redo, serialization
 
 ---
 
@@ -159,26 +161,10 @@ fractal_flame_wgpu/
 │                               - Separate builders for 2D and 3D modes
 │                               - Enables variation plugins (future)
 │
-├── State Management
-│   ├── config.rs               FractalConfig (complete state)
-│   │                           - Flame (transforms, variations, params)
-│   │                           - View (zoom, pan, rotation, camera)
-│   │                           - Rendering (density, speed, max_iterations)
-│   │                           - Colors (mode, palette_index, palette data, background)
-│   │                           - Tone mapping (mode, curve, use_curve, exposure, gamma)
-│   │                           - Reproducibility (deterministic_rng)
-│   │                           - JSON import/export (.fflame files)
-│   │                           - File save/load with full metadata
-│   │
-│   ├── undo.rs                 UndoHistory
-│   │                           - 50-state circular buffer
-│   │                           - Undo/redo tracking
-│   │
-│   └── png_metadata.rs         PNG metadata embedding
-│                               - PngMetadata struct (build, render, config)
-│                               - encode_png_with_metadata() → tEXt chunks
-│                               - read_png_metadata() → extract from PNG
-│                               - SHA256 checksum of config JSON
+├── State Management - **See [CONFIG.md](main/CONFIG.md)** for complete documentation
+│   ├── config.rs               FractalConfig (complete state), JSON serialization
+│   ├── undo.rs                 UndoHistory (50-state circular buffer)
+│   └── png_metadata.rs         PNG metadata embedding, tEXt chunks
 │
 ├── Profiling & Version Tracking
 │   ├── profiler.rs             GpuProfiler + CPU timing
