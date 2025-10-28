@@ -7,6 +7,7 @@ Quick reference guide to understanding the codebase structure and data flow.
 - [BUFFERS.md](main/BUFFERS.md) - GPU layouts, bind groups, data structures
 - [TRANSFORMS.md](main/TRANSFORMS.md) - Flame algorithm, affine math, IFS implementation
 - [RENDERER.md](main/RENDERER.md) - 3-pass pipeline, FlameRenderer, PNG export
+- [SHADERS.md](main/SHADERS.md) - WGSL modular system, ShaderBuilder, dynamic compilation
 
 ---
 
@@ -209,60 +210,19 @@ fractal_flame_wgpu/
 │                               - Tests all presets and variations
 │                               - M ops/sec output
 │
-└── Shaders (WGSL) - Dynamic Compilation System
-    ├── core/                   🔥 MODULAR COMPONENTS (assembled at runtime)
-    │   ├── header.wgsl         Bindings and data structures (66 lines)
-    │   │                       - Transform, DispatchParams, VariationParams
-    │   │                       - All bind group layouts
-    │   │
-    │   ├── rng.wgsl            RNG functions (34 lines)
-    │   │                       - PCG random number generator
-    │   │
-    │   ├── affine.wgsl         Affine transform (9 lines)
-    │   │
-    │   ├── variations_2d.wgsl  2D variation functions (152 lines)
-    │   │                       - Core 2D variations (0-15)
-    │   │                       - Parameterized 2D (JuliaN, Blob)
-    │   │
-    │   ├── variations_3d.wgsl  All variations including 3D (202 lines)
-    │   │                       - All 2D variations PLUS
-    │   │                       - 3D depth variations (Zcone, Flatten, ZScale)
-    │   │                       - 3D rotation variations (PreRotate, PostRotate)
-    │   │                       - 3D full variations (Hemisphere)
-    │   │
-    │   ├── utilities.wgsl      Helper functions (135 lines)
-    │   │                       - get_param() - Parameter access
-    │   │                       - world_to_pixel() - Camera and projection
-    │   │                       - Point calculations (r, θ, φ)
-    │   │
-    │   ├── main_2d.wgsl        2D entry point (75 lines)
-    │   │                       - @compute main function
-    │   │                       - Calls apply_variations() [GENERATED]
-    │   │
-    │   └── main_3d.wgsl        3D entry point (76 lines)
-    │                           - @compute main function
-    │                           - Calls apply_variations() [GENERATED]
+└── Shaders (WGSL) - **See [SHADERS.md](main/SHADERS.md)** for complete shader documentation
+    ├── core/                   Modular components (dynamically assembled)
+    │   ├── header.wgsl         Bind groups and data structures
+    │   ├── rng.wgsl            PCG random number generator
+    │   ├── variations_2d.wgsl  2D variation functions
+    │   ├── variations_3d.wgsl  All variations including 3D
+    │   ├── utilities.wgsl      Helper functions (param access, projection, r/θ/φ)
+    │   ├── main_2d.wgsl        2D entry point
+    │   └── main_3d.wgsl        3D entry point
     │
-    ├── [GENERATED at runtime]  Trajectory shaders built by ShaderBuilder
-    │                           - 2D: header + rng + variations_2d + [generated apply_variations] + utilities + main_2d
-    │                           - 3D: header + rng + variations_3d + [generated apply_variations] + utilities + main_3d
-    │                           - Only active variations compiled
-    │                           - Conditional RNG and parameter passing
-    │                           - Supports plugin variation injection
-    │
-    ├── accumulate.wgsl         🔥 COMPUTE: Temporal blending (41 lines)
-    │                           - Read temp samples
-    │                           - Blend with previous accumulation
-    │                           - Exponential moving average
-    │                           - Write to current accumulation
-    │
-    └── tonemap.wgsl            🎨 RENDER: Display
-                                - Read accumulation texture
-                                - Log-scale tone mapping
-                                - Palette lookup (Speed mode)
-                                - Gamma correction
-                                - Background blending
-                                - Output to screen
+    ├── ShaderBuilder           Dynamic compilation (only active variations)
+    ├── accumulate.wgsl         Progressive refinement pass
+    └── tonemap.wgsl            Display rendering pass
 ```
 
 ---
