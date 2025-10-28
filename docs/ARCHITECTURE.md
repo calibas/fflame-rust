@@ -12,6 +12,7 @@ Quick reference guide to understanding the codebase structure and data flow.
 - [COLOR.md](main/COLOR.md) - Color modes, palette system, histogram accumulation
 - [CONFIG.md](main/CONFIG.md) - FractalConfig, presets, undo/redo, serialization
 - [EXPORT.md](main/EXPORT.md) - PNG export (transparent/opaque), metadata, CLI batch mode
+- [TESTING-GUIDE.md](TESTING-GUIDE.md) - Unit tests, regression tests, benchmarks, profiling
 
 ---
 
@@ -181,22 +182,10 @@ fractal_flame_wgpu/
 │                               - Platform and architecture info
 │                               - Global singleton via get_version_info()
 │
-├── Testing & Benchmarking
-│   ├── tests/regression.rs    12 regression tests
-│   │                           - CPU iteration determinism
-│   │                           - All 26 variation functions
-│   │                           - Preset validation
-│   │                           - Serialization round-trips
-│   │
-│   ├── benches/flame_bench.rs Criterion benchmarks
-│   │                           - Statistical microbenchmarking
-│   │                           - CPU iteration performance
-│   │                           - Individual variation functions
-│   │
-│   └── bin/simple_benchmark.rs CLI benchmark tool
-│                               - Human-readable performance testing
-│                               - Tests all presets and variations
-│                               - M ops/sec output
+├── Testing & Benchmarking - **See [TESTING-GUIDE.md](TESTING-GUIDE.md)** for complete guide
+│   ├── tests/regression.rs    12 regression tests (CPU determinism, variations, presets)
+│   ├── benches/flame_bench.rs Criterion benchmarks (statistical microbenchmarking)
+│   └── bin/simple_benchmark.rs CLI benchmark tool (human-readable performance)
 │
 └── Shaders (WGSL) - **See [SHADERS.md](main/SHADERS.md)** for complete shader documentation
     ├── core/                   Modular components (dynamically assembled)
