@@ -49,7 +49,7 @@ Can we combine/compress certain pipeline items? We keep changing the structure.
 
 
 
-Let's double check, none of the post-processing effect require us to regenerate the fractal? Is that currently being handled correctly?
+Let's double check, none of the post-processing effect require us to regenerate the fractal? Is that currently being handled correctly? I want to make sure we're not regenerating the fractal when we don't need to, and vice versa.
 
 
 
@@ -63,3 +63,37 @@ UI Improvements
 Multi-file Architecture tied into Thou Shalts (UI, Buffer, Pipeline, Shaders, Fractal Flames)
 
 Build system checks like buffer sizes.
+
+
+
+
+// How exactly does Fractal Flame point generation work?
+
+// You start with a point (random?) it goes through the transforms once and results in a new point, is it drawn on the screen at this point?
+
+// The result of the previous iteration is used as the input in the next iteration through the transforms, do you keep drawing the new point every iteration? Do you iterate through the transforms 100 times, then draw the points, or would this draw 100 points?
+
+// Are the values isolated to the threads during calculation? Are the results of one thread used as the input for another thread?
+
+// Does each thread function differently with RNG? Does they each get a unique seed for psuedo-RNG?
+
+
+
+So there's only so many paths that can be taken.
+
+2 transforms, 1 iterations, 2 paths
+2 transforms, 2 iterations, 4 paths
+2 transforms, 3 iterations, 8 paths
+...
+
+Can we pre-calculate the first X paths before exponential increase is too much to store? The we can cache the results, and skip those paths on future generations? Aren't we repeating the same math a ridiculous amount?
+
+
+
+
+
+
+
+Undo Redo System
+
+My Fractals List, clones selected Preset. Saves previous fractals.
