@@ -34,6 +34,14 @@ pub fn render_settings_window(
     histogram_color_scale_changed: &mut bool,
     low_density_smoothing: &mut f32,
     low_density_smoothing_changed: &mut bool,
+    density_compression_strength: &mut f32,
+    density_compression_changed: &mut bool,
+    blend_factor: &mut f32,
+    blend_factor_changed: &mut bool,
+    use_dynamic_blend: &mut bool,
+    use_dynamic_blend_changed: &mut bool,
+    target_iterations_per_pixel: &mut u32,
+    target_iterations_changed: &mut bool,
 ) {
     egui::Window::new("Settings")
         .open(show_settings)
@@ -232,6 +240,95 @@ pub fn render_settings_window(
                         .changed()
                     {
                         *low_density_smoothing_changed = true;
+                    }
+
+                    // Dynamic blend toggle
+                    if ui.checkbox(use_dynamic_blend, "Use Dynamic Blend (Exponential Convergence)")
+                        .on_hover_text(
+                            "Enabled: Classic exponential convergence - blend rate decreases over time.\n\
+                            Image converges to stable result, prevents overbrighten over time.\n\
+                            Formula: blend_factor = samples_this_frame / samples_accumulated\n\n\
+                            Disabled: Fixed blend rate - uses slider value constantly.\n\
+                            Useful for testing density compression effects.\n\
+                            Warning: May overbrighten if rendering for long periods."
+                        )
+                        .changed()
+                    {
+                        *use_dynamic_blend_changed = true;
+                    }
+
+                    // Blend factor (accumulation rate) - only when dynamic blend is OFF
+                    ui.add_enabled_ui(!*use_dynamic_blend, |ui| {
+                        if ui.add(egui::Slider::new(blend_factor, 0.01..=1.0)
+                            .logarithmic(true)
+                            .text("Fixed Blend Rate"))
+                            .on_hover_text(
+                                "Only used when Dynamic Blend is disabled.\n\
+                                Controls constant blend rate per frame.\n\n\
+                                0.01: Very smooth (1% per frame)\n\
+                                0.1: Balanced (10% per frame) - default\n\
+                                0.5: Fast (50% per frame)\n\
+                                1.0: Instant (100% per frame)"
+                            )
+                            .changed()
+                        {
+                            *blend_factor_changed = true;
+                        }
+                    });
+
+                    // Density compression strength
+                    if ui.add(egui::Slider::new(density_compression_strength, 0.0..=100.0)
+                        .text("Density Compression"))
+                        .on_hover_text(
+                            "Slows accumulation in bright areas to reveal core detail.\n\
+                            Works with Blend Rate to control per-pixel accumulation speed.\n\n\
+                            0: No compression - uniform accumulation (default)\n\
+                            25: Gentle - bright areas accumulate at ~20% rate\n\
+                            50: Moderate - bright areas accumulate at ~2% rate\n\
+                            100: Strong - bright areas accumulate at ~1% rate\n\n\
+                            Higher Blend Rate makes compression effect more visible.\n\
+                            Use this to prevent bright cores from washing out detail."
+                        )
+                        .changed()
+                    {
+                        *density_compression_changed = true;
+                    }
+
+                    // Per-pixel iteration limit
+                    // Use logarithmic slider for better control across large ranges
+                    let mut log_value = if *target_iterations_per_pixel == 0 {
+                        0.0  // 0 maps to log(0) special case
+                    } else {
+                        (*target_iterations_per_pixel as f64).log10()
+                    };
+
+                    if ui.add(egui::Slider::new(&mut log_value, 0.0..=6.0)
+                        .custom_formatter(|n, _| {
+                            if n < 0.5 {
+                                "Disabled".to_string()
+                            } else {
+                                format!("{}", format_iterations(10f64.powf(n) as u64))
+                            }
+                        })
+                        .text("Per-Pixel Iteration Limit"))
+                        .on_hover_text(
+                            "Stop accumulating a pixel after it receives N iterations.\n\
+                            Prevents over-sampling dense areas while sparse areas catch up.\n\n\
+                            Disabled: All pixels accumulate forever (default)\n\
+                            1,000: Very aggressive - stops early\n\
+                            10,000: Moderate - good for quick previews\n\
+                            100,000: Conservative - allows good convergence\n\
+                            1,000,000: Very conservative - high quality\n\n\
+                            Works independently of blend_factor and density compression."
+                        )
+                        .changed()
+                    {
+                        *target_iterations_per_pixel = if log_value < 0.5 {
+                            0  // Disabled
+                        } else {
+                            10f64.powf(log_value) as u32
+                        };
+                        *target_iterations_changed = true;
                     }
 
                     // Speed multiplier for frame rate (1x = 60 FPS, 2x = 120 FPS, etc.)

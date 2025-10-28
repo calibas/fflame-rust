@@ -40,6 +40,10 @@ pub struct UiResponse {
     pub gamma_changed: bool,
     pub histogram_color_scale_changed: bool,
     pub low_density_smoothing_changed: bool,
+    pub density_compression_changed: bool,
+    pub blend_factor_changed: bool,
+    pub use_dynamic_blend_changed: bool,
+    pub target_iterations_changed: bool,
 }
 
 impl Default for UiResponse {
@@ -85,6 +89,10 @@ impl Default for UiResponse {
             gamma_changed: false,
             histogram_color_scale_changed: false,
             low_density_smoothing_changed: false,
+            density_compression_changed: false,
+            blend_factor_changed: false,
+            use_dynamic_blend_changed: false,
+            target_iterations_changed: false,
         }
     }
 }

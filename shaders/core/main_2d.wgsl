@@ -87,6 +87,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 atomicAdd(&histogram[base_idx + 1u], g_u32);
                 atomicAdd(&histogram[base_idx + 2u], b_u32);
                 atomicAdd(&histogram[base_idx + 3u], density_u32);
+
+                // Increment iteration count for this pixel (for per-pixel convergence tracking)
+                atomicAdd(&iteration_counts[pixel_idx], 1u);
             }
         }
     }

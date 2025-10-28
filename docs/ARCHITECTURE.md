@@ -393,11 +393,11 @@ In render():
 
 ### Bind Group 0 (Accumulate Pass)
 ```
-@group(0) @binding(0) - histogram: array<u32>            (storage buffer, read)
-@group(0) @binding(1) - prev_accumulation: texture_2d    (texture, sample)
-@group(0) @binding(2) - accumulation: texture_storage_2d (texture, write)
-@group(0) @binding(3) - sampler_linear: sampler          (sampler)
-@group(0) @binding(4) - params: AccumulateParams         (uniform buffer, read)
+@group(0) @binding(0) - prev_accumulation: texture_2d       (texture, sample)
+@group(0) @binding(1) - histogram: array<u32>               (storage buffer, read)
+@group(0) @binding(2) - output_texture: texture_storage_2d  (texture, write)
+@group(0) @binding(3) - params: AccumulateParams            (uniform buffer, read)
+@group(0) @binding(4) - iteration_counts: array<u32>        (storage buffer, read)
 ```
 
 ### Bind Group 0 (Tonemap Pass)
@@ -470,6 +470,32 @@ struct TonemapParams {
 }
 ```
 
+### AccumulateParams
+```rust
+struct AccumulateParams {
+    width: u32,
+    height: u32,
+    blend_factor: f32,                    // Blend rate (samples_this_frame / samples_accumulated)
+    histogram_color_scale: f32,           // Must match compute shader value
+    low_density_smoothing: f32,           // 0.0-1.0, reduces noise in sparse areas
+    density_compression_strength: f32,    // 0.0-100.0, slows accumulation in bright areas
+    target_iterations_per_pixel: u32,     // Per-pixel iteration limit (0 = disabled)
+    _pad0: f32,                           // Alignment padding (48 bytes total)
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
+    _pad4: f32,
+}
+```
+
+**Accumulation Formula:**
+```rust
+adjusted_blend = blend_factor
+    × density_factor           // Low-density smoothing
+    × compression_factor       // Density compression
+    × convergence_gate;        // Per-pixel iteration limiting (0 or 1)
+```
+
 ---
 
 ## 🎨 Histogram Color Accumulation System (Added 2025-10-27)
@@ -485,12 +511,15 @@ The renderer uses a **histogram-based atomic accumulation** system to safely col
    - Each thread generates 256-1024 iterations
    - Converts final_color (RGB f32) to u32 with fixed scale
    - Atomically adds to histogram buffer
+   - Atomically increments iteration_counts per pixel (for convergence tracking)
 
 2. Accumulate Pass (accumulate.wgsl)
    - Reads histogram buffer (non-atomic)
+   - Reads iteration_counts per pixel
    - Decodes u32 back to f32 RGB
-   - Blends with previous accumulation (exponential moving average)
-   - Clears histogram for next frame
+   - Applies accumulation controls: low-density smoothing, density compression, iteration limiting
+   - Blends with previous accumulation using adjusted blend factor
+   - Clears histogram for next frame (iteration_counts persist)
 
 3. Tonemap Pass (tonemap.wgsl)
    - Reads accumulation texture

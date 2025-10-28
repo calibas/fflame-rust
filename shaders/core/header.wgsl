@@ -64,4 +64,4 @@ struct VariationParams {
 @group(0) @binding(3) var palette_texture: texture_1d<f32>;
 @group(0) @binding(4) var palette_sampler: sampler;
 @group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;
-// Note: binding 6 removed (scale_buffer replaced with params.histogram_color_scale)
+@group(0) @binding(6) var<storage, read_write> iteration_counts: array<atomic<u32>>;
