@@ -63,7 +63,10 @@ See [docs/outline.md](docs/outline.md) for original design goals
      - Alpha channel = density (0.01 per hit)
   2. **Accumulate Pass** - Progressive refinement (blend new samples with history)
      - Ping-pong buffers swapped each frame
-     - Exponential moving average for smooth convergence
+     - Blend control: Exponential (dynamic) or fixed rate
+     - Low-density smoothing to reduce noise in sparse areas
+     - Density compression to slow accumulation in bright areas
+     - Per-pixel iteration limiting to prevent over-sampling dense areas (optional)
   3. **Tonemap Pass** - Display rendering
      - Log/linear tone mapping based on density
      - Optional S-curve adjustment
@@ -79,6 +82,18 @@ See [docs/outline.md](docs/outline.md) for original design goals
   - **Result**: Pixel-perfect quality at any `iterations_per_thread` setting
   - **Critical for animation**: Ensures consistent quality across frames with varying iteration counts
   - See [docs/ITERATIONS_PER_THREAD_QUALITY.md](docs/ITERATIONS_PER_THREAD_QUALITY.md) for complete analysis
+- **Accumulation Controls**: Fine-grained control over convergence behavior
+  - **Blend Rate**: 0.01 (slow/smooth) to 1.0 (fast/flickery), default 0.1 (10%)
+  - **Dynamic Blend Mode**: Exponential convergence (old default) vs fixed rate (new option)
+  - **Low-Density Smoothing** (0.0-1.0): Reduces blend rate in sparse areas to reduce noise, default 0.5
+  - **Density Compression** (0.0-100.0): Slows accumulation in bright areas to reveal detail, default 0.0 (disabled)
+    - Formula: `compression_factor = 1 / (1 + density × strength × 0.01)`
+    - 25 = gentle (20% rate in bright areas), 50 = moderate (2% rate), 100 = strong (1% rate)
+  - **Per-Pixel Iteration Limit** (0-1M): Stop accumulating pixel after N hits, default 0 (disabled)
+    - Prevents over-sampling dense areas while sparse areas catch up
+    - Tracked via atomic counters in compute shader (~5% performance overhead)
+    - Gated after pixel accumulates initial density to avoid empty spots
+    - Low limits (5-100) for quick previews, high limits (100K-1M) for quality
 - **Color Modes**: Transform colors, Palette lookup, Speed-based coloring
 - **Projection Types**: Orthographic (flat) and Perspective (depth-aware)
 - **Camera Control**: Full 3D camera rotation (pitch and yaw) for viewing from any angle

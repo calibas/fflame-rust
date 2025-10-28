@@ -1,0 +1,65 @@
+I want to reconsider how we're editing shader files. We have a system for building shaders conditionally. Many of these featuers can be fully optional, and should have zero effect on performance when they're not part of shader compilation.
+
+We can have different tone mapping and coloring methods as conditional shader options as well. We can combine all the repeated parts of the 2D/3D shader code so you wont have to do double edits as much.
+
+Better performance, and better code organization seems possible.
+
+
+
+
+Check the last time CLAUDE.md has been updated. Check the last time ARCHITECTURE.md has been updated.
+
+Then look for the commits and items in docs that have been updated since the earliest of the two above times. Update CLAUDE.md and ARCHITECTURE.md accordingly.
+
+
+
+// I want to step back and look at this conceptually. Every pass should be improving quality. If there's so many iterations happening for a single pixel that it's risking overflowing, does that pixel need any more data? 
+
+// I have a theory, once a pixel gets X amount of iterations, then there's no further improving the quality. It should get closer and closer to the "truth", not continually need adaptive scaling. Can we use the per-pixel buffer we've currently got to track how close each pixel is to "finishing" rendering?
+
+
+
+
+
+Instead of writing everything to one giant texture, would it make sense to divide it up into sections? 
+Would this speed things up? We need to examine the pipeline carefully. Are we wasting space? More operations on smaller chunks?
+
+
+
+
+
+Idea #1, Histogram size slider. If the Histogram is overflowing, increase the size. (Needed anymore?)
+
+Idea #2, Quality slider. If overflows are happening, and the user wants better quality, let them increase the number of passes.
+
+
+
+// More general theory. I want to look at a density map of the entire image and tell which areas are prone to overflows, which areas should be "dark", 
+
+
+
+Can we combine/compress certain pipeline items? We keep changing the structure.
+
+
+
+
+
+// Did the per-pixel systems implemented earlier fail because of blend_factor, not because of flaws in the system? I still like the idea of tracking when each area has "enough" iterations on a per-pixel basis instead of leaving it up to a global setting. (This is correct)
+
+
+
+
+Let's double check, none of the post-processing effect require us to regenerate the fractal? Is that currently being handled correctly?
+
+
+
+2nd, 3rd time running into needs_update bug with UI.
+
+
+Thou Shalts (Better Context System)
+
+UI Improvements
+
+Multi-file Architecture tied into Thou Shalts (UI, Buffer, Pipeline, Shaders, Fractal Flames)
+
+Build system checks like buffer sizes.
