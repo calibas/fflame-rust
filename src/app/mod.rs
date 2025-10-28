@@ -941,12 +941,12 @@ impl App {
         // Only do normal updates if we didn't load a preset
         if !preset_loaded {
             // Capture state before applying meaningful changes
-            // Only capture on drag START or slider changes, not during continuous dragging
+            // Only capture on drag START, not during continuous dragging
             // Note: palette_changed removed - undo is captured when Apply is clicked (see custom_palette handler)
             let should_capture = ui_response.triangle_drag_started || view_changed
                 || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed
                 || ui_response.tonemap_mode_changed || ui_response.tonemap_curve_changed
-                || (ui_response.flame_changed && !ui_response.triangle_dragging); // Capture slider changes, but not during triangle drag
+                || (ui_response.flame_changed && !ui_response.triangle_drag_started); // Other flame changes (not dragging)
             if should_capture {
                 self.capture_state();
             }
@@ -1029,17 +1029,17 @@ impl App {
 
                 // Reset accumulation when view changes, palette changes, color mode changes, background color changes, flame changes, or user requests it
                 // Note: preset_changed is handled separately above with import_config() which also resets
-                // For triangle dragging: reset on EVERY frame during drag to avoid smearing (accumulation over old image)
+                // For triangle dragging: reset on first frame (triangle_drag_started) and when drag ends (triangle_drag_ended), but not during continuous drag
                 // Tone mapping: reset on mode change (log vs linear affects accumulation), but not curve/exposure/gamma (post-processing only)
                 let should_reset = ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
-                    || ui_response.background_color_changed || ui_response.tonemap_mode_changed
+                    || ui_response.background_color_changed || ui_response.tonemap_mode_changed || ui_response.triangle_drag_started || ui_response.triangle_drag_ended
                     || ui_response.histogram_color_scale_changed  // New scale incompatible with old samples
                     || ui_response.low_density_smoothing_changed  // New smoothing needs fresh samples to see effect
                     || ui_response.density_compression_changed  // New compression needs fresh samples to see effect
                     || ui_response.blend_factor_changed  // New blend rate needs fresh start to see effect
                     || ui_response.use_dynamic_blend_changed  // Switching blend modes needs fresh start
                     || ui_response.target_iterations_changed  // New iteration limit needs fresh iteration counts
-                    || ui_response.flame_changed;  // Always reset on flame changes (including during triangle drag)
+                    || (ui_response.flame_changed && !ui_response.triangle_dragging);
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                     if ui_response.histogram_color_scale_changed {
