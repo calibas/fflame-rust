@@ -10,7 +10,8 @@
       "Bash(findstr:*)",
       "Bash(cargo doc:*)",
       "Bash(wasm-pack build:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []
