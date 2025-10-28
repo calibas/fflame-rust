@@ -129,6 +129,19 @@ z' = z + g  // Simple Z offset (no rotation in affine)
 
 **Result:** Points cluster around the attractor, creating fractal structure.
 
+**Key Insight: One Iteration = One Point Drawn**
+
+Each iteration through the algorithm (steps 3a-3f) produces **one point** that is plotted to the histogram. If a thread performs 256 iterations, it draws approximately 236 points (256 total iterations minus 20 burn-in iterations that are discarded).
+
+**The point "walks" through transform space:**
+- Iteration 1: p₀ → Transform → p₁ (drawn)
+- Iteration 2: p₁ → Transform → p₂ (drawn)
+- Iteration 3: p₂ → Transform → p₃ (drawn)
+- ...
+- Iteration 256: p₂₅₅ → Transform → p₂₅₆ (drawn)
+
+The same point variable is reused throughout the loop (step 3f: `p = p''`), creating a chaotic trajectory through the fractal's attractor. Each position along this trajectory is plotted, building up the final image through density accumulation.
+
 ### CPU Reference Implementation (2D only)
 
 **Location:** [src/scene/transforms.rs](../../src/scene/transforms.rs) - `Flame::iterate()`
@@ -239,6 +252,34 @@ fn apply_transform(
 - Default: 128 workgroups × 64 threads × 256 iterations = 2M iterations/frame
 - At 60 FPS: 120M iterations/second
 - Each thread is independent (fully parallel)
+
+**Thread Isolation and Parallelism:**
+
+Each of the **8,192 threads** (128 workgroups × 64 threads) operates **completely independently** with no communication during iteration:
+
+**Per Thread:**
+- **Own random seed:** `init_rng(params.seed + thread_id)` - ensures unique random sequence
+- **Own starting point:** Random position in [-1, 1] range, different for each thread
+- **Own iteration chain:** 256 iterations producing ~236 drawn points (after 20 burn-in)
+- **Own point trajectory:** The point variable `p` is local to the thread, reused each iteration
+
+**No Inter-Thread Communication:**
+- Thread A's point never influences Thread B's point
+- Threads do not share intermediate results
+- Each thread follows its own chaotic path through transform space
+
+**Only Synchronization Point:**
+- Atomic writes to shared histogram buffer: `atomicAdd(&histogram[...], ...)`
+- Multiple threads can hit the same pixel - atomics ensure thread-safe accumulation
+- This is where all threads' work combines to form the final image
+
+**Total Points Per Frame:**
+- 8,192 threads × 236 points/thread ≈ **1.9 million points drawn**
+- Each point increments density at one pixel location
+- High-density areas (many points) become bright, low-density areas stay dark
+
+**Why This Works:**
+Despite each thread starting randomly and following an independent chaotic path, they all converge to draw the **same fractal structure**. This is the mathematical property of the IFS (Iterated Function System) - the attractor is the same regardless of starting point.
 
 ### GPU Implementation (3D Mode)
 
