@@ -1,10 +1,25 @@
 # Fractal Flame Renderer - Project Context
 
 ## Overview
-See [docs/STATUS.md](docs/STATUS.md) for implementation status vs original design
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for code organization and data flow
-See [docs/WASM.md](docs/WASM.md) for WebAssembly build guide and platform-specific details
-See [docs/outline.md](docs/outline.md) for original design goals
+
+**Quick Start:** This file provides a concise quick reference for AI assistants. For detailed documentation, see the docs below.
+
+**Core Documentation:**
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - System overview and navigation hub
+- [docs/main/](docs/main/) - Detailed topic documentation:
+  - [UI.md](docs/main/UI.md) - Windows, panels, input handling
+  - [BUFFERS.md](docs/main/BUFFERS.md) - GPU layouts, data structures
+  - [TRANSFORMS.md](docs/main/TRANSFORMS.md) - Flame algorithm, IFS, thread isolation
+  - [RENDERER.md](docs/main/RENDERER.md) - 3-pass pipeline, FlameRenderer
+  - [SHADERS.md](docs/main/SHADERS.md) - WGSL modular system
+  - [VARIATIONS.md](docs/main/VARIATIONS.md) - All 26 variations, registry
+  - [COLOR.md](docs/main/COLOR.md) - Color modes, palette, histogram
+  - [CONFIG.md](docs/main/CONFIG.md) - FractalConfig, presets, undo/redo
+  - [EXPORT.md](docs/main/EXPORT.md) - PNG export, metadata, CLI batch mode
+- [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md) - Unit tests, regression, benchmarks
+- [docs/WASM.md](docs/WASM.md) - WebAssembly build guide
+- [docs/STATUS.md](docs/STATUS.md) - Implementation status vs original design
+- [docs/outline.md](docs/outline.md) - Original design goals
 
 **Note:** Project history is tracked via git commits. Use `git log --oneline` to see recent changes.
 
@@ -546,63 +561,12 @@ Full pseudo-3D rendering inspired by Apophysis 7X:
 
 ### Histogram Color Accumulation System (Added 2025-10-27)
 
-**Overview:** The renderer uses a u32 histogram buffer for thread-safe atomic color accumulation on the GPU.
+Thread-safe atomic color accumulation using u32 histogram buffer:
+- Format: 4× u32 per pixel (R, G, B, Density)
+- Eliminates overflow (4.2B max), proper HDR
+- UI: "Histogram Color Scale" slider (default 100.0)
 
-**Architecture:**
-```
-1. Compute Pass → Write to histogram (atomic u32 adds)
-2. Accumulate Pass → Read histogram, decode, blend, clear
-3. Tonemap Pass → Display
-```
-
-**Format (U32 Unpacked):**
-- 4× u32 per pixel: R, G, B, Density (separate channels)
-- Memory: width × height × 16 bytes (e.g., 9.2 MB @ 800×600)
-- No bit packing - simpler, more robust
-
-**Evolution:**
-1. **textureStore (original):** Race conditions, undefined behavior
-2. **U16 packed (2025-10-26):** 3× u32 per pixel, RGB overflow after ~1,310 hits
-3. **U32 unpacked (2025-10-27, current):** 4× u32 per pixel, overflow eliminated
-
-**Key Benefits:**
-- ✅ Overflow eliminated (4.2B max vs 65K)
-- ✅ Bright areas stay bright (proper HDR)
-- ✅ 2.4% performance cost (acceptable tradeoff)
-- ✅ Clean codebase (failed optimizations removed)
-
-**Encoding (Compute Shader):**
-```wgsl
-let color_scale = params.histogram_color_scale;  // Default: 100.0
-atomicAdd(&histogram[base + 0u], u32(color.r * color_scale));
-atomicAdd(&histogram[base + 1u], u32(color.g * color_scale));
-atomicAdd(&histogram[base + 2u], u32(color.b * color_scale));
-atomicAdd(&histogram[base + 3u], u32(color_scale));
-```
-
-**Decoding (Accumulate Shader):**
-```wgsl
-let r_sum = f32(histogram[base + 0u]);
-let g_sum = f32(histogram[base + 1u]);
-let b_sum = f32(histogram[base + 2u]);
-let density = f32(histogram[base + 3u]);
-let color = vec3(r_sum, g_sum, b_sum) / density;  // Scale cancels out
-```
-
-**UI Control:**
-- Settings window → "Histogram Color Scale" slider (1.0-1000.0, default 100.0)
-- Higher scale = better precision, still safe from overflow
-- Recommend ≥100 for smooth gradients
-
-**Performance:**
-- U32 unpacked: 1607ms @ 1920×1080 (24.76 Giter/s)
-- U16 packed: 1570ms (25.36 Giter/s) but had overflow artifacts
-- Gap: 2.4% slower, acceptable for correct visual output
-
-**Documentation:**
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Detailed histogram section
-- [docs/COLOR_PIPELINE.md](docs/COLOR_PIPELINE.md) - Complete color pipeline with u32 updates
-- [docs/HISTOGRAM_OPTIMIZATION_ATTEMPTS.md](docs/HISTOGRAM_OPTIMIZATION_ATTEMPTS.md) - Failed attempts (per-pixel adaptive scaling, convergence masking)
+**See [docs/main/COLOR.md](docs/main/COLOR.md)** for complete documentation. Historical investigation in [docs/archive/histogram/](docs/archive/histogram/).
 
 ## Known Issues
 - Julia variation uses CPU `rand::random()` which doesn't work on GPU (needs RNG passed in)
