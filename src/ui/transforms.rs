@@ -1,4 +1,6 @@
 use crate::scene::transforms::{Flame, RenderMode};
+use crate::variations::VariationCategory;
+use super::variation_controls::render_variation_category;
 
 /// Render the Transforms window with transform editing controls
 pub fn render_transforms_window(
@@ -33,42 +35,10 @@ pub fn render_transforms_window(
                         egui::CollapsingHeader::new(format!("Transform {}", i + 1))
                             .default_open(i == 0)
                             .show(ui, |ui| {
-                                ui.label("Affine Matrix");
+                                // Affine Matrix controls
+                                render_affine_controls(ui, transform, flame_changed);
 
-                                ui.horizontal(|ui| {
-                                    ui.label("a:");
-                                    if ui.add(egui::DragValue::new(&mut transform.a).speed(0.01)).changed() {
-                                        *flame_changed = true;
-                                    }
-                                    ui.label("b:");
-                                    if ui.add(egui::DragValue::new(&mut transform.b).speed(0.01)).changed() {
-                                        *flame_changed = true;
-                                    }
-                                });
-
-                                ui.horizontal(|ui| {
-                                    ui.label("c:");
-                                    if ui.add(egui::DragValue::new(&mut transform.c).speed(0.01)).changed() {
-                                        *flame_changed = true;
-                                    }
-                                    ui.label("d:");
-                                    if ui.add(egui::DragValue::new(&mut transform.d).speed(0.01)).changed() {
-                                        *flame_changed = true;
-                                    }
-                                });
-
-                                ui.horizontal(|ui| {
-                                    ui.label("e:");
-                                    if ui.add(egui::DragValue::new(&mut transform.e).speed(0.01)).changed() {
-                                        *flame_changed = true;
-                                    }
-                                    ui.label("f:");
-                                    if ui.add(egui::DragValue::new(&mut transform.f).speed(0.01)).changed() {
-                                        *flame_changed = true;
-                                    }
-                                });
-
-                                // Z offset (only show in 3D mode)
+                                // Z offset (only in 3D mode)
                                 if matches!(flame.render_mode, RenderMode::ThreeD) {
                                     ui.horizontal(|ui| {
                                         ui.label("g (Z offset):");
@@ -79,330 +49,27 @@ pub fn render_transforms_window(
                                 }
 
                                 ui.separator();
+
+                                // Weight control
                                 ui.label("Weight");
                                 if ui.add(egui::Slider::new(&mut transform.weight, 0.0..=1024.0).logarithmic(true)).changed() {
                                     *flame_changed = true;
                                 }
 
                                 ui.separator();
-                                ui.label("Color");
-                                if ui.horizontal(|ui| {
-                                    ui.label("R:");
-                                    let r_changed = ui.add(egui::Slider::new(&mut transform.color[0], 0.0..=1.0)).changed();
-                                    ui.label("G:");
-                                    let g_changed = ui.add(egui::Slider::new(&mut transform.color[1], 0.0..=1.0)).changed();
-                                    ui.label("B:");
-                                    let b_changed = ui.add(egui::Slider::new(&mut transform.color[2], 0.0..=1.0)).changed();
-                                    r_changed || g_changed || b_changed
-                                }).inner {
-                                    *flame_changed = true;
-                                }
 
-                                if ui.add(egui::Slider::new(&mut transform.color_speed, 0.0..=1.0).text("Color Speed")).changed() {
-                                    *flame_changed = true;
-                                }
+                                // Color controls
+                                render_color_controls(ui, transform, flame_changed);
 
-                                ui.separator();
-                                ui.label("Basic 2D Variations");
+                                // Variation controls by category
+                                render_variation_category(ui, transform, VariationCategory::Basic2D, "Basic 2D Variations", flame_changed);
+                                render_variation_category(ui, transform, VariationCategory::Advanced2D, "Advanced 2D Variations", flame_changed);
 
-                                // Get basic 2D variations from registry
-                                let basic_2d = crate::variations::global_registry().by_category(crate::variations::VariationCategory::Basic2D);
-                                for var_info in basic_2d {
-                                    let mut value = transform.get_variation(&var_info.name);
-                                    if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
-                                        transform.set_variation(&var_info.name, value);
-                                        *flame_changed = true;
-                                    }
-
-                                    // Show parameters if variation is active and has parameters
-                                    if value.abs() > 1e-6 && !var_info.parameters.is_empty() {
-                                        ui.indent(format!("params_{}", var_info.name), |ui| {
-                                            for param in &var_info.parameters {
-                                                let mut param_value = transform.get_variation_param_or_default(
-                                                    &var_info.name,
-                                                    &param.name,
-                                                    &crate::variations::global_registry(),
-                                                );
-
-                                                let param_changed = match param.param_type {
-                                                    crate::variations::ParamType::Float => {
-                                                        let min = param.min_value.unwrap_or(-10.0);
-                                                        let max = param.max_value.unwrap_or(10.0);
-                                                        ui.add(egui::Slider::new(&mut param_value, min..=max)
-                                                            .text(&param.display_name)
-                                                            .step_by(0.01))
-                                                            .changed()
-                                                    }
-                                                    crate::variations::ParamType::Integer => {
-                                                        let min = param.min_value.unwrap_or(1.0) as i32;
-                                                        let max = param.max_value.unwrap_or(10.0) as i32;
-                                                        let mut int_val = param_value as i32;
-                                                        let changed = ui.add(egui::Slider::new(&mut int_val, min..=max)
-                                                            .text(&param.display_name))
-                                                            .changed();
-                                                        param_value = int_val as f32;
-                                                        changed
-                                                    }
-                                                    crate::variations::ParamType::Angle => {
-                                                        let min = param.min_value.unwrap_or(0.0);
-                                                        let max = param.max_value.unwrap_or(360.0);
-                                                        ui.add(egui::Slider::new(&mut param_value, min..=max)
-                                                            .text(&param.display_name)
-                                                            .suffix("°"))
-                                                            .changed()
-                                                    }
-                                                };
-
-                                                if param_changed {
-                                                    transform.set_variation_param(&var_info.name, &param.name, param_value);
-                                                    *flame_changed = true;
-                                                }
-                                            }
-                                        });
-                                    }
-                                }
-
-                                ui.separator();
-                                ui.label("Advanced 2D Variations");
-
-                                // Get advanced 2D variations from registry
-                                let advanced_2d = crate::variations::global_registry().by_category(crate::variations::VariationCategory::Advanced2D);
-                                for var_info in advanced_2d {
-                                    let mut value = transform.get_variation(&var_info.name);
-                                    if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
-                                        transform.set_variation(&var_info.name, value);
-                                        *flame_changed = true;
-                                    }
-
-                                    // Show parameters if variation is active and has parameters
-                                    if value.abs() > 1e-6 && !var_info.parameters.is_empty() {
-                                        ui.indent(format!("params_{}", var_info.name), |ui| {
-                                            for param in &var_info.parameters {
-                                                let mut param_value = transform.get_variation_param_or_default(
-                                                    &var_info.name,
-                                                    &param.name,
-                                                    &crate::variations::global_registry(),
-                                                );
-
-                                                let param_changed = match param.param_type {
-                                                    crate::variations::ParamType::Float => {
-                                                        let min = param.min_value.unwrap_or(-10.0);
-                                                        let max = param.max_value.unwrap_or(10.0);
-                                                        ui.add(egui::Slider::new(&mut param_value, min..=max)
-                                                            .text(&param.display_name)
-                                                            .step_by(0.01))
-                                                            .changed()
-                                                    }
-                                                    crate::variations::ParamType::Integer => {
-                                                        let min = param.min_value.unwrap_or(1.0) as i32;
-                                                        let max = param.max_value.unwrap_or(10.0) as i32;
-                                                        let mut int_val = param_value as i32;
-                                                        let changed = ui.add(egui::Slider::new(&mut int_val, min..=max)
-                                                            .text(&param.display_name))
-                                                            .changed();
-                                                        param_value = int_val as f32;
-                                                        changed
-                                                    }
-                                                    crate::variations::ParamType::Angle => {
-                                                        let min = param.min_value.unwrap_or(0.0);
-                                                        let max = param.max_value.unwrap_or(360.0);
-                                                        ui.add(egui::Slider::new(&mut param_value, min..=max)
-                                                            .text(&param.display_name)
-                                                            .suffix("°"))
-                                                            .changed()
-                                                    }
-                                                };
-
-                                                if param_changed {
-                                                    transform.set_variation_param(&var_info.name, &param.name, param_value);
-                                                    *flame_changed = true;
-                                                }
-                                            }
-                                        });
-                                    }
-                                }
-
-                                // Show 3D variations only in 3D mode
+                                // 3D variation categories (only visible in 3D mode)
                                 if matches!(flame.render_mode, RenderMode::ThreeD) {
-                                    ui.separator();
-                                    ui.label("3D Depth Variations");
-
-                                    // Get 3D depth variations from registry
-                                    let depth_3d = crate::variations::global_registry().by_category(crate::variations::VariationCategory::Depth3D);
-                                    for var_info in depth_3d {
-                                        let mut value = transform.get_variation(&var_info.name);
-                                        if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
-                                            transform.set_variation(&var_info.name, value);
-                                            *flame_changed = true;
-                                        }
-
-                                        // Show parameters if variation is active and has parameters
-                                        if value.abs() > 1e-6 && !var_info.parameters.is_empty() {
-                                            ui.indent(format!("params_{}", var_info.name), |ui| {
-                                                for param in &var_info.parameters {
-                                                    let mut param_value = transform.get_variation_param_or_default(
-                                                        &var_info.name,
-                                                        &param.name,
-                                                        &crate::variations::global_registry(),
-                                                    );
-
-                                                    let param_changed = match param.param_type {
-                                                        crate::variations::ParamType::Float => {
-                                                            let min = param.min_value.unwrap_or(-10.0);
-                                                            let max = param.max_value.unwrap_or(10.0);
-                                                            ui.add(egui::Slider::new(&mut param_value, min..=max)
-                                                                .text(&param.display_name)
-                                                                .step_by(0.01))
-                                                                .changed()
-                                                        }
-                                                        crate::variations::ParamType::Integer => {
-                                                            let min = param.min_value.unwrap_or(1.0) as i32;
-                                                            let max = param.max_value.unwrap_or(10.0) as i32;
-                                                            let mut int_val = param_value as i32;
-                                                            let changed = ui.add(egui::Slider::new(&mut int_val, min..=max)
-                                                                .text(&param.display_name))
-                                                                .changed();
-                                                            param_value = int_val as f32;
-                                                            changed
-                                                        }
-                                                        crate::variations::ParamType::Angle => {
-                                                            let min = param.min_value.unwrap_or(0.0);
-                                                            let max = param.max_value.unwrap_or(360.0);
-                                                            ui.add(egui::Slider::new(&mut param_value, min..=max)
-                                                                .text(&param.display_name)
-                                                                .suffix("°"))
-                                                                .changed()
-                                                        }
-                                                    };
-
-                                                    if param_changed {
-                                                        transform.set_variation_param(&var_info.name, &param.name, param_value);
-                                                        *flame_changed = true;
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    }
-
-                                    ui.separator();
-                                    ui.label("3D Rotation Variations");
-
-                                    // Get 3D rotation variations from registry
-                                    let rotation_3d = crate::variations::global_registry().by_category(crate::variations::VariationCategory::Rotation3D);
-                                    for var_info in rotation_3d {
-                                        let mut value = transform.get_variation(&var_info.name);
-                                        if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
-                                            transform.set_variation(&var_info.name, value);
-                                            *flame_changed = true;
-                                        }
-
-                                        // Show parameters if variation is active and has parameters
-                                        if value.abs() > 1e-6 && !var_info.parameters.is_empty() {
-                                            ui.indent(format!("params_{}", var_info.name), |ui| {
-                                                for param in &var_info.parameters {
-                                                    let mut param_value = transform.get_variation_param_or_default(
-                                                        &var_info.name,
-                                                        &param.name,
-                                                        &crate::variations::global_registry(),
-                                                    );
-
-                                                    let param_changed = match param.param_type {
-                                                        crate::variations::ParamType::Float => {
-                                                            let min = param.min_value.unwrap_or(-10.0);
-                                                            let max = param.max_value.unwrap_or(10.0);
-                                                            ui.add(egui::Slider::new(&mut param_value, min..=max)
-                                                                .text(&param.display_name)
-                                                                .step_by(0.01))
-                                                                .changed()
-                                                        }
-                                                        crate::variations::ParamType::Integer => {
-                                                            let min = param.min_value.unwrap_or(1.0) as i32;
-                                                            let max = param.max_value.unwrap_or(10.0) as i32;
-                                                            let mut int_val = param_value as i32;
-                                                            let changed = ui.add(egui::Slider::new(&mut int_val, min..=max)
-                                                                .text(&param.display_name))
-                                                                .changed();
-                                                            param_value = int_val as f32;
-                                                            changed
-                                                        }
-                                                        crate::variations::ParamType::Angle => {
-                                                            let min = param.min_value.unwrap_or(0.0);
-                                                            let max = param.max_value.unwrap_or(360.0);
-                                                            ui.add(egui::Slider::new(&mut param_value, min..=max)
-                                                                .text(&param.display_name)
-                                                                .suffix("°"))
-                                                                .changed()
-                                                        }
-                                                    };
-
-                                                    if param_changed {
-                                                        transform.set_variation_param(&var_info.name, &param.name, param_value);
-                                                        *flame_changed = true;
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    }
-
-                                    ui.separator();
-                                    ui.label("Full 3D Variations");
-
-                                    // Get full 3D variations from registry
-                                    let full_3d = crate::variations::global_registry().by_category(crate::variations::VariationCategory::Full3D);
-                                    for var_info in full_3d {
-                                        let mut value = transform.get_variation(&var_info.name);
-                                        if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
-                                            transform.set_variation(&var_info.name, value);
-                                            *flame_changed = true;
-                                        }
-
-                                        // Show parameters if variation is active and has parameters
-                                        if value.abs() > 1e-6 && !var_info.parameters.is_empty() {
-                                            ui.indent(format!("params_{}", var_info.name), |ui| {
-                                                for param in &var_info.parameters {
-                                                    let mut param_value = transform.get_variation_param_or_default(
-                                                        &var_info.name,
-                                                        &param.name,
-                                                        &crate::variations::global_registry(),
-                                                    );
-
-                                                    let param_changed = match param.param_type {
-                                                        crate::variations::ParamType::Float => {
-                                                            let min = param.min_value.unwrap_or(-10.0);
-                                                            let max = param.max_value.unwrap_or(10.0);
-                                                            ui.add(egui::Slider::new(&mut param_value, min..=max)
-                                                                .text(&param.display_name)
-                                                                .step_by(0.01))
-                                                                .changed()
-                                                        }
-                                                        crate::variations::ParamType::Integer => {
-                                                            let min = param.min_value.unwrap_or(1.0) as i32;
-                                                            let max = param.max_value.unwrap_or(10.0) as i32;
-                                                            let mut int_val = param_value as i32;
-                                                            let changed = ui.add(egui::Slider::new(&mut int_val, min..=max)
-                                                                .text(&param.display_name))
-                                                                .changed();
-                                                            param_value = int_val as f32;
-                                                            changed
-                                                        }
-                                                        crate::variations::ParamType::Angle => {
-                                                            let min = param.min_value.unwrap_or(0.0);
-                                                            let max = param.max_value.unwrap_or(360.0);
-                                                            ui.add(egui::Slider::new(&mut param_value, min..=max)
-                                                                .text(&param.display_name)
-                                                                .suffix("°"))
-                                                                .changed()
-                                                        }
-                                                    };
-
-                                                    if param_changed {
-                                                        transform.set_variation_param(&var_info.name, &param.name, param_value);
-                                                        *flame_changed = true;
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    }
+                                    render_variation_category(ui, transform, VariationCategory::Depth3D, "3D Depth Variations", flame_changed);
+                                    render_variation_category(ui, transform, VariationCategory::Rotation3D, "3D Rotation Variations", flame_changed);
+                                    render_variation_category(ui, transform, VariationCategory::Full3D, "Full 3D Variations", flame_changed);
                                 }
 
                                 ui.separator();
@@ -424,4 +91,62 @@ pub fn render_transforms_window(
                 *delete_transform = Some(idx);
             }
         });
+}
+
+/// Render affine matrix controls (a, b, c, d, e, f)
+fn render_affine_controls(ui: &mut egui::Ui, transform: &mut crate::scene::transforms::Transform, flame_changed: &mut bool) {
+    ui.label("Affine Matrix");
+
+    ui.horizontal(|ui| {
+        ui.label("a:");
+        if ui.add(egui::DragValue::new(&mut transform.a).speed(0.01)).changed() {
+            *flame_changed = true;
+        }
+        ui.label("b:");
+        if ui.add(egui::DragValue::new(&mut transform.b).speed(0.01)).changed() {
+            *flame_changed = true;
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.label("c:");
+        if ui.add(egui::DragValue::new(&mut transform.c).speed(0.01)).changed() {
+            *flame_changed = true;
+        }
+        ui.label("d:");
+        if ui.add(egui::DragValue::new(&mut transform.d).speed(0.01)).changed() {
+            *flame_changed = true;
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.label("e:");
+        if ui.add(egui::DragValue::new(&mut transform.e).speed(0.01)).changed() {
+            *flame_changed = true;
+        }
+        ui.label("f:");
+        if ui.add(egui::DragValue::new(&mut transform.f).speed(0.01)).changed() {
+            *flame_changed = true;
+        }
+    });
+}
+
+/// Render color controls (RGB color and color speed)
+fn render_color_controls(ui: &mut egui::Ui, transform: &mut crate::scene::transforms::Transform, flame_changed: &mut bool) {
+    ui.label("Color");
+    if ui.horizontal(|ui| {
+        ui.label("R:");
+        let r_changed = ui.add(egui::Slider::new(&mut transform.color[0], 0.0..=1.0)).changed();
+        ui.label("G:");
+        let g_changed = ui.add(egui::Slider::new(&mut transform.color[1], 0.0..=1.0)).changed();
+        ui.label("B:");
+        let b_changed = ui.add(egui::Slider::new(&mut transform.color[2], 0.0..=1.0)).changed();
+        r_changed || g_changed || b_changed
+    }).inner {
+        *flame_changed = true;
+    }
+
+    if ui.add(egui::Slider::new(&mut transform.color_speed, 0.0..=1.0).text("Color Speed")).changed() {
+        *flame_changed = true;
+    }
 }

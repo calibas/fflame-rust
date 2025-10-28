@@ -72,26 +72,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // If converged, stop all accumulation (convergence_gate = 0.0)
     let convergence_gate = select(1.0, 0.0, is_converged);
 
-    var rgb_accumulated = prev.rgb;
-    var alpha_accumulated = prev.a;
+    // Adaptive blending based on accumulated density to reduce low-density noise
+    let density_threshold = 0.1;
+    let density_factor = mix(1.0, min(prev.a / density_threshold, 1.0), params.low_density_smoothing);
 
-    if (density > 0.0) {
-        // Adaptive blending based on accumulated density to reduce low-density noise
-        let density_threshold = 0.1;
-        let density_factor = mix(1.0, min(prev.a / density_threshold, 1.0), params.low_density_smoothing);
+    // Apply density compression to slow accumulation in bright areas
+    // Formula adjusted for actual density scale (0-100+)
+    // Use linear term instead of squared to avoid saturation
+    let compression_factor = 1.0 / (1.0 + prev.a * params.density_compression_strength * 0.01);
 
-        // Apply density compression to slow accumulation in bright areas
-        // Formula adjusted for actual density scale (0-100+)
-        // Use linear term instead of squared to avoid saturation
-        let compression_factor = 1.0 / (1.0 + prev.a * params.density_compression_strength * 0.01);
+    // Multiply all factors together: global blend × density × compression × convergence
+    let adjusted_blend = params.blend_factor * density_factor * compression_factor * convergence_gate;
 
-        // Multiply all factors together: global blend × density × compression × convergence
-        let adjusted_blend = params.blend_factor * density_factor * compression_factor * convergence_gate;
-        rgb_accumulated = prev.rgb * (1.0 - adjusted_blend) + new_color * adjusted_blend;
+    // ALWAYS blend (like ce58657), even when density==0, to prevent smearing during interactive editing
+    let rgb_accumulated = prev.rgb * (1.0 - adjusted_blend) + new_color * adjusted_blend;
 
-        // Alpha (density) accumulates additively, also gated by convergence
-        alpha_accumulated = prev.a + (density * 0.01 * params.blend_factor * convergence_gate);
-    }
+    // Alpha (density) accumulates additively, also gated by convergence
+    // Only add alpha when we actually have new samples
+    let alpha_accumulated = prev.a + (density * 0.01 * params.blend_factor * convergence_gate);
 
     // Write to output
     textureStore(output_texture, pixel, vec4<f32>(rgb_accumulated, alpha_accumulated));
