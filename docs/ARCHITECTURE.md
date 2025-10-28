@@ -8,6 +8,7 @@ Quick reference guide to understanding the codebase structure and data flow.
 - [TRANSFORMS.md](main/TRANSFORMS.md) - Flame algorithm, affine math, IFS implementation
 - [RENDERER.md](main/RENDERER.md) - 3-pass pipeline, FlameRenderer, PNG export
 - [SHADERS.md](main/SHADERS.md) - WGSL modular system, ShaderBuilder, dynamic compilation
+- [VARIATIONS.md](main/VARIATIONS.md) - Variation registry, all 26 core variations, parameters
 
 ---
 
