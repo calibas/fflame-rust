@@ -10,6 +10,7 @@ pub fn render_menu_bar(
     show_help: &mut bool,
     show_palette_editor: &mut bool,
     show_config_window: &mut bool,
+    show_undo_history: &mut bool,
 ) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::menu::bar(ui, |ui| {
@@ -24,6 +25,7 @@ pub fn render_menu_bar(
                 ui.separator();
                 ui.checkbox(show_palette_editor, "🎨 Palette Editor");
                 ui.checkbox(show_config_window, "📄 Config Import/Export");
+                ui.checkbox(show_undo_history, "⮪ Undo/Redo History");
             });
         });
     });

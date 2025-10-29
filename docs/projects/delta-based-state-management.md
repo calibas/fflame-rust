@@ -1,6 +1,6 @@
 # Delta-Based State Management System
 
-**Status:** Phase 3 Complete ✅ (Proof-of-concept working)
+**Status:** Phase 5 Complete ✅ (Undo/Redo History UI added)
 **Created:** 2025-10-29
 **Updated:** 2025-10-29
 **Category:** Architecture Refactor
@@ -1198,17 +1198,32 @@ config_manager.update_batch(vec![(path1, val1), (path2, val2)], "Description", f
 
 ---
 
-### Phase 5: Undo/Redo Window (Week 3-4)
+### Phase 5: Undo/Redo Window ✅ COMPLETE
 **Goal**: Add UI to show undo history
 
 **Tasks**:
-1. Create undo history window
-2. Display list of `ConfigChange` descriptions
-3. Allow clicking to undo/redo to specific point
-4. Show what will be undone/redone on hover
-5. Polish UX (keyboard shortcuts, tooltips, etc.)
+1. ✅ Create undo history window ([src/ui/undo_history.rs](../../src/ui/undo_history.rs))
+2. ✅ Display list of `ConfigChange` descriptions
+3. ✅ Allow clicking to undo/redo (single step for now)
+4. ⏸️ Show what will be undone/redone on hover (future enhancement)
+5. ⏸️ Polish UX (keyboard shortcuts, tooltips, multi-level undo) (future enhancement)
 
-**Deliverable**: Full undo/redo window with history visualization
+**Deliverable**: Basic undo/redo window with history visualization
+
+**What Was Completed**:
+- Created new `undo_history.rs` module with `render_undo_history_window()` function
+- Displays undo stack in reverse chronological order (most recent first)
+- Displays redo stack in chronological order (oldest first)
+- Shows change descriptions from `ConfigChange.description`
+- Includes quick action buttons (Undo/Redo with enabled state)
+- Shows stack statistics (entry counts)
+- Wired into menu bar under "Windows" → "⮪ Undo/Redo History"
+- Fully integrated with existing undo/redo system
+
+**Files Modified**:
+- `src/ui/undo_history.rs` - NEW FILE: Undo/redo history window UI
+- `src/ui/menu_bar.rs` - Added history window toggle
+- `src/ui/mod.rs` - Added `show_undo_history` field, wired up window rendering
 
 ### Phase 6: Optimization & Polish (Week 4)
 **Goal**: Performance tuning and edge cases
