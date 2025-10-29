@@ -1,7 +1,8 @@
 # Lazy Undo System Implementation
 
-**Status:** Implementation started
+**Status:** Phase 1 Complete (Exposure slider working)
 **Created:** 2025-10-28
+**Updated:** 2025-10-28
 **Category:** UI/UX Improvement
 
 ## Problem
@@ -38,7 +39,7 @@ Implement **lazy undo capture** with throttling:
 
 ### 1. Core Helper (`src/ui/lazy_undo.rs`)
 
-**Status:** ✅ Complete
+**Status:** ✅ Complete (Commit: b4a288f)
 
 Created `LazyUndoHelper` struct that tracks:
 - Last capture time (for throttling)
@@ -72,9 +73,25 @@ if lazy.should_capture_for_drag_state(is_mouse_down) {
 
 ### 2. Integration Points
 
-**Status:** 🔨 In Progress
+**Status:** 🔨 In Progress (1 of 6 sections complete)
 
 Need to update all UI locations where continuous interactions trigger `flame_changed`:
+
+#### ✅ COMPLETED: Exposure Slider (Tone Mapping Window)
+
+**Commits:** b4a288f (implementation), 427c282 (fix)
+
+**What was done:**
+1. Added `lazy_undo_tone_mapping: LazyUndoHelper` to `EguiLayer` struct
+2. Updated `render_tone_mapping_window()` signature to accept `lazy_undo` parameter
+3. Changed exposure slider from `.changed()` to lazy undo pattern
+4. Added `exposure_changed` to undo capture check in app.rs line 950
+
+**Testing:** Confirmed working - drag exposure slider creates undo points at start, every 1s, and end.
+
+**Lessons learned:**
+- Must add the `*_changed` flag to `should_capture` check in app.rs
+- Pattern works correctly: `lazy_undo.should_capture_for_widget(&response)`
 
 #### A. Settings Window Sliders
 
@@ -226,28 +243,40 @@ pub struct EguiLayer {
 
 ### 4. Migration Strategy
 
-**Phase 1: Settings Window** (Low Risk)
+**Phase 1: Tone Mapping Window** (Low Risk) ✅ COMPLETE
+- ✅ Add `lazy_undo_tone_mapping` to EguiLayer
+- ✅ Update tone_mapping.rs signature
+- ✅ Convert exposure slider to lazy undo pattern
+- ✅ Add `exposure_changed` to capture check in app.rs
+- ✅ Test and verify working
+
+**REMAINING PHASES:**
+
+**Phase 2: Settings Window** (Low Risk) - NEXT
 - Add `lazy_undo_settings` to EguiLayer
 - Update settings.rs to use helper for all sliders
+- Update capture check to include: `iterations_changed`, `histogram_color_scale_changed`,
+  `low_density_smoothing_changed`, `density_compression_changed`, `blend_factor_changed`,
+  `target_iterations_changed`
 - Test with iterations/speed/blend sliders
 - Verify undo behavior during drag
 
-**Phase 2: Tone Mapping & View** (Low Risk)
-- Add `lazy_undo_tone_mapping` and `lazy_undo_view` to EguiLayer
-- Update tone_mapping.rs and view.rs
-- Test exposure/gamma/zoom sliders
+**Phase 3: View Window** (Low Risk)
+- Add `lazy_undo_view` to EguiLayer
+- Update view.rs for zoom/pan/rotation sliders
+- Test zoom/pan/camera rotation sliders
 
-**Phase 3: Transforms** (Medium Risk)
+**Phase 4: Transforms** (Medium Risk)
 - Add `lazy_undo_transforms` to EguiLayer
 - Update transforms.rs for all affine/color/weight sliders
 - Test with multiple transforms and sliders
 
-**Phase 4: Variations** (Low Risk)
+**Phase 5: Variations** (Low Risk)
 - Add `lazy_undo_variations` to EguiLayer
 - Update variation_controls.rs and variation_params.rs
 - Test variation weight and parameter sliders
 
-**Phase 5: Verification** (Critical)
+**Phase 6: Final Verification** (Critical)
 - Test all UI interactions with undo
 - Verify undo buffer contains meaningful states after long drag
 - Check edge cases (rapid slider movements, window switching during drag)
@@ -425,8 +454,33 @@ Add UI to show:
 
 The lazy undo system solves a critical UX problem with minimal implementation complexity. By throttling undo captures to meaningful intervals, it preserves useful undo history while reducing CPU overhead.
 
+**Current Status (2025-10-28):**
+- ✅ Core system implemented and tested
+- ✅ Phase 1 complete: Exposure slider working correctly
+- ✅ Bug fix: Added exposure_changed to capture check
+- 🔨 Ready for Phase 2: Settings window sliders
+
 **Next Steps:**
-1. Implement Phase 1 (Settings window)
-2. Test thoroughly
-3. Roll out to remaining UI sections
-4. Document in user-facing help
+1. Implement Phase 2 (Settings window: iterations, speed, blend, etc.)
+2. Test each phase thoroughly before moving to next
+3. Roll out to remaining UI sections (Phases 3-5)
+4. Final verification (Phase 6)
+5. Document in user-facing help if needed
+
+**Implementation Pattern (from Phase 1):**
+```rust
+// 1. Add helper to EguiLayer
+lazy_undo_section: LazyUndoHelper::new(),
+
+// 2. Pass to render function
+&mut self.lazy_undo_section,
+
+// 3. In UI code, replace .changed() pattern:
+let response = ui.add(egui::Slider::new(&mut value, range).text("Label"));
+if lazy_undo.should_capture_for_widget(&response) {
+    *value_changed = true;
+}
+
+// 4. Add to should_capture check in app.rs:
+|| ui_response.value_changed
+```
