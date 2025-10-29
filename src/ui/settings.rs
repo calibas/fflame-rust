@@ -362,12 +362,20 @@ pub fn render_settings_window(
                         )
                         .changed()
                     {
-                        *target_iterations_per_pixel = if log_value < 0.5 {
+                        let new_value = if log_value < 0.5 {
                             0  // Disabled
                         } else {
                             10f64.powf(log_value) as u32
                         };
-                        *target_iterations_changed = true;
+                        if let Ok(update_type) = config_manager.update_param(
+                            ConfigPath::TargetIterationsPerPixel,
+                            new_value.into(),
+                            true  // Lazy undo
+                        ) {
+                            *target_iterations_per_pixel = config_manager.active_config().target_iterations_per_pixel;
+                            *target_iterations_changed = true;
+                            max_update = max_update.max(update_type);
+                        }
                     }
 
                     // Speed multiplier for frame rate (1x = 60 FPS, 2x = 120 FPS, etc.)
