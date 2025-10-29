@@ -1,6 +1,7 @@
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::palette::{ColorMode, PaletteLibrary};
 use crate::ui::LazyUndoHelper;
+use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
 
 /// Render the Tone Mapping window with all tone mapping and color controls
 #[allow(clippy::too_many_arguments)]
@@ -8,6 +9,7 @@ pub fn render_tone_mapping_window(
     ctx: &egui::Context,
     show_tone_mapping: &mut bool,
     show_palette_editor: &mut bool,
+    config_manager: &mut ConfigManager,
     tonemap_mode: &mut ToneMapMode,
     tonemap_mode_changed: &mut bool,
     tonemap_curve: &mut ToneCurve,
@@ -31,7 +33,8 @@ pub fn render_tone_mapping_window(
     background_color: &mut [f32; 3],
     background_color_changed: &mut bool,
     lazy_undo: &mut LazyUndoHelper,
-) {
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
     egui::Window::new("Tone Mapping & Colors")
         .open(show_tone_mapping)
         .show(ctx, |ui| {
@@ -57,18 +60,29 @@ pub fn render_tone_mapping_window(
 
                     ui.separator();
 
-                    // Use lazy undo for exposure slider to throttle undo captures
-                    let exposure_response = ui.add(egui::Slider::new(exposure, 0.1..=5.0).text("Exposure"));
-                    if lazy_undo.should_capture_for_widget(&exposure_response) {
-                        *exposure_changed = true;
+                    // Convert sliders to use ConfigManager
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.1..=5.0, "Exposure") {
+                        if result.changed {
+                            *exposure = config_manager.config().exposure;
+                            *exposure_changed = result.should_capture;
+                        }
+                        max_update = max_update.max(result.update_type);
                     }
 
-                    if ui.add(egui::Slider::new(gamma, 1.0..=3.0).text("Gamma")).changed() {
-                        *gamma_changed = true;
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, 1.0..=3.0, "Gamma") {
+                        if result.changed {
+                            *gamma = config_manager.config().gamma;
+                            *gamma_changed = result.should_capture;
+                        }
+                        max_update = max_update.max(result.update_type);
                     }
 
-                    if ui.add(egui::Slider::new(density_scale, 0.01..=10.0).text("Density Scale")).changed() {
-                        *density_changed = true;
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::DensityScale, 0.01..=10.0, "Density Scale") {
+                        if result.changed {
+                            *density_scale = config_manager.config().density_scale;
+                            *density_changed = result.should_capture;
+                        }
+                        max_update = max_update.max(result.update_type);
                     }
                 });
 
@@ -249,6 +263,8 @@ pub fn render_tone_mapping_window(
                     }
                 });
         });
+
+    max_update
 }
 
 /// Render curve editor UI

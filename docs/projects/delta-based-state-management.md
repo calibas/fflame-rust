@@ -853,17 +853,33 @@ impl EguiLayer {
 
 **Deliverable**: ✅ Core delta system tested and working, 9/9 tests passing
 
-### Phase 2: Slider Binding (Week 1-2)
+### Phase 2: Slider Binding ✅ COMPLETE
 **Goal**: Create declarative slider API
 
-**Tasks**:
-1. Implement `ConfigSlider` builder
-2. Create `config_slider!` macro
-3. Test with a few simple sliders (exposure, gamma)
-4. Verify undo/redo works correctly
-5. Verify lazy throttling works (no extra undo points)
+**Status**: ✅ Complete (2025-10-29, commit ca1b75e)
 
-**Deliverable**: Working slider binding system, proven with 2-3 sliders
+**Tasks Completed**:
+1. ✅ Created `src/config/slider.rs` with:
+   - `ConfigSlider` builder pattern with fluent API
+   - `ConfigSlider::new()` - creates slider bound to config path
+   - `ConfigSlider::lazy()` - enables 500ms throttled undo
+   - `ConfigSlider::show()` - renders slider and handles updates
+   - `ConfigSliderResult` - return type with `changed`, `should_capture`, `update_type`
+2. ✅ Created extension traits for ergonomic usage:
+   - `ConfigSliderUi` - adds `ui.config_slider()` and `ui.config_drag_value()`
+   - `LazyUndoUi` - adds `ui.lazy_slider()` and `ui.lazy_drag()` shortcuts
+3. ✅ Made `ConfigManager::get_value()` public for slider access
+4. ✅ Tests:
+   - `test_config_slider_creation` - Verify builder creates correctly
+   - `test_config_slider_lazy` - Verify lazy flag setting
+
+**Implementation Notes**:
+- Slider automatically detects drag end and calls `reset_lazy_undo()`
+- Returns `UpdateType` so app layer knows what to recompute
+- Handles both egui sliders and drag values
+- No macro needed - trait extension methods provide clean ergonomics
+
+**Deliverable**: ✅ Working slider binding system, 11/11 tests passing (9 from Phase 1 + 2 from Phase 2)
 
 ### Phase 3: Migrate Tone Mapping Window (Week 2)
 **Goal**: Fully convert one window as proof-of-concept

@@ -16,11 +16,12 @@ use crate::scene::transforms::Flame;
 use crate::scene::palette::{PaletteLibrary, ColorMode};
 use crate::scene::presets::PresetLibrary;
 use crate::util::PerformanceMetrics;
-use crate::config::FractalConfig;
+use crate::config::{FractalConfig, ConfigManager};
 use crate::undo::UndoHistory;
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 
 pub struct App {
+    pub(super) config_manager: ConfigManager,
     pub(super) gpu: GpuContext,
     pub(super) egui_layer: EguiLayer,
     pub(super) flame_renderer: Option<FlameRenderer>,
@@ -118,7 +119,10 @@ impl App {
             target_iterations_per_pixel: 0,  // Disabled by default
         };
 
+        let config_manager = ConfigManager::new(initial_config.clone());
+
         let mut app = Self {
+            config_manager,
             gpu,
             egui_layer,
             flame_renderer: Some(flame_renderer),
@@ -374,6 +378,7 @@ impl App {
             window,
             self.gpu.size,
             &self.metrics,
+            &mut self.config_manager,
             self.flame_renderer.as_mut(),
             &mut self.flame,
             &mut self.iterations_per_thread,

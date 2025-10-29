@@ -95,6 +95,7 @@ impl EguiLayer {
         window: &Window,
         window_size: winit::dpi::PhysicalSize<u32>,
         metrics: &crate::util::PerformanceMetrics,
+        config_manager: &mut crate::config::ConfigManager,
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
         flame: &mut crate::scene::transforms::Flame,
         iterations_per_thread: &mut u32,
@@ -286,10 +287,11 @@ impl EguiLayer {
             );
 
             // Render Tone Mapping window
-            tone_mapping::render_tone_mapping_window(
+            let _tonemap_update = tone_mapping::render_tone_mapping_window(
                 ctx,
                 &mut self.show_tone_mapping,
                 &mut self.show_palette_editor,
+                config_manager,
                 tonemap_mode,
                 &mut tonemap_mode_changed,
                 tonemap_curve,
