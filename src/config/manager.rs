@@ -72,9 +72,19 @@ impl ConfigManager {
             true
         };
 
+        // Debug logging
+        log::debug!(
+            "ConfigManager::update_param: path={}, lazy={}, should_capture={}, undo_stack_len={}",
+            path,
+            lazy,
+            should_capture,
+            self.undo_stack.len()
+        );
+
         // Capture undo point if needed
         if should_capture {
             self.push_undo(change.clone());
+            log::debug!("  -> Captured undo, new stack len: {}", self.undo_stack.len());
         }
 
         // Apply change to current config
