@@ -1056,7 +1056,7 @@ This ensures:
 ### Phase 4: Migrate Remaining Windows (Week 2-3) 🟡 IN PROGRESS
 **Goal**: Convert all UI to delta system
 
-**Status**: 🟡 In Progress (2025-10-29, commits 6e25df7, d5a9fcb)
+**Status**: 🟡 In Progress (2025-10-29, commits 6e25df7, d5a9fcb, 898802e)
 
 **Tasks Completed**:
 1. ✅ Convert View window (zoom, pan, rotation, camera) - All 5 controls + 7 buttons migrated
@@ -1068,16 +1068,18 @@ This ensures:
    - Arrow buttons: `update_batch()` for pan_x + pan_y
    - Reset View button: `update_batch()` for all 6 parameters
    - Returns `UpdateType`, syncs from `active_config()` for live preview
-2. 🟡 Convert Settings window (partial) - 4 rendering quality sliders migrated
+2. 🟡 Convert Settings window (partial) - 5 rendering quality sliders migrated (5/7 total)
    - Histogram Color Scale: Logarithmic slider with `update_param(lazy=true)`
    - Low-Density Smoothing: Linear slider with `update_param(lazy=true)`
    - Fixed Blend Rate: Logarithmic slider with `update_param(lazy=true)` (disabled when dynamic blend on)
    - Density Compression Strength: Linear slider with `update_param(lazy=true)`
+   - Per-Pixel Iteration Limit: Logarithmic slider with custom formatter + `update_param(lazy=true)`
    - Pattern: Manual slider + temp variable + `update_param()` (ConfigSlider doesn't support `.logarithmic(true)` yet)
    - Returns `UpdateType`, syncs from `active_config()` for live preview
+   - Pending: iterations_per_thread, speed_multiplier (not in ConfigPath yet - need to add to FractalConfig first)
 
 **Remaining Tasks**:
-2. ⚪ Complete Settings window (iterations, speed multiplier, target_iterations, checkboxes)
+2. ⚪ Add missing parameters to ConfigPath (iterations_per_thread, speed_multiplier) and complete Settings window
 3. ⚪ Convert Transforms window (affine, variations, colors)
 4. ⚪ Convert Triangle Editor (special case - batch updates)
 5. ⚪ Convert remaining Tone Mapping controls (mode, curve, etc.)
