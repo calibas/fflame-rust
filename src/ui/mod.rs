@@ -210,7 +210,7 @@ impl EguiLayer {
             );
 
             // Render Settings window
-            settings::render_settings_window(
+            let settings_update_type = settings::render_settings_window(
                 ctx,
                 &mut self.show_settings,
                 &mut self.show_config_window,
@@ -237,6 +237,7 @@ impl EguiLayer {
                 &mut iterations_changed,
                 deterministic_rng,
                 speed_multiplier,
+                config_manager,
                 histogram_color_scale,
                 &mut histogram_color_scale_changed,
                 low_density_smoothing,
@@ -250,6 +251,7 @@ impl EguiLayer {
                 target_iterations_per_pixel,
                 &mut target_iterations_changed,
             );
+            // TODO: Handle settings_update_type (Phase 4 task)
 
             // Render View window
             let view_update_type = view::render_view_window(
