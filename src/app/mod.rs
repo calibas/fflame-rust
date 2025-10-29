@@ -943,11 +943,9 @@ impl App {
             // Capture state before applying meaningful changes
             // Only capture on drag START, not during continuous dragging
             // Note: palette_changed removed - undo is captured when Apply is clicked (see custom_palette handler)
-            // Note: exposure_changed uses lazy undo to throttle captures during drag
             let should_capture = ui_response.triangle_drag_started || view_changed
                 || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed
                 || ui_response.tonemap_mode_changed || ui_response.tonemap_curve_changed
-                || ui_response.exposure_changed || ui_response.gamma_changed
                 || (ui_response.flame_changed && !ui_response.triangle_drag_started); // Other flame changes (not dragging)
             if should_capture {
                 self.capture_state();
