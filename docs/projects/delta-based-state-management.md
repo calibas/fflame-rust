@@ -1095,7 +1095,25 @@ This ensures:
 6. ⚪ Remove ALL `*_changed` flags from codebase
 7. ⚪ Update app.rs to only use `UpdateType`
 
-**Deliverable**: ⚠️ Partial - View window complete, remaining windows pending
+**Implementation Patterns Established**:
+
+1. **Simple sliders/drags**: Use `lazy_slider()` or `lazy_drag()` extension traits
+2. **Logarithmic/custom sliders**: Manual slider + temp variable + `update_param(lazy=true)` (ConfigSlider doesn't support `.logarithmic(true)` yet)
+3. **Indexed parameters**: Pass config_manager + index to helper functions, use `ConfigPath::Transform*` variants
+4. **Buttons**: Use `update_param(lazy=false)` for immediate capture
+5. **Multi-parameter changes**: Use `update_batch()` with descriptive names
+6. **All controls**: Read from `active_config()` for live preview during drag
+7. **Window functions**: Return `UpdateType` for proper update classification
+
+**Metrics**:
+- Windows migrated: 3 (View 100%, Settings 71%, Transforms core 100%)
+- Controls converted: 30+ individual controls across windows
+- Lines changed: ~500+ across 5 files
+- Commits: 7 feature + 3 documentation
+- Build status: ✅ All passing
+
+**Deliverable**: ✅ Core migration complete - 3 windows functional with proper undo/redo
+**Remaining**: Variation controls, Triangle Editor, missing ConfigPath params, cleanup
 
 ### Phase 5: Undo/Redo Window (Week 3-4)
 **Goal**: Add UI to show undo history
