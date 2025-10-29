@@ -169,8 +169,13 @@ impl ConfigManager {
             self.set_value(&delta.path, delta.new_value.clone())?;
         }
 
-        // Push to undo stack
-        self.push_undo(change.clone());
+        // Push back to undo stack (WITHOUT clearing redo stack!)
+        self.undo_stack.push(change.clone());
+
+        // Trim undo stack if needed
+        if self.undo_stack.len() > self.max_undo_depth {
+            self.undo_stack.remove(0);
+        }
 
         Ok(change.update_type())
     }
