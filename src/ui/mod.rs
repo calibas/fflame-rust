@@ -2,6 +2,7 @@ mod config_dialog;
 mod formatting;
 mod help;
 mod helpers;
+mod lazy_undo;
 mod menu_bar;
 mod palette_editor;
 mod performance;
@@ -14,6 +15,7 @@ mod variation_controls;
 mod variation_params;
 mod view;
 
+pub use lazy_undo::LazyUndoHelper;
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
 
@@ -38,6 +40,8 @@ pub struct EguiLayer {
     show_triangle_editor: bool,
     show_tone_mapping: bool,
     show_help: bool,
+    // Lazy undo helpers for throttling undo captures during continuous drag
+    lazy_undo_tone_mapping: LazyUndoHelper,
 }
 
 impl EguiLayer {
@@ -69,6 +73,7 @@ impl EguiLayer {
             show_triangle_editor: false,
             show_tone_mapping: true,  // Show by default
             show_help: false,
+            lazy_undo_tone_mapping: LazyUndoHelper::new(),
         }
     }
 
@@ -307,6 +312,7 @@ impl EguiLayer {
                 speed_factor,
                 background_color,
                 &mut background_color_changed,
+                &mut self.lazy_undo_tone_mapping,
             );
 
             // Render Palette Editor window
