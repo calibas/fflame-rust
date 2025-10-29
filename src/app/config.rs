@@ -116,25 +116,27 @@ impl App {
 
     /// Undo to previous state
     pub fn undo(&mut self) {
-        let config = self.undo_history.undo().cloned();
-        if let Some(config) = config {
-            self.import_config(config);
+        if let Ok(_update_type) = self.config_manager.undo() {
+            // Sync App state from ConfigManager
+            let config = self.config_manager.config();
+            self.import_config(config.clone());
         }
     }
 
     /// Redo to next state
     pub fn redo(&mut self) {
-        let config = self.undo_history.redo().cloned();
-        if let Some(config) = config {
-            self.import_config(config);
+        if let Ok(_update_type) = self.config_manager.redo() {
+            // Sync App state from ConfigManager
+            let config = self.config_manager.config();
+            self.import_config(config.clone());
         }
     }
 
     pub fn can_undo(&self) -> bool {
-        self.undo_history.can_undo()
+        self.config_manager.can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        self.undo_history.can_redo()
+        self.config_manager.can_redo()
     }
 }
