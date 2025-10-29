@@ -1053,18 +1053,31 @@ This ensures:
 **Deliverable**: ✅ Proof-of-concept fully working
 **Next**: Continue Phase 3 migration (remaining controls) or proceed to Phase 4
 
-### Phase 4: Migrate Remaining Windows (Week 2-3)
+### Phase 4: Migrate Remaining Windows (Week 2-3) 🟡 IN PROGRESS
 **Goal**: Convert all UI to delta system
 
-**Tasks**:
-1. Convert View window (zoom, pan, rotation, camera)
-2. Convert Settings window (iterations, blend, etc.)
-3. Convert Transforms window (affine, variations, colors)
-4. Convert Triangle Editor (special case - batch updates)
-5. Remove ALL `*_changed` flags from codebase
-6. Update app.rs to only use `UpdateType`
+**Status**: 🟡 In Progress (2025-10-29, commit 6e25df7)
 
-**Deliverable**: Entire UI on delta system, flag-based code deleted
+**Tasks Completed**:
+1. ✅ Convert View window (zoom, pan, rotation, camera) - All 5 controls + 7 buttons migrated
+   - Zoom: `lazy_drag()` with 500ms throttle
+   - Pan X/Y: `lazy_drag()` with 500ms throttle
+   - Rotation: `update_param(lazy=true)` with degrees/radians conversion
+   - Camera Rotation X/Y: `update_param(lazy=true)` with conversion (3D mode only)
+   - Zoom In/Out buttons: `update_param(lazy=false)` for immediate capture
+   - Arrow buttons: `update_batch()` for pan_x + pan_y
+   - Reset View button: `update_batch()` for all 6 parameters
+   - Returns `UpdateType`, syncs from `active_config()` for live preview
+
+**Remaining Tasks**:
+2. ⚪ Convert Settings window (iterations, blend, etc.)
+3. ⚪ Convert Transforms window (affine, variations, colors)
+4. ⚪ Convert Triangle Editor (special case - batch updates)
+5. ⚪ Convert remaining Tone Mapping controls (mode, curve, etc.)
+6. ⚪ Remove ALL `*_changed` flags from codebase
+7. ⚪ Update app.rs to only use `UpdateType`
+
+**Deliverable**: ⚠️ Partial - View window complete, remaining windows pending
 
 ### Phase 5: Undo/Redo Window (Week 3-4)
 **Goal**: Add UI to show undo history
