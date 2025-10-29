@@ -1056,7 +1056,7 @@ This ensures:
 ### Phase 4: Migrate Remaining Windows (Week 2-3) 🟡 IN PROGRESS
 **Goal**: Convert all UI to delta system
 
-**Status**: 🟡 In Progress (2025-10-29, commits 6e25df7, d5a9fcb, 898802e)
+**Status**: 🟡 In Progress (2025-10-29, commits 6e25df7, d5a9fcb, 898802e, e9b5a47)
 
 **Tasks Completed**:
 1. ✅ Convert View window (zoom, pan, rotation, camera) - All 5 controls + 7 buttons migrated
@@ -1077,10 +1077,19 @@ This ensures:
    - Pattern: Manual slider + temp variable + `update_param()` (ConfigSlider doesn't support `.logarithmic(true)` yet)
    - Returns `UpdateType`, syncs from `active_config()` for live preview
    - Pending: iterations_per_thread, speed_multiplier (not in ConfigPath yet - need to add to FractalConfig first)
+3. ✅ Convert Transforms window - 11 controls per transform migrated (affine, weight, color)
+   - Affine parameters (a,b,c,d,e,f): DragValues with `update_param(lazy=true)`
+   - Z offset (g): DragValue for 3D mode only with `update_param(lazy=true)`
+   - Weight: Logarithmic slider with `update_param(lazy=true)`
+   - Color RGB: 3 sliders with indexed `ConfigPath::TransformColor`
+   - Color Speed: Slider with `ConfigPath::TransformColorSpeed`
+   - Pattern: Indexed ConfigPath (per-transform), temp variable + `update_param(lazy=true)` + `active_config()` sync
+   - Returns `UpdateType`, updated helper functions to accept config_manager + index
+   - Note: Variation controls not yet converted (separate module)
 
 **Remaining Tasks**:
 2. ⚪ Add missing parameters to ConfigPath (iterations_per_thread, speed_multiplier) and complete Settings window
-3. ⚪ Convert Transforms window (affine, variations, colors)
+3. ⚪ Convert Transform variation controls (variation_controls.rs)
 4. ⚪ Convert Triangle Editor (special case - batch updates)
 5. ⚪ Convert remaining Tone Mapping controls (mode, curve, etc.)
 6. ⚪ Remove ALL `*_changed` flags from codebase
