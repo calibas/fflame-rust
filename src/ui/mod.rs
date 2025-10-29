@@ -15,7 +15,7 @@ mod variation_controls;
 mod variation_params;
 mod view;
 
-pub use lazy_undo::LazyUndoHelper;
+pub use lazy_undo::{LazyUndoHelper, LazyUndoUi, LazySliderResult};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
 

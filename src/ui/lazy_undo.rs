@@ -159,6 +159,82 @@ impl Default for LazyUndoHelper {
     }
 }
 
+/// Result from a lazy slider operation
+#[derive(Debug, Clone, Copy)]
+pub struct LazySliderResult {
+    /// Whether the value changed (user interacted with slider)
+    pub changed: bool,
+    /// Whether to capture undo state (throttled)
+    pub should_capture: bool,
+}
+
+/// Extension trait for egui::Ui to add lazy slider methods
+///
+/// This eliminates the need for manual flag management - just call `ui.lazy_slider()`
+/// and it returns both whether the value changed AND whether to capture undo.
+pub trait LazyUndoUi {
+    /// Add a slider with lazy undo capture.
+    ///
+    /// **Usage:**
+    /// ```rust
+    /// let result = ui.lazy_slider(&mut lazy_undo, &mut value, 0.0..=1.0, "Exposure");
+    /// if result.should_capture {
+    ///     app.capture_state();
+    /// }
+    /// if result.changed {
+    ///     needs_update = true;
+    /// }
+    /// ```
+    fn lazy_slider<Num: egui::emath::Numeric>(
+        &mut self,
+        lazy_undo: &mut LazyUndoHelper,
+        value: &mut Num,
+        range: std::ops::RangeInclusive<Num>,
+        text: &str,
+    ) -> LazySliderResult;
+
+    /// Add a drag value with lazy undo capture.
+    fn lazy_drag_value<Num: egui::emath::Numeric>(
+        &mut self,
+        lazy_undo: &mut LazyUndoHelper,
+        value: &mut Num,
+    ) -> LazySliderResult;
+}
+
+impl LazyUndoUi for egui::Ui {
+    fn lazy_slider<Num: egui::emath::Numeric>(
+        &mut self,
+        lazy_undo: &mut LazyUndoHelper,
+        value: &mut Num,
+        range: std::ops::RangeInclusive<Num>,
+        text: &str,
+    ) -> LazySliderResult {
+        let response = self.add(egui::Slider::new(value, range).text(text));
+        let changed = response.changed();
+        let should_capture = lazy_undo.should_capture_for_widget(&response);
+
+        LazySliderResult {
+            changed,
+            should_capture,
+        }
+    }
+
+    fn lazy_drag_value<Num: egui::emath::Numeric>(
+        &mut self,
+        lazy_undo: &mut LazyUndoHelper,
+        value: &mut Num,
+    ) -> LazySliderResult {
+        let response = self.add(egui::DragValue::new(value));
+        let changed = response.changed();
+        let should_capture = lazy_undo.should_capture_for_widget(&response);
+
+        LazySliderResult {
+            changed,
+            should_capture,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

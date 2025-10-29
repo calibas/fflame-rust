@@ -97,3 +97,7 @@ Can we pre-calculate the first X paths before exponential increase is too much t
 Undo Redo System
 
 My Fractals List, clones selected Preset. Saves previous fractals.
+
+
+
+Mouse wheel zoom location doesn't respect rotation.
