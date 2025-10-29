@@ -265,9 +265,11 @@ println!("Rendered {} iterations in {:.2}ms",
 - Use `CommandEncoder` for GPU operations, submit once per frame
 
 ### State Management
-- Call `app.capture_state()` before making changes (for undo)
+- Use `LazyUndoHelper` for slider/drag interactions to throttle undo captures
+- Call `app.capture_state()` before making discrete changes (buttons, dropdowns)
 - Reset accumulation when view/flame/palette changes
 - Use `view_changed_by_keyboard` flag pattern for deferred updates
+- See [docs/projects/lazy-undo-implementation.md](docs/projects/lazy-undo-implementation.md) for lazy undo details
 
 ### Variation Registry Architecture
 - **Global Singleton**: `global_registry()` returns `&'static VariationRegistry` (initialized once via `once_cell::Lazy`)

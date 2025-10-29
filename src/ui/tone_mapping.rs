@@ -1,5 +1,6 @@
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::palette::{ColorMode, PaletteLibrary};
+use crate::ui::LazyUndoHelper;
 
 /// Render the Tone Mapping window with all tone mapping and color controls
 #[allow(clippy::too_many_arguments)]
@@ -29,6 +30,7 @@ pub fn render_tone_mapping_window(
     speed_factor: &mut f32,
     background_color: &mut [f32; 3],
     background_color_changed: &mut bool,
+    lazy_undo: &mut LazyUndoHelper,
 ) {
     egui::Window::new("Tone Mapping & Colors")
         .open(show_tone_mapping)
@@ -55,7 +57,9 @@ pub fn render_tone_mapping_window(
 
                     ui.separator();
 
-                    if ui.add(egui::Slider::new(exposure, 0.1..=5.0).text("Exposure")).changed() {
+                    // Use lazy undo for exposure slider to throttle undo captures
+                    let exposure_response = ui.add(egui::Slider::new(exposure, 0.1..=5.0).text("Exposure"));
+                    if lazy_undo.should_capture_for_widget(&exposure_response) {
                         *exposure_changed = true;
                     }
 
