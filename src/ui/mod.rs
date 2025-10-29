@@ -11,6 +11,7 @@ mod settings;
 mod tone_mapping;
 mod transforms;
 mod triangle_editor;
+mod undo_history;
 mod variation_controls;
 mod variation_params;
 mod view;
@@ -40,6 +41,7 @@ pub struct EguiLayer {
     show_triangle_editor: bool,
     show_tone_mapping: bool,
     show_help: bool,
+    show_undo_history: bool,
     // Lazy undo helpers for throttling undo captures during continuous drag
     lazy_undo_tone_mapping: LazyUndoHelper,
 }
@@ -73,6 +75,7 @@ impl EguiLayer {
             show_triangle_editor: false,
             show_tone_mapping: true,  // Show by default
             show_help: false,
+            show_undo_history: false,
             lazy_undo_tone_mapping: LazyUndoHelper::new(),
         }
     }
@@ -198,6 +201,7 @@ impl EguiLayer {
                 &mut self.show_help,
                 &mut self.show_palette_editor,
                 &mut self.show_config_window,
+                &mut self.show_undo_history,
             );
 
             // Render Performance window
@@ -350,6 +354,15 @@ impl EguiLayer {
                 &mut config_save_file,
                 &mut config_load_file,
                 &mut apophysis_import_file,
+            );
+
+            // Render Undo/Redo History window
+            undo_history::render_undo_history_window(
+                ctx,
+                &mut self.show_undo_history,
+                config_manager,
+                &mut undo_requested,
+                &mut redo_requested,
             );
         });
 
