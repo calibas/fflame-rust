@@ -581,3 +581,259 @@ fn precompute_weighted_paths(flame: &Flame, depth: u32, coverage: f32) -> PathCa
 **Status:** Proposal - awaiting proof-of-concept implementation
 **Champion:** TBD
 **Last Updated:** 2025-10-28
+
+---
+
+## Synergy with Spatial Path Correlation
+
+This proposal is **complementary** to [PROPOSAL-spatial-path-correlation.md](PROPOSAL-spatial-path-correlation.md) and they can be implemented together for maximum benefit.
+
+### Combined Architecture
+
+**Path Caching provides:** Pre-computed iteration results for common paths
+**Spatial Correlation provides:** Intelligence about which paths to use
+
+**Together they enable:**
+
+#### 1. **Intelligent Cache Usage**
+
+Instead of random path selection from cache, use spatial correlation data:
+
+```rust
+// Path caching alone (blind selection)
+let path_id = rng.gen_range(0..cache.num_paths);
+let cached_point = cache.cached_points[path_id];
+
+// WITH spatial correlation (intelligent selection)
+let pixel = world_to_pixel(current_point);
+let productive_paths = spatial_data.paths_for_pixel(pixel);
+let path_id = productive_paths.sample_weighted(&rng);  // Choose productive path
+let cached_point = cache.cached_points[path_id];
+```
+
+**Benefit:** Use cached paths that are **known to contribute** to the target region.
+
+#### 2. **Extreme Zoom Acceleration**
+
+At 1000× zoom, only ~1% of paths contribute to visible region:
+
+```rust
+// Phase 1: Spatial correlation identifies productive paths
+let viewport_paths = spatial_correlation.paths_in_viewport(viewport);
+// Result: 1,000 productive paths out of 1,000,000 total
+
+// Phase 2: Cache only productive paths
+let optimized_cache = PathCache::new_filtered(&flame, &viewport_paths, depth: 20);
+// Result: 20 KB cache instead of 20 MB, covering only visible paths
+
+// Phase 3: GPU samples from optimized cache
+@compute
+fn main_zoomed(...) {
+    let path_id = sample_from_optimized_cache(&rng);  // Only productive paths
+    let start_point = optimized_cache[path_id];
+    // Continue iteration from cached point
+}
+```
+
+**Benefit:**
+- 1000× smaller cache for zoomed regions
+- Every cached path is known to be productive
+- Massive speedup for extreme zooms
+
+#### 3. **Adaptive Cache Invalidation**
+
+Use spatial correlation to decide what to recache:
+
+```rust
+fn update_cache_adaptive(
+    cache: &mut PathCache,
+    spatial_data: &SpatialPathCorrelation,
+    viewport: Rect
+) {
+    // Only recache paths that contribute to current viewport
+    let active_paths = spatial_data.paths_in_viewport(viewport);
+
+    for path_id in active_paths {
+        if !cache.is_cached(path_id) {
+            cache.precompute_path(path_id);
+        }
+    }
+
+    // Evict paths that are no longer visible
+    cache.evict_paths_not_in(active_paths);
+}
+```
+
+**Benefit:** Dynamic cache management based on what's actually being rendered.
+
+#### 4. **Deep Start Point Selection**
+
+Combine both to skip burn-in AND focus on productive regions:
+
+```rust
+struct DeepStart {
+    position: Vec2,       // From path cache (after N iterations)
+    color: f32,           // From path cache
+    path_id: PathId,      // Which path this came from
+    productivity: f32,    // From spatial correlation (how many pixels this path hits)
+}
+
+fn generate_deep_starts(
+    cache: &PathCache,
+    spatial_data: &SpatialPathCorrelation,
+    viewport: Rect
+) -> Vec<DeepStart> {
+    cache.cached_points.iter()
+        .enumerate()
+        .filter_map(|(path_id, point)| {
+            let productivity = spatial_data.path_productivity(path_id, viewport);
+            if productivity > 0.01 {  // Only productive paths
+                Some(DeepStart {
+                    position: point.position,
+                    color: point.color_index,
+                    path_id,
+                    productivity,
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+// GPU: Sample weighted by productivity
+@compute
+fn main_combined(...) {
+    let start_idx = sample_weighted(&rng, deep_starts_productivity);
+    var current = deep_starts[start_idx].position;
+    var color = deep_starts[start_idx].color;
+
+    // Already 20 iterations deep AND on a productive path
+    for (var i = 0u; i < params.iterations_per_thread - 20u; i++) {
+        current = apply_transform(current, ...);
+        plot_to_histogram(current, color);
+    }
+}
+```
+
+**Benefit:**
+- Skip burn-in (from cache)
+- Start on productive paths only (from spatial correlation)
+- Massive speedup for both
+
+### Implementation Order
+
+**Recommended sequence:**
+
+1. **Phase 1: Spatial Correlation (Week 1-3)**
+   - Validate hypothesis first
+   - If correlation < 30%, both ideas may fail
+   - Provides path intelligence for cache
+
+2. **Phase 2: Path Caching (Week 4-5)**
+   - Implement simple origin-based cache
+   - Use spatial data to filter productive paths
+   - Measure combined benefit
+
+3. **Phase 3: Integration (Week 6-8)**
+   - Adaptive cache based on spatial data
+   - Intelligent cache selection
+   - Extreme zoom optimization
+
+**Why this order:**
+- Spatial correlation is the **riskier hypothesis** - validate first
+- If spatial correlation fails, path caching alone has limited benefit
+- If spatial correlation succeeds, it guides efficient cache implementation
+
+### Memory Efficiency
+
+**Path caching alone:**
+- 2 transforms, depth 20: 20 MB for all 1M paths
+
+**With spatial filtering:**
+- 2 transforms, depth 20, 1000× zoom: 20 KB for ~1,000 productive paths
+- **1000× memory reduction** while maintaining quality
+
+### Performance Stacking
+
+**Path caching alone:** ~10-20% speedup (skip first 20 iterations)
+
+**Spatial correlation alone:** ~10-30% speedup (avoid wasted paths)
+
+**Combined:** ~30-100% speedup (multiplicative benefits)
+- Skip iterations (cache)
+- Focus on productive paths (correlation)
+- Extreme zoom capability (both)
+
+### Risk Mitigation
+
+**If spatial correlation hypothesis fails:**
+- Path caching still provides modest benefit
+- Fall back to uniform path caching
+- ~10-20% speedup instead of 30-100%
+
+**If path caching overhead too high:**
+- Spatial correlation still valuable alone
+- Adaptive sampling, exhausted path detection
+- ~10-30% speedup instead of 30-100%
+
+### Shared Infrastructure
+
+Both proposals share common components:
+
+```rust
+// Shared: Path encoding/decoding
+fn encode_path(sequence: &[usize], num_transforms: usize) -> u64;
+fn decode_path(path_id: u64, num_transforms: usize, depth: usize) -> Vec<usize>;
+
+// Shared: Path enumeration
+fn enumerate_all_paths(num_transforms: usize, depth: usize) -> Vec<PathId>;
+
+// Shared: Path simulation
+fn simulate_path(flame: &Flame, path_sequence: &[usize]) -> (Vec2, f32);
+
+// Integration: Path cache with spatial filter
+struct IntelligentPathCache {
+    cache: PathCache,                    // Pre-computed points
+    spatial: SpatialPathCorrelation,     // Path→region mapping
+    viewport_cache: HashMap<Rect, Vec<PathId>>,  // Viewport-specific productive paths
+}
+```
+
+### Future: Animation Support
+
+**Problem:** Both systems need updates when flame parameters change.
+
+**Combined solution:**
+```rust
+// Pre-compute spatial correlation for animation keyframes
+let keyframe_correlations: Vec<SpatialPathCorrelation> =
+    animation.keyframes.iter()
+        .map(|frame| analyze_paths(&frame.flame))
+        .collect();
+
+// Interpolate which paths are productive during animation
+fn productive_paths_at_time(
+    t: f32,
+    keyframe_correlations: &[SpatialPathCorrelation]
+) -> HashSet<PathId> {
+    let (k0, k1, blend) = interpolate_keyframes(t);
+    keyframe_correlations[k0].paths.union(&keyframe_correlations[k1].paths)
+}
+
+// Cache transitions smoothly during animation
+cache.update_for_paths(productive_paths_at_time(t));
+```
+
+### Conclusion
+
+**Path caching** and **spatial path correlation** are **highly synergistic**:
+
+- ✅ Spatial correlation provides **intelligence** for which paths to cache
+- ✅ Path caching provides **speed** by pre-computing those paths
+- ✅ Together they enable **extreme zooms** (1000×+) impossible with either alone
+- ✅ Memory efficiency: Cache only productive paths
+- ✅ Performance stacking: 30-100% speedup combined vs 10-30% individually
+- ✅ Risk mitigation: Each provides value independently
+
+**Recommended approach:** Implement both together, starting with spatial correlation validation to guide cache implementation.
