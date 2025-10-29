@@ -804,5 +804,321 @@ Use current density map to guide sampling:
 **Champion:** TBD
 **Last Updated:** 2025-10-28
 
-**Related Proposals:**
-- [PROPOSAL-path-caching.md](PROPOSAL-path-caching.md) - Pre-computed path caching (complementary approach)
+---
+
+## Synergy with Path Caching
+
+This proposal is **highly complementary** to [PROPOSAL-path-caching.md](PROPOSAL-path-caching.md). Together they form a complete optimization system.
+
+### What Each Provides
+
+**Spatial Path Correlation (this proposal):**
+- **Intelligence:** Which paths lead to which regions
+- **Detection:** Exhausted paths, convergence, offscreen paths
+- **Guidance:** Where to focus sampling effort
+- **Adaptive:** Real-time adjustment based on what's being rendered
+
+**Path Caching (complementary proposal):**
+- **Speed:** Pre-computed iteration results
+- **Efficiency:** Skip burn-in and early iterations
+- **Memory:** Trade memory for computation
+
+**Together:**
+- **Intelligent caching:** Only cache productive paths (1000× memory reduction at extreme zoom)
+- **Guided sampling:** Use cached paths that are known to contribute
+- **Extreme zooms:** 1000×+ zoom levels with reasonable performance
+- **Deep starts:** Begin on productive paths, 20 iterations in
+
+### Combined Implementation Strategy
+
+**Phase 1: Validate Spatial Correlation (Week 1-3)**
+
+This is the **critical first step** that determines viability of both approaches:
+
+```rust
+// CPU proof-of-concept
+fn validate_spatial_hypothesis(flame: &Flame) -> CorrelationReport {
+    let mut pixel_paths: Vec<HashSet<PathId>> = vec![HashSet::new(); width * height];
+
+    // Simulate rendering
+    for _ in 0..100_000 {
+        let mut p = random_start();
+        let mut path = Vec::new();
+
+        for i in 0..30 {
+            let xform_idx = select_transform_weighted(&flame);
+            path.push(xform_idx);
+            p = apply_transform(p, xform_idx);
+
+            let pixel = world_to_pixel(p);
+            if in_bounds(pixel) {
+                let path_id = encode_path(&path);
+                pixel_paths[pixel_idx].insert(path_id);
+            }
+        }
+    }
+
+    // Analyze correlation strength
+    let total_pixels = pixel_paths.len();
+    let pixels_with_dominant_path = pixel_paths.iter()
+        .filter(|paths| {
+            if paths.is_empty() { return false; }
+            let max_count = paths.iter().map(|_| 1).max().unwrap();
+            max_count as f32 / paths.len() as f32 > 0.5
+        })
+        .count();
+
+    let correlation = pixels_with_dominant_path as f32 / total_pixels as f32;
+
+    CorrelationReport {
+        correlation_strength: correlation,
+        avg_paths_per_pixel: pixel_paths.iter().map(|p| p.len()).sum::<usize>() as f32 / total_pixels as f32,
+        // ... more statistics
+    }
+}
+```
+
+**Success criteria:**
+- Correlation strength > 30% → Proceed to Phase 2
+- Correlation strength > 50% → High confidence
+- Correlation strength < 30% → Both approaches may not be viable
+
+**Why this matters:**
+- If spatial correlation is weak, path caching won't know which paths to cache
+- If spatial correlation is strong, path caching becomes extremely efficient
+
+**Phase 2: Path Caching with Spatial Guidance (Week 4-6)**
+
+If Phase 1 succeeds, implement path caching **guided by spatial data**:
+
+```rust
+struct IntelligentPathCache {
+    // Pre-computed points for productive paths only
+    cached_points: HashMap<PathId, CachedPoint>,
+
+    // Spatial correlation data
+    spatial: SpatialPathCorrelation,
+
+    // Current viewport's productive paths
+    active_paths: Vec<PathId>,
+}
+
+impl IntelligentPathCache {
+    fn new(flame: &Flame, spatial: SpatialPathCorrelation, viewport: Rect) -> Self {
+        // Identify which paths contribute to viewport
+        let active_paths = spatial.paths_in_viewport(viewport);
+
+        // Cache ONLY those paths (massive memory savings)
+        let cached_points = active_paths.iter()
+            .map(|&path_id| {
+                let point = precompute_path(flame, path_id, depth: 20);
+                (path_id, point)
+            })
+            .collect();
+
+        Self { cached_points, spatial, active_paths }
+    }
+
+    fn sample_starting_point(&self, rng: &mut Rng) -> (Vec2, f32, PathId) {
+        // Sample from productive paths, weighted by contribution
+        let path_id = self.active_paths.choose_weighted(rng, |path_id| {
+            self.spatial.path_productivity(*path_id)
+        }).unwrap();
+
+        let point = &self.cached_points[path_id];
+        (point.position, point.color_index, *path_id)
+    }
+}
+```
+
+**Benefits:**
+- **Memory efficiency:** Cache only ~1% of paths at 1000× zoom
+  - 2 transforms, depth 20, full: 20 MB
+  - 2 transforms, depth 20, 1000× zoom: 20 KB (1000× reduction)
+- **Quality:** Every cached path is known to contribute
+- **Speed:** Skip 20 iterations AND focus on productive paths
+
+**Phase 3: GPU Integration (Week 7-10)**
+
+Implement both systems on GPU:
+
+```wgsl
+// Storage buffers
+@group(0) @binding(7)
+var<storage, read> cached_points: array<CachedPoint>;  // Productive paths only
+
+@group(0) @binding(8)
+var<storage, read> path_productivity: array<f32>;  // Weight for each cached path
+
+@group(0) @binding(9)
+var<storage, read_write> pixel_paths: array<PixelPathData>;  // Spatial tracking
+
+@compute @workgroup_size(64, 1, 1)
+fn main_combined(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    var rng = rng_init(thread_id, params.seed);
+
+    // 1. Sample productive cached path (weighted by productivity)
+    let cache_idx = sample_weighted_cached_path(&rng);
+    var current = cached_points[cache_idx].position;
+    var color_index = cached_points[cache_idx].color;
+    var current_path_id = cached_points[cache_idx].path_id;
+
+    // 2. Already 20 iterations deep on a productive path
+    for (var i = 20u; i < params.iterations_per_thread; i++) {
+        // Check if current pixel is saturated (spatial tracking)
+        let pixel = world_to_pixel(current);
+        if (in_bounds(pixel)) {
+            let pixel_idx = pixel.y * params.width + pixel.x;
+
+            // Adaptive switching: if pixel saturated, jump to new cached path
+            if (pixel_paths[pixel_idx].hit_count > params.saturation_threshold) {
+                let new_idx = sample_weighted_cached_path(&rng);
+                current = cached_points[new_idx].position;
+                color_index = cached_points[new_idx].color;
+                current_path_id = cached_points[new_idx].path_id;
+                continue;
+            }
+
+            // Plot and track
+            plot_to_histogram(pixel, color_index);
+            atomicAdd(&pixel_paths[pixel_idx].hit_count, 1u);
+            pixel_paths[pixel_idx].path_bits = current_path_id;  // Record which path
+        }
+
+        // Continue iteration
+        let xform_idx = select_transform(rng_nextf(&rng));
+        current = apply_transform(current, xform_idx, &color_index);
+
+        // Update path tracking
+        current_path_id = update_path_id(current_path_id, xform_idx);
+    }
+}
+```
+
+**Combined benefits:**
+- Skip 20 iterations per thread (cache)
+- Every thread starts on productive path (spatial)
+- Adaptive switching avoids saturated pixels (spatial)
+- Total: 30-100% speedup
+
+### Extreme Zoom Example
+
+**Scenario:** 1000× zoom on a 2-transform flame
+
+**Without either system:**
+- Sample all paths uniformly
+- Most paths go offscreen or to non-visible regions
+- ~99% wasted computation
+
+**With path caching alone:**
+- Cache all 1M paths (20 MB)
+- Still sample paths uniformly
+- ~99% wasted computation
+- Slight speedup from skipping iterations
+
+**With spatial correlation alone:**
+- Identify ~1,000 productive paths
+- Sample those paths preferentially
+- ~99% efficiency
+- Moderate speedup
+
+**With both combined:**
+- Identify ~1,000 productive paths
+- Cache ONLY those paths (20 KB)
+- Skip 20 iterations per thread
+- ~99% efficiency
+- **Massive speedup** (2-10× or more)
+
+### Memory Comparison
+
+```
+System                      | Full Cache | 10× Zoom | 100× Zoom | 1000× Zoom
+----------------------------|------------|----------|-----------|------------
+Path caching alone          | 20 MB      | 20 MB    | 20 MB     | 20 MB
+Spatial alone (no cache)    | 0 MB       | 0 MB     | 0 MB      | 0 MB
+Combined (intelligent)      | 20 MB      | 2 MB     | 200 KB    | 20 KB
+
+Productive path count:
+- Full view: 1M paths
+- 10× zoom: ~100K paths
+- 100× zoom: ~10K paths
+- 1000× zoom: ~1K paths
+```
+
+**Result:** Combined system scales memory usage with zoom level!
+
+### Risk Mitigation
+
+**Dependency graph:**
+
+```
+Spatial Correlation Success
+    ├─> Path Caching Highly Effective (intelligent selection)
+    └─> Path Caching Moderately Effective (blind selection)
+
+Spatial Correlation Failure
+    └─> Path Caching Minimally Effective (uniform sampling, small benefit)
+```
+
+**Recommendation:**
+1. Validate spatial correlation FIRST (critical hypothesis)
+2. If successful, implement path caching WITH spatial guidance
+3. If spatial fails, path caching alone has limited value
+
+### Shared Infrastructure
+
+Both systems benefit from shared code:
+
+```rust
+// Shared modules
+mod path_encoding {
+    pub fn encode(sequence: &[usize], num_transforms: usize) -> u64;
+    pub fn decode(id: u64, num_transforms: usize, depth: usize) -> Vec<usize>;
+}
+
+mod path_simulation {
+    pub fn simulate(flame: &Flame, sequence: &[usize]) -> (Vec2, f32);
+    pub fn enumerate_paths(num_transforms: usize, depth: usize) -> Vec<Vec<usize>>;
+}
+
+mod path_analysis {
+    pub fn productivity(path_id: PathId, spatial: &SpatialData) -> f32;
+    pub fn paths_in_viewport(viewport: Rect, spatial: &SpatialData) -> Vec<PathId>;
+}
+
+// Combined system
+pub struct AdaptiveFlameRenderer {
+    spatial_correlation: SpatialPathCorrelation,
+    intelligent_cache: IntelligentPathCache,
+    gpu_resources: GpuResources,
+}
+```
+
+### Implementation Complexity
+
+**Spatial alone:** Very High (5/5 stars)
+**Path caching alone:** High (4/5 stars)
+**Combined:** Very High+ (5/5 stars, but shared infrastructure reduces total work)
+
+**Paradox:** Combined is only ~20% more work than spatial alone, but provides 2-3× the benefit.
+
+**Why:** Most complexity is in path encoding, simulation, and analysis - shared by both.
+
+### Conclusion
+
+**Spatial path correlation** and **path caching** should be considered **as a unified system**, not separate features:
+
+- ✅ Spatial correlation is the **critical hypothesis** - validate first
+- ✅ Path caching is **guided by** spatial correlation for maximum efficiency
+- ✅ Combined: 30-100% speedup vs 10-30% individually
+- ✅ Extreme zooms (1000×+) only possible with both
+- ✅ Memory scales with zoom (20 MB → 20 KB at 1000× zoom)
+- ✅ Risk mitigation: Each provides independent value if other fails
+
+**Recommended Timeline:**
+- Week 1-3: Validate spatial correlation (CRITICAL - go/no-go decision)
+- Week 4-6: Implement intelligent path cache (guided by spatial data)
+- Week 7-10: GPU integration and optimization
+- Total: 10 weeks for revolutionary rendering system
+
+**See [PROPOSAL-path-caching.md](PROPOSAL-path-caching.md)** for detailed cache implementation, storage requirements, and performance analysis.
