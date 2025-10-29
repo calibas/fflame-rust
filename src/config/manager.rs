@@ -208,7 +208,7 @@ impl ConfigManager {
     }
 
     /// Get value from config by path
-    fn get_value(&self, path: &ConfigPath) -> Result<ConfigValue, ConfigError> {
+    pub fn get_value(&self, path: &ConfigPath) -> Result<ConfigValue, ConfigError> {
         match path {
             // View
             ConfigPath::Zoom => Ok(self.current.zoom.into()),

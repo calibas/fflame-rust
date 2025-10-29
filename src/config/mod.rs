@@ -12,9 +12,11 @@
 pub mod delta;
 pub mod fractal_config;
 pub mod manager;
+pub mod slider;
 
 pub use delta::{
     AffineParam, ColorComponent, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, UpdateType,
 };
 pub use fractal_config::FractalConfig;
 pub use manager::{ConfigError, ConfigManager};
+pub use slider::{ConfigSlider, ConfigSliderResult, ConfigSliderUi, LazyUndoUi};
