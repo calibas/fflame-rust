@@ -42,6 +42,8 @@ pub struct EguiLayer {
     show_help: bool,
     // Lazy undo helpers for throttling undo captures during continuous drag
     lazy_undo_tone_mapping: LazyUndoHelper,
+    lazy_undo_tone_curve: LazyUndoHelper,  // Separate helper for curve editor
+    lazy_undo_view: LazyUndoHelper,
 }
 
 impl EguiLayer {
@@ -74,6 +76,8 @@ impl EguiLayer {
             show_tone_mapping: true,  // Show by default
             show_help: false,
             lazy_undo_tone_mapping: LazyUndoHelper::new(),
+            lazy_undo_tone_curve: LazyUndoHelper::new(),
+            lazy_undo_view: LazyUndoHelper::new(),
         }
     }
 
@@ -259,6 +263,7 @@ impl EguiLayer {
                 flame,
                 &mut view_changed,
                 &mut camera_rotation_changed,
+                &mut self.lazy_undo_view,
             );
 
             // Render Help window
@@ -313,6 +318,7 @@ impl EguiLayer {
                 background_color,
                 &mut background_color_changed,
                 &mut self.lazy_undo_tone_mapping,
+                &mut self.lazy_undo_tone_curve,
             );
 
             // Render Palette Editor window

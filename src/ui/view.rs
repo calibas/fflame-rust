@@ -1,4 +1,5 @@
 use crate::scene::transforms::{Flame, RenderMode};
+use crate::ui::{LazyUndoHelper, LazyUndoUi};
 
 /// Render the View window with navigation controls
 #[allow(clippy::too_many_arguments)]
@@ -14,6 +15,7 @@ pub fn render_view_window(
     flame: &Flame,
     view_changed: &mut bool,
     camera_rotation_changed: &mut bool,
+    lazy_undo: &mut LazyUndoHelper,
 ) {
     egui::Window::new("View")
         .open(show_view)
@@ -31,7 +33,8 @@ pub fn render_view_window(
             });
             ui.horizontal(|ui| {
                 ui.label("Value:");
-                if ui.add(egui::DragValue::new(zoom).speed(0.01).range(0.01..=10000.0)).changed() {
+                let result = ui.lazy_drag_value(lazy_undo, zoom);
+                if result.should_capture {
                     *view_changed = true;
                 }
             });
@@ -41,13 +44,15 @@ pub fn render_view_window(
             ui.label("Pan");
             ui.horizontal(|ui| {
                 ui.label("X:");
-                if ui.add(egui::DragValue::new(pan_x).speed(0.01)).changed() {
+                let result = ui.lazy_drag_value(lazy_undo, pan_x);
+                if result.should_capture {
                     *view_changed = true;
                 }
             });
             ui.horizontal(|ui| {
                 ui.label("Y:");
-                if ui.add(egui::DragValue::new(pan_y).speed(0.01)).changed() {
+                let result = ui.lazy_drag_value(lazy_undo, pan_y);
+                if result.should_capture {
                     *view_changed = true;
                 }
             });
@@ -108,10 +113,12 @@ pub fn render_view_window(
             ui.horizontal(|ui| {
                 // Convert radians to degrees for display
                 let mut degrees = rotation.to_degrees();
-                if ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°")).changed() {
+                let result = ui.lazy_slider(lazy_undo, &mut degrees, -180.0..=180.0, "");
+                if result.should_capture {
                     *rotation = degrees.to_radians();
                     *view_changed = true;
                 }
+                ui.label("°");
             });
 
             // 3D Camera rotation controls (only visible in 3D mode)
@@ -122,19 +129,23 @@ pub fn render_view_window(
                 ui.horizontal(|ui| {
                     ui.label("Pitch (X):");
                     let mut degrees_x = camera_rotation_x.to_degrees();
-                    if ui.add(egui::Slider::new(&mut degrees_x, -180.0..=180.0).suffix("°")).changed() {
+                    let result = ui.lazy_slider(lazy_undo, &mut degrees_x, -180.0..=180.0, "");
+                    if result.should_capture {
                         *camera_rotation_x = degrees_x.to_radians();
                         *camera_rotation_changed = true;
                     }
+                    ui.label("°");
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Yaw (Y):");
                     let mut degrees_y = camera_rotation_y.to_degrees();
-                    if ui.add(egui::Slider::new(&mut degrees_y, -180.0..=180.0).suffix("°")).changed() {
+                    let result = ui.lazy_slider(lazy_undo, &mut degrees_y, -180.0..=180.0, "");
+                    if result.should_capture {
                         *camera_rotation_y = degrees_y.to_radians();
                         *camera_rotation_changed = true;
                     }
+                    ui.label("°");
                 });
             }
 

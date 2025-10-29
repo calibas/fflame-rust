@@ -101,3 +101,55 @@ My Fractals List, clones selected Preset. Saves previous fractals.
 
 
 Mouse wheel zoom location doesn't respect rotation.
+
+Rotation slider isn't working with Undo, saved Presets?
+
+Seems the rotation implementation needs a little more work. The only thing that was fixed to use relative rotation was moving the main view around.
+
+
+
+
+
+Better state management.
+
+A fractal change is really just submitting a new FractalConfig, so we'll base the system around this concept.
+
+General Overview: The new state management system looks at what is different, whether it needs to update the fractal (based on what was changed), and whether it needs to create a new Undo point.
+
+New Undo System: The Undo system records exactly what was changed, and displays it in the Undo window (coming later).
+
+So the system tracks the parameters changed, and updates accordingly. It'll change the workflow substantially, but I think this is a much more robust system. We can trigger whatever we want based on which parameters were changed, instead of a whole bunch of flags.
+
+So a slider change would emit a signal like:
+
+{"update": { "exposure": 0.4 }, "lazy": false}
+
+The update function each slider calls would be something like:
+fn update_params(param: str, new_value: float, lazy: bool)
+
+There should be a generic slider creation function that creates the slider and binds it to update_params
+
+After the signal emits, the system compares "exposure" to the current FractalConfig.
+
+IF it needs an update, it follows the next steps, otherwise, nothing happens.
+
+- If "lazy" is false, an Undo point is created, and the current time is kept track of (last_undo_time).
+- If "lazy" is true, an Undo point is created IF the time of last undo point is greater than 500ms. Then last_undo_time is updated. So we're only creating the "lazy" undo points at most every 500 ms.
+- FractalConfig is updated. Based upon which parameters were changing, the fractal is refreshed entirely, or updated as needed. This part is important, as it'll be the single gateway for the UI interacting with the fractal.
+
+
+
+With the Undo system, do we need to save the whole FractalConfig anymore? Can we just record the update history, in a form like this:
+
+{"new": { "exposure": 0.4 }, 
+ "old": { "exposure": 1.0 }}
+
+ Or even:
+
+ {"update": {"exposure": -0.6}}
+
+ That should be everything needed to recreate the previous state exactly, and it can be displayed to the user in the Undo window in an easy to understand form.
+
+
+
+The new Undo/Redo Window is part of all this, but it can be added in the last step. We don't need to focus on it yet.

@@ -39,7 +39,7 @@ Implement **lazy undo capture** with throttling:
 
 ### 1. Core Helper (`src/ui/lazy_undo.rs`)
 
-**Status:** ✅ Complete (Commit: b4a288f)
+**Status:** ✅ Complete (Commits: b4a288f, 9873222)
 
 Created `LazyUndoHelper` struct that tracks:
 - Last capture time (for throttling)
@@ -48,18 +48,27 @@ Created `LazyUndoHelper` struct that tracks:
 
 **API:**
 ```rust
-use crate::ui::LazyUndoHelper;
+use crate::ui::{LazyUndoHelper, LazyUndoUi};
 
-// Create helper (typically stored in EguiLayer or UI function)
+// Create helper (typically stored in EguiLayer)
 let mut lazy = LazyUndoHelper::new();
 
-// For egui widgets with Response:
-let response = ui.add(egui::Slider::new(&mut value, 0.0..=1.0));
-if lazy.should_capture_for_widget(&response) {
-    *flame_changed = true;  // Only triggers at start, every 1s, and end
+// RECOMMENDED: Use extension trait (added in 9873222)
+let result = ui.lazy_slider(&mut lazy, &mut value, 0.0..=1.0, "Label");
+if result.should_capture {
+    app.capture_state();  // Only triggers at start, every 1s, and end
+}
+if result.changed {
+    needs_update = true;
 }
 
-// For custom drag detection:
+// ALTERNATIVE: Manual widget handling (original pattern)
+let response = ui.add(egui::Slider::new(&mut value, 0.0..=1.0));
+if lazy.should_capture_for_widget(&response) {
+    *flame_changed = true;
+}
+
+// For custom drag detection (non-egui widgets):
 if lazy.should_capture_for_drag_state(is_mouse_down) {
     *flame_changed = true;
 }
@@ -79,19 +88,25 @@ Need to update all UI locations where continuous interactions trigger `flame_cha
 
 #### ✅ COMPLETED: Exposure Slider (Tone Mapping Window)
 
-**Commits:** b4a288f (implementation), 427c282 (fix)
+**Commits:** b4a288f (implementation), 427c282 (fix), 9873222 (refactor)
 
 **What was done:**
-1. Added `lazy_undo_tone_mapping: LazyUndoHelper` to `EguiLayer` struct
-2. Updated `render_tone_mapping_window()` signature to accept `lazy_undo` parameter
-3. Changed exposure slider from `.changed()` to lazy undo pattern
-4. Added `exposure_changed` to undo capture check in app.rs line 950
+1. Added `lazy_undo_tone_mapping: LazyUndoHelper` to `EguiLayer` struct (b4a288f)
+2. Updated `render_tone_mapping_window()` signature to accept `lazy_undo` parameter (b4a288f)
+3. Changed exposure slider from `.changed()` to lazy undo pattern (b4a288f)
+4. Added `exposure_changed` to undo capture check in app.rs line 950 (427c282)
+5. **REFACTOR (9873222):** Added `LazyUndoUi` extension trait to simplify API
+   - Created `lazy_slider()` and `lazy_drag_value()` methods on `egui::Ui`
+   - Returns `LazySliderResult` with both `changed` and `should_capture` flags
+   - Eliminates need for manual response variable and flag management
+   - Updated exposure slider to use new simpler API
 
 **Testing:** Confirmed working - drag exposure slider creates undo points at start, every 1s, and end.
 
 **Lessons learned:**
 - Must add the `*_changed` flag to `should_capture` check in app.rs
-- Pattern works correctly: `lazy_undo.should_capture_for_widget(&response)`
+- Original pattern: `lazy_undo.should_capture_for_widget(&response)` works but verbose
+- **NEW PATTERN (preferred):** `ui.lazy_slider()` is much cleaner and easier to apply widely
 
 #### A. Settings Window Sliders
 
@@ -110,12 +125,21 @@ Need to update all UI locations where continuous interactions trigger `flame_cha
 **Pattern:**
 ```rust
 // BEFORE (captures every frame):
-if ui.add(egui::Slider::new(iterations_per_thread, 1..=1024)).changed() {
+if ui.add(egui::Slider::new(iterations_per_thread, 1..=1024).text("Label")).changed() {
     *iterations_changed = true;
 }
 
-// AFTER (captures throttled):
-let response = ui.add(egui::Slider::new(iterations_per_thread, 1..=1024));
+// AFTER (captures throttled - NEW TRAIT API):
+let result = ui.lazy_slider(&mut lazy_undo, iterations_per_thread, 1..=1024, "Label");
+if result.should_capture {
+    app.capture_state();
+}
+if result.changed {
+    *iterations_changed = true;
+}
+
+// ALTERNATIVE (manual API - still works):
+let response = ui.add(egui::Slider::new(iterations_per_thread, 1..=1024).text("Label"));
 if lazy_undo.should_capture_for_widget(&response) {
     *iterations_changed = true;
 }
@@ -249,6 +273,7 @@ pub struct EguiLayer {
 - ✅ Convert exposure slider to lazy undo pattern
 - ✅ Add `exposure_changed` to capture check in app.rs
 - ✅ Test and verify working
+- ✅ Refactor to use `LazyUndoUi` extension trait (commit 9873222)
 
 **REMAINING PHASES:**
 
@@ -337,6 +362,114 @@ pub struct EguiLayer {
 - Current: 60 undo captures/second during drag = ~1-5ms overhead
 - Lazy: 1 undo capture/second during drag = ~0.02ms overhead
 - **Net improvement:** ~1-5ms saved per second of dragging
+
+## Refactor: Extension Trait API (Commit 9873222)
+
+**Date:** 2025-10-28
+**Problem:** Original manual API was verbose and required multiple steps per slider
+**Solution:** Created `LazyUndoUi` extension trait on `egui::Ui`
+
+### Before (Manual API)
+```rust
+let response = ui.add(egui::Slider::new(&mut value, range).text("Label"));
+if lazy_undo.should_capture_for_widget(&response) {
+    *value_changed = true;
+}
+```
+
+**Issues:**
+- Requires intermediate `response` variable
+- Manual flag management (`*value_changed = true`)
+- Hard to read when applied to dozens of sliders
+- Captures undo via flag system
+
+### After (Extension Trait API)
+```rust
+use crate::ui::LazyUndoUi;  // Import trait
+
+let result = ui.lazy_slider(&mut lazy_undo, &mut value, range, "Label");
+if result.should_capture {
+    app.capture_state();  // Direct call
+}
+if result.changed {
+    *value_changed = true;
+}
+```
+
+**Benefits:**
+- Single function call handles slider + undo logic
+- Returns struct with both `changed` and `should_capture` flags
+- No intermediate variables needed
+- Cleaner, more readable code
+- Easy to apply widely across UI
+
+### Implementation Details
+
+**File:** `src/ui/lazy_undo.rs`
+
+**New Types:**
+```rust
+/// Result from a lazy slider operation
+#[derive(Debug, Clone, Copy)]
+pub struct LazySliderResult {
+    pub changed: bool,         // User interacted with slider
+    pub should_capture: bool,  // Time to capture undo (throttled)
+}
+```
+
+**New Trait:**
+```rust
+pub trait LazyUndoUi {
+    fn lazy_slider<Num: egui::emath::Numeric>(
+        &mut self,
+        lazy_undo: &mut LazyUndoHelper,
+        value: &mut Num,
+        range: std::ops::RangeInclusive<Num>,
+        text: &str,
+    ) -> LazySliderResult;
+
+    fn lazy_drag_value<Num: egui::emath::Numeric>(
+        &mut self,
+        lazy_undo: &mut LazyUndoHelper,
+        value: &mut Num,
+    ) -> LazySliderResult;
+}
+```
+
+**Trait Implementation:**
+- Implemented on `egui::Ui`
+- Calls existing `should_capture_for_widget()` internally
+- Returns structured result instead of relying on flags
+- Works with any numeric type (f32, f64, i32, u32, etc.)
+
+### Migration Guide
+
+**Step 1:** Import trait at top of file
+```rust
+use crate::ui::LazyUndoUi;
+```
+
+**Step 2:** Replace slider patterns
+
+**From:**
+```rust
+if ui.add(egui::Slider::new(&mut value, 0.0..=1.0).text("Exposure")).changed() {
+    *exposure_changed = true;
+}
+```
+
+**To:**
+```rust
+let result = ui.lazy_slider(&mut lazy_undo, &mut value, 0.0..=1.0, "Exposure");
+if result.should_capture {
+    app.capture_state();
+}
+if result.changed {
+    *exposure_changed = true;  // Only if you need the flag for other logic
+}
+```
+
+**Note:** For sliders that ONLY trigger undo (no other side effects), you can omit the `changed` check entirely.
 
 ## API Documentation
 
@@ -467,7 +600,7 @@ The lazy undo system solves a critical UX problem with minimal implementation co
 4. Final verification (Phase 6)
 5. Document in user-facing help if needed
 
-**Implementation Pattern (from Phase 1):**
+**Implementation Pattern (from Phase 1 + Refactor):**
 ```rust
 // 1. Add helper to EguiLayer
 lazy_undo_section: LazyUndoHelper::new(),
@@ -475,7 +608,18 @@ lazy_undo_section: LazyUndoHelper::new(),
 // 2. Pass to render function
 &mut self.lazy_undo_section,
 
-// 3. In UI code, replace .changed() pattern:
+// 3a. In UI code - RECOMMENDED (trait API):
+use crate::ui::LazyUndoUi;  // Import trait
+
+let result = ui.lazy_slider(&mut lazy_undo, &mut value, range, "Label");
+if result.should_capture {
+    app.capture_state();  // Direct call instead of flag
+}
+if result.changed {
+    *value_changed = true;  // Still need flag for other logic
+}
+
+// 3b. In UI code - ALTERNATIVE (manual API):
 let response = ui.add(egui::Slider::new(&mut value, range).text("Label"));
 if lazy_undo.should_capture_for_widget(&response) {
     *value_changed = true;
