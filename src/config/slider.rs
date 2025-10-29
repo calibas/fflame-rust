@@ -107,16 +107,16 @@ impl<'a> ConfigSlider<'a> {
             should_capture = true;
         }
 
-        // Handle drag end: force capture final value
+        // Handle drag end: force commit preview to current
         if drag_stopped && self.lazy {
-            log::trace!("  Force capturing drag end value");
+            log::trace!("  Force committing preview on drag end");
             let id = ui.make_persistent_id(format!("drag_start_{}", self.path));
             ui.data_mut(|d| {
                 d.remove::<f32>(id);  // Clear drag start value
             });
 
-            // Force capture by calling force_capture_param
-            update_type = update_type.merge(self.manager.force_capture_param(self.path.clone())?);
+            // Force commit preview to current (captures final delta if changed)
+            update_type = update_type.merge(self.manager.force_commit_preview(&self.path)?);
             self.manager.reset_lazy_undo();
         }
 
