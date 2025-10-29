@@ -98,6 +98,41 @@ fn default_blend_factor() -> f32 {
     0.1  // 10% blend rate - good balance between speed and smoothness
 }
 
+impl Default for FractalConfig {
+    fn default() -> Self {
+        use crate::scene::transforms::Flame;
+        use crate::scene::tonemap::ToneCurve;
+
+        Self {
+            flame: Flame::default(),
+            zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+            rotation: 0.0,
+            camera_rotation_x: 0.0,
+            camera_rotation_y: 0.0,
+            density_scale: 1.0,
+            speed_factor: 0.5,
+            max_iterations: default_max_iterations(),
+            histogram_color_scale: default_histogram_color_scale(),
+            low_density_smoothing: default_low_density_smoothing(),
+            density_compression_strength: 0.0,
+            blend_factor: default_blend_factor(),
+            target_iterations_per_pixel: 0,
+            color_mode: ColorMode::Transform,
+            palette_index: 0,
+            palette: None,
+            background_color: [0.0, 0.0, 0.0],
+            tonemap_mode: ToneMapMode::default(),
+            tonemap_curve: ToneCurve::default(),
+            use_curve: default_true(),
+            exposure: default_exposure(),
+            gamma: default_gamma(),
+            deterministic_rng: false,
+        }
+    }
+}
+
 impl FractalConfig {
     /// Export configuration to JSON string
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
