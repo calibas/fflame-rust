@@ -154,3 +154,12 @@ Seems the rotation implementation needs a little more work. The only thing that 
 
 
 Live preview system when dragging sliders and points (see Triangle Editor implementation)
+
+
+Save every 500ms vs save on update after 500ms have passed
+500ms timer upon dragging, if dragging is still occurring, save state and restart timer.
+
+
+
+Backups Window.
+Every minute, save the FractalConfig as a backup, unless it's identical to the last backup.

@@ -252,9 +252,10 @@ impl EguiLayer {
             );
 
             // Render View window
-            view::render_view_window(
+            let view_update_type = view::render_view_window(
                 ctx,
                 &mut self.show_view,
+                config_manager,
                 zoom,
                 pan_x,
                 pan_y,
@@ -265,6 +266,7 @@ impl EguiLayer {
                 &mut view_changed,
                 &mut camera_rotation_changed,
             );
+            // TODO: Handle view_update_type (Phase 4 task)
 
             // Render Help window
             help::render_help_window(ctx, &mut self.show_help);
