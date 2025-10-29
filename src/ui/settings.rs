@@ -1,4 +1,5 @@
 use crate::scene::{presets::PresetLibrary, transforms::Flame};
+use crate::config::{ConfigManager, ConfigPath, UpdateType};
 use super::formatting::format_iterations;
 
 /// Render the Settings window with all control panels
@@ -30,6 +31,7 @@ pub fn render_settings_window(
     iterations_changed: &mut bool,
     deterministic_rng: &mut bool,
     speed_multiplier: &mut u32,
+    config_manager: &mut ConfigManager,
     histogram_color_scale: &mut f32,
     histogram_color_scale_changed: &mut bool,
     low_density_smoothing: &mut f32,
@@ -42,7 +44,8 @@ pub fn render_settings_window(
     use_dynamic_blend_changed: &mut bool,
     target_iterations_per_pixel: &mut u32,
     target_iterations_changed: &mut bool,
-) {
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
     egui::Window::new("Settings")
         .open(show_settings)
         .show(ctx, |ui| {
@@ -210,7 +213,8 @@ pub fn render_settings_window(
                     }
 
                     // Histogram color scale
-                    if ui.add(egui::Slider::new(histogram_color_scale, 1.0..=100.0)
+                    let mut temp_histogram = *histogram_color_scale;
+                    if ui.add(egui::Slider::new(&mut temp_histogram, 1.0..=100.0)
                         .logarithmic(true)
                         .text("Histogram Color Scale"))
                         .on_hover_text(
@@ -224,11 +228,20 @@ pub fn render_settings_window(
                         )
                         .changed()
                     {
-                        *histogram_color_scale_changed = true;
+                        if let Ok(update_type) = config_manager.update_param(
+                            ConfigPath::HistogramColorScale,
+                            temp_histogram.into(),
+                            true  // Lazy undo
+                        ) {
+                            *histogram_color_scale = config_manager.active_config().histogram_color_scale;
+                            *histogram_color_scale_changed = true;
+                            max_update = max_update.max(update_type);
+                        }
                     }
 
                     // Low-density smoothing
-                    if ui.add(egui::Slider::new(low_density_smoothing, 0.0..=1.0)
+                    let mut temp_smoothing = *low_density_smoothing;
+                    if ui.add(egui::Slider::new(&mut temp_smoothing, 0.0..=1.0)
                         .text("Low-Density Smoothing"))
                         .on_hover_text(
                             "Reduces noise in low-density (sparse) areas by limiting single-hit weight.\n\
@@ -239,7 +252,15 @@ pub fn render_settings_window(
                         )
                         .changed()
                     {
-                        *low_density_smoothing_changed = true;
+                        if let Ok(update_type) = config_manager.update_param(
+                            ConfigPath::LowDensitySmoothing,
+                            temp_smoothing.into(),
+                            true  // Lazy undo
+                        ) {
+                            *low_density_smoothing = config_manager.active_config().low_density_smoothing;
+                            *low_density_smoothing_changed = true;
+                            max_update = max_update.max(update_type);
+                        }
                     }
 
                     // Dynamic blend toggle
@@ -259,7 +280,8 @@ pub fn render_settings_window(
 
                     // Blend factor (accumulation rate) - only when dynamic blend is OFF
                     ui.add_enabled_ui(!*use_dynamic_blend, |ui| {
-                        if ui.add(egui::Slider::new(blend_factor, 0.01..=1.0)
+                        let mut temp_blend = *blend_factor;
+                        if ui.add(egui::Slider::new(&mut temp_blend, 0.01..=1.0)
                             .logarithmic(true)
                             .text("Fixed Blend Rate"))
                             .on_hover_text(
@@ -272,12 +294,21 @@ pub fn render_settings_window(
                             )
                             .changed()
                         {
-                            *blend_factor_changed = true;
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::BlendFactor,
+                                temp_blend.into(),
+                                true  // Lazy undo
+                            ) {
+                                *blend_factor = config_manager.active_config().blend_factor;
+                                *blend_factor_changed = true;
+                                max_update = max_update.max(update_type);
+                            }
                         }
                     });
 
                     // Density compression strength
-                    if ui.add(egui::Slider::new(density_compression_strength, 0.0..=100.0)
+                    let mut temp_compression = *density_compression_strength;
+                    if ui.add(egui::Slider::new(&mut temp_compression, 0.0..=100.0)
                         .text("Density Compression"))
                         .on_hover_text(
                             "Slows accumulation in bright areas to reveal core detail.\n\
@@ -291,7 +322,15 @@ pub fn render_settings_window(
                         )
                         .changed()
                     {
-                        *density_compression_changed = true;
+                        if let Ok(update_type) = config_manager.update_param(
+                            ConfigPath::DensityCompressionStrength,
+                            temp_compression.into(),
+                            true  // Lazy undo
+                        ) {
+                            *density_compression_strength = config_manager.active_config().density_compression_strength;
+                            *density_compression_changed = true;
+                            max_update = max_update.max(update_type);
+                        }
                     }
 
                     // Per-pixel iteration limit
@@ -363,4 +402,6 @@ pub fn render_settings_window(
                     }
                 });
         });
+
+    max_update
 }
