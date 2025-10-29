@@ -881,22 +881,47 @@ impl EguiLayer {
 
 **Deliverable**: ✅ Working slider binding system, 11/11 tests passing (9 from Phase 1 + 2 from Phase 2)
 
-### Phase 3: Migrate Tone Mapping Window (Week 2)
+### Phase 3: Migrate Tone Mapping Window ✅ PARTIAL (3 sliders working)
 **Goal**: Fully convert one window as proof-of-concept
 
-**Tasks**:
-1. Convert all tone mapping sliders to `ConfigSlider`
-2. Convert tone curve editor to delta system
-3. Remove all `*_changed` flags from tone mapping
-4. Update app.rs to handle `UpdateType` from tone mapping window
-5. Thorough testing:
-   - Slider changes work
-   - Undo/redo works
-   - Lazy undo throttles correctly
-   - No extra undo points
-   - Correct update types triggered
+**Status**: 🟡 Partial (2025-10-29, commits 12abf20, 148a38f, 52e08f5)
 
-**Deliverable**: Tone Mapping window fully on new system, old flags removed
+**Tasks Completed**:
+1. ✅ Integrated ConfigManager into App struct
+2. ✅ Wired ConfigManager through render_ui() call chain
+3. ✅ Converted 3 tone mapping sliders to use `LazyUndoUi::lazy_slider()`:
+   - Exposure slider (lazy undo throttled)
+   - Gamma slider (lazy undo throttled)
+   - Density scale slider (lazy undo throttled)
+4. ✅ Fixed undo/redo integration:
+   - Wired `can_undo()` and `can_redo()` to ConfigManager
+   - Fixed `undo()` and `redo()` to update ConfigManager and sync back to App state
+   - Fixed redo bug where redo stack was being cleared after first redo
+5. ✅ User testing confirmed:
+   - All 3 sliders work correctly
+   - Lazy undo throttles properly (creates few undo points when dragging)
+   - Undo button lights up when undo is available
+   - Undo updates slider values in UI
+   - Redo now works for full undo history
+
+**Implementation Notes**:
+- Currently in "hybrid mode" - ConfigSlider coexists with old `*_changed` flags
+- tone_mapping window returns UpdateType but it's not handled yet
+- Sliders sync bidirectionally: UI → ConfigManager → App state
+
+**Known Issues Fixed**:
+- ❌ Undo button stayed grey → ✅ Fixed by wiring to ConfigManager
+- ❌ Undo didn't update UI → ✅ Fixed by syncing config back to App
+- ❌ Redo only worked once → ✅ Fixed by not clearing redo stack on redo
+
+**Remaining Phase 3 Tasks**:
+- ⚪ Convert remaining tone mapping controls (tonemap_mode, use_curve, curve presets, etc.)
+- ⚪ Convert tone curve editor to delta system
+- ⚪ Remove `*_changed` flags from tone mapping window
+- ⚪ Handle UpdateType returns in app.rs (trigger resets/updates)
+
+**Deliverable**: ✅ Proof-of-concept working! 3 sliders fully functional with lazy undo/redo
+**Next**: Complete remaining tone mapping controls, or move to Phase 4 (other windows)
 
 ### Phase 4: Migrate Remaining Windows (Week 2-3)
 **Goal**: Convert all UI to delta system
