@@ -914,14 +914,46 @@ impl EguiLayer {
 - ❌ Undo didn't update UI → ✅ Fixed by syncing config back to App
 - ❌ Redo only worked once → ✅ Fixed by not clearing redo stack on redo
 
+**Known Issues Found**:
+- ❌ **Lazy undo delta calculation bug**: Intermediate undo points have wrong deltas
+  - Example: Drag 1.0→5.0 creates: `[1.0→1.3, 3.1→3.2, 4.7→4.8, 4.7→5.0]`
+  - Should be: `[1.0→5.0]` (single delta from start to end)
+  - Root cause: `update_param()` updates ConfigManager.current every frame
+  - Delta is calculated from last frame's value, not last captured value
+  - Result: Undo/redo sequence visits wrong intermediate values
+
+**Design Issue Identified**:
+Current approach updates state every frame but captures conditionally:
+- `update_param()` calculates delta from ConfigManager.current
+- ConfigManager.current gets updated every frame (line: `self.set_value(&path, new_value)`)
+- Next frame: delta is from updated current, not from last captured state
+- Result: Frame-to-frame deltas (3.1→3.2) instead of capture-to-capture (1.0→3.2)
+
+**Solution (agreed):**
+Track two states in ConfigManager:
+1. `current`: Last **captured** state (what's in undo stack)
+2. `preview`: Live **preview** state (what UI displays during drag)
+
+Flow for lazy undo:
+- User drags: Update preview every frame, leave current unchanged
+- Throttle fires (500ms): Capture delta from current→preview, then current = preview
+- Drag ends: Capture delta from current→preview, then current = preview
+
+This ensures:
+- Deltas are always capture-to-capture (e.g., 1.0→3.2, not 3.1→3.2)
+- UI shows live preview immediately
+- Undo stack only has meaningful checkpoints
+- Sliders just send absolute values, ConfigManager handles delta logic
+
 **Remaining Phase 3 Tasks**:
+- 🔴 **BLOCKER**: Implement current/preview state separation in ConfigManager
 - ⚪ Convert remaining tone mapping controls (tonemap_mode, use_curve, curve presets, etc.)
 - ⚪ Convert tone curve editor to delta system
 - ⚪ Remove `*_changed` flags from tone mapping window
 - ⚪ Handle UpdateType returns in app.rs (trigger resets/updates)
 
-**Deliverable**: ✅ Proof-of-concept working! 3 sliders fully functional with lazy undo/redo
-**Next**: Complete remaining tone mapping controls, or move to Phase 4 (other windows)
+**Deliverable**: ⚠️ Proof-of-concept partially working (start/end correct, intermediates wrong)
+**Next**: Fix delta calculation, then continue migration
 
 ### Phase 4: Migrate Remaining Windows (Week 2-3)
 **Goal**: Convert all UI to delta system
