@@ -128,7 +128,11 @@ impl App {
         if let Ok(_update_type) = self.config_manager.redo() {
             // Sync App state from ConfigManager
             let config = self.config_manager.config();
+            log::debug!("After redo, ConfigManager has: exposure={}, gamma={}, density_scale={}",
+                config.exposure, config.gamma, config.density_scale);
             self.import_config(config.clone());
+            log::debug!("After import_config, App has: exposure={}, gamma={}, density_scale={}",
+                self.exposure, self.gamma, self.density_scale);
         }
     }
 

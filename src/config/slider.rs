@@ -22,6 +22,7 @@ pub struct ConfigSlider<'a> {
     manager: &'a mut ConfigManager,
     path: ConfigPath,
     current_value: f32,
+    drag_start_value: Option<f32>,  // Value when drag started
     range: std::ops::RangeInclusive<f32>,
     label: String,
     lazy: bool,
@@ -39,10 +40,12 @@ impl<'a> ConfigSlider<'a> {
         label: impl Into<String>,
     ) -> Result<Self, ConfigError> {
         let current_value: f32 = manager.get_value(&path)?.try_into()?;
+        log::trace!("ConfigSlider::new: {} read value {:.3} from ConfigManager", path, current_value);
         Ok(Self {
             manager,
             path,
             current_value,
+            drag_start_value: None,
             range,
             label: label.into(),
             lazy: false,
@@ -57,25 +60,64 @@ impl<'a> ConfigSlider<'a> {
 
     /// Render the slider and handle updates
     pub fn show(mut self, ui: &mut egui::Ui) -> Result<ConfigSliderResult, ConfigError> {
+        log::trace!("ConfigSlider::show: {} = {:.3}", self.path, self.current_value);
+
+        // Track drag start value for lazy undo
+        if self.lazy {
+            let id = ui.make_persistent_id(format!("drag_start_{}", self.path));
+            let drag_start = ui.data_mut(|d| {
+                d.get_persisted::<f32>(id)
+            });
+            self.drag_start_value = drag_start;
+        }
+
         let response = ui.add(egui::Slider::new(&mut self.current_value, self.range.clone()).text(&self.label));
 
         let changed = response.changed();
+        let is_being_dragged = response.dragged();
+        let drag_stopped = response.drag_stopped();
+
+        if changed {
+            log::trace!("  Slider changed to: {:.3}", self.current_value);
+        }
+        if drag_stopped {
+            log::trace!("  Drag stopped at: {:.3}", self.current_value);
+        }
+
         let mut should_capture = false;
         let mut update_type = UpdateType::None;
 
+        // For lazy sliders: store value when drag starts
+        if self.lazy && is_being_dragged && self.drag_start_value.is_none() {
+            let id = ui.make_persistent_id(format!("drag_start_{}", self.path));
+            ui.data_mut(|d| {
+                d.insert_persisted(id, self.current_value);
+            });
+            self.drag_start_value = Some(self.current_value);
+            log::trace!("  Drag started at: {:.3}", self.current_value);
+        }
+
+        // Handle value changes during drag (lazy throttled)
         if changed {
-            // Value changed - update config
             update_type = self.manager.update_param(
                 self.path.clone(),
                 self.current_value.into(),
-                self.lazy,
+                self.lazy,  // Use normal lazy throttling
             )?;
-            should_capture = true; // ConfigManager already handled lazy throttling
+            should_capture = true;
+        }
 
-            // On drag end, reset lazy timer to ensure final state is captured
-            if response.drag_stopped() && self.lazy {
-                self.manager.reset_lazy_undo();
-            }
+        // Handle drag end: force capture final value
+        if drag_stopped && self.lazy {
+            log::trace!("  Force capturing drag end value");
+            let id = ui.make_persistent_id(format!("drag_start_{}", self.path));
+            ui.data_mut(|d| {
+                d.remove::<f32>(id);  // Clear drag start value
+            });
+
+            // Force capture by calling force_capture_param
+            update_type = update_type.merge(self.manager.force_capture_param(self.path.clone())?);
+            self.manager.reset_lazy_undo();
         }
 
         Ok(ConfigSliderResult {
