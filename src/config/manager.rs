@@ -15,8 +15,13 @@ use web_time::Instant;
 
 /// Central manager for configuration state and undo/redo
 pub struct ConfigManager {
-    /// Current configuration
+    /// Current configuration (last captured state)
     current: FractalConfig,
+
+    /// Preview configuration (live state during lazy updates)
+    /// When Some: shows live preview, deltas computed from current
+    /// When None: not in preview mode
+    preview: Option<FractalConfig>,
 
     /// Undo stack (deltas, not full configs)
     undo_stack: Vec<ConfigChange>,
@@ -38,6 +43,7 @@ impl ConfigManager {
     pub fn new(config: FractalConfig) -> Self {
         Self {
             current: config,
+            preview: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             max_undo_depth: 50,
@@ -53,45 +59,81 @@ impl ConfigManager {
         new_value: ConfigValue,
         lazy: bool,
     ) -> Result<UpdateType, ConfigError> {
-        // Get current value
-        let old_value = self.get_value(&path)?;
+        if lazy {
+            // Lazy mode: Update preview, capture on throttle
 
-        // Check if actually changed
-        if old_value.approx_eq(&new_value) {
-            return Ok(UpdateType::None);
-        }
+            // Create preview if it doesn't exist (first update in drag sequence)
+            if self.preview.is_none() {
+                self.preview = Some(self.current.clone());
+                log::trace!("Created preview from current");
+            }
 
-        // Create delta
-        let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
-        let change = ConfigChange::single(delta);
+            // Get preview value (will exist now)
+            let preview_value = self.get_value(&path)?;
 
-        // Decide if we should capture undo
-        let should_capture = if lazy {
-            self.should_capture_lazy_undo()
+            // Check if actually changed from preview
+            if preview_value.approx_eq(&new_value) {
+                return Ok(UpdateType::None);
+            }
+
+            // Update preview with new value
+            self.set_value_in_preview(&path, new_value.clone())?;
+            log::trace!("Updated preview: {} = {}", path, new_value);
+
+            // Check if we should capture this change
+            let should_capture = self.should_capture_lazy_undo();
+
+            if should_capture {
+                // Capture delta from current → preview
+                let old_value_in_current = {
+                    let temp_preview = self.preview.take();
+                    let val = self.get_value(&path)?;
+                    self.preview = temp_preview;
+                    val
+                };
+
+                log::debug!("Lazy capture: {} = {} → {}", path, old_value_in_current, new_value);
+
+                let delta = ConfigDelta::new(path.clone(), old_value_in_current, new_value.clone());
+                let change = ConfigChange::single(delta);
+                let update_type = change.update_type();
+
+                self.push_undo(change);
+
+                // Commit preview to current
+                self.current = self.preview.take().unwrap();
+                log::debug!("  -> Committed preview to current, undo stack len: {}", self.undo_stack.len());
+
+                return Ok(update_type);
+            }
+
+            // No capture yet, just return update type based on path
+            Ok(path.update_type())
+
         } else {
-            true
-        };
+            // Non-lazy mode: Update current directly and capture immediately
 
-        // Debug logging
-        log::debug!(
-            "ConfigManager::update_param: path={}, lazy={}, should_capture={}, undo_stack_len={}",
-            path,
-            lazy,
-            should_capture,
-            self.undo_stack.len()
-        );
+            let old_value = self.get_value(&path)?;
 
-        // Capture undo point if needed
-        if should_capture {
-            self.push_undo(change.clone());
-            log::debug!("  -> Captured undo, new stack len: {}", self.undo_stack.len());
+            // Check if actually changed
+            if old_value.approx_eq(&new_value) {
+                return Ok(UpdateType::None);
+            }
+
+            log::debug!("Immediate capture: {} = {} → {}", path, old_value, new_value);
+
+            // Create delta and capture
+            let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
+            let change = ConfigChange::single(delta);
+            let update_type = change.update_type();
+
+            self.push_undo(change);
+
+            // Apply change to current
+            self.set_value(&path, new_value)?;
+
+            Ok(update_type)
         }
-
-        // Apply change to current config
-        self.set_value(&path, new_value)?;
-
-        // Return what kind of update is needed
-        Ok(change.update_type())
     }
 
     /// Apply a batch of changes (single undo point)
@@ -218,55 +260,6 @@ impl ConfigManager {
         }
     }
 
-    /// Force capture current state (for drag end)
-    /// This captures even if the value hasn't changed since last update
-    pub fn force_capture_param(&mut self, path: ConfigPath) -> Result<UpdateType, ConfigError> {
-        let current_value = self.get_value(&path)?;
-        let path_str = format!("{}", path);
-
-        // Check if we already have a recent capture with this same value
-        // If so, no need to capture again
-        if let Some(last_change) = self.undo_stack.last() {
-            if let Some(last_delta) = last_change.deltas.first() {
-                let last_path_str = format!("{}", last_delta.path);
-                if last_path_str == path_str && last_delta.new_value.approx_eq(&current_value) {
-                    log::debug!("force_capture_param: {} already at {}, skipping duplicate", path, current_value);
-                    return Ok(UpdateType::None);
-                }
-            }
-        }
-
-        // Need to capture - but we need the OLD value from before the drag started
-        // The undo stack's last entry should have it
-        let old_value = if let Some(last_change) = self.undo_stack.last() {
-            if let Some(last_delta) = last_change.deltas.first() {
-                let last_path_str = format!("{}", last_delta.path);
-                if last_path_str == path_str {
-                    // Found matching path in last undo - the drag started from its old_value
-                    // and now we want to capture from old_value → current_value
-                    last_delta.old_value.clone()
-                } else {
-                    // Different path, just use current as both old and new (no-op)
-                    current_value.clone()
-                }
-            } else {
-                current_value.clone()
-            }
-        } else {
-            // No undo history, can't determine old value
-            log::warn!("force_capture_param: No undo history to determine old value for {}", path);
-            return Ok(UpdateType::None);
-        };
-
-        log::debug!("force_capture_param: Capturing {} → {}", old_value, current_value);
-
-        let delta = ConfigDelta::new(path, old_value, current_value);
-        let change = ConfigChange::single(delta);
-        self.push_undo(change.clone());
-
-        Ok(change.update_type())
-    }
-
     /// Reset lazy undo timer (call on drag end to ensure final state is captured)
     pub fn reset_lazy_undo(&mut self) {
         self.last_lazy_undo = None;
@@ -295,51 +288,54 @@ impl ConfigManager {
     }
 
     /// Get value from config by path
+    /// Returns preview value if in preview mode, otherwise current value
     pub fn get_value(&self, path: &ConfigPath) -> Result<ConfigValue, ConfigError> {
+        // Use preview if available, otherwise current
+        let config = self.preview.as_ref().unwrap_or(&self.current);
+
         match path {
             // View
-            ConfigPath::Zoom => Ok(self.current.zoom.into()),
-            ConfigPath::PanX => Ok(self.current.pan_x.into()),
-            ConfigPath::PanY => Ok(self.current.pan_y.into()),
-            ConfigPath::Rotation => Ok(self.current.rotation.into()),
-            ConfigPath::CameraRotationX => Ok(self.current.camera_rotation_x.into()),
-            ConfigPath::CameraRotationY => Ok(self.current.camera_rotation_y.into()),
+            ConfigPath::Zoom => Ok(config.zoom.into()),
+            ConfigPath::PanX => Ok(config.pan_x.into()),
+            ConfigPath::PanY => Ok(config.pan_y.into()),
+            ConfigPath::Rotation => Ok(config.rotation.into()),
+            ConfigPath::CameraRotationX => Ok(config.camera_rotation_x.into()),
+            ConfigPath::CameraRotationY => Ok(config.camera_rotation_y.into()),
 
             // Tone mapping
-            ConfigPath::Exposure => Ok(self.current.exposure.into()),
-            ConfigPath::Gamma => Ok(self.current.gamma.into()),
-            ConfigPath::DensityScale => Ok(self.current.density_scale.into()),
-            ConfigPath::TonemapMode => Ok(self.current.tonemap_mode.into()),
-            ConfigPath::TonemapCurve => Ok(self.current.tonemap_curve.clone().into()),
-            ConfigPath::UseCurve => Ok(self.current.use_curve.into()),
+            ConfigPath::Exposure => Ok(config.exposure.into()),
+            ConfigPath::Gamma => Ok(config.gamma.into()),
+            ConfigPath::DensityScale => Ok(config.density_scale.into()),
+            ConfigPath::TonemapMode => Ok(config.tonemap_mode.into()),
+            ConfigPath::TonemapCurve => Ok(config.tonemap_curve.clone().into()),
+            ConfigPath::UseCurve => Ok(config.use_curve.into()),
 
             // Color
-            ConfigPath::ColorMode => Ok(self.current.color_mode.into()),
-            ConfigPath::PaletteIndex => Ok((self.current.palette_index as u32).into()),
+            ConfigPath::ColorMode => Ok(config.color_mode.into()),
+            ConfigPath::PaletteIndex => Ok((config.palette_index as u32).into()),
             ConfigPath::Palette(p) => Ok(ConfigValue::Palette((**p).clone())),
-            ConfigPath::SpeedFactor => Ok(self.current.speed_factor.into()),
-            ConfigPath::BackgroundColor => Ok(self.current.background_color.into()),
+            ConfigPath::SpeedFactor => Ok(config.speed_factor.into()),
+            ConfigPath::BackgroundColor => Ok(config.background_color.into()),
 
             // Rendering settings
-            ConfigPath::HistogramColorScale => Ok(self.current.histogram_color_scale.into()),
-            ConfigPath::LowDensitySmoothing => Ok(self.current.low_density_smoothing.into()),
+            ConfigPath::HistogramColorScale => Ok(config.histogram_color_scale.into()),
+            ConfigPath::LowDensitySmoothing => Ok(config.low_density_smoothing.into()),
             ConfigPath::DensityCompressionStrength => {
-                Ok(self.current.density_compression_strength.into())
+                Ok(config.density_compression_strength.into())
             }
-            ConfigPath::BlendFactor => Ok(self.current.blend_factor.into()),
+            ConfigPath::BlendFactor => Ok(config.blend_factor.into()),
             ConfigPath::TargetIterationsPerPixel => {
-                Ok(self.current.target_iterations_per_pixel.into())
+                Ok(config.target_iterations_per_pixel.into())
             }
-            ConfigPath::MaxIterations => Ok(self.current.max_iterations.into()),
-            ConfigPath::DeterministicRng => Ok(self.current.deterministic_rng.into()),
+            ConfigPath::MaxIterations => Ok(config.max_iterations.into()),
+            ConfigPath::DeterministicRng => Ok(config.deterministic_rng.into()),
 
             // Transforms
             ConfigPath::TransformCount => {
-                Ok((self.current.flame.transforms.len() as u32).into())
+                Ok((config.flame.transforms.len() as u32).into())
             }
             ConfigPath::TransformWeight { index } => {
-                let xform = self
-                    .current
+                let xform = config
                     .flame
                     .transforms
                     .get(*index)
@@ -347,8 +343,7 @@ impl ConfigManager {
                 Ok(xform.weight.into())
             }
             ConfigPath::TransformColor { index, component } => {
-                let xform = self
-                    .current
+                let xform = config
                     .flame
                     .transforms
                     .get(*index)
@@ -361,8 +356,7 @@ impl ConfigManager {
                 Ok(value.into())
             }
             ConfigPath::TransformColorSpeed { index } => {
-                let xform = self
-                    .current
+                let xform = config
                     .flame
                     .transforms
                     .get(*index)
@@ -370,8 +364,7 @@ impl ConfigManager {
                 Ok(xform.color_speed.into())
             }
             ConfigPath::TransformAffine { index, param } => {
-                let xform = self
-                    .current
+                let xform = config
                     .flame
                     .transforms
                     .get(*index)
@@ -388,8 +381,7 @@ impl ConfigManager {
                 Ok(value.into())
             }
             ConfigPath::TransformVariation { index, variation } => {
-                let xform = self
-                    .current
+                let xform = config
                     .flame
                     .transforms
                     .get(*index)
@@ -402,8 +394,7 @@ impl ConfigManager {
                 variation,
                 param,
             } => {
-                let xform = self
-                    .current
+                let xform = config
                     .flame
                     .transforms
                     .get(*index)
@@ -414,8 +405,8 @@ impl ConfigManager {
             }
 
             // Flame
-            ConfigPath::RenderMode => Ok(self.current.flame.render_mode.into()),
-            ConfigPath::ProjectionType => Ok(self.current.flame.projection.into()),
+            ConfigPath::RenderMode => Ok(config.flame.render_mode.into()),
+            ConfigPath::ProjectionType => Ok(config.flame.projection.into()),
         }
     }
 
@@ -601,6 +592,223 @@ impl ConfigManager {
         }
 
         Ok(())
+    }
+
+    /// Set value in preview config by path
+    /// Panics if preview doesn't exist (caller must ensure preview is created first)
+    fn set_value_in_preview(&mut self, path: &ConfigPath, value: ConfigValue) -> Result<(), ConfigError> {
+        let preview = self.preview.as_mut().expect("set_value_in_preview called but preview is None");
+
+        match path {
+            // View
+            ConfigPath::Zoom => {
+                preview.zoom = value.try_into()?;
+            }
+            ConfigPath::PanX => {
+                preview.pan_x = value.try_into()?;
+            }
+            ConfigPath::PanY => {
+                preview.pan_y = value.try_into()?;
+            }
+            ConfigPath::Rotation => {
+                preview.rotation = value.try_into()?;
+            }
+            ConfigPath::CameraRotationX => {
+                preview.camera_rotation_x = value.try_into()?;
+            }
+            ConfigPath::CameraRotationY => {
+                preview.camera_rotation_y = value.try_into()?;
+            }
+
+            // Tone mapping
+            ConfigPath::Exposure => {
+                preview.exposure = value.try_into()?;
+            }
+            ConfigPath::Gamma => {
+                preview.gamma = value.try_into()?;
+            }
+            ConfigPath::DensityScale => {
+                preview.density_scale = value.try_into()?;
+            }
+            ConfigPath::TonemapMode => {
+                preview.tonemap_mode = value.try_into()?;
+            }
+            ConfigPath::TonemapCurve => {
+                preview.tonemap_curve = value.try_into()?;
+            }
+            ConfigPath::UseCurve => {
+                preview.use_curve = value.try_into()?;
+            }
+
+            // Color
+            ConfigPath::ColorMode => {
+                preview.color_mode = value.try_into()?;
+            }
+            ConfigPath::PaletteIndex => {
+                let idx: u32 = value.try_into()?;
+                preview.palette_index = idx as usize;
+            }
+            ConfigPath::Palette(p) => {
+                if let ConfigValue::Palette(palette) = value {
+                    preview.palette = Some(palette);
+                }
+            }
+            ConfigPath::SpeedFactor => {
+                preview.speed_factor = value.try_into()?;
+            }
+            ConfigPath::BackgroundColor => {
+                preview.background_color = value.try_into()?;
+            }
+
+            // Rendering settings
+            ConfigPath::HistogramColorScale => {
+                preview.histogram_color_scale = value.try_into()?;
+            }
+            ConfigPath::LowDensitySmoothing => {
+                preview.low_density_smoothing = value.try_into()?;
+            }
+            ConfigPath::DensityCompressionStrength => {
+                preview.density_compression_strength = value.try_into()?;
+            }
+            ConfigPath::BlendFactor => {
+                preview.blend_factor = value.try_into()?;
+            }
+            ConfigPath::TargetIterationsPerPixel => {
+                preview.target_iterations_per_pixel = value.try_into()?;
+            }
+            ConfigPath::MaxIterations => {
+                preview.max_iterations = value.try_into()?;
+            }
+            ConfigPath::DeterministicRng => {
+                preview.deterministic_rng = value.try_into()?;
+            }
+
+            // Transforms
+            ConfigPath::TransformCount => {
+                // Can't directly set count - must add/remove transforms
+                return Err(ConfigError::ReadOnlyParameter);
+            }
+            ConfigPath::TransformWeight { index } => {
+                let xform = preview
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                xform.weight = value.try_into()?;
+            }
+            ConfigPath::TransformColor { index, component } => {
+                let xform = preview
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                match component {
+                    ColorComponent::R => xform.color[0] = new_value,
+                    ColorComponent::G => xform.color[1] = new_value,
+                    ColorComponent::B => xform.color[2] = new_value,
+                }
+            }
+            ConfigPath::TransformColorSpeed { index } => {
+                let xform = preview
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                xform.color_speed = value.try_into()?;
+            }
+            ConfigPath::TransformAffine { index, param } => {
+                let xform = preview
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                match param {
+                    AffineParam::A => xform.a = new_value,
+                    AffineParam::B => xform.b = new_value,
+                    AffineParam::C => xform.c = new_value,
+                    AffineParam::D => xform.d = new_value,
+                    AffineParam::E => xform.e = new_value,
+                    AffineParam::F => xform.f = new_value,
+                    AffineParam::G => xform.g = new_value,
+                }
+            }
+            ConfigPath::TransformVariation { index, variation } => {
+                let xform = preview
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let weight: f32 = value.try_into()?;
+                if weight == 0.0 {
+                    xform.variations.remove(variation);
+                } else {
+                    xform.variations.insert(variation.clone(), weight);
+                }
+            }
+            ConfigPath::TransformVariationParam {
+                index,
+                variation,
+                param,
+            } => {
+                let xform = preview
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                let key = format!("{}.{}", variation, param);
+                xform.variation_params.insert(key, new_value);
+            }
+
+            // Flame
+            ConfigPath::RenderMode => {
+                preview.flame.render_mode = value.try_into()?;
+            }
+            ConfigPath::ProjectionType => {
+                preview.flame.projection = value.try_into()?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Force commit preview to current (call on drag end)
+    /// Returns the update type of the final change
+    pub fn force_commit_preview(&mut self, path: &ConfigPath) -> Result<UpdateType, ConfigError> {
+        if let Some(preview) = self.preview.take() {
+            // Get values from current and preview
+            let old_value = {
+                let val = self.get_value(path)?;
+                self.preview = Some(preview);
+                val
+            };
+            let new_value = self.get_value(path)?;
+
+            // If they're different, capture the final delta
+            if !old_value.approx_eq(&new_value) {
+                log::debug!("Force commit: {} = {} → {}", path, old_value, new_value);
+
+                let delta = ConfigDelta::new(path.clone(), old_value, new_value);
+                let change = ConfigChange::single(delta);
+                let update_type = change.update_type();
+
+                self.push_undo(change);
+
+                // Commit preview to current
+                self.current = self.preview.take().unwrap();
+                log::debug!("  -> Committed final preview to current");
+
+                return Ok(update_type);
+            } else {
+                // No change, just discard preview
+                self.preview = None;
+                log::debug!("Force commit: {} unchanged, discarding preview", path);
+            }
+        }
+
+        Ok(UpdateType::None)
     }
 
     /// Get current config (read-only)
