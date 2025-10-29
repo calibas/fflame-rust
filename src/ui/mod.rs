@@ -274,14 +274,16 @@ impl EguiLayer {
             help::render_help_window(ctx, &mut self.show_help);
 
             // Render Transforms window
-            transforms::render_transforms_window(
+            let transforms_update_type = transforms::render_transforms_window(
                 ctx,
                 &mut self.show_transforms,
+                config_manager,
                 flame,
                 &mut flame_changed,
                 &mut add_transform,
                 &mut delete_transform,
             );
+            // TODO: Handle transforms_update_type (Phase 4 task)
 
             // Render Triangle Editor window
             triangle_editor::render_triangle_editor_window(
