@@ -812,8 +812,17 @@ impl ConfigManager {
     }
 
     /// Get current config (read-only)
+    /// Returns last captured/committed state, NOT live preview
+    /// Use active_config() if you want to see live values during drag
     pub fn config(&self) -> &FractalConfig {
         &self.current
+    }
+
+    /// Get active config (read-only)
+    /// Returns preview if in preview mode, otherwise current
+    /// Use this to read live values for rendering
+    pub fn active_config(&self) -> &FractalConfig {
+        self.preview.as_ref().unwrap_or(&self.current)
     }
 
     /// Get mutable config (for operations that need it - use sparingly!)
