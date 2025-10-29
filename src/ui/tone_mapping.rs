@@ -63,7 +63,7 @@ pub fn render_tone_mapping_window(
                     // Convert sliders to use ConfigManager
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.1..=5.0, "Exposure") {
                         if result.changed {
-                            *exposure = config_manager.config().exposure;
+                            *exposure = config_manager.active_config().exposure;
                             *exposure_changed = result.should_capture;
                         }
                         max_update = max_update.max(result.update_type);
@@ -71,7 +71,7 @@ pub fn render_tone_mapping_window(
 
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, 1.0..=3.0, "Gamma") {
                         if result.changed {
-                            *gamma = config_manager.config().gamma;
+                            *gamma = config_manager.active_config().gamma;
                             *gamma_changed = result.should_capture;
                         }
                         max_update = max_update.max(result.update_type);
@@ -79,7 +79,7 @@ pub fn render_tone_mapping_window(
 
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::DensityScale, 0.01..=10.0, "Density Scale") {
                         if result.changed {
-                            *density_scale = config_manager.config().density_scale;
+                            *density_scale = config_manager.active_config().density_scale;
                             *density_changed = result.should_capture;
                         }
                         max_update = max_update.max(result.update_type);
