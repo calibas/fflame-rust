@@ -1,6 +1,6 @@
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::palette::{ColorMode, PaletteLibrary};
-use crate::ui::{LazyUndoHelper, LazyUndoUi};
+use crate::ui::LazyUndoHelper;
 
 /// Render the Tone Mapping window with all tone mapping and color controls
 #[allow(clippy::too_many_arguments)]
@@ -30,8 +30,7 @@ pub fn render_tone_mapping_window(
     speed_factor: &mut f32,
     background_color: &mut [f32; 3],
     background_color_changed: &mut bool,
-    lazy_undo_sliders: &mut LazyUndoHelper,
-    lazy_undo_curve: &mut LazyUndoHelper,
+    lazy_undo: &mut LazyUndoHelper,
 ) {
     egui::Window::new("Tone Mapping & Colors")
         .open(show_tone_mapping)
@@ -58,19 +57,17 @@ pub fn render_tone_mapping_window(
 
                     ui.separator();
 
-                    // Use lazy undo for all sliders to throttle undo captures
-                    let result = ui.lazy_slider(lazy_undo_sliders, exposure, 0.1..=5.0, "Exposure");
-                    if result.should_capture {
+                    // Use lazy undo for exposure slider to throttle undo captures
+                    let exposure_response = ui.add(egui::Slider::new(exposure, 0.1..=5.0).text("Exposure"));
+                    if lazy_undo.should_capture_for_widget(&exposure_response) {
                         *exposure_changed = true;
                     }
 
-                    let result = ui.lazy_slider(lazy_undo_sliders, gamma, 1.0..=3.0, "Gamma");
-                    if result.should_capture {
+                    if ui.add(egui::Slider::new(gamma, 1.0..=3.0).text("Gamma")).changed() {
                         *gamma_changed = true;
                     }
 
-                    let result = ui.lazy_slider(lazy_undo_sliders, density_scale, 0.01..=10.0, "Density Scale");
-                    if result.should_capture {
+                    if ui.add(egui::Slider::new(density_scale, 0.01..=10.0).text("Density Scale")).changed() {
                         *density_changed = true;
                     }
                 });
@@ -111,7 +108,7 @@ pub fn render_tone_mapping_window(
                         ui.separator();
 
                         // Curve editor
-                        render_curve_editor(ui, tonemap_curve, tonemap_curve_changed, lazy_undo_curve);
+                        render_curve_editor(ui, tonemap_curve, tonemap_curve_changed);
                     });
                 });
 
@@ -238,8 +235,7 @@ pub fn render_tone_mapping_window(
 
                     // Show speed factor slider in Speed mode
                     if matches!(*color_mode, ColorMode::Speed) {
-                        let result = ui.lazy_slider(lazy_undo_sliders, speed_factor, 0.0..=1.0, "Speed Blend Factor");
-                        if result.should_capture {
+                        if ui.add(egui::Slider::new(speed_factor, 0.0..=1.0).text("Speed Blend Factor")).changed() {
                             *color_mode_changed = true;
                         }
                     }
@@ -256,12 +252,7 @@ pub fn render_tone_mapping_window(
 }
 
 /// Render curve editor UI
-fn render_curve_editor(
-    ui: &mut egui::Ui,
-    curve: &mut ToneCurve,
-    curve_changed: &mut bool,
-    lazy_undo: &mut LazyUndoHelper,
-) {
+fn render_curve_editor(ui: &mut egui::Ui, curve: &mut ToneCurve, curve_changed: &mut bool) {
     ui.label("Curve Editor");
 
     // Plot the curve
@@ -370,20 +361,12 @@ fn render_curve_editor(
         if let Some(drag_pos) = ui.ctx().pointer_latest_pos() {
             let (new_x, new_y) = from_screen(drag_pos);
             curve.move_point(idx, new_x, new_y);
-
-            // Use lazy undo to throttle captures during drag
-            if lazy_undo.should_capture_for_drag_state(true) {
-                *curve_changed = true;
-            }
+            *curve_changed = true;
         }
     }
 
     // Clear drag on mouse release
     if !mouse_down && dragging_point.is_some() {
-        // Capture undo on drag end
-        if lazy_undo.should_capture_for_drag_state(false) {
-            *curve_changed = true;
-        }
         dragging_point = None;
     }
 
