@@ -144,15 +144,24 @@ impl ConfigManager {
             .pop()
             .ok_or(ConfigError::EmptyUndoStack)?;
 
+        log::debug!("Undo: {}", change.description);
+        for delta in &change.deltas {
+            log::debug!("  Original delta: {} → {}", delta.old_value, delta.new_value);
+        }
+
         let inverted = change.invert();
 
         // Apply inverted deltas
         for delta in &inverted.deltas {
+            log::debug!("  Applying: {} ← {}", delta.path, delta.new_value);
             self.set_value(&delta.path, delta.new_value.clone())?;
         }
 
         // Push to redo stack
         self.redo_stack.push(change);
+
+        log::debug!("  Undo stack now: {} items, Redo stack now: {} items",
+            self.undo_stack.len(), self.redo_stack.len());
 
         Ok(inverted.update_type())
     }
@@ -164,8 +173,10 @@ impl ConfigManager {
             .pop()
             .ok_or(ConfigError::EmptyRedoStack)?;
 
-        // Apply deltas
+        log::debug!("Redo: {}", change.description);
         for delta in &change.deltas {
+            log::debug!("  Delta: {} → {}", delta.old_value, delta.new_value);
+            log::debug!("  Applying: {} → {}", delta.path, delta.new_value);
             self.set_value(&delta.path, delta.new_value.clone())?;
         }
 
@@ -176,6 +187,9 @@ impl ConfigManager {
         if self.undo_stack.len() > self.max_undo_depth {
             self.undo_stack.remove(0);
         }
+
+        log::debug!("  Undo stack now: {} items, Redo stack now: {} items",
+            self.undo_stack.len(), self.redo_stack.len());
 
         Ok(change.update_type())
     }
@@ -204,6 +218,55 @@ impl ConfigManager {
         }
     }
 
+    /// Force capture current state (for drag end)
+    /// This captures even if the value hasn't changed since last update
+    pub fn force_capture_param(&mut self, path: ConfigPath) -> Result<UpdateType, ConfigError> {
+        let current_value = self.get_value(&path)?;
+        let path_str = format!("{}", path);
+
+        // Check if we already have a recent capture with this same value
+        // If so, no need to capture again
+        if let Some(last_change) = self.undo_stack.last() {
+            if let Some(last_delta) = last_change.deltas.first() {
+                let last_path_str = format!("{}", last_delta.path);
+                if last_path_str == path_str && last_delta.new_value.approx_eq(&current_value) {
+                    log::debug!("force_capture_param: {} already at {}, skipping duplicate", path, current_value);
+                    return Ok(UpdateType::None);
+                }
+            }
+        }
+
+        // Need to capture - but we need the OLD value from before the drag started
+        // The undo stack's last entry should have it
+        let old_value = if let Some(last_change) = self.undo_stack.last() {
+            if let Some(last_delta) = last_change.deltas.first() {
+                let last_path_str = format!("{}", last_delta.path);
+                if last_path_str == path_str {
+                    // Found matching path in last undo - the drag started from its old_value
+                    // and now we want to capture from old_value → current_value
+                    last_delta.old_value.clone()
+                } else {
+                    // Different path, just use current as both old and new (no-op)
+                    current_value.clone()
+                }
+            } else {
+                current_value.clone()
+            }
+        } else {
+            // No undo history, can't determine old value
+            log::warn!("force_capture_param: No undo history to determine old value for {}", path);
+            return Ok(UpdateType::None);
+        };
+
+        log::debug!("force_capture_param: Capturing {} → {}", old_value, current_value);
+
+        let delta = ConfigDelta::new(path, old_value, current_value);
+        let change = ConfigChange::single(delta);
+        self.push_undo(change.clone());
+
+        Ok(change.update_type())
+    }
+
     /// Reset lazy undo timer (call on drag end to ensure final state is captured)
     pub fn reset_lazy_undo(&mut self) {
         self.last_lazy_undo = None;
@@ -211,6 +274,11 @@ impl ConfigManager {
 
     /// Push change to undo stack, maintaining depth limit
     fn push_undo(&mut self, change: ConfigChange) {
+        log::debug!("PUSH_UNDO: {}", change.description);
+        for delta in &change.deltas {
+            log::debug!("  Delta: {} → {}", delta.old_value, delta.new_value);
+        }
+
         self.undo_stack.push(change);
 
         // Trim if over limit
@@ -219,7 +287,11 @@ impl ConfigManager {
         }
 
         // Clear redo stack (new change invalidates redo)
+        let redo_cleared = self.redo_stack.len();
         self.redo_stack.clear();
+
+        log::debug!("  Undo stack now: {} items, Redo stack cleared ({} items removed)",
+            self.undo_stack.len(), redo_cleared);
     }
 
     /// Get value from config by path
@@ -739,6 +811,44 @@ mod tests {
             .unwrap();
         assert_eq!(update2, UpdateType::ToneMappingOnly);
         assert_eq!(manager.undo_stack.len(), 1); // Still 1!
+    }
+
+    #[test]
+    fn test_undo_redo_sequence() {
+        // Test a longer sequence to catch redo bugs
+        let config = FractalConfig::default();
+        let mut manager = ConfigManager::new(config);
+
+        // Start at exposure = 1.0
+        assert!(manager.config().exposure == 1.0);
+
+        // Change to 2.0
+        manager.update_param(ConfigPath::Exposure, 2.0.into(), false).unwrap();
+        assert!(manager.config().exposure == 2.0);
+
+        // Change to 3.0
+        manager.update_param(ConfigPath::Exposure, 3.0.into(), false).unwrap();
+        assert!(manager.config().exposure == 3.0);
+
+        // Change to 4.0
+        manager.update_param(ConfigPath::Exposure, 4.0.into(), false).unwrap();
+        assert!(manager.config().exposure == 4.0);
+
+        // Undo: should go back to 3.0
+        manager.undo().unwrap();
+        assert!(manager.config().exposure == 3.0, "After 1st undo, expected 3.0, got {}", manager.config().exposure);
+
+        // Undo: should go back to 2.0
+        manager.undo().unwrap();
+        assert!(manager.config().exposure == 2.0, "After 2nd undo, expected 2.0, got {}", manager.config().exposure);
+
+        // Redo: should go back to 3.0
+        manager.redo().unwrap();
+        assert!(manager.config().exposure == 3.0, "After 1st redo, expected 3.0, got {}", manager.config().exposure);
+
+        // Redo: should go back to 4.0
+        manager.redo().unwrap();
+        assert!(manager.config().exposure == 4.0, "After 2nd redo, expected 4.0, got {}", manager.config().exposure);
     }
 
     #[test]

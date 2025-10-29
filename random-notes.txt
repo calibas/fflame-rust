@@ -151,3 +151,6 @@ Seems the rotation implementation needs a little more work. The only thing that 
 // 
 // 
 // The new Undo/Redo Window is part of all this, but it can be added in the last step. We don't need to focus on it yet.
+
+
+Live preview system when dragging sliders and points (see Triangle Editor implementation)

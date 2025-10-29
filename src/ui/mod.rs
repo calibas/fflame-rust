@@ -181,6 +181,10 @@ impl EguiLayer {
         let mut triangle_drag_ended = false;
 
 
+        // Log ConfigManager state at start of UI render
+        // log::debug!("render_ui start: ConfigManager has exposure={:.3}, gamma={:.3}",
+        //     config_manager.config().exposure, config_manager.config().gamma);
+
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Render menu bar
             menu_bar::render_menu_bar(
