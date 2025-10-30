@@ -237,6 +237,16 @@ impl ConfigManager {
             .ok_or(ConfigError::EmptyUndoStack)?;
 
         log::debug!("Undo: {}", change.description);
+
+        // Check if this is a snapshot-based undo
+        if let Some(snapshot) = &change.snapshot {
+            log::debug!("  Restoring full config snapshot");
+            self.current = (**snapshot).clone();
+            self.redo_stack.push(change);
+            return Ok(UpdateType::IterationReset); // Full config change
+        }
+
+        // Delta-based undo (original behavior)
         for delta in &change.deltas {
             log::debug!("  Original delta: {} → {}", delta.old_value, delta.new_value);
         }
@@ -266,6 +276,16 @@ impl ConfigManager {
             .ok_or(ConfigError::EmptyRedoStack)?;
 
         log::debug!("Redo: {}", change.description);
+
+        // Check if this is a snapshot-based redo
+        if let Some(snapshot) = &change.snapshot {
+            log::debug!("  Restoring full config snapshot");
+            self.current = (**snapshot).clone();
+            self.undo_stack.push(change);
+            return Ok(UpdateType::IterationReset); // Full config change
+        }
+
+        // Delta-based redo (original behavior)
         for delta in &change.deltas {
             log::debug!("  Delta: {} → {}", delta.old_value, delta.new_value);
             log::debug!("  Applying: {} → {}", delta.path, delta.new_value);
@@ -877,6 +897,35 @@ impl ConfigManager {
     /// Get mutable config (for operations that need it - use sparingly!)
     pub fn config_mut(&mut self) -> &mut FractalConfig {
         &mut self.current
+    }
+
+    /// Load a complete config (e.g., preset, imported file)
+    /// This creates two undo entries:
+    /// 1. Snapshot of old state (for undo)
+    /// 2. Snapshot of new state (for redo after undo)
+    /// Use this for atomic operations like loading presets
+    pub fn load_config(&mut self, new_config: FractalConfig, description: String) -> Result<(), ConfigError> {
+        // Clear any preview state
+        self.preview = None;
+
+        // Create snapshot of current state (for undo)
+        let old_snapshot = ConfigChange::snapshot(
+            self.current.clone(),
+            format!("Before: {}", description),
+        );
+        self.push_undo(old_snapshot);
+
+        // Replace current config
+        self.current = new_config.clone();
+
+        // Create snapshot of new state (for redo after undo)
+        let new_snapshot = ConfigChange::snapshot(
+            new_config,
+            description,
+        );
+        self.push_undo(new_snapshot);
+
+        Ok(())
     }
 
     /// Get undo stack (for displaying in undo window)

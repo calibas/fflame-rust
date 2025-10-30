@@ -933,18 +933,22 @@ impl App {
         // Note: density_changed and background_color_changed don't need encoder updates,
         // they're handled every frame before tonemap pass
 
-        // Handle preset change BEFORE other updates (requires mutable self)
+        // Handle preset change BEFORE other updates
+        // Note: Preset loading now happens via ConfigManager in UI layer (settings.rs)
+        // This just handles the side effects (reset accumulation, sync app state)
         let preset_loaded = if ui_response.preset_changed {
-            if let Some(preset) = self.preset_library.get(self.current_preset_index).cloned() {
-                println!("Loading preset: {} (index {})", preset.flame.name, self.current_preset_index);
-                println!("  Transforms: {}", preset.flame.transforms.len());
-                self.import_config(preset);
-                // import_config calls capture_state internally and resets accumulation
-                // Skip normal update logic since import_config handled everything
-                true
-            } else {
-                false
-            }
+            println!("Preset loaded via ConfigManager, syncing app state");
+            // Sync app-level state from config
+            let config = self.config_manager.active_config();
+            self.flame = config.flame.clone();
+            self.zoom = config.zoom;
+            self.pan_x = config.pan_x;
+            self.pan_y = config.pan_y;
+            self.rotation = config.rotation;
+            self.camera_rotation_x = config.camera_rotation_x;
+            self.camera_rotation_y = config.camera_rotation_y;
+            // Note: Other fields like tonemap settings are already synced via UI
+            true
         } else {
             false
         };

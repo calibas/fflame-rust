@@ -357,6 +357,10 @@ pub struct ConfigChange {
     pub deltas: Vec<ConfigDelta>,
     pub timestamp: Instant,
     pub description: String,
+    /// Full config snapshot (used for preset loading)
+    /// When Some: this is a full config replacement, ignore deltas for undo
+    /// When None: use deltas for undo/redo
+    pub snapshot: Option<Box<super::fractal_config::FractalConfig>>,
 }
 
 impl ConfigChange {
@@ -368,6 +372,7 @@ impl ConfigChange {
             deltas: vec![delta],
             timestamp,
             description,
+            snapshot: None,
         }
     }
 
@@ -381,6 +386,18 @@ impl ConfigChange {
             deltas,
             timestamp,
             description,
+            snapshot: None,
+        }
+    }
+
+    /// Create snapshot undo point (for preset loading)
+    /// This stores the full config state before replacement
+    pub fn snapshot(config: super::fractal_config::FractalConfig, description: String) -> Self {
+        Self {
+            deltas: vec![],
+            timestamp: Instant::now(),
+            description,
+            snapshot: Some(Box::new(config)),
         }
     }
 
@@ -390,6 +407,7 @@ impl ConfigChange {
             deltas: self.deltas.iter().rev().map(|d| d.invert()).collect(),
             timestamp: Instant::now(),
             description: format!("Undo: {}", self.description),
+            snapshot: self.snapshot.clone(),
         }
     }
 
