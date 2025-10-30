@@ -1187,10 +1187,11 @@ config_manager.update_batch(vec![(path1, val1), (path2, val2)], "Description", f
 - ⚪ Convert variation controls in variation_controls.rs (complete Transforms window)
 
 **Short-term** (Phase 4 cleanup):
-- Convert Triangle Editor (complex batch updates)
-- Complete Tone Mapping window (mode dropdown, curve editor)
-- Remove `*_changed` flags from migrated windows
-- Handle UpdateType returns in app.rs
+- ⚪ Convert Triangle Editor (complex batch updates) - **IN PROGRESS**
+- ⚪ Convert variation controls in variation_controls.rs (complete Transforms window)
+- ⚪ Complete Tone Mapping window (mode dropdown, curve editor)
+- ⚪ Remove `*_changed` flags from migrated windows
+- ⚪ Handle UpdateType returns in app.rs
 
 **Long-term** (Phase 5-6):
 - ✅ ~~Create undo/redo history window UI~~ (done 8983c00)
@@ -1228,6 +1229,98 @@ config_manager.update_batch(vec![(path1, val1), (path2, val2)], "Description", f
 - `src/ui/undo_history.rs` - NEW FILE: Undo/redo history window UI
 - `src/ui/menu_bar.rs` - Added history window toggle
 - `src/ui/mod.rs` - Added `show_undo_history` field, wired up window rendering
+
+**Bug Fix** (commit d38b5bf):
+- Fixed egui ID collision: Added unique `id_source()` to both ScrollArea widgets
+- Error only appeared when both undo and redo stacks had entries (middle of history)
+
+---
+
+## Phase 4 Extended: Triangle Editor Migration 🔄 IN PROGRESS
+
+### Overview
+The Triangle Editor is a visual affine transform editor that allows dragging triangle vertices to modify transform parameters. It modifies all 6 affine parameters (a, b, c, d, e, f) as a single atomic operation, making it a perfect use case for `update_batch()`.
+
+### Current Implementation
+**File**: `src/ui/triangle_editor.rs` (651 lines)
+
+**Interaction Modes**:
+1. **Move Points** - Drag individual O, X, Y points
+2. **Translate** - Move entire triangle
+3. **Rotate** - Rotate around origin O
+4. **Scale** - Scale from origin O
+
+**Current Behavior**:
+- Uses `triangle_drag_started`, `triangle_dragging`, `triangle_drag_ended` flags
+- Modifies `flame.transforms[selected_transform]` directly via `from_triangle(o, x, y)`
+- **Smart accumulation**: During continuous drag, updates GPU params but doesn't reset accumulation
+- Captures undo on `triangle_drag_started` via old `capture_state()` system
+- Resets accumulation on drag start and drag end only
+
+### Migration Strategy
+
+**Key Insight**: `transform.from_triangle(o, x, y)` modifies all 6 affine params simultaneously. This maps perfectly to `update_batch()`:
+
+```rust
+// Batch update all 6 affine parameters in one atomic operation
+let changes = vec![
+    (ConfigPath::TransformAffine { index, param: AffineParam::A }, a.into()),
+    (ConfigPath::TransformAffine { index, param: AffineParam::B }, b.into()),
+    (ConfigPath::TransformAffine { index, param: AffineParam::C }, c.into()),
+    (ConfigPath::TransformAffine { index, param: AffineParam::D }, d.into()),
+    (ConfigPath::TransformAffine { index, param: AffineParam::E }, e.into()),
+    (ConfigPath::TransformAffine { index, param: AffineParam::F }, f.into()),
+];
+let description = match mouse_mode {
+    MouseMode::MovePoints => "Triangle Edit (Move Points)",
+    MouseMode::Translate => "Triangle Edit (Translate)",
+    MouseMode::Rotate => "Triangle Edit (Rotate)",
+    MouseMode::Scale => "Triangle Edit (Scale)",
+};
+config_manager.update_batch(changes, description.to_string(), true);  // lazy=true
+```
+
+**Benefits**:
+- Single undo point for all 6 parameters (atomic operation)
+- Human-readable description in undo history
+- Lazy undo with 500ms throttle during drag
+- Force-commit on drag end ensures final state captured
+- Removes need for `triangle_drag_*` flags (ConfigManager handles internally)
+
+### Implementation Tasks
+
+1. **Update function signature**:
+   - Add `config_manager: &mut ConfigManager` parameter
+   - Remove `flame_changed`, `triangle_drag_*` flag parameters
+   - Return `UpdateType` instead of unit
+
+2. **Replace update logic** (4 locations - one per mode):
+   - Replace `transform.from_triangle() + *flame_changed = true`
+   - With `config_manager.update_batch()` call
+   - Use mode-specific descriptions for undo history
+
+3. **Update call site** (`src/ui/mod.rs`):
+   - Pass `config_manager` instead of flag pointers
+   - Capture `UpdateType` return value
+   - Remove flag declarations and UiResponse fields
+
+4. **Update app.rs**:
+   - Remove `triangle_drag_*` handling from undo capture logic
+   - Remove from accumulation reset conditions (ConfigManager handles this)
+
+5. **Test**:
+   - Verify undo/redo works for each mode
+   - Verify lazy throttling during drag
+   - Verify final state captured on drag end
+   - Verify accumulation behavior unchanged
+
+### Expected Outcome
+- Triangle Editor fully integrated with delta-based state management
+- Proper undo/redo with descriptive labels
+- No more manual flag management
+- Consistent with other migrated windows
+
+---
 
 ### Phase 6: Optimization & Polish (Week 4)
 **Goal**: Performance tuning and edge cases
