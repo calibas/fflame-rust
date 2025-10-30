@@ -1266,7 +1266,7 @@ config_manager.update_batch(vec![(path1, val1), (path2, val2)], "Description", f
 
 **Long-term** (Phase 5-6):
 - ✅ ~~Create undo/redo history window UI~~ (done 8983c00)
-- ⚪ Add keyboard shortcuts (Ctrl+Z, Ctrl+Y)
+- ✅ ~~Add keyboard shortcuts (Ctrl+Z, Ctrl+Y)~~ (already exists)
 - ⚪ Optimize performance if needed
 - ⚪ Clean up old undo_history code
 
