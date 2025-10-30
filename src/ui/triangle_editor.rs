@@ -396,7 +396,18 @@ pub fn render_triangle_editor_window(
                 }
 
                 // Clear drag on release
+                let was_dragging = drag_target != DragTarget::None || drag_start_pos.is_some();
                 if !response.dragged() {
+                    // Drag ended - force commit any pending preview changes
+                    if was_dragging && config_manager.is_in_preview_mode() {
+                        // Force commit with any affine parameter (they all return IterationReset)
+                        if let Ok(_) = config_manager.force_commit_preview(&crate::config::ConfigPath::TransformAffine {
+                            index: selected_transform,
+                            param: crate::config::AffineParam::A
+                        }) {
+                            log::debug!("Triangle Editor: Force-committed preview on drag end");
+                        }
+                    }
                     drag_target = DragTarget::None;
                     drag_start_pos = None;
                 }
