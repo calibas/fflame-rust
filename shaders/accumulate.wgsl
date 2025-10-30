@@ -87,9 +87,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // ALWAYS blend (like ce58657), even when density==0, to prevent smearing during interactive editing
     let rgb_accumulated = prev.rgb * (1.0 - adjusted_blend) + new_color * adjusted_blend;
 
-    // Alpha (density) accumulates additively, also gated by convergence
-    // Only add alpha when we actually have new samples
-    let alpha_accumulated = prev.a + (density * 0.01 * params.blend_factor * convergence_gate);
+    // Alpha (density) handling:
+    // - Normal mode (blend_factor < 1.0): Additive accumulation
+    // - Overwrite mode (blend_factor == 1.0): Replace previous alpha
+    // This prevents progressive brightness during live preview drag
+    let new_alpha = density * 0.01 * params.blend_factor * convergence_gate;
+    let alpha_accumulated = select(
+        prev.a + new_alpha,        // Normal: accumulate
+        new_alpha,                 // Overwrite: replace
+        params.blend_factor >= 0.99  // Check for overwrite mode (float comparison tolerance)
+    );
 
     // Write to output
     textureStore(output_texture, pixel, vec4<f32>(rgb_accumulated, alpha_accumulated));
