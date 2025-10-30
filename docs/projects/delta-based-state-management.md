@@ -1,9 +1,15 @@
 # Delta-Based State Management System
 
-**Status:** Phase 4 Complete ✅ (Mouse panning integrated, preview mode exit fixed)
+**Status:** Phase 8 Complete ✅ (All UI controls migrated, preset loading integrated)
 **Created:** 2025-10-29
 **Updated:** 2025-10-30
 **Category:** Architecture Refactor
+
+**Major Milestone**: All user-facing controls now use delta-based state management!
+- ✅ Phase 1-5: Core infrastructure, View window, Triangle Editor
+- ✅ Phase 6: Variation controls (weights + parameters)
+- ✅ Phase 7: Tone Mapping & Colors window (8 controls)
+- ✅ Phase 8: Preset loading system (snapshot-based)
 
 ## Problem Statement
 
@@ -2327,15 +2333,15 @@ egui::ComboBox::from_label("Preset")
 
 ### App.rs Changes
 
-Removed `import_config()` from preset handling path. Now just syncs state from ConfigManager:
+**Cleaner Implementation**: Preset loading now uses normal update path instead of duplicating GPU upload logic.
 
+**State Sync** (lines 939-950):
 ```rust
-// Handle preset change BEFORE other updates
-// Note: Preset loading now happens via ConfigManager in UI layer (settings.rs)
-// This just handles the side effects (reset accumulation, sync app state)
-let preset_loaded = if ui_response.preset_changed {
+// Handle preset change: sync app state from ConfigManager
+// Note: Preset loading happens via ConfigManager in UI layer (settings.rs)
+// GPU upload and reset handled by normal update path below
+if ui_response.preset_changed {
     println!("Preset loaded via ConfigManager, syncing app state");
-    // Sync app-level state from config
     let config = self.config_manager.active_config();
     self.flame = config.flame.clone();
     self.zoom = config.zoom;
@@ -2344,11 +2350,18 @@ let preset_loaded = if ui_response.preset_changed {
     self.rotation = config.rotation;
     self.camera_rotation_x = config.camera_rotation_x;
     self.camera_rotation_y = config.camera_rotation_y;
-    true
-} else {
-    false
-};
+    // GPU upload handled below via flame_changed flag
+}
 ```
+
+**Normal Update Path Integration**:
+- Removed `!preset_loaded` guard (line 966) - presets now use normal update logic
+- Settings sets both `preset_changed` AND `flame_changed` flags (line 115)
+- `flame_changed` triggers GPU upload via existing path (line 991-996)
+- `preset_changed` added to reset conditions (line 1056)
+- **No code duplication** - reuses all existing update logic!
+
+**Key Insight**: Don't special-case presets - just set the right flags (`flame_changed` + `preset_changed`) and let existing update system handle GPU upload and reset.
 
 ### Benefits
 - ✅ **Atomic preset loading**: Single operation, not 50+ deltas
@@ -2356,9 +2369,11 @@ let preset_loaded = if ui_response.preset_changed {
 - ✅ **Clean undo history**: Two entries per preset load
 - ✅ **No massive deltas**: Full config stored as snapshot
 - ✅ **Works with existing system**: Snapshots and deltas coexist seamlessly
+- ✅ **No code duplication**: Reuses normal GPU upload/reset paths
+- ✅ **Easier maintenance**: Changes to update logic automatically apply to presets
 
 ### Result
-Preset loading fully integrated with delta-based state management!
+Preset loading fully integrated with delta-based state management via clean flag-based approach!
 
 ---
 
