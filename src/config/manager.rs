@@ -143,40 +143,90 @@ impl ConfigManager {
         description: String,
         lazy: bool,
     ) -> Result<UpdateType, ConfigError> {
-        let mut deltas = Vec::new();
+        if lazy {
+            // Lazy mode: Update preview, capture on throttle (same logic as update_param)
 
-        // Create deltas for all changes
-        for (path, new_value) in changes {
-            let old_value = self.get_value(&path)?;
-            if !old_value.approx_eq(&new_value) {
-                deltas.push(ConfigDelta::new(path, old_value, new_value));
+            // Create preview if it doesn't exist (first update in drag sequence)
+            if self.preview.is_none() {
+                self.preview = Some(self.current.clone());
+                log::trace!("Created preview from current (batch)");
             }
-        }
 
-        if deltas.is_empty() {
-            return Ok(UpdateType::None);
-        }
+            // Create deltas from preview to new values
+            let mut deltas = Vec::new();
+            for (path, new_value) in changes {
+                let preview_value = self.get_value(&path)?; // Gets from preview
+                if !preview_value.approx_eq(&new_value) {
+                    deltas.push(ConfigDelta::new(path.clone(), preview_value, new_value.clone()));
+                    // Update preview with new value
+                    self.set_value_in_preview(&path, new_value)?;
+                }
+            }
 
-        let change = ConfigChange::batch(deltas, description);
+            if deltas.is_empty() {
+                return Ok(UpdateType::None);
+            }
 
-        // Decide if we should capture undo
-        let should_capture = if lazy {
-            self.should_capture_lazy_undo()
+            let change = ConfigChange::batch(deltas, description);
+            let update_type = change.update_type();
+
+            // Check if we should capture this change
+            let should_capture = self.should_capture_lazy_undo();
+
+            if should_capture {
+                // Capture delta from current → preview
+                let deltas_from_current: Vec<ConfigDelta> = change.deltas.iter().map(|delta| {
+                    // Get old value from current (not preview)
+                    let old_val_in_current = {
+                        let temp_preview = self.preview.take();
+                        let val = self.get_value(&delta.path).unwrap();
+                        self.preview = temp_preview;
+                        val
+                    };
+                    ConfigDelta::new(delta.path.clone(), old_val_in_current, delta.new_value.clone())
+                }).collect();
+
+                let change_from_current = ConfigChange::batch(deltas_from_current, change.description.clone());
+                self.push_undo(change_from_current);
+
+                // Commit preview to current
+                self.current = self.preview.take().unwrap();
+                log::debug!("  -> Committed batch preview to current, undo stack len: {}", self.undo_stack.len());
+
+                return Ok(update_type);
+            }
+
+            // No capture yet, just return update type
+            Ok(update_type)
+
         } else {
-            true
-        };
+            // Non-lazy mode: Update current directly and capture immediately
+            let mut deltas = Vec::new();
 
-        // Capture undo point if needed
-        if should_capture {
+            // Create deltas for all changes
+            for (path, new_value) in changes {
+                let old_value = self.get_value(&path)?;
+                if !old_value.approx_eq(&new_value) {
+                    deltas.push(ConfigDelta::new(path, old_value, new_value));
+                }
+            }
+
+            if deltas.is_empty() {
+                return Ok(UpdateType::None);
+            }
+
+            let change = ConfigChange::batch(deltas, description);
+
+            // Capture undo point
             self.push_undo(change.clone());
-        }
 
-        // Apply all changes
-        for delta in &change.deltas {
-            self.set_value(&delta.path, delta.new_value.clone())?;
-        }
+            // Apply all changes
+            for delta in &change.deltas {
+                self.set_value(&delta.path, delta.new_value.clone())?;
+            }
 
-        Ok(change.update_type())
+            Ok(change.update_type())
+        }
     }
 
     /// Undo last change

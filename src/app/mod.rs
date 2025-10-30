@@ -965,8 +965,11 @@ impl App {
                     label: Some("Update Encoder"),
                 });
 
-                if ui_response.flame_changed {
-                    // Note: self.flame is already synced from ConfigManager at the start of render_ui()
+                // Update flame if changed OR if in preview mode (live updates during drag)
+                let in_preview_mode = self.config_manager.is_in_preview_mode();
+                if ui_response.flame_changed || in_preview_mode {
+                    // Note: self.flame is synced from ConfigManager at the END of render_ui()
+                    // When in preview mode, this gives live updates every frame during drag
                     renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
