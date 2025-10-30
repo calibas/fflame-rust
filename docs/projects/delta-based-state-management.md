@@ -1,8 +1,8 @@
 # Delta-Based State Management System
 
-**Status:** Phase 4 Complete ✅ (Triangle Editor migrated with smart accumulation)
+**Status:** Phase 4 Extended 🟡 (Fixing live preview rendering issues)
 **Created:** 2025-10-29
-**Updated:** 2025-10-29
+**Updated:** 2025-10-30
 **Category:** Architecture Refactor
 
 ## Problem Statement
@@ -1369,6 +1369,156 @@ config_manager.update_batch(changes, description.to_string(), true);  // lazy=tr
 - ✅ No more manual flag management
 - ✅ Consistent with other migrated windows
 - ✅ Smart accumulation during drag (smooth visual feedback)
+
+---
+
+## Phase 4 Extended: Live Preview Rendering Issues (2025-10-29)
+
+### Remaining Issues After Triangle Editor Migration
+
+**Status:** 🟡 In Progress - Fixing preview/rendering integration
+
+**Issues Identified:**
+
+1. **Blink every 500ms during drag** ❌
+   - Preview commits to undo when throttle fires (500ms intervals)
+   - Commit clears preview → `is_in_preview_mode()` returns false
+   - System thinks drag ended → triggers accumulation reset
+   - Next frame creates new preview → continues drag
+   - Result: Visible flicker/blink every 500ms
+
+2. **All changes trigger full redraw** ⚠️
+   - UpdateType system exists (ViewOnly, ToneMappingOnly, ColorOnly, IterationReset)
+   - But rendering uses individual `*_changed` flags instead
+   - Post-processing changes (exposure, gamma) reset accumulation unnecessarily
+   - Inefficient - tone mapping doesn't need iteration reset
+
+### Root Cause Analysis
+
+**Preview Lifecycle Problem:**
+```
+Current (Broken):
+Frame 1: Start drag → Create preview → Reset accumulation ✓
+Frame 30: Throttle (500ms) → Commit to undo → Clear preview ✗
+Frame 30: is_in_preview_mode() = false → System triggers reset → BLINK ✗
+Frame 31: Continue drag → Create new preview → Repeat...
+
+Desired (Fixed):
+Frame 1: Start drag → Create preview → Reset accumulation ✓
+Frame 30: Throttle (500ms) → Commit to undo → KEEP preview active ✓
+Frame 60: Throttle (1000ms) → Commit to undo → KEEP preview active ✓
+Frame 90: End drag → Force-commit → Clear preview ✓
+```
+
+**UpdateType Not Used for Rendering:**
+- UpdateType correctly classifies changes:
+  - `ViewOnly`: Zoom, pan, rotation (just math)
+  - `ToneMappingOnly`: Exposure, gamma, background color (post-processing)
+  - `ColorOnly`: Palette, color mode (re-run color accumulation)
+  - `IterationReset`: Transforms, variations (full redraw)
+- But `should_reset` logic uses individual flags, ignores UpdateType
+- Result: All changes treated as IterationReset
+
+### Proposed Solution
+
+#### Part 1: Fix Preview Commit Blink
+
+**Modify `update_batch()` and `update_param()` lazy mode:**
+- Throttle commit should NOT clear preview
+- Clone current instead of taking preview
+- Preview stays active throughout entire drag
+- Only `force_commit_preview()` clears preview
+
+```rust
+// In update_batch() lazy mode:
+if should_capture {
+    self.push_undo(change_from_current);
+    self.current = self.preview.clone().unwrap(); // Clone, not take
+    // Preview stays active!
+    return Ok(update_type);
+}
+```
+
+#### Part 2: Reset Only When Preview Created
+
+**Track when preview is first created:**
+- Add `preview_just_created: bool` flag to ConfigManager
+- Set true when `preview.is_none()` and we create it
+- Expose `consume_preview_created_flag()` method
+- App checks this flag to reset accumulation on drag START only
+
+```rust
+// In ConfigManager:
+if self.preview.is_none() {
+    self.preview = Some(self.current.clone());
+    self.preview_just_created = true;  // NEW: Set flag
+}
+
+// In app.rs:
+let preview_just_created = config_manager.consume_preview_created_flag();
+let should_reset = preview_just_created  // Reset on drag start
+    || ui_response.reset_requested
+    || view_changed
+    || (flame_changed && !is_in_preview_mode());
+```
+
+#### Part 3: Use UpdateType for Rendering Decisions
+
+**Respect UpdateType classification:**
+- `ToneMappingOnly`: Update params, never reset
+- `ColorOnly`: Update params, never reset during drag
+- `IterationReset`: Update params, reset on drag start only
+
+**Accumulation Reset Timeline:**
+```
+Drag Start (preview created):     Reset accumulation
+During Drag (every frame):        NO reset, smooth accumulation
+Throttle Commit (every 500ms):    NO reset, keep accumulating
+Drag End (force commit):          NO reset, already accumulating
+```
+
+### Rendering Behavior by UpdateType
+
+| UpdateType | First Drag Frame | During Drag | Throttle Commit | Drag End |
+|------------|------------------|-------------|-----------------|----------|
+| **ViewOnly** | Update params | Update params | No reset | No reset |
+| **ToneMappingOnly** | Update params | Update params | No reset | No reset |
+| **ColorOnly** | Reset, update | Update params | No reset | No reset |
+| **IterationReset** | Reset, update | Update params | No reset | No reset |
+
+**Key Principle**: Reset accumulation ONCE when drag starts, then smooth accumulation throughout entire drag sequence.
+
+### Implementation Tasks
+
+1. ⚪ **Modify ConfigManager preview lifecycle:**
+   - Add `preview_just_created` flag
+   - Add `consume_preview_created_flag()` method
+   - Don't clear preview on throttle commit (clone instead of take)
+   - Only clear preview on `force_commit_preview()`
+
+2. ⚪ **Update app.rs reset logic:**
+   - Check `preview_just_created` flag for reset
+   - Remove reset during `is_in_preview_mode()` (except first frame)
+   - Simplify logic using UpdateType
+
+3. ⚪ **Respect UpdateType in rendering:**
+   - ToneMappingOnly: No reset needed
+   - ColorOnly: Reset on drag start only
+   - IterationReset: Reset on drag start only
+
+4. ⚪ **Test thoroughly:**
+   - Triangle Editor: No blink during drag
+   - Tone mapping sliders: Live updates without reset
+   - Verify smooth accumulation throughout drag
+   - Verify undo history captures correctly
+
+### Expected Outcome
+
+- ⚪ No blink during drag (preview stays active)
+- ⚪ Smooth accumulation throughout entire drag
+- ⚪ Post-processing changes don't reset accumulation unnecessarily
+- ⚪ Clean separation: commit to undo ≠ exit preview mode
+- ⚪ Efficient rendering based on UpdateType
 
 ---
 
