@@ -423,20 +423,31 @@ Perfect overwrite behavior with no shader modifications!
 
 ---
 
-## Testing Plan
+## Testing Results ✅
 
-1. **Triangle Editor drag:**
+1. **Triangle Editor drag:** ✅ PASSED
    - Drag point across fractal
-   - Verify no progressive brightness in dense areas
-   - Verify preview updates every frame
+   - ✅ No progressive brightness in dense areas
+   - ✅ Preview updates every frame
    - Release drag
-   - Verify reset occurs
-   - Verify high quality render after ~1 second
+   - ✅ Preview mode exits immediately
+   - ✅ High quality render after ~1 second
 
-2. **ConfigSlider drag (lazy mode):**
+2. **ConfigSlider drag (lazy mode):** ✅ PASSED
    - Drag rotation slider
-   - Verify smooth live preview
-   - Verify correct brightness throughout
+   - ✅ Smooth live preview
+   - ✅ Correct brightness throughout
+
+3. **Mouse panning drag:** ✅ PASSED (2025-10-30)
+   - Drag to pan view
+   - ✅ Smooth live preview (no black flashes)
+   - ✅ Single atomic undo entry for X+Y
+   - ✅ Preview mode exits immediately on release
+
+4. **View sliders (rotation, camera):** ✅ PASSED (2025-10-30)
+   - Drag rotation slider
+   - ✅ No black flashing during drag
+   - ✅ Smooth live preview
    - Release drag
    - Verify clean return to high quality
 
