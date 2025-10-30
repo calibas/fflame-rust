@@ -101,8 +101,18 @@ pub fn render_settings_window(
                         .show_ui(ui, |ui| {
                             for (idx, preset) in presets.iter().enumerate() {
                                 if ui.selectable_value(current_preset_index, idx, &preset.flame.name).changed() {
-                                    println!("UI: Preset changed to {} ({})", preset.flame.name, idx);
-                                    *preset_changed = true;
+                                    println!("UI: Loading preset: {} ({})", preset.flame.name, idx);
+                                    // Load preset via ConfigManager (creates two undo points)
+                                    if let Err(e) = config_manager.load_config(
+                                        preset.clone(),
+                                        format!("Load Preset: {}", preset.flame.name),
+                                    ) {
+                                        log::error!("Failed to load preset: {}", e);
+                                    } else {
+                                        // Update flame reference from config
+                                        *flame = config_manager.active_config().flame.clone();
+                                        *preset_changed = true;
+                                    }
                                 }
                             }
                         });
