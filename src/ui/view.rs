@@ -198,7 +198,10 @@ pub fn render_view_window(
                         true  // Lazy undo for slider drag
                     ) {
                         *rotation = config_manager.active_config().rotation;
-                        *view_changed = true;
+                        // Don't trigger reset during preview mode - overwrite mode handles it
+                        if !config_manager.is_in_preview_mode() {
+                            *view_changed = true;
+                        }
                         max_update = max_update.max(update_type);
                     }
                 }
@@ -220,7 +223,10 @@ pub fn render_view_window(
                             true  // Lazy undo for slider drag
                         ) {
                             *camera_rotation_x = config_manager.active_config().camera_rotation_x;
-                            *camera_rotation_changed = true;
+                            // Don't trigger reset during preview mode - overwrite mode handles it
+                            if !config_manager.is_in_preview_mode() {
+                                *camera_rotation_changed = true;
+                            }
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -237,7 +243,10 @@ pub fn render_view_window(
                             true  // Lazy undo for slider drag
                         ) {
                             *camera_rotation_y = config_manager.active_config().camera_rotation_y;
-                            *camera_rotation_changed = true;
+                            // Don't trigger reset during preview mode - overwrite mode handles it
+                            if !config_manager.is_in_preview_mode() {
+                                *camera_rotation_changed = true;
+                            }
                             max_update = max_update.max(update_type);
                         }
                     }
