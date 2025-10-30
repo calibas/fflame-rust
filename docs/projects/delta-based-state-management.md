@@ -1334,15 +1334,34 @@ config_manager.update_batch(changes, description.to_string(), true);  // lazy=tr
 
 ### Implementation Complete (2025-10-29)
 
-**Key Bug Fix**: Triangle Editor wasn't updating the fractal because:
-1. Triangle Editor returns `UpdateType::IterationReset` when modifying transforms
-2. UI layer wasn't setting `flame_changed = true` based on this return value
-3. Without `flame_changed`, renderer never called `update_flame()` to upload changes to GPU
+**Key Bug Fixes**:
 
-**Solution**:
-- Sync `flame` from `config_manager.active_config().flame` at start of `render_ui()`
-- Set `flame_changed = true` when Triangle Editor returns `UpdateType >= IterationReset`
-- Use `is_in_preview_mode()` to detect lazy drag and skip accumulation reset for smooth feedback
+1. **Triangle Editor wasn't updating the fractal** (commit d9a5516):
+   - Triangle Editor returns `UpdateType::IterationReset` when modifying transforms
+   - UI layer wasn't setting `flame_changed = true` based on this return value
+   - Without `flame_changed`, renderer never called `update_flame()` to upload changes to GPU
+   - **Solution**: Set `flame_changed = true` when UpdateType >= IterationReset
+
+2. **No live preview during drag** (commit 548e544):
+   - `update_batch()` with `lazy=true` wasn't implementing preview mode
+   - Only throttled undo captures but always updated `current` directly
+   - Without preview, changes only visible every 500ms (throttle interval)
+   - **Solution**: Refactored `update_batch()` to match `update_param()` lazy behavior:
+     - Create preview on first call
+     - Update preview (not current) every frame during drag
+     - Commit preview to current only when throttle fires
+     - Force-commit preview when drag ends
+
+3. **Preview mode never exited**:
+   - Preview stayed active after mouse release
+   - **Solution**: Detect drag end and force-commit preview in Triangle Editor
+
+**Final Solution Architecture**:
+- Sync `flame` from `config_manager.active_config().flame` at END of `render_ui()`
+- Set `flame_changed = true` when in preview mode OR UpdateType >= IterationReset
+- Use `is_in_preview_mode()` to detect lazy drag and skip accumulation reset
+- Call `update_flame()` every frame when in preview mode for live updates
+- Force-commit preview on drag end to exit preview mode
 
 ### Expected Outcome
 - ✅ Triangle Editor fully integrated with delta-based state management
