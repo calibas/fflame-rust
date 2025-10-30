@@ -327,6 +327,8 @@ impl ConfigManager {
             ConfigPath::TargetIterationsPerPixel => {
                 Ok(config.target_iterations_per_pixel.into())
             }
+            ConfigPath::IterationsPerThread => Ok(config.iterations_per_thread.into()),
+            ConfigPath::SpeedMultiplier => Ok(config.speed_multiplier.into()),
             ConfigPath::MaxIterations => Ok(config.max_iterations.into()),
             ConfigPath::DeterministicRng => Ok(config.deterministic_rng.into()),
 
@@ -489,6 +491,12 @@ impl ConfigManager {
             }
             ConfigPath::TargetIterationsPerPixel => {
                 self.current.target_iterations_per_pixel = value.try_into()?;
+            }
+            ConfigPath::IterationsPerThread => {
+                self.current.iterations_per_thread = value.try_into()?;
+            }
+            ConfigPath::SpeedMultiplier => {
+                self.current.speed_multiplier = value.try_into()?;
             }
             ConfigPath::MaxIterations => {
                 self.current.max_iterations = value.try_into()?;
@@ -675,6 +683,12 @@ impl ConfigManager {
             }
             ConfigPath::TargetIterationsPerPixel => {
                 preview.target_iterations_per_pixel = value.try_into()?;
+            }
+            ConfigPath::IterationsPerThread => {
+                preview.iterations_per_thread = value.try_into()?;
+            }
+            ConfigPath::SpeedMultiplier => {
+                preview.speed_multiplier = value.try_into()?;
             }
             ConfigPath::MaxIterations => {
                 preview.max_iterations = value.try_into()?;

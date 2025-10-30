@@ -46,6 +46,8 @@ pub enum ConfigPath {
     DensityCompressionStrength,
     BlendFactor,
     TargetIterationsPerPixel,
+    IterationsPerThread,
+    SpeedMultiplier,
     MaxIterations,
     DeterministicRng,
 
@@ -119,6 +121,8 @@ impl Display for ConfigPath {
             ConfigPath::DensityCompressionStrength => write!(f, "Density Compression"),
             ConfigPath::BlendFactor => write!(f, "Blend Factor"),
             ConfigPath::TargetIterationsPerPixel => write!(f, "Target Iterations Per Pixel"),
+            ConfigPath::IterationsPerThread => write!(f, "Iterations Per Thread"),
+            ConfigPath::SpeedMultiplier => write!(f, "Speed Multiplier"),
             ConfigPath::MaxIterations => write!(f, "Max Iterations"),
             ConfigPath::DeterministicRng => write!(f, "Deterministic RNG"),
 
@@ -448,7 +452,9 @@ impl ConfigPath {
             | ConfigPath::LowDensitySmoothing
             | ConfigPath::DensityCompressionStrength
             | ConfigPath::BlendFactor
-            | ConfigPath::TargetIterationsPerPixel => UpdateType::IterationReset,
+            | ConfigPath::TargetIterationsPerPixel
+            | ConfigPath::IterationsPerThread
+            | ConfigPath::SpeedMultiplier => UpdateType::IterationReset,
 
             // Transform/flame changes - full reset
             ConfigPath::TransformCount

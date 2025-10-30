@@ -32,6 +32,8 @@ impl App {
             density_compression_strength: self.density_compression_strength,
             blend_factor: self.blend_factor,
             target_iterations_per_pixel: self.target_iterations_per_pixel,
+            iterations_per_thread: self.iterations_per_thread,
+            speed_multiplier: self.speed_multiplier,
         }
     }
 
@@ -62,6 +64,8 @@ impl App {
         self.density_compression_strength = config.density_compression_strength;
         self.blend_factor = config.blend_factor;
         self.target_iterations_per_pixel = config.target_iterations_per_pixel;
+        self.iterations_per_thread = config.iterations_per_thread;
+        self.speed_multiplier = config.speed_multiplier;
 
         // If config includes a palette, add it to library or update existing
         if let Some(ref palette) = config.palette {
