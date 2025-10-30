@@ -1108,8 +1108,28 @@ This ensures:
    - Fixed: `force_commit_preview()` simplified to just commit preview→current without creating deltas
    - Fixed: Added `force_commit_preview()` call on mouse release to exit preview mode immediately
 
+6. ✅ Convert Transform Variation Controls - All variation controls migrated (2025-10-30)
+   - **variation_params.rs**: Migrated to use ConfigManager
+     - Accepts `config_manager` and `transform_index` instead of direct transform access
+     - Uses `update_param(lazy=true)` for Float, Integer, and Angle parameter types
+     - Reads from `active_config()` for live preview
+     - Returns `UpdateType::IterationReset` (variation params require fractal recalc)
+   - **variation_controls.rs**: Migrated to use ConfigManager
+     - Accepts `config_manager` and `transform_index` instead of direct transform access
+     - Uses `update_param(lazy=true)` for variation weight sliders
+     - Automatically shows/hides parameter controls based on weight > 1e-6
+     - Returns `UpdateType::IterationReset` (variations require fractal recalc)
+   - **transforms.rs**: Updated to call new signatures
+     - Passes `config_manager` and transform index to all variation category calls
+     - Collects and tracks maximum `UpdateType` from all variation changes
+   - **Architecture**: Full add/delete/undo support
+     - Add variation: Set weight > 0.0 → Delta stores `[0.0 → weight]` with variation name in path
+     - Delete variation: Set weight to 0.0 → Delta stores `[weight → 0.0]` with variation name in path
+     - Undo delete: Apply inverse `[0.0 → weight]` → Recreates variation (name preserved in ConfigPath)
+     - Variation parameters stored separately: `ConfigPath::TransformVariationParam { index, variation, param }`
+   - **Testing**: ✅ All variation sliders work with lazy undo (500ms throttle, live preview, proper undo/redo)
+
 **Remaining Tasks**:
-3. ⚪ Convert Transform variation controls (variation_controls.rs)
 5. ⚪ Convert remaining Tone Mapping controls (mode, curve, etc.)
 6. ⚪ Remove ALL `*_changed` flags from codebase
 7. ⚪ Update app.rs to only use `UpdateType`
@@ -1125,8 +1145,14 @@ This ensures:
 7. **Window functions**: Return `UpdateType` for proper update classification
 
 **Metrics**:
-- Windows migrated: 4 (View 100%, Settings 100%, Transforms core 100%, Triangle Editor 100%)
-- Controls converted: 41+ individual controls (37 sliders/buttons + 4 triangle editor modes)
+- Windows migrated: 4 (View 100%, Settings 100%, Transforms 100%, Triangle Editor 100%)
+- Controls converted: 50+ individual controls across all windows
+  - View: 5 sliders + 7 buttons (12 controls)
+  - Settings: 7 quality controls (7 controls)
+  - Transforms: 11 core controls per transform (affine, weight, color)
+  - Variations: All 26 core variations + parameters (e.g., JuliaN power/dist, Blob high/low/waves)
+  - Triangle Editor: 4 interaction modes (batch updates)
+  - Mouse panning: Atomic X+Y batch updates
 - Lines changed: ~700+ across 11 files
 - Commits: 9 feature + 4 documentation + 1 bugfix
 - Build status: ✅ All passing

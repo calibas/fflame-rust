@@ -5,38 +5,46 @@
 //! variation categories.
 
 use crate::{
-    scene::transforms::Transform,
+    config::{ConfigManager, ConfigPath, UpdateType},
     variations::{ParamType, VariationParameter},
 };
 
 /// Render parameter controls for an active variation
 ///
 /// This function handles all parameter types (Float, Integer, Angle) and
-/// automatically updates the transform when parameters are modified.
+/// automatically updates the config via ConfigManager with lazy undo support.
 ///
 /// # Arguments
 /// * `ui` - The egui UI context
-/// * `transform` - The transform containing the variation parameters
+/// * `config_manager` - The configuration manager
+/// * `transform_index` - Index of the transform being edited
 /// * `var_name` - Name of the variation (e.g., "julian", "blob")
 /// * `parameters` - List of parameters for this variation
-/// * `flame_changed` - Flag to set when parameters are modified
+///
+/// # Returns
+/// The highest UpdateType from all parameter changes
 ///
 /// # Example
 /// ```rust,ignore
 /// if value.abs() > 1e-6 && !var_info.parameters.is_empty() {
 ///     ui.indent(format!("params_{}", var_info.name), |ui| {
-///         render_variation_params(ui, transform, &var_info.name, &var_info.parameters, flame_changed);
+///         let update = render_variation_params(ui, config_manager, i, &var_info.name, &var_info.parameters);
+///         max_update = max_update.max(update);
 ///     });
 /// }
 /// ```
 pub fn render_variation_params(
     ui: &mut egui::Ui,
-    transform: &mut Transform,
+    config_manager: &mut ConfigManager,
+    transform_index: usize,
     var_name: &str,
     parameters: &[VariationParameter],
-    flame_changed: &mut bool,
-) {
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
+
     for param in parameters {
+        // Get current value from active config (for live preview)
+        let transform = &config_manager.active_config().flame.transforms[transform_index];
         let mut param_value = transform.get_variation_param_or_default(
             var_name,
             &param.name,
@@ -50,10 +58,20 @@ pub fn render_variation_params(
         };
 
         if param_changed {
-            transform.set_variation_param(var_name, &param.name, param_value);
-            *flame_changed = true;
+            // Update via ConfigManager with lazy undo
+            let path = ConfigPath::TransformVariationParam {
+                index: transform_index,
+                variation: var_name.to_string(),
+                param: param.name.clone(),
+            };
+
+            if let Ok(update_type) = config_manager.update_param(path, param_value.into(), true) {
+                max_update = max_update.max(update_type);
+            }
         }
     }
+
+    max_update
 }
 
 /// Render a float parameter slider

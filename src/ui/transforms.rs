@@ -85,14 +85,22 @@ pub fn render_transforms_window(
                                 max_update = max_update.max(color_update);
 
                                 // Variation controls by category
-                                render_variation_category(ui, transform, VariationCategory::Basic2D, "Basic 2D Variations", flame_changed);
-                                render_variation_category(ui, transform, VariationCategory::Advanced2D, "Advanced 2D Variations", flame_changed);
+                                let var_update = render_variation_category(ui, config_manager, i, VariationCategory::Basic2D, "Basic 2D Variations");
+                                max_update = max_update.max(var_update);
+
+                                let var_update = render_variation_category(ui, config_manager, i, VariationCategory::Advanced2D, "Advanced 2D Variations");
+                                max_update = max_update.max(var_update);
 
                                 // 3D variation categories (only visible in 3D mode)
                                 if matches!(flame.render_mode, RenderMode::ThreeD) {
-                                    render_variation_category(ui, transform, VariationCategory::Depth3D, "3D Depth Variations", flame_changed);
-                                    render_variation_category(ui, transform, VariationCategory::Rotation3D, "3D Rotation Variations", flame_changed);
-                                    render_variation_category(ui, transform, VariationCategory::Full3D, "Full 3D Variations", flame_changed);
+                                    let var_update = render_variation_category(ui, config_manager, i, VariationCategory::Depth3D, "3D Depth Variations");
+                                    max_update = max_update.max(var_update);
+
+                                    let var_update = render_variation_category(ui, config_manager, i, VariationCategory::Rotation3D, "3D Rotation Variations");
+                                    max_update = max_update.max(var_update);
+
+                                    let var_update = render_variation_category(ui, config_manager, i, VariationCategory::Full3D, "Full 3D Variations");
+                                    max_update = max_update.max(var_update);
                                 }
 
                                 ui.separator();
