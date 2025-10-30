@@ -1068,15 +1068,16 @@ This ensures:
    - Arrow buttons: `update_batch()` for pan_x + pan_y
    - Reset View button: `update_batch()` for all 6 parameters
    - Returns `UpdateType`, syncs from `active_config()` for live preview
-2. 🟡 Convert Settings window (partial) - 5 rendering quality sliders migrated (5/7 total)
+2. ✅ Convert Settings window (complete) - All 7 rendering quality controls migrated (7/7 total)
    - Histogram Color Scale: Logarithmic slider with `update_param(lazy=true)`
    - Low-Density Smoothing: Linear slider with `update_param(lazy=true)`
    - Fixed Blend Rate: Logarithmic slider with `update_param(lazy=true)` (disabled when dynamic blend on)
    - Density Compression Strength: Linear slider with `update_param(lazy=true)`
    - Per-Pixel Iteration Limit: Logarithmic slider with custom formatter + `update_param(lazy=true)`
+   - Iterations Per Thread: Linear slider (64-4096) with `update_param(lazy=true)`
+   - Speed Multiplier: 5 buttons (1x-16x) with `update_param(lazy=false)` for immediate capture
    - Pattern: Manual slider + temp variable + `update_param()` (ConfigSlider doesn't support `.logarithmic(true)` yet)
    - Returns `UpdateType`, syncs from `active_config()` for live preview
-   - Pending: iterations_per_thread, speed_multiplier (not in ConfigPath yet - need to add to FractalConfig first)
 3. ✅ Convert Transforms window - 11 controls per transform migrated (affine, weight, color)
    - Affine parameters (a,b,c,d,e,f): DragValues with `update_param(lazy=true)`
    - Z offset (g): DragValue for 3D mode only with `update_param(lazy=true)`
@@ -1088,7 +1089,7 @@ This ensures:
    - Note: Variation controls not yet converted (separate module)
 
 **Remaining Tasks**:
-2. ⚪ Add missing parameters to ConfigPath (iterations_per_thread, speed_multiplier) and complete Settings window
+2. ✅ ~~Add missing parameters to ConfigPath (iterations_per_thread, speed_multiplier) and complete Settings window~~ (commit 7c45e89)
 3. ⚪ Convert Transform variation controls (variation_controls.rs)
 4. ⚪ Convert Triangle Editor (special case - batch updates)
 5. ⚪ Convert remaining Tone Mapping controls (mode, curve, etc.)
@@ -1106,14 +1107,14 @@ This ensures:
 7. **Window functions**: Return `UpdateType` for proper update classification
 
 **Metrics**:
-- Windows migrated: 3 (View 100%, Settings 71%, Transforms core 100%)
-- Controls converted: 30+ individual controls across windows
-- Lines changed: ~500+ across 5 files
-- Commits: 7 feature + 3 documentation
+- Windows migrated: 3 (View 100%, Settings 100%, Transforms core 100%)
+- Controls converted: 37+ individual controls across windows
+- Lines changed: ~650+ across 9 files
+- Commits: 8 feature + 3 documentation
 - Build status: ✅ All passing
 
 **Deliverable**: ✅ Core migration complete - 3 windows functional with proper undo/redo
-**Remaining**: Variation controls, Triangle Editor, missing ConfigPath params, cleanup
+**Remaining**: Variation controls, Triangle Editor, Tone Mapping completion, cleanup
 
 ---
 
@@ -1126,22 +1127,25 @@ This ensures:
 | Category | Metric | Status |
 |----------|--------|--------|
 | **Windows Migrated** | 3 core windows | ✅ Complete |
-| **Controls Converted** | 30+ individual controls | ✅ Working |
+| **Controls Converted** | 37+ individual controls | ✅ Working |
 | **Code Quality** | All builds passing | ✅ Passing |
 | **Undo/Redo** | Capture-to-capture deltas | ✅ Working |
 | **Live Preview** | Real-time during drag | ✅ Working |
 | **Documentation** | Patterns + examples | ✅ Complete |
 
-### Files Modified (8 total)
+### Files Modified (11 total)
 
 1. `src/ui/view.rs` - Full migration (100%)
-2. `src/ui/settings.rs` - Partial migration (71%)
+2. `src/ui/settings.rs` - Full migration (100%)
 3. `src/ui/transforms.rs` - Core migration (100%)
 4. `src/ui/tone_mapping.rs` - Partial migration (Phase 3)
 5. `src/ui/mod.rs` - Call site updates
-6. `src/config/manager.rs` - Current/preview system
-7. `src/config/slider.rs` - Extension traits
-8. `docs/projects/delta-based-state-management.md` - Full documentation
+6. `src/config/fractal_config.rs` - Added iterations_per_thread, speed_multiplier
+7. `src/config/delta.rs` - Added ConfigPath variants
+8. `src/config/manager.rs` - Current/preview system + new get/set
+9. `src/config/slider.rs` - Extension traits
+10. `src/app/config.rs` - Export/import updates
+11. `docs/projects/delta-based-state-management.md` - Full documentation
 
 ### Key Technical Innovations
 
@@ -1178,9 +1182,9 @@ config_manager.update_batch(vec![(path1, val1), (path2, val2)], "Description", f
 ### Future Work Priorities
 
 **Immediate** (extend Phase 4):
-- Add iterations_per_thread to FractalConfig + ConfigPath (complete Settings window)
-- Add speed_multiplier to FractalConfig + ConfigPath (complete Settings window)
-- Convert variation controls in variation_controls.rs (complete Transforms window)
+- ✅ ~~Add iterations_per_thread to FractalConfig + ConfigPath (complete Settings window)~~ (done 7c45e89)
+- ✅ ~~Add speed_multiplier to FractalConfig + ConfigPath (complete Settings window)~~ (done 7c45e89)
+- ⚪ Convert variation controls in variation_controls.rs (complete Transforms window)
 
 **Short-term** (Phase 4 cleanup):
 - Convert Triangle Editor (complex batch updates)
@@ -1188,11 +1192,11 @@ config_manager.update_batch(vec![(path1, val1), (path2, val2)], "Description", f
 - Remove `*_changed` flags from migrated windows
 - Handle UpdateType returns in app.rs
 
-**Long-term** (Phase 5+):
-- Create undo/redo history window UI
-- Add keyboard shortcuts (Ctrl+Z, Ctrl+Y)
-- Optimize performance if needed
-- Clean up old undo_history code
+**Long-term** (Phase 5-6):
+- ✅ ~~Create undo/redo history window UI~~ (done 8983c00)
+- ⚪ Add keyboard shortcuts (Ctrl+Z, Ctrl+Y)
+- ⚪ Optimize performance if needed
+- ⚪ Clean up old undo_history code
 
 **Conclusion**: Phase 4 establishes a **production-ready foundation** for delta-based state management. The system works excellently across multiple window types with proper undo/redo, live preview, and consistent patterns. Future migrations are straightforward using the proven patterns.
 
