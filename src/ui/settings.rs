@@ -112,6 +112,7 @@ pub fn render_settings_window(
                                         // Update flame reference from config
                                         *flame = config_manager.active_config().flame.clone();
                                         *preset_changed = true;
+                                        *flame_changed = true;  // Triggers GPU upload
                                     }
                                 }
                             }

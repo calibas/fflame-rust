@@ -1987,13 +1987,389 @@ if !config_manager.is_in_preview_mode() {
 
 ---
 
+## Phase 6: Variation Controls Migration (2025-10-30) ✅ COMPLETE
+
+### Overview
+Migrated all variation weight sliders and variation parameter controls (Float, Integer, Angle) to ConfigManager with lazy undo support.
+
+### Changed Files
+1. **src/ui/variation_params.rs** - Parameter rendering (JuliaN power, Blob waves, etc.)
+   - Changed signature to accept `config_manager` and `transform_index`
+   - Uses `ConfigPath::TransformVariationParam` with lazy=true
+   - Returns `UpdateType` instead of bool flag
+
+2. **src/ui/variation_controls.rs** - Variation weight sliders by category
+   - Changed signature to accept `config_manager` and `transform_index`
+   - Uses `ConfigPath::TransformVariation` with lazy=true
+   - Calls `render_variation_params()` for active variations
+   - Returns `UpdateType`
+
+3. **src/ui/transforms.rs** - Calls updated variation functions
+   - Passes `config_manager` and tracks `UpdateType`
+
+### Key Implementation Details
+
+**Variation Weights** (variation_controls.rs):
+```rust
+pub fn render_variation_category(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    transform_index: usize,
+    category: VariationCategory,
+    category_label: &str,
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
+    let variations = crate::variations::global_registry().by_category(category);
+
+    for var_info in variations {
+        let transform = &config_manager.active_config().flame.transforms[transform_index];
+        let mut value = transform.get_variation(&var_info.name);
+
+        if ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name)).changed() {
+            let path = ConfigPath::TransformVariation {
+                index: transform_index,
+                variation: var_info.name.clone(),
+            };
+            if let Ok(update_type) = config_manager.update_param(path, value.into(), true) {
+                max_update = max_update.max(update_type);
+            }
+        }
+        // Show parameters if active...
+    }
+    max_update
+}
+```
+
+**Variation Parameters** (variation_params.rs):
+```rust
+pub fn render_variation_params(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    transform_index: usize,
+    var_name: &str,
+    parameters: &[VariationParameter],
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
+
+    for param in parameters {
+        let transform = &config_manager.active_config().flame.transforms[transform_index];
+        let mut param_value = transform.get_variation_param_or_default(
+            var_name, &param.name, &crate::variations::global_registry()
+        );
+
+        let param_changed = match param.param_type {
+            ParamType::Float => render_float_param(ui, param, &mut param_value),
+            ParamType::Integer => render_integer_param(ui, param, &mut param_value),
+            ParamType::Angle => render_angle_param(ui, param, &mut param_value),
+        };
+
+        if param_changed {
+            let path = ConfigPath::TransformVariationParam {
+                index: transform_index,
+                variation: var_name.to_string(),
+                param: param.name.clone(),
+            };
+            if let Ok(update_type) = config_manager.update_param(path, param_value.into(), true) {
+                max_update = max_update.max(update_type);
+            }
+        }
+    }
+    max_update
+}
+```
+
+### Benefits
+- **Smooth dragging**: 500ms lazy throttling prevents undo spam
+- **Live preview**: Changes visible immediately during drag
+- **Proper undo**: Single undo per drag sequence
+- **Add/Delete variations**: Already supported via HashMap-based variation storage
+  - Variation name stored in ConfigPath
+  - Weight stored in ConfigValue
+  - Setting weight to 0.0 effectively "deletes" (undo restores)
+
+### Result
+✅ All 26 core variations + unlimited plugin variations fully integrated with delta-based state management
+
+---
+
+## Phase 7: Tone Mapping & Colors Window (2025-10-30) ✅ COMPLETE
+
+### Overview
+Migrated all remaining controls in Tone Mapping & Colors window to ConfigManager.
+
+### Migrated Controls (8 total)
+1. **Tonemap Mode buttons** (Linear, Log, LogSqrt) - lazy=false (discrete choice)
+2. **Use Tone Curve checkbox** - lazy=false (discrete toggle)
+3. **Tone Curve preset buttons** (S-Curve, Gentle, etc.) - lazy=false (discrete preset)
+4. **Color Mode dropdown** (Transform, Palette, Speed) - lazy=false (discrete choice)
+5. **Palette selector** - lazy=false (discrete selection)
+6. **Speed Factor slider** - lazy=true (continuous drag)
+7. **Background Color picker** - lazy=false (RGB picker is discrete per component)
+8. **Tone Curve editor** - lazy=true with force_commit on drag end (interactive control)
+
+### Key Implementation: Tone Curve Editor
+
+Interactive drag control following Triangle Editor pattern:
+
+```rust
+fn render_curve_editor(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    curve: &mut ToneCurve,
+    curve_changed: &mut bool,
+) -> UpdateType {
+    // ... drawing code ...
+
+    // Update dragged point (lazy mode)
+    if let Some(idx) = dragging_point {
+        if let Some(drag_pos) = ui.ctx().pointer_latest_pos() {
+            let (new_x, new_y) = from_screen(drag_pos);
+            let mut modified_curve = config_manager.active_config().tonemap_curve.clone();
+            modified_curve.move_point(idx, new_x, new_y);
+
+            if let Ok(update) = config_manager.update_param(
+                ConfigPath::TonemapCurve,
+                modified_curve.into(),
+                true  // lazy
+            ) {
+                *curve = config_manager.active_config().tonemap_curve.clone();
+                *curve_changed = true;
+                max_update = max_update.max(update);
+            }
+        }
+    }
+
+    // Force commit on drag end
+    if !mouse_down && dragging_point.is_some() {
+        dragging_point = None;
+        if config_manager.is_in_preview_mode() {
+            let _ = config_manager.force_commit_preview(&ConfigPath::TonemapCurve);
+        }
+    }
+
+    // Double-click add point (immediate capture)
+    if response.double_clicked() {
+        if let Some(click_pos) = response.interact_pointer_pos() {
+            let (x, y) = from_screen(click_pos);
+            let mut modified_curve = config_manager.active_config().tonemap_curve.clone();
+            modified_curve.add_point(CurvePoint::new(x, y));
+
+            if let Ok(update) = config_manager.update_param(
+                ConfigPath::TonemapCurve,
+                modified_curve.into(),
+                false  // immediate
+            ) {
+                *curve = config_manager.active_config().tonemap_curve.clone();
+                *curve_changed = true;
+                max_update = max_update.max(update);
+            }
+        }
+    }
+
+    max_update
+}
+```
+
+### Bug Fix: Checkbox Sync Issue (commit a488519)
+**Problem**: Tone Curve checkbox appeared checked but curve editor was disabled at startup.
+
+**Root Cause**: Line 114 used `*use_curve` (stale app-level variable) for `add_enabled_ui()` but checkbox read from `config_manager.active_config().use_curve`. These were out of sync at startup.
+
+**Fix**: Changed line 114-115 to read from config for both display and enabled state:
+```rust
+let current_use_curve = config_manager.active_config().use_curve;
+ui.add_enabled_ui(current_use_curve, |ui| {
+```
+
+### Result
+✅ All Tone Mapping & Colors controls integrated with delta-based state management
+
+---
+
+## Phase 8: Preset Loading System (2025-10-30) ✅ COMPLETE
+
+### Problem
+Old preset system used flag-based approach:
+- UI set `preset_changed = true` flag
+- App.rs called `import_config()` which manually copied all fields
+- No undo support for preset loading
+- Couldn't undo back to previous preset
+
+### Solution: Snapshot-Based Preset Loading
+
+Extended ConfigChange to support full config snapshots (not just deltas):
+
+```rust
+pub struct ConfigChange {
+    pub deltas: Vec<ConfigDelta>,
+    pub timestamp: Instant,
+    pub description: String,
+    /// Full config snapshot (used for preset loading)
+    /// When Some: this is a full config replacement, ignore deltas for undo
+    /// When None: use deltas for undo/redo
+    pub snapshot: Option<Box<FractalConfig>>,
+}
+
+impl ConfigChange {
+    /// Create snapshot undo point (for preset loading)
+    pub fn snapshot(config: FractalConfig, description: String) -> Self {
+        Self {
+            deltas: vec![],
+            timestamp: Instant::now(),
+            description,
+            snapshot: Some(Box::new(config)),
+        }
+    }
+}
+```
+
+### Two-Snapshot Approach
+
+Loading a preset creates **TWO undo entries**:
+1. Snapshot of **old state** → "Before: Load Preset: [name]"
+2. Snapshot of **new state** → "Load Preset: [name]"
+
+This allows:
+- **Single Undo**: Restores previous preset completely
+- **Single Redo**: Restores new preset after undo
+- **Clean undo history**: 2 entries per preset load (not 50+ deltas)
+
+### ConfigManager::load_config()
+
+```rust
+pub fn load_config(&mut self, new_config: FractalConfig, description: String) -> Result<(), ConfigError> {
+    // Clear any preview state
+    self.preview = None;
+
+    // Create snapshot of current state (for undo)
+    let old_snapshot = ConfigChange::snapshot(
+        self.current.clone(),
+        format!("Before: {}", description),
+    );
+    self.push_undo(old_snapshot);
+
+    // Replace current config
+    self.current = new_config.clone();
+
+    // Create snapshot of new state (for redo after undo)
+    let new_snapshot = ConfigChange::snapshot(
+        new_config,
+        description,
+    );
+    self.push_undo(new_snapshot);
+
+    Ok(())
+}
+```
+
+### Updated Undo/Redo Methods
+
+Both methods now check for snapshots before processing deltas:
+
+```rust
+pub fn undo(&mut self) -> Result<UpdateType, ConfigError> {
+    let change = self.undo_stack.pop().ok_or(ConfigError::EmptyUndoStack)?;
+
+    // Check if this is a snapshot-based undo
+    if let Some(snapshot) = &change.snapshot {
+        log::debug!("  Restoring full config snapshot");
+        self.current = (**snapshot).clone();
+        self.redo_stack.push(change);
+        return Ok(UpdateType::IterationReset); // Full config change
+    }
+
+    // Delta-based undo (original behavior)
+    // ... existing delta code ...
+}
+
+pub fn redo(&mut self) -> Result<UpdateType, ConfigError> {
+    let change = self.redo_stack.pop().ok_or(ConfigError::EmptyRedoStack)?;
+
+    // Check if this is a snapshot-based redo
+    if let Some(snapshot) = &change.snapshot {
+        log::debug!("  Restoring full config snapshot");
+        self.current = (**snapshot).clone();
+        self.undo_stack.push(change);
+        return Ok(UpdateType::IterationReset); // Full config change
+    }
+
+    // Delta-based redo (original behavior)
+    // ... existing delta code ...
+}
+```
+
+### UI Integration (settings.rs)
+
+Preset selector now calls ConfigManager directly:
+
+```rust
+egui::ComboBox::from_label("Preset")
+    .selected_text(current_preset_name)
+    .show_ui(ui, |ui| {
+        for (idx, preset) in presets.iter().enumerate() {
+            if ui.selectable_value(current_preset_index, idx, &preset.flame.name).changed() {
+                println!("UI: Loading preset: {} ({})", preset.flame.name, idx);
+                // Load preset via ConfigManager (creates two undo points)
+                if let Err(e) = config_manager.load_config(
+                    preset.clone(),
+                    format!("Load Preset: {}", preset.flame.name),
+                ) {
+                    log::error!("Failed to load preset: {}", e);
+                } else {
+                    // Update flame reference from config
+                    *flame = config_manager.active_config().flame.clone();
+                    *preset_changed = true;
+                }
+            }
+        }
+    });
+```
+
+### App.rs Changes
+
+Removed `import_config()` from preset handling path. Now just syncs state from ConfigManager:
+
+```rust
+// Handle preset change BEFORE other updates
+// Note: Preset loading now happens via ConfigManager in UI layer (settings.rs)
+// This just handles the side effects (reset accumulation, sync app state)
+let preset_loaded = if ui_response.preset_changed {
+    println!("Preset loaded via ConfigManager, syncing app state");
+    // Sync app-level state from config
+    let config = self.config_manager.active_config();
+    self.flame = config.flame.clone();
+    self.zoom = config.zoom;
+    self.pan_x = config.pan_x;
+    self.pan_y = config.pan_y;
+    self.rotation = config.rotation;
+    self.camera_rotation_x = config.camera_rotation_x;
+    self.camera_rotation_y = config.camera_rotation_y;
+    true
+} else {
+    false
+};
+```
+
+### Benefits
+- ✅ **Atomic preset loading**: Single operation, not 50+ deltas
+- ✅ **Full undo/redo support**: Can undo/redo preset changes
+- ✅ **Clean undo history**: Two entries per preset load
+- ✅ **No massive deltas**: Full config stored as snapshot
+- ✅ **Works with existing system**: Snapshots and deltas coexist seamlessly
+
+### Result
+Preset loading fully integrated with delta-based state management!
+
+---
+
 ## Open Questions
 
-1. **Preset loading**: Should loading a preset clear undo history? Or create a single "Load preset: X" undo point?
-   - **Recommendation**: Single undo point - allows undoing preset load
+1. ~~**Preset loading**: Should loading a preset clear undo history? Or create a single "Load preset: X" undo point?~~ ✅ RESOLVED
+   - **Solution**: Two-snapshot approach (before/after) for clean undo/redo
 
 2. **Import config**: Should importing a .fflame file clear undo history?
-   - **Recommendation**: Yes - it's a "new document" conceptually
+   - **Recommendation**: Use same snapshot approach as presets
+   - Allows undoing back to previous state
 
 3. **Undo window placement**: Separate window or panel in main UI?
    - **Recommendation**: Separate window (like other panels)
