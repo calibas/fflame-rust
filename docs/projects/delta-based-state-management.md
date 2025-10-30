@@ -1875,6 +1875,26 @@ Mouse drag panning was the last input that modified state directly without going
 ### Key Insight
 The infrastructure was already complete! Just routed the changes through ConfigManager instead of direct field modification. ConfigPath::PanX and ConfigPath::PanY already existed and were fully implemented.
 
+### Follow-up: Atomic Batch Updates (2025-10-30)
+
+**Problem:** Initial implementation used two separate `update_param()` calls for PanX and PanY, creating two undo entries instead of one atomic operation.
+
+**Solution:** Changed to `update_batch()` to capture both X and Y together:
+```rust
+self.config_manager.update_batch(
+    vec![
+        (ConfigPath::PanX, new_pan_x.into()),
+        (ConfigPath::PanY, new_pan_y.into()),
+    ],
+    "Pan (Mouse)".to_string(),
+    true  // Lazy mode
+);
+```
+
+**Note on force_commit_preview():** Removed the call on mouse release because it only handles single parameters. For batch updates, the throttle mechanism properly captures the full batch. `force_commit_preview()` would need refactoring to handle batch updates properly (future improvement).
+
+**Result:** Single "Pan (Mouse)" undo entry that restores both X and Y atomically.
+
 ---
 
 ## Phase 4 Extended: View Slider Reset Fix (2025-10-30) ✅ COMPLETE

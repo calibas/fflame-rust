@@ -102,10 +102,9 @@ impl App {
                     self.mouse_dragging = false;
                     self.last_mouse_pos = None;
 
-                    // Force commit preview if in lazy mode (mouse drag just ended)
-                    if self.config_manager.is_in_preview_mode() {
-                        let _ = self.config_manager.force_commit_preview(&crate::config::ConfigPath::PanX);
-                    }
+                    // Note: Don't force commit here for batch updates - the throttle will capture the batch
+                    // Calling force_commit with a single path would only capture that one parameter,
+                    // losing the atomic batch nature. Preview will auto-commit on next throttle or interaction.
                 }
             }
         }
@@ -132,10 +131,17 @@ impl App {
                 let rotated_dy = pan_dx * sin_r + pan_dy * cos_r;
 
                 // Route pan changes through ConfigManager for undo/redo support and live preview
+                // Use update_batch to capture both X and Y as a single atomic operation
                 let new_pan_x = self.pan_x + rotated_dx;
                 let new_pan_y = self.pan_y + rotated_dy;
-                let _ = self.config_manager.update_param(crate::config::ConfigPath::PanX, new_pan_x.into(), true);
-                let _ = self.config_manager.update_param(crate::config::ConfigPath::PanY, new_pan_y.into(), true);
+                let _ = self.config_manager.update_batch(
+                    vec![
+                        (crate::config::ConfigPath::PanX, new_pan_x.into()),
+                        (crate::config::ConfigPath::PanY, new_pan_y.into()),
+                    ],
+                    "Pan (Mouse)".to_string(),
+                    true  // Lazy mode for drag
+                );
 
                 // Read back from ConfigManager (gets preview value during drag)
                 self.pan_x = self.config_manager.active_config().pan_x;
