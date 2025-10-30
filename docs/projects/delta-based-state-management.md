@@ -1488,37 +1488,84 @@ Drag End (force commit):          NO reset, already accumulating
 
 **Key Principle**: Reset accumulation ONCE when drag starts, then smooth accumulation throughout entire drag sequence.
 
-### Implementation Tasks
+### Implementation Attempt #1 - FAILED ❌
 
-1. ⚪ **Modify ConfigManager preview lifecycle:**
-   - Add `preview_just_created` flag
-   - Add `consume_preview_created_flag()` method
-   - Don't clear preview on throttle commit (clone instead of take)
-   - Only clear preview on `force_commit_preview()`
+**What we implemented:**
+1. ✅ Clone preview on throttle commit (don't clear) - prevents blink
+2. ✅ Track `preview_just_created` flag - reset on drag start
+3. ✅ Track `was_in_preview_mode_last_frame` - detect exit
+4. ✅ Reset on `preview_just_ended` - reset on drag end
+5. Added complexity: timestamp tracking, stale preview detection
 
-2. ⚪ **Update app.rs reset logic:**
-   - Check `preview_just_created` flag for reset
-   - Remove reset during `is_in_preview_mode()` (except first frame)
-   - Simplify logic using UpdateType
+**Problems Identified:**
+1. ❌ **Dense areas get progressively brighter during drag**
+   - Accumulation buffer keeps accumulating during live mode
+   - Each frame adds more samples to dense areas
+   - Brightness builds up continuously
 
-3. ⚪ **Respect UpdateType in rendering:**
-   - ToneMappingOnly: No reset needed
-   - ColorOnly: Reset on drag start only
-   - IterationReset: Reset on drag start only
+2. ❌ **Brightness remains after exiting live mode**
+   - Exit detection calls `reset()`, but too late
+   - Overbright buffer already used for display
+   - Need to clear BEFORE displaying, not after
 
-4. ⚪ **Test thoroughly:**
-   - Triangle Editor: No blink during drag
-   - Tone mapping sliders: Live updates without reset
-   - Verify smooth accumulation throughout drag
-   - Verify undo history captures correctly
+3. ❌ **Overengineered solution**
+   - Added 5 new fields to ConfigManager
+   - Added 3 new methods
+   - Complex timestamp tracking and stale detection
+   - Most of it redundant with existing force_commit
 
-### Expected Outcome
+**Root Cause - User's Diagnosis:**
+> "The accumulation buffer is never being reset during live mode, and it keeps the same buffer even after live mode ends. It only clears on a 'true' fractal redraw."
 
-- ⚪ No blink during drag (preview stays active)
-- ⚪ Smooth accumulation throughout entire drag
-- ⚪ Post-processing changes don't reset accumulation unnecessarily
-- ⚪ Clean separation: commit to undo ≠ exit preview mode
-- ⚪ Efficient rendering based on UpdateType
+> "All we need to do is clear the accumulation buffer every frame in live mode."
+
+### Corrected Understanding
+
+**What "Live Mode" Needs:**
+- **Every frame during live mode**: Clear accumulation buffer (reset)
+- No progressive accumulation → prevents overbright dense areas
+- Lower quality, but fast visual feedback
+- OR ensure reset happens before display when exiting live mode
+
+**Existing Capabilities (Don't Overengineer):**
+- `renderer.reset()` already exists - clears accumulation buffer
+- `is_in_preview_mode()` already detects live mode
+- `force_commit_preview()` already called on drag end by sliders/Triangle Editor
+- Just need to call reset at the right time
+
+**The Simple Solution:**
+```rust
+// In render loop:
+if in_preview_mode {
+    // Clear accumulation every frame during live mode
+    renderer.reset(...)
+}
+// OR
+if preview_just_ended {
+    // Clear accumulation when exiting live mode (before next display)
+    renderer.reset(...)
+}
+```
+
+### Next Steps
+
+1. ❌ **Revert overengineered code**:
+   - Remove `preview_just_created`, `preview_just_committed` flags
+   - Remove `last_preview_update` timestamp tracking
+   - Remove `check_and_clear_stale_preview()` method
+   - Remove `consume_*_flag()` methods
+   - Remove `was_in_preview_mode_last_frame` tracking
+   - Keep ONLY: preview cloning on throttle (no blink fix)
+
+2. ⚪ **Implement simple solution**:
+   - Call `renderer.reset()` every frame when `in_preview_mode`
+   - OR call `renderer.reset()` when detecting exit from preview mode
+   - Test which timing works better
+
+3. ⚪ **Test**:
+   - Verify no progressive brightness during drag
+   - Verify full quality after drag ends
+   - Verify no blink during drag
 
 ---
 
