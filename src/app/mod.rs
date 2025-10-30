@@ -966,6 +966,7 @@ impl App {
                 });
 
                 if ui_response.flame_changed {
+                    // Note: self.flame is already synced from ConfigManager at the start of render_ui()
                     renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
@@ -1036,8 +1037,11 @@ impl App {
 
                 // Reset accumulation when view changes, palette changes, color mode changes, background color changes, flame changes, or user requests it
                 // Note: preset_changed is handled separately above with import_config() which also resets
-                // Note: Triangle Editor now uses ConfigManager with lazy undo (resets handled by ConfigManager)
+                // Special case: During ConfigManager preview mode (lazy drag), flame_changed but DON'T reset
+                //   - This gives smooth visual feedback during Triangle Editor drag
+                //   - ConfigManager.is_in_preview_mode() detects this state
                 // Tone mapping: reset on mode change (log vs linear affects accumulation), but not curve/exposure/gamma (post-processing only)
+                let is_lazy_dragging = self.config_manager.is_in_preview_mode();
                 let should_reset = ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
                     || ui_response.background_color_changed || ui_response.tonemap_mode_changed
                     || ui_response.histogram_color_scale_changed  // New scale incompatible with old samples
@@ -1046,7 +1050,7 @@ impl App {
                     || ui_response.blend_factor_changed  // New blend rate needs fresh start to see effect
                     || ui_response.use_dynamic_blend_changed  // Switching blend modes needs fresh start
                     || ui_response.target_iterations_changed  // New iteration limit needs fresh iteration counts
-                    || ui_response.flame_changed;
+                    || (ui_response.flame_changed && !is_lazy_dragging);  // Reset on flame changes, EXCEPT during lazy drag
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                     if ui_response.histogram_color_scale_changed {
