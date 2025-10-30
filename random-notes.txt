@@ -177,7 +177,6 @@ ID clashes happens when things like Windows or CollapsingHeaders share names, or
 Sometimes the solution is to use ui.push_id
 
 Second use of ScrollArea ID 3B8F
-First use of ScrollArea ID 3B8F
 Widget is above this text.
 ID clashes happens when things like Windows or CollapsingHeaders share names, or when things like Plot and Grid"s aren't given unique id_salt:s.
 
