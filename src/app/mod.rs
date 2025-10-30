@@ -933,12 +933,11 @@ impl App {
         // Note: density_changed and background_color_changed don't need encoder updates,
         // they're handled every frame before tonemap pass
 
-        // Handle preset change BEFORE other updates
-        // Note: Preset loading now happens via ConfigManager in UI layer (settings.rs)
-        // This just handles the side effects (reset accumulation, sync app state)
-        let preset_loaded = if ui_response.preset_changed {
+        // Handle preset change: sync app state from ConfigManager
+        // Note: Preset loading happens via ConfigManager in UI layer (settings.rs)
+        // GPU upload and reset handled by normal update path below
+        if ui_response.preset_changed {
             println!("Preset loaded via ConfigManager, syncing app state");
-            // Sync app-level state from config
             let config = self.config_manager.active_config();
             self.flame = config.flame.clone();
             self.zoom = config.zoom;
@@ -947,14 +946,11 @@ impl App {
             self.rotation = config.rotation;
             self.camera_rotation_x = config.camera_rotation_x;
             self.camera_rotation_y = config.camera_rotation_y;
-            // Note: Other fields like tonemap settings are already synced via UI
-            true
-        } else {
-            false
-        };
+            // GPU upload handled below via flame_changed flag
+        }
 
-        // Only do normal updates if we didn't load a preset
-        if !preset_loaded {
+        // Capture state before applying meaningful changes (skip for presets - ConfigManager handles it)
+        if !ui_response.preset_changed {
             // Capture state before applying meaningful changes
             // Note: Triangle Editor now uses ConfigManager (handles undo internally)
             // Note: palette_changed removed - undo is captured when Apply is clicked (see custom_palette handler)
@@ -967,7 +963,7 @@ impl App {
             }
         }
 
-        if needs_update && !preset_loaded {
+        if needs_update {
             if let Some(ref mut renderer) = self.flame_renderer {
                 let mut update_encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Update Encoder"),
@@ -1047,7 +1043,6 @@ impl App {
                 }
 
                 // Reset accumulation when view changes, palette changes, color mode changes, background color changes, flame changes, or user requests it
-                // Note: preset_changed is handled separately above with import_config() which also resets
                 // Tone mapping: reset on mode change (log vs linear affects accumulation), but not curve/exposure/gamma (post-processing only)
                 let in_preview_mode = self.config_manager.is_in_preview_mode();
                 let should_reset = ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
@@ -1058,6 +1053,7 @@ impl App {
                     || ui_response.blend_factor_changed  // New blend rate needs fresh start to see effect
                     || ui_response.use_dynamic_blend_changed  // Switching blend modes needs fresh start
                     || ui_response.target_iterations_changed  // New iteration limit needs fresh iteration counts
+                    || ui_response.preset_changed  // Preset loading requires fresh start
                     || (ui_response.flame_changed && !in_preview_mode);  // Reset on flame changes, EXCEPT during preview mode (overwrite mode handles it)
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
