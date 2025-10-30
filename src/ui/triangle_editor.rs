@@ -1,4 +1,5 @@
 use crate::scene::transforms::Flame;
+use crate::config::{ConfigManager, ConfigPath, AffineParam, UpdateType};
 use egui::{Color32, Pos2, Stroke, Vec2};
 use serde::{Deserialize, Serialize};
 
@@ -21,12 +22,11 @@ impl Default for MouseMode {
 pub fn render_triangle_editor_window(
     ctx: &egui::Context,
     show_triangle_editor: &mut bool,
+    config_manager: &mut ConfigManager,
     flame: &mut Flame,
-    flame_changed: &mut bool,
-    triangle_drag_started: &mut bool,
-    triangle_dragging: &mut bool,
-    triangle_drag_ended: &mut bool,
-) {
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
+
     egui::Window::new("Triangle Editor")
         .open(show_triangle_editor)
         .default_size([500.0, 600.0])
@@ -191,13 +191,10 @@ pub fn render_triangle_editor_window(
                             if let Some(pos) = response.interact_pointer_pos() {
                                 if pos.distance(o_pos) < hit_radius {
                                     drag_target = DragTarget::Origin;
-                                    *triangle_drag_started = true;
                                 } else if pos.distance(x_pos) < hit_radius {
                                     drag_target = DragTarget::XPoint;
-                                    *triangle_drag_started = true;
                                 } else if pos.distance(y_pos) < hit_radius {
                                     drag_target = DragTarget::YPoint;
-                                    *triangle_drag_started = true;
                                 }
                             }
                         }
@@ -214,9 +211,21 @@ pub fn render_triangle_editor_window(
                                     DragTarget::None => {}
                                 }
 
+                                // Apply triangle changes via update_batch
                                 transform.from_triangle(o, x, y);
-                                *flame_changed = true;
-                                *triangle_dragging = true;
+                                let changes = vec![
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, transform.a.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, transform.b.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, transform.c.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, transform.d.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, transform.e.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, transform.f.into()),
+                                ];
+                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Move Points)".to_string(), true) {
+                                    // Sync transform from active_config for live preview
+                                    *transform = config_manager.active_config().flame.transforms[selected_transform].clone();
+                                    max_update = max_update.max(update_type);
+                                }
                             }
                         }
                     }
@@ -225,7 +234,6 @@ pub fn render_triangle_editor_window(
                         // Start drag on any point in canvas
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
-                            *triangle_drag_started = true;
                         }
 
                         // Translate entire triangle
@@ -244,9 +252,20 @@ pub fn render_triangle_editor_window(
                                 y[0] += world_delta[0];
                                 y[1] += world_delta[1];
 
+                                // Apply triangle changes via update_batch
                                 transform.from_triangle(o, x, y);
-                                *flame_changed = true;
-                                *triangle_dragging = true;
+                                let changes = vec![
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, transform.a.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, transform.b.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, transform.c.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, transform.d.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, transform.e.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, transform.f.into()),
+                                ];
+                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Translate)".to_string(), true) {
+                                    *transform = config_manager.active_config().flame.transforms[selected_transform].clone();
+                                    max_update = max_update.max(update_type);
+                                }
 
                                 drag_start_pos = Some(current_pos);
                             }
@@ -257,7 +276,6 @@ pub fn render_triangle_editor_window(
                         // Capture initial mouse position
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
-                            *triangle_drag_started = true;
                         }
 
                         // Rotate X and Y around O based on angle from O
@@ -290,9 +308,20 @@ pub fn render_triangle_editor_window(
                                 x = [o[0] + x_rot[0], o[1] + x_rot[1]];
                                 y = [o[0] + y_rot[0], o[1] + y_rot[1]];
 
+                                // Apply triangle changes via update_batch
                                 transform.from_triangle(o, x, y);
-                                *flame_changed = true;
-                                *triangle_dragging = true;
+                                let changes = vec![
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, transform.a.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, transform.b.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, transform.c.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, transform.d.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, transform.e.into()),
+                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, transform.f.into()),
+                                ];
+                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Rotate)".to_string(), true) {
+                                    *transform = config_manager.active_config().flame.transforms[selected_transform].clone();
+                                    max_update = max_update.max(update_type);
+                                }
 
                                 drag_start_pos = Some(current_pos);
                             }
@@ -303,7 +332,6 @@ pub fn render_triangle_editor_window(
                         // Capture initial mouse position
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
-                            *triangle_drag_started = true;
                         }
 
                         // Scale along perpendicular axis to X-Y line
@@ -344,11 +372,22 @@ pub fn render_triangle_editor_window(
                                         x = [o[0] + x_vec[0] * scale_factor, o[1] + x_vec[1] * scale_factor];
                                         y = [o[0] + y_vec[0] * scale_factor, o[1] + y_vec[1] * scale_factor];
 
+                                        // Apply triangle changes via update_batch
                                         transform.from_triangle(o, x, y);
+                                        let changes = vec![
+                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, transform.a.into()),
+                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, transform.b.into()),
+                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, transform.c.into()),
+                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, transform.d.into()),
+                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, transform.e.into()),
+                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, transform.f.into()),
+                                        ];
+                                        if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Scale)".to_string(), true) {
+                                            *transform = config_manager.active_config().flame.transforms[selected_transform].clone();
+                                            max_update = max_update.max(update_type);
+                                        }
                                     }
                                 }
-                                *flame_changed = true;
-                                *triangle_dragging = true;
 
                                 drag_start_pos = Some(current_pos);
                             }
@@ -358,10 +397,6 @@ pub fn render_triangle_editor_window(
 
                 // Clear drag on release
                 if !response.dragged() {
-                    // Detect transition from dragging to not dragging
-                    if was_dragging {
-                        *triangle_drag_ended = true;
-                    }
                     drag_target = DragTarget::None;
                     drag_start_pos = None;
                 }
@@ -497,7 +532,7 @@ pub fn render_triangle_editor_window(
                                 x_new[1] += 0.1;
                                 y_new[1] += 0.1;
                                 transform.from_triangle(o_new, x_new, y_new);
-                                *flame_changed = true;
+                                // TODO: Migrate affine parameter sliders to use update_param()
                             }
                         });
                         ui.horizontal(|ui| {
@@ -507,7 +542,7 @@ pub fn render_triangle_editor_window(
                                 x_new[0] -= 0.1;
                                 y_new[0] -= 0.1;
                                 transform.from_triangle(o_new, x_new, y_new);
-                                *flame_changed = true;
+                                // TODO: Migrate affine parameter sliders to use update_param()
                             }
                             if ui.button("  v  ").clicked() {
                                 let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
@@ -515,7 +550,7 @@ pub fn render_triangle_editor_window(
                                 x_new[1] -= 0.1;
                                 y_new[1] -= 0.1;
                                 transform.from_triangle(o_new, x_new, y_new);
-                                *flame_changed = true;
+                                // TODO: Migrate affine parameter sliders to use update_param()
                             }
                             if ui.button("  >  ").clicked() {
                                 let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
@@ -523,7 +558,7 @@ pub fn render_triangle_editor_window(
                                 x_new[0] += 0.1;
                                 y_new[0] += 0.1;
                                 transform.from_triangle(o_new, x_new, y_new);
-                                *flame_changed = true;
+                                // TODO: Migrate affine parameter sliders to use update_param()
                             }
                         });
 
@@ -547,7 +582,7 @@ pub fn render_triangle_editor_window(
                                 let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
 
                                 transform.from_triangle(o_curr, x_new, y_new);
-                                *flame_changed = true;
+                                // TODO: Migrate affine parameter sliders to use update_param()
                             }
                             if ui.button("↺ Rotate CCW").clicked() {
                                 let angle = 15.0_f32.to_radians();
@@ -565,7 +600,7 @@ pub fn render_triangle_editor_window(
                                 let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
 
                                 transform.from_triangle(o_curr, x_new, y_new);
-                                *flame_changed = true;
+                                // TODO: Migrate affine parameter sliders to use update_param()
                             }
                         });
 
@@ -580,7 +615,7 @@ pub fn render_triangle_editor_window(
                                 let y_new = [o_curr[0] + y_vec[0] * 1.1, o_curr[1] + y_vec[1] * 1.1];
 
                                 transform.from_triangle(o_curr, x_new, y_new);
-                                *flame_changed = true;
+                                // TODO: Migrate affine parameter sliders to use update_param()
                             }
                             if ui.button("⇄ Scale Down").clicked() {
                                 let (o_curr, x_curr, y_curr) = transform.to_triangle();
@@ -591,7 +626,7 @@ pub fn render_triangle_editor_window(
                                 let y_new = [o_curr[0] + y_vec[0] * 0.9, o_curr[1] + y_vec[1] * 0.9];
 
                                 transform.from_triangle(o_curr, x_new, y_new);
-                                *flame_changed = true;
+                                // TODO: Migrate affine parameter sliders to use update_param()
                             }
                         });
                     });
@@ -599,7 +634,7 @@ pub fn render_triangle_editor_window(
 
                 if coords_changed {
                     transform.from_triangle(o, x, y);
-                    *flame_changed = true;
+                    // TODO: Migrate affine parameter sliders to use update_param()
                 }
 
                 ui.separator();
@@ -620,7 +655,7 @@ pub fn render_triangle_editor_window(
                 });
 
                 if affine_changed {
-                    *flame_changed = true;
+                    // TODO: Migrate affine parameter sliders to use update_param()
                 }
 
                 ui.separator();
@@ -629,11 +664,13 @@ pub fn render_triangle_editor_window(
                 {
                     if ui.button("Reset to Identity").clicked() {
                         transform.reset_to_identity();
-                        *flame_changed = true;
+                        // TODO: Migrate affine parameter sliders to use update_param()
                     }
                 }
             }
         });
+
+    max_update
 }
 
 /// Get a distinct color for each transform index

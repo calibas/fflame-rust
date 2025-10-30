@@ -31,9 +31,6 @@ pub struct UiResponse {
     pub render_mode_changed: bool,
     pub projection_changed: bool,
     pub camera_rotation_changed: bool,
-    pub triangle_drag_started: bool, // True only on first frame of triangle drag (for undo capture)
-    pub triangle_dragging: bool,     // True during continuous triangle drag (including first frame)
-    pub triangle_drag_ended: bool,   // True only on frame when drag ends (for clean redraw)
     pub tonemap_mode_changed: bool,
     pub tonemap_curve_changed: bool,
     pub exposure_changed: bool,
@@ -80,9 +77,6 @@ impl Default for UiResponse {
             render_mode_changed: false,
             projection_changed: false,
             camera_rotation_changed: false,
-            triangle_drag_started: false,
-            triangle_dragging: false,
-            triangle_drag_ended: false,
             tonemap_mode_changed: false,
             tonemap_curve_changed: false,
             exposure_changed: false,

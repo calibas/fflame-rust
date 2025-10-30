@@ -179,9 +179,6 @@ impl EguiLayer {
         let mut palette_save_file = None;
         let mut palette_import_json = None;
         let mut palette_load_file = false;
-        let mut triangle_drag_started = false;
-        let mut triangle_dragging = false;
-        let mut triangle_drag_ended = false;
 
 
         // Log ConfigManager state at start of UI render
@@ -290,15 +287,13 @@ impl EguiLayer {
             // TODO: Handle transforms_update_type (Phase 4 task)
 
             // Render Triangle Editor window
-            triangle_editor::render_triangle_editor_window(
+            let triangle_editor_update = triangle_editor::render_triangle_editor_window(
                 ctx,
                 &mut self.show_triangle_editor,
+                config_manager,
                 flame,
-                &mut flame_changed,
-                &mut triangle_drag_started,
-                &mut triangle_dragging,
-                &mut triangle_drag_ended,
             );
+            // TODO: Handle triangle_editor_update (Phase 4 task)
 
             // Render Tone Mapping window
             let _tonemap_update = tone_mapping::render_tone_mapping_window(
@@ -442,9 +437,6 @@ impl EguiLayer {
             render_mode_changed,
             projection_changed,
             camera_rotation_changed,
-            triangle_drag_started,
-            triangle_dragging,
-            triangle_drag_ended,
             tonemap_mode_changed,
             tonemap_curve_changed,
             exposure_changed,
