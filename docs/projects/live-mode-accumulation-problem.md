@@ -1,6 +1,6 @@
 # Live Mode Accumulation Problem
 
-**Status:** Fix identified - Alpha accumulation bug in shader
+**Status:** ✅ RESOLVED - Minimal shader fix (3 files, ~30 lines)
 **Date:** 2025-10-30
 **Related:** Phase 4 - Triangle Editor migration to delta-based state management
 
@@ -488,22 +488,76 @@ Perfect overwrite behavior with no shader modifications!
 
 ---
 
-## Implementation Checklist
+## Final Resolution
 
-- [ ] Add `overwrite_mode: bool` field to FlameRenderer
-- [ ] Add `set_overwrite_mode()` method
-- [ ] Initialize `overwrite_mode = false` in FlameRenderer::new()
-- [ ] Modify `accumulate_pass()` blend_factor calculation
-- [ ] Add `was_in_preview_mode_last_frame: bool` to App struct
-- [ ] Initialize field in App::run()
-- [ ] Add overwrite mode control in App::render()
-- [ ] Add transition detection and reset on exit
-- [ ] Test Triangle Editor drag
-- [ ] Test slider drag
-- [ ] Test multiple rapid drags
-- [ ] Test long continuous drag
-- [ ] Update delta-based-state-management.md with final solution
-- [ ] Commit changes
+**The Minimal Fix:** Only 3 files changed, ~30 lines total. No reset-on-exit needed!
+
+### What Was Implemented
+
+1. **shaders/accumulate.wgsl** - Alpha handling with `select()`:
+   ```wgsl
+   let new_alpha = density * 0.01 * params.blend_factor * convergence_gate;
+   let alpha_accumulated = select(
+       prev.a + new_alpha,        // Normal: accumulate
+       new_alpha,                 // Overwrite: replace
+       params.blend_factor >= 0.99  // Check for overwrite mode
+   );
+   ```
+
+2. **src/renderer/compute_kernel.rs** - Overwrite mode infrastructure:
+   - Added `overwrite_mode: bool` field
+   - Added `set_overwrite_mode()` method
+   - Set `blend_factor = 1.0` when overwrite mode active
+
+3. **src/app/mod.rs** - Enable overwrite during preview:
+   ```rust
+   let in_preview_mode = self.config_manager.is_in_preview_mode();
+   renderer.set_overwrite_mode(in_preview_mode);
+   ```
+
+### Why Reset-On-Exit Wasn't Needed
+
+**Key insight:** The shader fix creates valid single-frame data during preview. When preview ends, the accumulation buffer contains correct RGB and alpha values (just noisy due to low sample count). Progressive refinement can continue directly from this valid starting point - no reset required!
+
+**Before fix:**
+- Preview ends with corrupted buffer (overbright alpha)
+- Reset required to clear corruption
+- Jarring visual flash
+
+**After fix:**
+- Preview ends with valid buffer (correct single-frame snapshot)
+- No reset needed - just continue accumulating
+- Smooth transition from noisy preview to refined result
+
+### Test Results
+
+✅ Triangle Editor drag - No brightness buildup, smooth preview
+✅ Slider drag - Correct brightness throughout
+✅ Multiple rapid drags - Clean transitions
+✅ Long continuous drag - Brightness stays consistent
+✅ Drag release - Smooth convergence to high quality
+
+### Benefits for Animation System
+
+This fix is critical for the planned animation system:
+
+**Animation requires:**
+- Rendering many frames with varying parameter values
+- Each frame must have correct, independent brightness
+- No accumulation of density across different parameter states
+
+**Overwrite mode provides:**
+- Single-frame snapshots at any parameter value
+- No cross-contamination between frames
+- Consistent brightness regardless of parameter changes
+
+**Use cases:**
+- Parameter interpolation (morph transforms over time)
+- Keyframe rendering (jump between discrete states)
+- Real-time parameter scrubbing (drag timeline slider)
+- Batch rendering (export frame sequence)
+
+The animation system can use `set_overwrite_mode(true)` to render each frame independently, then optionally use progressive refinement (overwrite mode off) for final quality passes.
 
 ---
 

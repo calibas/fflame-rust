@@ -101,6 +101,11 @@ impl App {
                     // Always clear dragging state on release, even if egui consumed it
                     self.mouse_dragging = false;
                     self.last_mouse_pos = None;
+
+                    // Force commit preview if in lazy mode (mouse drag just ended)
+                    if self.config_manager.is_in_preview_mode() {
+                        let _ = self.config_manager.force_commit_preview(&crate::config::ConfigPath::PanX);
+                    }
                 }
             }
         }
@@ -126,9 +131,16 @@ impl App {
                 let rotated_dx = pan_dx * cos_r - pan_dy * sin_r;
                 let rotated_dy = pan_dx * sin_r + pan_dy * cos_r;
 
-                self.pan_x += rotated_dx;
-                self.pan_y += rotated_dy;
-                self.view_changed_by_keyboard = true; // Reuse same flag for mouse
+                // Route pan changes through ConfigManager for undo/redo support and live preview
+                let new_pan_x = self.pan_x + rotated_dx;
+                let new_pan_y = self.pan_y + rotated_dy;
+                let _ = self.config_manager.update_param(crate::config::ConfigPath::PanX, new_pan_x.into(), true);
+                let _ = self.config_manager.update_param(crate::config::ConfigPath::PanY, new_pan_y.into(), true);
+
+                // Read back from ConfigManager (gets preview value during drag)
+                self.pan_x = self.config_manager.active_config().pan_x;
+                self.pan_y = self.config_manager.active_config().pan_y;
+                // Note: Don't set view_changed_by_keyboard here - preview mode handles updates via overwrite mode
             }
         }
         // Always update mouse position for zoom-to-cursor

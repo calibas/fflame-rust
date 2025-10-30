@@ -1,6 +1,6 @@
 # Delta-Based State Management System
 
-**Status:** Phase 4 Extended 🟡 (Fixing live preview rendering issues)
+**Status:** Phase 4 Complete ✅ (Triangle Editor migrated, live preview fixed)
 **Created:** 2025-10-29
 **Updated:** 2025-10-30
 **Category:** Architecture Refactor
@@ -1826,6 +1826,56 @@ Undo History:
 - ⚪ Undo across app restarts (persist undo stack)
 - ⚪ Undo preview (show what will change on hover)
 - ⚪ Configurable throttle duration
+
+## Phase 4 Extended: Mouse Panning Migration (2025-10-30) ✅ COMPLETE
+
+### Overview
+Mouse drag panning was the last input that modified state directly without going through ConfigManager. This prevented undo/redo support and caused rendering issues during drag.
+
+### Before Migration
+**File**: `src/app/input.rs` - `handle_mouse_move()`
+
+**Old behavior:**
+- Directly modified `self.pan_x` and `self.pan_y`
+- Set `view_changed_by_keyboard = true` to trigger reset
+- No undo/redo support
+- Full reset every frame during drag (black flashes)
+
+### After Migration
+**Changes made:**
+1. Route pan changes through ConfigManager:
+   ```rust
+   let _ = self.config_manager.update_param(ConfigPath::PanX, new_pan_x.into(), true);
+   let _ = self.config_manager.update_param(ConfigPath::PanY, new_pan_y.into(), true);
+   ```
+
+2. Read back from preview:
+   ```rust
+   self.pan_x = self.config_manager.active_config().pan_x;
+   self.pan_y = self.config_manager.active_config().pan_y;
+   ```
+
+3. Remove reset trigger during drag (overwrite mode handles it)
+
+4. Force commit on mouse release:
+   ```rust
+   if self.config_manager.is_in_preview_mode() {
+       let _ = self.config_manager.force_commit_preview(&ConfigPath::PanX);
+   }
+   ```
+
+### Benefits
+- ✅ Live preview during mouse drag (smooth, no resets)
+- ✅ Overwrite mode prevents brightness buildup (shader fix applies)
+- ✅ Undo/redo support for mouse panning
+- ✅ Lazy undo throttling (500ms) - not spamming undo stack
+- ✅ Clean commit to undo stack on mouse release
+- ✅ No black flashes or flickering during drag
+
+### Key Insight
+The infrastructure was already complete! Just routed the changes through ConfigManager instead of direct field modification. ConfigPath::PanX and ConfigPath::PanY already existed and were fully implemented.
+
+---
 
 ## Open Questions
 
