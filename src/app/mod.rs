@@ -117,6 +117,8 @@ impl App {
             density_compression_strength: 0.0,  // Linear accumulation default (no compression)
             blend_factor: 0.1,  // 10% blend rate - good balance between speed and smoothness
             target_iterations_per_pixel: 0,  // Disabled by default
+            iterations_per_thread: 256,  // Default GPU workgroup size
+            speed_multiplier: 1,  // Default 1x speed (60 FPS)
         };
 
         let config_manager = ConfigManager::new(initial_config.clone());

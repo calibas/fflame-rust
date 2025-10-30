@@ -163,3 +163,28 @@ Save every 500ms vs save on update after 500ms have passed
 
 Backups Window.
 Every minute, save the FractalConfig as a backup, unless it's identical to the last backup.
+
+
+Undo/Redo queue size mismatch? Problem with the order they're dropped?
+
+Keep full state and allow click to restore in Undo window? Recreate state step by step? 
+Kinda works at the moment but has errors when clicking a restore point:
+
+First use of ScrollArea ID 3B8F
+Widget is above this text.
+ID clashes happens when things like Windows or CollapsingHeaders share names, or when things like Plot and Grid"s aren't given unique id_salt:s.
+
+Sometimes the solution is to use ui.push_id
+
+Second use of ScrollArea ID 3B8F
+First use of ScrollArea ID 3B8F
+Widget is above this text.
+ID clashes happens when things like Windows or CollapsingHeaders share names, or when things like Plot and Grid"s aren't given unique id_salt:s.
+
+Sometimes the solution is to use ui.push_id
+
+
+
+1 giant undo list, redo is determined by the position in the list. Changing settings clears all points after the current point.
+
+

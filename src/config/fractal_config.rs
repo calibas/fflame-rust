@@ -42,6 +42,12 @@ pub struct FractalConfig {
     /// Per-pixel iteration limit (0 = disabled, default: 0)
     #[serde(default)]
     pub target_iterations_per_pixel: u32,
+    /// Iterations per thread (GPU workgroup performance tuning, default: 256)
+    #[serde(default = "default_iterations_per_thread")]
+    pub iterations_per_thread: u32,
+    /// Speed multiplier for frame rate (1x-16x, affects quality consistency, default: 1)
+    #[serde(default = "default_speed_multiplier")]
+    pub speed_multiplier: u32,
 
     /// Color settings
     pub color_mode: ColorMode,
@@ -98,6 +104,14 @@ fn default_blend_factor() -> f32 {
     0.1  // 10% blend rate - good balance between speed and smoothness
 }
 
+fn default_iterations_per_thread() -> u32 {
+    256  // Default iterations per GPU thread
+}
+
+fn default_speed_multiplier() -> u32 {
+    1  // Default 1x speed (60 FPS)
+}
+
 impl Default for FractalConfig {
     fn default() -> Self {
         use crate::scene::transforms::Flame;
@@ -119,6 +133,8 @@ impl Default for FractalConfig {
             density_compression_strength: 0.0,
             blend_factor: default_blend_factor(),
             target_iterations_per_pixel: 0,
+            iterations_per_thread: default_iterations_per_thread(),
+            speed_multiplier: default_speed_multiplier(),
             color_mode: ColorMode::Transform,
             palette_index: 0,
             palette: None,

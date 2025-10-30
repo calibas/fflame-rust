@@ -207,9 +207,26 @@ pub fn render_settings_window(
 
                     ui.separator();
 
-                    // Render settings
-                    if ui.add(egui::Slider::new(iterations_per_thread, 64..=4096).text("Iterations per Thread")).changed() {
-                        *iterations_changed = true;
+                    // Render settings - Iterations per thread
+                    let mut temp_iterations = *iterations_per_thread;
+                    if ui.add(egui::Slider::new(&mut temp_iterations, 64..=4096)
+                        .text("Iterations per Thread"))
+                        .on_hover_text(
+                            "GPU workgroup performance tuning.\n\
+                            Higher values = fewer dispatches, better GPU utilization.\n\
+                            Lower values = more frequent updates, smoother animation."
+                        )
+                        .changed()
+                    {
+                        if let Ok(update_type) = config_manager.update_param(
+                            ConfigPath::IterationsPerThread,
+                            temp_iterations.into(),
+                            true  // Lazy undo
+                        ) {
+                            *iterations_per_thread = config_manager.active_config().iterations_per_thread;
+                            *iterations_changed = true;
+                            max_update = max_update.max(update_type);
+                        }
                     }
 
                     // Histogram color scale
@@ -381,11 +398,56 @@ pub fn render_settings_window(
                     // Speed multiplier for frame rate (1x = 60 FPS, 2x = 120 FPS, etc.)
                     ui.horizontal(|ui| {
                         ui.label("Speed:");
-                        if ui.selectable_label(*speed_multiplier == 1, "1x").clicked() { *speed_multiplier = 1; }
-                        if ui.selectable_label(*speed_multiplier == 2, "2x").clicked() { *speed_multiplier = 2; }
-                        if ui.selectable_label(*speed_multiplier == 4, "4x").clicked() { *speed_multiplier = 4; }
-                        if ui.selectable_label(*speed_multiplier == 8, "8x").clicked() { *speed_multiplier = 8; }
-                        if ui.selectable_label(*speed_multiplier == 16, "16x").clicked() { *speed_multiplier = 16; }
+                        if ui.selectable_label(*speed_multiplier == 1, "1x").clicked() {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::SpeedMultiplier,
+                                1u32.into(),
+                                false  // Immediate capture
+                            ) {
+                                *speed_multiplier = config_manager.active_config().speed_multiplier;
+                                max_update = max_update.max(update_type);
+                            }
+                        }
+                        if ui.selectable_label(*speed_multiplier == 2, "2x").clicked() {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::SpeedMultiplier,
+                                2u32.into(),
+                                false
+                            ) {
+                                *speed_multiplier = config_manager.active_config().speed_multiplier;
+                                max_update = max_update.max(update_type);
+                            }
+                        }
+                        if ui.selectable_label(*speed_multiplier == 4, "4x").clicked() {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::SpeedMultiplier,
+                                4u32.into(),
+                                false
+                            ) {
+                                *speed_multiplier = config_manager.active_config().speed_multiplier;
+                                max_update = max_update.max(update_type);
+                            }
+                        }
+                        if ui.selectable_label(*speed_multiplier == 8, "8x").clicked() {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::SpeedMultiplier,
+                                8u32.into(),
+                                false
+                            ) {
+                                *speed_multiplier = config_manager.active_config().speed_multiplier;
+                                max_update = max_update.max(update_type);
+                            }
+                        }
+                        if ui.selectable_label(*speed_multiplier == 16, "16x").clicked() {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::SpeedMultiplier,
+                                16u32.into(),
+                                false
+                            ) {
+                                *speed_multiplier = config_manager.active_config().speed_multiplier;
+                                max_update = max_update.max(update_type);
+                            }
+                        }
                     });
                     ui.label(format!("Target FPS: {}", 60 * *speed_multiplier)).on_hover_text(
                         "Speed multiplier increases frame rate for smoother progressive rendering.\n\
