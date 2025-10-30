@@ -185,6 +185,10 @@ impl EguiLayer {
         // log::debug!("render_ui start: ConfigManager has exposure={:.3}, gamma={:.3}",
         //     config_manager.config().exposure, config_manager.config().gamma);
 
+        // Sync flame from ConfigManager before rendering UI
+        // This ensures all UI windows see the latest state (important for Triangle Editor)
+        *flame = config_manager.active_config().flame.clone();
+
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Render menu bar
             menu_bar::render_menu_bar(
@@ -293,7 +297,10 @@ impl EguiLayer {
                 config_manager,
                 flame,
             );
-            // TODO: Handle triangle_editor_update (Phase 4 task)
+            // Handle triangle editor updates
+            if triangle_editor_update >= crate::config::UpdateType::IterationReset {
+                flame_changed = true;
+            }
 
             // Render Tone Mapping window
             let _tonemap_update = tone_mapping::render_tone_mapping_window(

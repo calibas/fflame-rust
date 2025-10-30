@@ -265,6 +265,11 @@ impl ConfigManager {
         self.last_lazy_undo = None;
     }
 
+    /// Check if ConfigManager is in preview mode (during lazy drag)
+    pub fn is_in_preview_mode(&self) -> bool {
+        self.preview.is_some()
+    }
+
     /// Push change to undo stack, maintaining depth limit
     fn push_undo(&mut self, change: ConfigChange) {
         log::debug!("PUSH_UNDO: {}", change.description);
