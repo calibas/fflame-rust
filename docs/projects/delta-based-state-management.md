@@ -1,6 +1,6 @@
 # Delta-Based State Management System
 
-**Status:** Phase 4 Complete ✅ (Triangle Editor migrated, live preview fixed)
+**Status:** Phase 4 Complete ✅ (Mouse panning integrated, preview mode exit fixed)
 **Created:** 2025-10-29
 **Updated:** 2025-10-30
 **Category:** Architecture Refactor
@@ -1097,6 +1097,16 @@ This ensures:
    - Smart accumulation: `is_in_preview_mode()` detects lazy drag, skips reset for smooth feedback
    - Bug fix: Set `flame_changed = true` based on UpdateType return, sync flame from ConfigManager
    - Returns `UpdateType`, removes `triangle_drag_*` flags
+
+5. ✅ Convert Mouse Panning - Integrated with ConfigManager for undo/redo support (2025-10-30)
+   - Uses `update_batch()` for atomic PanX + PanY updates (single undo entry)
+   - Lazy mode enabled for smooth drag (500ms throttle)
+   - Respects view rotation (same as arrow keys)
+   - Preview mode via `is_in_preview_mode()` check
+   - Fixed: Removed `view_changed_by_keyboard` flag during drag (was causing black flashes)
+   - Fixed: View slider flags only set when NOT in preview mode (rotation, camera rotation)
+   - Fixed: `force_commit_preview()` simplified to just commit preview→current without creating deltas
+   - Fixed: Added `force_commit_preview()` call on mouse release to exit preview mode immediately
 
 **Remaining Tasks**:
 3. ⚪ Convert Transform variation controls (variation_controls.rs)

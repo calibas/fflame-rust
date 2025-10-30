@@ -844,40 +844,20 @@ impl ConfigManager {
     }
 
     /// Force commit preview to current (call on drag end)
-    /// Returns the update type of the final change
-    pub fn force_commit_preview(&mut self, path: &ConfigPath) -> Result<UpdateType, ConfigError> {
+    /// Simply commits preview to current without capturing to undo
+    /// (deltas are already captured by throttle mechanism during drag)
+    pub fn force_commit_preview(&mut self, _path: &ConfigPath) -> Result<UpdateType, ConfigError> {
         if let Some(preview) = self.preview.take() {
-            // Get values from current and preview
-            let old_value = {
-                let val = self.get_value(path)?;
-                self.preview = Some(preview);
-                val
-            };
-            let new_value = self.get_value(path)?;
+            // Just commit preview to current, don't create new deltas
+            // The throttle mechanism already captured changes during drag
+            self.current = preview;
+            log::debug!("Force commit: Committed preview to current (no undo capture)");
 
-            // If they're different, capture the final delta
-            if !old_value.approx_eq(&new_value) {
-                log::debug!("Force commit: {} = {} → {}", path, old_value, new_value);
-
-                let delta = ConfigDelta::new(path.clone(), old_value, new_value);
-                let change = ConfigChange::single(delta);
-                let update_type = change.update_type();
-
-                self.push_undo(change);
-
-                // Commit preview to current
-                self.current = self.preview.take().unwrap();
-                log::debug!("  -> Committed final preview to current");
-
-                return Ok(update_type);
-            } else {
-                // No change, just discard preview
-                self.preview = None;
-                log::debug!("Force commit: {} unchanged, discarding preview", path);
-            }
+            // Return ViewOnly as a safe default - caller can check if needed
+            Ok(UpdateType::ViewOnly)
+        } else {
+            Ok(UpdateType::None)
         }
-
-        Ok(UpdateType::None)
     }
 
     /// Get current config (read-only)
