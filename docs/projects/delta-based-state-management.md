@@ -1564,29 +1564,46 @@ if preview_just_ended {
 ```
 This prevents blink during drag by keeping preview active through throttle commits.
 
-### Next: Implement Simple Live Mode Fix (To Discuss)
+### Next: Implement Simple Live Mode Fix - DO BOTH ✅
 
-**Option A - Reset every frame during live mode:**
+**User Decision:**
+> "It should probably do both, clear the accumulation buffer during live mode, and completely redraw the fractal when exiting live mode."
+
+**Implementation Plan:**
+
+**Part 1 - Clear accumulation every frame during live mode:**
 ```rust
+// In app.rs render loop, BEFORE compute pass:
 if self.config_manager.is_in_preview_mode() {
     renderer.reset(...);  // Clear accumulation buffer every frame
 }
 ```
-- **Pro**: Prevents progressive brightness buildup
-- **Con**: May impact performance (resetting 60 times/second)
+- Prevents progressive brightness buildup
+- Each frame starts fresh (low quality, fast feedback)
+- No accumulated overbright areas
 
-**Option B - Reset when exiting live mode:**
+**Part 2 - Complete redraw when exiting live mode:**
 ```rust
-// Detect when force_commit_preview() is called
-// Then call renderer.reset() before next frame displays
+// In app.rs, detect when preview mode ends:
+let was_in_preview = /* track previous frame state */;
+let in_preview = self.config_manager.is_in_preview_mode();
+if was_in_preview && !in_preview {
+    renderer.reset(...);  // Trigger complete redraw for full quality
+}
 ```
-- **Pro**: Only one reset (on exit)
-- **Con**: Timing critical - must happen before display shows overbright buffer
+- Ensures final render is full quality
+- Clears any residual state from live mode
+- Fresh accumulation starts
 
-**Questions:**
-1. Which approach is better for performance?
-2. Does Option B have ordering issues (reset happens after display)?
-3. Is there a third option we're missing?
+**Why Both:**
+1. **During**: Prevents brightness buildup (keeps live mode clean)
+2. **Exit**: Ensures high quality final result (fresh start for accumulation)
+
+**Implementation Details:**
+- Use existing `renderer.reset()` - already tested and working
+- Use existing `is_in_preview_mode()` - simple boolean check
+- Track `was_in_preview_mode_last_frame` in App struct (1 bool field)
+- No complex flags, timestamps, or state machines needed
 
 ---
 
