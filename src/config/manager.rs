@@ -100,8 +100,8 @@ impl ConfigManager {
 
                 self.push_undo(change);
 
-                // Commit preview to current
-                self.current = self.preview.take().unwrap();
+                // Commit preview to current (clone to keep preview active - prevents blink)
+                self.current = self.preview.clone().unwrap();
                 log::debug!("  -> Committed preview to current, undo stack len: {}", self.undo_stack.len());
 
                 return Ok(update_type);
@@ -189,8 +189,8 @@ impl ConfigManager {
                 let change_from_current = ConfigChange::batch(deltas_from_current, change.description.clone());
                 self.push_undo(change_from_current);
 
-                // Commit preview to current
-                self.current = self.preview.take().unwrap();
+                // Commit preview to current (clone to keep preview active - prevents blink)
+                self.current = self.preview.clone().unwrap();
                 log::debug!("  -> Committed batch preview to current, undo stack len: {}", self.undo_stack.len());
 
                 return Ok(update_type);

@@ -1547,25 +1547,46 @@ if preview_just_ended {
 }
 ```
 
-### Next Steps
+### Code Cleanup - Reverted to Minimal Fix ✅
 
-1. ❌ **Revert overengineered code**:
-   - Remove `preview_just_created`, `preview_just_committed` flags
-   - Remove `last_preview_update` timestamp tracking
-   - Remove `check_and_clear_stale_preview()` method
-   - Remove `consume_*_flag()` methods
-   - Remove `was_in_preview_mode_last_frame` tracking
-   - Keep ONLY: preview cloning on throttle (no blink fix)
+**Reverted all overengineered code:**
+- ✅ Removed `preview_just_created`, `preview_just_committed` flags
+- ✅ Removed `last_preview_update` timestamp tracking
+- ✅ Removed `check_and_clear_stale_preview()` method
+- ✅ Removed `consume_*_flag()` methods
+- ✅ Removed `was_in_preview_mode_last_frame` tracking
 
-2. ⚪ **Implement simple solution**:
-   - Call `renderer.reset()` every frame when `in_preview_mode`
-   - OR call `renderer.reset()` when detecting exit from preview mode
-   - Test which timing works better
+**Kept ONLY the "no blink" fix:**
+```rust
+// In update_param() and update_batch() (2 lines total):
+// Changed from: self.current = self.preview.take().unwrap();
+// Changed to:   self.current = self.preview.clone().unwrap();
+```
+This prevents blink during drag by keeping preview active through throttle commits.
 
-3. ⚪ **Test**:
-   - Verify no progressive brightness during drag
-   - Verify full quality after drag ends
-   - Verify no blink during drag
+### Next: Implement Simple Live Mode Fix (To Discuss)
+
+**Option A - Reset every frame during live mode:**
+```rust
+if self.config_manager.is_in_preview_mode() {
+    renderer.reset(...);  // Clear accumulation buffer every frame
+}
+```
+- **Pro**: Prevents progressive brightness buildup
+- **Con**: May impact performance (resetting 60 times/second)
+
+**Option B - Reset when exiting live mode:**
+```rust
+// Detect when force_commit_preview() is called
+// Then call renderer.reset() before next frame displays
+```
+- **Pro**: Only one reset (on exit)
+- **Con**: Timing critical - must happen before display shows overbright buffer
+
+**Questions:**
+1. Which approach is better for performance?
+2. Does Option B have ordering issues (reset happens after display)?
+3. Is there a third option we're missing?
 
 ---
 
