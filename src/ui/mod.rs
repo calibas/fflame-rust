@@ -185,10 +185,6 @@ impl EguiLayer {
         // log::debug!("render_ui start: ConfigManager has exposure={:.3}, gamma={:.3}",
         //     config_manager.config().exposure, config_manager.config().gamma);
 
-        // Sync flame from ConfigManager before rendering UI
-        // This ensures all UI windows see the latest state (important for Triangle Editor)
-        *flame = config_manager.active_config().flame.clone();
-
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Render menu bar
             menu_bar::render_menu_bar(
@@ -298,7 +294,8 @@ impl EguiLayer {
                 flame,
             );
             // Handle triangle editor updates
-            if triangle_editor_update >= crate::config::UpdateType::IterationReset {
+            // Set flame_changed if update type requires it OR if in preview mode (live updates during drag)
+            if triangle_editor_update >= crate::config::UpdateType::IterationReset || config_manager.is_in_preview_mode() {
                 flame_changed = true;
             }
 
@@ -411,6 +408,10 @@ impl EguiLayer {
         for id in &full_output.textures_delta.free {
             self.renderer.free_texture(id);
         }
+
+        // Sync flame from ConfigManager AFTER UI updates (for live preview during drag)
+        // This ensures app.rs gets the latest preview state when checking is_in_preview_mode()
+        *flame = config_manager.active_config().flame.clone();
 
         UiResponse {
             reset_requested,
