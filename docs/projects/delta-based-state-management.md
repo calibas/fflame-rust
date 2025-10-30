@@ -1877,6 +1877,45 @@ The infrastructure was already complete! Just routed the changes through ConfigM
 
 ---
 
+## Phase 4 Extended: View Slider Reset Fix (2025-10-30) ✅ COMPLETE
+
+### Problem
+Rotation and Camera rotation sliders in View window were flashing/going black during drag, similar to the original mouse panning issue.
+
+### Root Cause
+View sliders set `view_changed = true` or `camera_rotation_changed = true` every frame during drag. These flags triggered full accumulation resets every frame, causing black flashes when the buffer cleared before the next frame could render.
+
+### Solution
+Only set view change flags when NOT in preview mode:
+
+```rust
+// Rotation slider (line 201-204)
+if !config_manager.is_in_preview_mode() {
+    *view_changed = true;
+}
+
+// Camera rotation sliders (lines 226-229, 246-249)
+if !config_manager.is_in_preview_mode() {
+    *camera_rotation_changed = true;
+}
+```
+
+### Fixed Sliders
+1. Rotation slider (2D view rotation)
+2. Camera Pitch slider (3D camera X rotation)
+3. Camera Yaw slider (3D camera Y rotation)
+
+### Result
+- ✅ Smooth rotation during drag (no flashes)
+- ✅ Overwrite mode provides live preview
+- ✅ Undo/redo already working (sliders use ConfigManager)
+- ✅ Lazy throttling already working (500ms intervals)
+
+### Note on Legacy Flags
+`view_changed` and `camera_rotation_changed` are legacy flags from the old system that coexist with the new ConfigManager/UpdateType system. They could eventually be replaced by checking UpdateType, but they're not causing problems now that they respect preview mode.
+
+---
+
 ## Open Questions
 
 1. **Preset loading**: Should loading a preset clear undo history? Or create a single "Load preset: X" undo point?
