@@ -1129,8 +1129,22 @@ This ensures:
      - Variation parameters stored separately: `ConfigPath::TransformVariationParam { index, variation, param }`
    - **Testing**: ✅ All variation sliders work with lazy undo (500ms throttle, live preview, proper undo/redo)
 
+7. ✅ Convert Tone Mapping & Colors Window - Complete window migration (2025-10-30)
+   - **Tonemap Mode buttons** (Linear/Logarithmic/Density): `update_param(lazy=false)` for immediate capture
+   - **Use Tone Curve checkbox**: `update_param(lazy=false)` for immediate capture
+   - **Tone Curve preset buttons** (Linear/S-Curve/Brighten/Darken): `update_param(lazy=false)` for immediate capture
+   - **Tone Curve editor**: Interactive drag control with lazy undo
+     - Drag control points: `update_param(lazy=true)` for smooth live preview (500ms throttle)
+     - Drag end: `force_commit_preview()` to exit preview mode immediately
+     - Double-click add point: `update_param(lazy=false)` for immediate capture
+     - Returns `UpdateType::ToneMappingOnly` (no iteration reset needed)
+   - **Color Mode dropdown** (Transform/Palette/Speed): `update_param(lazy=false)` for immediate capture
+   - **Palette selector**: `update_param(lazy=false)` for immediate capture (returns `UpdateType::ColorOnly`)
+   - **Speed Factor slider**: `update_param(lazy=true)` for smooth drag (returns `UpdateType::ColorOnly`)
+   - **Background Color picker**: `update_param(lazy=false)` for immediate capture (returns `UpdateType::ToneMappingOnly`)
+   - **Testing**: ✅ All controls work with proper undo/redo, curve editor has smooth live preview
+
 **Remaining Tasks**:
-5. ⚪ Convert remaining Tone Mapping controls (mode, curve, etc.)
 6. ⚪ Remove ALL `*_changed` flags from codebase
 7. ⚪ Update app.rs to only use `UpdateType`
 
@@ -1145,20 +1159,21 @@ This ensures:
 7. **Window functions**: Return `UpdateType` for proper update classification
 
 **Metrics**:
-- Windows migrated: 4 (View 100%, Settings 100%, Transforms 100%, Triangle Editor 100%)
-- Controls converted: 50+ individual controls across all windows
+- Windows migrated: 5 (View 100%, Settings 100%, Transforms 100%, Tone Mapping 100%, Triangle Editor 100%)
+- Controls converted: 65+ individual controls across all windows
   - View: 5 sliders + 7 buttons (12 controls)
   - Settings: 7 quality controls (7 controls)
   - Transforms: 11 core controls per transform (affine, weight, color)
   - Variations: All 26 core variations + parameters (e.g., JuliaN power/dist, Blob high/low/waves)
+  - Tone Mapping: 8 controls (mode buttons, curve checkbox, 4 curve presets, curve editor drag, color mode, palette, speed, background)
   - Triangle Editor: 4 interaction modes (batch updates)
   - Mouse panning: Atomic X+Y batch updates
-- Lines changed: ~700+ across 11 files
-- Commits: 9 feature + 4 documentation + 1 bugfix
+- Lines changed: ~900+ across 12 files
+- Commits: 11 feature + 5 documentation + 1 bugfix
 - Build status: ✅ All passing
 
-**Deliverable**: ✅ Core migration complete - 4 windows functional with proper undo/redo and smart accumulation
-**Remaining**: Variation controls, Tone Mapping completion, cleanup
+**Deliverable**: ✅ Core migration complete - 5 windows functional with proper undo/redo and smart accumulation
+**Remaining**: Legacy flag cleanup
 
 ---
 
