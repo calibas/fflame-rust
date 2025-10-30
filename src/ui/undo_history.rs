@@ -20,6 +20,7 @@ pub fn render_undo_history_window(
                 ui.label("(No undo history)");
             } else {
                 egui::ScrollArea::vertical()
+                    .id_source("undo_scroll_area")
                     .max_height(200.0)
                     .show(ui, |ui| {
                         for (i, change) in undo_history.iter().enumerate().rev() {
@@ -46,6 +47,7 @@ pub fn render_undo_history_window(
                 ui.label("(No redo history)");
             } else {
                 egui::ScrollArea::vertical()
+                    .id_source("redo_scroll_area")
                     .max_height(200.0)
                     .show(ui, |ui| {
                         for (i, change) in redo_history.iter().enumerate() {
