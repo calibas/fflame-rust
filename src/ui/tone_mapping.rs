@@ -111,7 +111,9 @@ pub fn render_tone_mapping_window(
                         }
                     }
 
-                    ui.add_enabled_ui(*use_curve, |ui| {
+                    // Use the config value for enabled state (not the app-level variable which may be stale)
+                    let current_use_curve = config_manager.active_config().use_curve;
+                    ui.add_enabled_ui(current_use_curve, |ui| {
                         // Preset curves
                         ui.label("Presets");
                         ui.horizontal(|ui| {
