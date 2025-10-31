@@ -28,7 +28,6 @@ pub fn render_tone_mapping_window(
     current_palette_index: &mut usize,
     palette_changed: &mut bool,
     palette_editor_palette: &mut crate::scene::palette::Palette,
-    palette_editor_has_changes: &mut bool,
     speed_factor: &mut f32,
     background_color: &mut [f32; 3],
     background_color_changed: &mut bool,
@@ -233,7 +232,7 @@ pub fn render_tone_mapping_window(
                                                 }
 
                                                 *palette_editor_palette = edited_palette;
-                                                *palette_editor_has_changes = true; // New palette needs to be applied
+                                                // Note: Changes now applied live via ConfigManager
                                             }
                                         }
                                     }
@@ -266,7 +265,7 @@ pub fn render_tone_mapping_window(
                                     // For custom palettes, keep the same name (will update in place)
 
                                     *palette_editor_palette = edited_palette;
-                                    *palette_editor_has_changes = true; // New palette needs to be applied
+                                    // Note: Changes now applied live via ConfigManager
                                 }
                             }
 
@@ -289,7 +288,7 @@ pub fn render_tone_mapping_window(
 
                                     edited_palette.name = new_name;
                                     *palette_editor_palette = edited_palette;
-                                    *palette_editor_has_changes = true; // New palette needs to be applied
+                                    // Note: Changes now applied live via ConfigManager
                                 }
                             }
                         });
