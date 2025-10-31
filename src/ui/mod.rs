@@ -323,7 +323,6 @@ impl EguiLayer {
                 current_palette_index,
                 &mut palette_changed,
                 &mut self.palette_editor.current_palette,
-                &mut self.palette_editor.has_unsaved_changes,
                 speed_factor,
                 background_color,
                 &mut background_color_changed,
