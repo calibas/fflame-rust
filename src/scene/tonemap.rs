@@ -19,7 +19,7 @@ impl Default for ToneMapMode {
 }
 
 /// A single control point on the tone curve
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct CurvePoint {
     /// Input value (0.0 to 1.0)
     pub x: f32,
@@ -38,7 +38,7 @@ impl CurvePoint {
 
 /// Tone curve for fine-grained control over tone mapping
 /// Similar to Photoshop/Apophysis curves system
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToneCurve {
     /// Control points defining the curve (always includes (0,0) and (1,1))
     /// Sorted by x coordinate
