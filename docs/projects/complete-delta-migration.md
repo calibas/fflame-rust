@@ -249,11 +249,99 @@ For each migrated control:
 - ✅ Dual undo cleanup (tone mapping)
 - ✅ Lazy undo force commit bug fix
 
-### Remaining Work
+### Completed Work
 - [x] Phase 11: Transform structure operations (add/delete/modify) ✅ COMPLETE (2025-10-31)
 - [x] Phase 12: Remove old undo system entirely ✅ COMPLETE (2025-10-31)
 - [x] Phase 13: Final transform migration ✅ NOT NEEDED (future feature, no old code)
-- [ ] Phase 14: Documentation cleanup (delete undo.rs, update CLAUDE.md)
+- [x] Phase 14a: Fix ALL remaining lazy undo bugs ✅ COMPLETE (2025-10-31)
+- [x] Phase 14b: Fix shader recompilation performance ✅ COMPLETE (2025-10-31)
+- [x] Phase 14c: Palette editor live undo (partial) ✅ COMPLETE (2025-10-31)
+
+### Remaining Work
+- [ ] Phase 15: Palette editor complete (add/delete, import/export)
+- [ ] Phase 16: Final documentation cleanup (delete undo.rs, update CLAUDE.md)
+
+---
+
+## Today's Major Fixes (2025-10-31 Afternoon)
+
+### Phase 14a: Fix ALL Remaining Lazy Undo Bugs ✅
+
+**Problem:** 17 more sliders were stuck in preview mode - never called `force_commit_preview()`
+
+**Affected Controls:**
+
+**settings.rs (6 sliders):**
+- iterations_per_thread
+- histogram_color_scale
+- low_density_smoothing
+- blend_factor
+- density_compression_strength
+- target_iterations_per_pixel
+
+**transforms.rs (11 controls):**
+- Transform weight (1 slider)
+- Affine parameters a,b,c,d,e,f (6 drag values)
+- Color RGB (3 sliders)
+- Color speed (1 slider)
+
+**variation_controls.rs + variation_params.rs:**
+- Variation weight sliders (all 26+ variations)
+- Variation parameter sliders (Float, Integer, Angle types)
+
+**Solution:**
+- Sliders: Store response, check `drag_stopped()`, call `force_commit_preview()`
+- DragValues: Store response, check `lost_focus()`, call `force_commit_preview()`
+- Variation params: Changed render functions to return `(changed, drag_stopped)` tuple
+
+**Result:** ALL lazy undo sliders in the entire codebase now work correctly!
+
+**Files Modified:**
+- `src/ui/settings.rs` - Fixed 6 sliders
+- `src/ui/transforms.rs` - Fixed 11 controls
+- `src/ui/variation_controls.rs` - Fixed variation weight sliders
+- `src/ui/variation_params.rs` - Fixed parameter sliders
+
+### Phase 14b: Fix Shader Recompilation Performance ✅
+
+**Problem:** Every variation weight adjustment (0.5 → 0.6) triggered full shader rebuild (~100ms stutter)
+
+**Root Cause:**
+- `ShaderCache.ensure_current()` compared `HashMap<String, f32>` for equality
+- HashMap equality includes values (weights), not just keys (variation names)
+- Weights don't affect shader code at all - only which variations exist
+
+**Solution:**
+- Compare only keys as HashSets: `needed.keys() == self.active_variations.keys()`
+- Now only rebuilds when variations actually added/removed
+
+**Result:**
+- ✅ No shader rebuild when adjusting existing variation weights
+- ✅ Still rebuilds when adding/removing variations (correct behavior)
+- ✅ Smooth real-time editing without compilation stutters
+
+**Files Modified:**
+- `src/shader_cache.rs` - Changed comparison logic (lines 62-67)
+
+### Phase 14c: Palette Editor Live Undo (Partial) ✅
+
+**Problem:** Palette editor had Apply button, no live updates, no undo support
+
+**Implemented:**
+- Color stop position slider: Live updates with lazy undo
+- Color picker: Live updates with lazy undo
+- Both use preview mode and create single undo entry on release
+- Fixed black frames during preview mode (palette changes now respect preview mode)
+
+**Still TODO:**
+- Add/delete color stops
+- Palette name editing
+- Import/export operations
+- Remove Apply button (deferred to Phase 15)
+
+**Files Modified:**
+- `src/ui/palette_editor.rs` - Added lazy undo for position/color
+- `src/app/mod.rs` - Fixed palette preview mode logic (line 1067)
 
 ---
 
