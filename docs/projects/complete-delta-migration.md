@@ -58,25 +58,50 @@ The delta-based state management system (ConfigManager) is mostly implemented an
 
 ## Migration Phases
 
-### Phase 11: Migrate Transform Add/Delete/Modify (TODO)
+### Phase 11: Migrate Transform Add/Delete/Modify ✅ COMPLETE (2025-10-31)
 
-**Current State:**
-- Transform window uses `app.capture_state()` for undo
-- Add/delete transform creates undo entries via old system
-- This works but is inconsistent with rest of app
+**What Was Migrated:**
+- Add transform → snapshot-based undo via `config_manager.load_config()`
+- Delete transform → snapshot-based undo via `config_manager.load_config()`
+- Config import (JSON paste) → snapshot-based undo
+- Config load from file → snapshot-based undo
+- Apophysis XML import → snapshot-based undo
 
-**Goal:**
-- Migrate to ConfigManager batch update API
-- Remove dependency on old capture_state()
+**Implementation Pattern:**
+```rust
+// Create new config with modification
+let mut new_config = self.config_manager.active_config().clone();
+new_config.flame.transforms.push(new_transform); // or remove, etc.
 
-**Complexity:** Medium
-- Transform structure changes affect multiple controls at once
-- Need batch update support (already implemented)
-- May need new ConfigPath variants for transform operations
+// Load via ConfigManager (creates before/after snapshots internally)
+if let Err(e) = self.config_manager.load_config(new_config, "Add Transform".to_string()) {
+    eprintln!("Failed: {}", e);
+} else {
+    // Update app state from config
+    self.flame = self.config_manager.active_config().flame.clone();
+}
+```
 
-**Files to Update:**
-- `src/ui/transform_window.rs` - Replace capture_state() calls
-- Possibly `src/config/path.rs` - Add transform structure paths if needed
+**Key Design Decision:**
+Used `load_config()` instead of creating new ConfigPath variants because:
+- Transform structure changes affect entire flame (not single parameters)
+- Snapshot approach is simpler and more robust
+- Same pattern as preset loading (consistent API)
+- Avoids complex delta tracking for transform arrays
+
+**Files Modified:**
+- `src/app/mod.rs` - Replaced 7 `capture_state()` calls with `load_config()`
+  - Line 481: Config import (JSON paste)
+  - Line 522: Add transform
+  - Line 539: Delete transform
+  - Line 584: Load config from file
+  - Line 637, 648: Apophysis XML import (single/multiple flames)
+  - Line 979: Removed generic flame_changed capture
+
+**Remaining capture_state() Call:**
+- Line 550: Custom palette from editor (deferred - low frequency, separate subsystem)
+
+**Testing:** ✅ Build successful
 
 ### Phase 12: Remove Old Undo System (TODO)
 
@@ -213,7 +238,7 @@ For each migrated control:
 - ✅ Lazy undo force commit bug fix
 
 ### Remaining Work
-- [ ] Phase 11: Transform structure operations (add/delete/modify)
+- [x] Phase 11: Transform structure operations (add/delete/modify) ✅ COMPLETE (2025-10-31)
 - [ ] Phase 12: Remove old undo system entirely
 - [ ] Phase 13: Final transform UI (when added)
 - [ ] Phase 14: Documentation cleanup

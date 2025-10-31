@@ -477,8 +477,13 @@ impl App {
         if let Some(json) = ui_response.config_import_requested {
             match FractalConfig::from_json(&json) {
                 Ok(config) => {
-                    self.capture_state();
-                    self.import_config(config);
+                    // Load via ConfigManager (creates snapshot-based undo entry)
+                    if let Err(e) = self.config_manager.load_config(config, "Import Config".to_string()) {
+                        eprintln!("Failed to import config: {}", e);
+                    } else {
+                        // Update app state from config
+                        self.flame = self.config_manager.active_config().flame.clone();
+                    }
                 }
                 Err(e) => {
                     eprintln!("Failed to import config: {}", e);
@@ -488,7 +493,8 @@ impl App {
 
         // Handle add transform
         if ui_response.add_transform {
-            self.capture_state();
+            // Create new config with added transform
+            let mut new_config = self.config_manager.active_config().clone();
 
             // Create a new default transform
             let new_transform = crate::scene::transforms::Transform {
@@ -510,14 +516,32 @@ impl App {
                 color_speed: 0.5,
             };
 
-            self.flame.transforms.push(new_transform);
+            new_config.flame.transforms.push(new_transform);
+
+            // Load via ConfigManager (creates snapshot-based undo entry)
+            if let Err(e) = self.config_manager.load_config(new_config, "Add Transform".to_string()) {
+                eprintln!("Failed to add transform: {}", e);
+            } else {
+                // Update app state from config
+                self.flame = self.config_manager.active_config().flame.clone();
+            }
         }
 
         // Handle delete transform
         if let Some(idx) = ui_response.delete_transform {
-            if self.flame.transforms.len() > 1 && idx < self.flame.transforms.len() {
-                self.capture_state();
-                self.flame.transforms.remove(idx);
+            if self.config_manager.active_config().flame.transforms.len() > 1
+                && idx < self.config_manager.active_config().flame.transforms.len() {
+                // Create new config with deleted transform
+                let mut new_config = self.config_manager.active_config().clone();
+                new_config.flame.transforms.remove(idx);
+
+                // Load via ConfigManager (creates snapshot-based undo entry)
+                if let Err(e) = self.config_manager.load_config(new_config, format!("Delete Transform {}", idx)) {
+                    eprintln!("Failed to delete transform: {}", e);
+                } else {
+                    // Update app state from config
+                    self.flame = self.config_manager.active_config().flame.clone();
+                }
             }
         }
 
@@ -565,9 +589,14 @@ impl App {
                 {
                     match FractalConfig::load_from_file(&path) {
                         Ok(config) => {
-                            self.capture_state();
-                            self.import_config(config);
-                            println!("Config loaded from: {}", path.display());
+                            // Load via ConfigManager (creates snapshot-based undo entry)
+                            if let Err(e) = self.config_manager.load_config(config, "Load Config".to_string()) {
+                                eprintln!("Failed to load config: {}", e);
+                            } else {
+                                // Update app state from config
+                                self.flame = self.config_manager.active_config().flame.clone();
+                                println!("Config loaded from: {}", path.display());
+                            }
                         }
                         Err(e) => {
                             eprintln!("Failed to load config: {}", e);
@@ -614,15 +643,23 @@ impl App {
                                         eprintln!("No flames found in file");
                                     } else if configs.len() == 1 {
                                         // Single flame: import directly
-                                        self.capture_state();
-                                        self.import_config(configs.into_iter().next().unwrap());
-                                        println!("Imported Apophysis flame from: {}", path.display());
+                                        let config = configs.into_iter().next().unwrap();
+                                        if let Err(e) = self.config_manager.load_config(config, "Import Apophysis Flame".to_string()) {
+                                            eprintln!("Failed to import flame: {}", e);
+                                        } else {
+                                            self.flame = self.config_manager.active_config().flame.clone();
+                                            println!("Imported Apophysis flame from: {}", path.display());
+                                        }
                                     } else {
                                         // Multiple flames: let user choose
                                         // TODO: Add multi-flame selection dialog
                                         println!("Found {} flames, importing first one", configs.len());
-                                        self.capture_state();
-                                        self.import_config(configs.into_iter().next().unwrap());
+                                        let config = configs.into_iter().next().unwrap();
+                                        if let Err(e) = self.config_manager.load_config(config, "Import Apophysis Flame".to_string()) {
+                                            eprintln!("Failed to import flame: {}", e);
+                                        } else {
+                                            self.flame = self.config_manager.active_config().flame.clone();
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -949,16 +986,9 @@ impl App {
             // GPU upload handled below via flame_changed flag
         }
 
-        // Capture state before applying meaningful changes (skip for presets - ConfigManager handles it)
-        if !ui_response.preset_changed {
-            // Note: Most controls now use ConfigManager (handles undo internally)
-            // Only capture for non-ConfigManager controls (transforms window structure changes)
-            // ConfigManager-managed controls removed: view, tone mapping, colors (Phase 4-7)
-            let should_capture = ui_response.flame_changed; // Transform structure changes (add/delete/modify)
-            if should_capture {
-                self.capture_state();
-            }
-        }
+        // All controls now use ConfigManager for undo/redo! ✅
+        // Phase 11 (2025-10-31): Transform add/delete migrated to snapshot-based undo
+        // No more capture_state() calls needed here
 
         if needs_update {
             if let Some(ref mut renderer) = self.flame_renderer {
