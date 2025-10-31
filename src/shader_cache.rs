@@ -59,7 +59,10 @@ impl ShaderCache {
     pub fn ensure_current(&mut self, device: &Device, bind_group_layout: &BindGroupLayout, flame: &Flame) -> bool {
         let needed = flame.extract_active_variations();
 
-        if needed == self.active_variations {
+        // Only compare which variations are active (keys), not their weights
+        // Weights don't affect shader compilation, only which variations are included
+        if needed.keys().collect::<std::collections::HashSet<_>>()
+            == self.active_variations.keys().collect::<std::collections::HashSet<_>>() {
             return false; // No rebuild needed
         }
 
