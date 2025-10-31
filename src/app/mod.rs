@@ -1064,7 +1064,7 @@ impl App {
                 // Reset accumulation when view changes, palette changes, color mode changes, background color changes, flame changes, or user requests it
                 // Tone mapping: reset on mode change (log vs linear affects accumulation), but not curve/exposure/gamma (post-processing only)
                 let in_preview_mode = self.config_manager.is_in_preview_mode();
-                let should_reset = ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
+                let should_reset = ui_response.reset_requested || view_changed || (ui_response.palette_changed && !in_preview_mode) || ui_response.color_mode_changed
                     || ui_response.background_color_changed || ui_response.tonemap_mode_changed
                     || ui_response.histogram_color_scale_changed  // New scale incompatible with old samples
                     || ui_response.low_density_smoothing_changed  // New smoothing needs fresh samples to see effect
