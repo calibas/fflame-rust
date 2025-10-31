@@ -191,3 +191,21 @@ Sometimes the solution is to use ui.push_id
 
 
 Undo/Redo History, save to disk for "unlimited" version?
+
+
+Duplicate logic problems:
+
+I see! The config_manager holds the canonical config state and handles undo/redo, but the App struct has a separate copy of fields. This is the duplication problem. The rendering code is reading from App's fields (like self.zoom, self.pan_x) instead of from config_manager.active_config(). This is a larger architectural issue than just default values - there's a fundamental duplication of state between App fields and ConfigManager. However, refactoring this completely would be a much bigger change. For now, let me just ensure the defaults are consistent and come from the constants module. Let me check if there are similar issues in new_headless:
+Grep "pub.*fn new_headless" (in src/app/export.rs)
+⎿
+1 line of output
+Bash
+⎿
+Find new_headless function location
+IN
+grep -n "new_headless" src/app/mod.rs | head -5
+OUT
+0
+There's no new_headless in mod.rs anymore - it must be in export.rs. Let me check:
+Read c:\projects\fflame-rust\src\app\export.rs (lines 2-81)
+Good - the export_headless function now takes config: &FractalConfig as a parameter and uses it directly, so there's no duplication issue there. The real issue is in App::new() - the App struct duplicates many fields from config_manager. This is a known architectural issue but refactoring it completely would be a major change touching many files. For now, let me just verify the build still works with the changes I made:
