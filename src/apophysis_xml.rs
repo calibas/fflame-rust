@@ -192,7 +192,7 @@ fn parse_flame_element(
         exposure: 1.0,
         gamma,
         deterministic_rng: false,
-        histogram_color_scale: 10.0,
+        histogram_color_scale: 100.0,
         low_density_smoothing: 0.5,
         density_compression_strength: 0.0,
         blend_factor: 0.1,

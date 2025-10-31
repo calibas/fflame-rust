@@ -46,7 +46,7 @@ impl ConfigManager {
             preview: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            max_undo_depth: 50,
+            max_undo_depth: 500,  // ~5MB max memory (500 states × ~10KB each)
             last_lazy_undo: None,
             lazy_throttle: Duration::from_millis(500),
         }
