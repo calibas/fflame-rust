@@ -98,8 +98,8 @@ impl App {
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
             density_scale: 1.0,
-            speed_factor: 0.5,
-            max_iterations: 1_000_000_000,  // Effectively unlimited
+            speed_factor: crate::config::DEFAULT_SPEED_FACTOR,
+            max_iterations: crate::config::DEFAULT_MAX_ITERATIONS,
             color_mode: ColorMode::Transform,
             palette_index: 1,
             palette: Some(palette_library.get(1).unwrap().clone()),
@@ -107,16 +107,16 @@ impl App {
             tonemap_mode: ToneMapMode::Logarithmic,
             tonemap_curve: ToneCurve::linear(),
             use_curve: true,
-            exposure: 1.0,
-            gamma: 2.2,
+            exposure: crate::config::DEFAULT_EXPOSURE,
+            gamma: crate::config::DEFAULT_GAMMA,
             deterministic_rng: false,
-            histogram_color_scale: 100.0,  // Default (max color depth)
-            low_density_smoothing: 0.5,  // Moderate smoothing default
-            density_compression_strength: 0.0,  // Linear accumulation default (no compression)
-            blend_factor: 0.1,  // 10% blend rate - good balance between speed and smoothness
-            target_iterations_per_pixel: 0,  // Disabled by default
-            iterations_per_thread: 256,  // Default GPU workgroup size
-            speed_multiplier: 1,  // Default 1x speed (60 FPS)
+            histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
+            low_density_smoothing: crate::config::DEFAULT_LOW_DENSITY_SMOOTHING,
+            density_compression_strength: crate::config::DEFAULT_DENSITY_COMPRESSION,
+            blend_factor: crate::config::DEFAULT_BLEND_FACTOR,
+            target_iterations_per_pixel: crate::config::DEFAULT_TARGET_ITERATIONS_PER_PIXEL as u32,
+            iterations_per_thread: crate::config::DEFAULT_ITERATIONS_PER_THREAD,
+            speed_multiplier: crate::config::DEFAULT_SPEED_MULTIPLIER,
         };
 
         let config_manager = ConfigManager::new(initial_config.clone());
@@ -127,45 +127,44 @@ impl App {
             egui_layer,
             flame_renderer: Some(flame_renderer),
             flame,
-            iterations_per_thread: 256,
-            zoom: 1.0,
-            pan_x: 0.0,
-            pan_y: 0.0,
-            rotation: 0.0,
-            camera_rotation_x: 0.0,
-            camera_rotation_y: 0.0,
-            density_scale: 1.0,
+            iterations_per_thread: initial_config.iterations_per_thread,
+            zoom: initial_config.zoom,
+            pan_x: initial_config.pan_x,
+            pan_y: initial_config.pan_y,
+            rotation: initial_config.rotation,
+            camera_rotation_x: initial_config.camera_rotation_x,
+            camera_rotation_y: initial_config.camera_rotation_y,
+            density_scale: initial_config.density_scale,
             view_changed_by_keyboard: false,
             mouse_dragging: false,
             last_mouse_pos: None,
             metrics: PerformanceMetrics::new(),
             palette_library,
-            current_palette_index: 1, // Start with Fire palette
+            current_palette_index: initial_config.palette_index,
             preset_library,
-            current_preset_index: 0, // Start with first preset
-            color_mode: ColorMode::Transform,
+            current_preset_index: 0,
+            color_mode: initial_config.color_mode,
             paused: false,
-            max_iterations: Some(1_000_000_000),
-            speed_factor: 0.5,
+            max_iterations: Some(initial_config.max_iterations),
+            speed_factor: initial_config.speed_factor,
             modifiers: winit::keyboard::ModifiersState::default(),
-            background_color: [0.0, 0.0, 0.0], // Default to black
-            tonemap_mode: ToneMapMode::Logarithmic,
-            tonemap_curve: ToneCurve::linear(),
-            use_curve: false,  // Curves disabled by default
-            exposure: 1.0,
-            gamma: 2.2,
-            deterministic_rng: true, // Enabled by default for reproducible rendering
-            speed_multiplier: 1, // Default 1x (60 FPS)
+            background_color: initial_config.background_color,
+            tonemap_mode: initial_config.tonemap_mode,
+            tonemap_curve: initial_config.tonemap_curve.clone(),
+            use_curve: initial_config.use_curve,
+            exposure: initial_config.exposure,
+            gamma: initial_config.gamma,
+            deterministic_rng: initial_config.deterministic_rng,
+            speed_multiplier: initial_config.speed_multiplier,
             last_frame_time: None,
-            // Batched accumulation: 1 = normal (every frame), 4 = experimental batching
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
-            histogram_color_scale: 100.0, // Default (max color depth)
-            low_density_smoothing: 0.5, // Moderate smoothing default
-            density_compression_strength: 0.0, // Linear accumulation default (no compression)
-            blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
-            use_dynamic_blend: true, // Default to exponential convergence (old behavior)
-            target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
+            histogram_color_scale: initial_config.histogram_color_scale,
+            low_density_smoothing: initial_config.low_density_smoothing,
+            density_compression_strength: initial_config.density_compression_strength,
+            blend_factor: initial_config.blend_factor,
+            use_dynamic_blend: crate::config::DEFAULT_USE_DYNAMIC_BLEND,
+            target_iterations_per_pixel: initial_config.target_iterations_per_pixel,
         };
 
         #[allow(deprecated)]

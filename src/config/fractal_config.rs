@@ -89,27 +89,27 @@ fn default_true() -> bool {
 }
 
 fn default_max_iterations() -> u64 {
-    1_000_000_000  // 1 billion iterations (effectively infinite for interactive use)
+    super::defaults::DEFAULT_MAX_ITERATIONS
 }
 
 fn default_histogram_color_scale() -> f32 {
-    100.0  // Maximum precision: 655 hits before overflow, 100 color levels
+    super::defaults::DEFAULT_HISTOGRAM_COLOR_SCALE
 }
 
 fn default_low_density_smoothing() -> f32 {
-    0.5  // Moderate smoothing reduces noise without excessive blur
+    super::defaults::DEFAULT_LOW_DENSITY_SMOOTHING
 }
 
 fn default_blend_factor() -> f32 {
-    0.1  // 10% blend rate - good balance between speed and smoothness
+    super::defaults::DEFAULT_BLEND_FACTOR
 }
 
 fn default_iterations_per_thread() -> u32 {
-    256  // Default iterations per GPU thread
+    super::defaults::DEFAULT_ITERATIONS_PER_THREAD
 }
 
 fn default_speed_multiplier() -> u32 {
-    1  // Default 1x speed (60 FPS)
+    super::defaults::DEFAULT_SPEED_MULTIPLIER
 }
 
 impl Default for FractalConfig {

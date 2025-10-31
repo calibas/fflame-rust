@@ -9,11 +9,13 @@
 /// - Human-readable change descriptions
 /// - Centralized lazy undo throttling
 
+pub mod defaults;
 pub mod delta;
 pub mod fractal_config;
 pub mod manager;
 pub mod slider;
 
+pub use defaults::*;
 pub use delta::{
     AffineParam, ColorComponent, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, UpdateType,
 };
