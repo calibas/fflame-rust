@@ -49,21 +49,21 @@ pub fn render_tone_mapping_window(
                         if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Linear), "Linear").clicked() {
                             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Linear.into(), false) {
                                 *tonemap_mode = config_manager.active_config().tonemap_mode;
-                                *tonemap_mode_changed = true;
+                                // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                 max_update = max_update.max(update);
                             }
                         }
                         if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Logarithmic), "Logarithmic").clicked() {
                             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into(), false) {
                                 *tonemap_mode = config_manager.active_config().tonemap_mode;
-                                *tonemap_mode_changed = true;
+                                // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                 max_update = max_update.max(update);
                             }
                         }
                         if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::DensityVisualization), "Density").clicked() {
                             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::DensityVisualization.into(), false) {
                                 *tonemap_mode = config_manager.active_config().tonemap_mode;
-                                *tonemap_mode_changed = true;
+                                // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                 max_update = max_update.max(update);
                             }
                         }
@@ -120,21 +120,21 @@ pub fn render_tone_mapping_window(
                             if ui.button("Linear").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::linear().into(), false) {
                                     *tonemap_curve = config_manager.active_config().tonemap_curve.clone();
-                                    *tonemap_curve_changed = true;
+                                    // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                     max_update = max_update.max(update);
                                 }
                             }
                             if ui.button("S-Curve").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::s_curve().into(), false) {
                                     *tonemap_curve = config_manager.active_config().tonemap_curve.clone();
-                                    *tonemap_curve_changed = true;
+                                    // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                     max_update = max_update.max(update);
                                 }
                             }
                             if ui.button("Brighten Shadows").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::brighten_shadows().into(), false) {
                                     *tonemap_curve = config_manager.active_config().tonemap_curve.clone();
-                                    *tonemap_curve_changed = true;
+                                    // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -143,7 +143,7 @@ pub fn render_tone_mapping_window(
                             if ui.button("Darken Highlights").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::darken_highlights().into(), false) {
                                     *tonemap_curve = config_manager.active_config().tonemap_curve.clone();
-                                    *tonemap_curve_changed = true;
+                                    // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -315,7 +315,7 @@ pub fn render_tone_mapping_window(
                     if ui.color_edit_button_rgb(&mut temp_bg_color).changed() {
                         if let Ok(update) = config_manager.update_param(ConfigPath::BackgroundColor, temp_bg_color.into(), false) {
                             *background_color = config_manager.active_config().background_color;
-                            *background_color_changed = true;
+                            // Note: ConfigManager handles undo, flag removed to avoid dual undo
                             max_update = max_update.max(update);
                         }
                     }

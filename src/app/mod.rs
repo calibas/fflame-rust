@@ -951,13 +951,10 @@ impl App {
 
         // Capture state before applying meaningful changes (skip for presets - ConfigManager handles it)
         if !ui_response.preset_changed {
-            // Capture state before applying meaningful changes
-            // Note: Triangle Editor now uses ConfigManager (handles undo internally)
-            // Note: palette_changed removed - undo is captured when Apply is clicked (see custom_palette handler)
-            let should_capture = view_changed
-                || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed
-                || ui_response.tonemap_mode_changed || ui_response.tonemap_curve_changed
-                || ui_response.flame_changed; // All flame changes (Triangle Editor uses ConfigManager)
+            // Note: Most controls now use ConfigManager (handles undo internally)
+            // Only capture for non-ConfigManager controls (transforms window structure changes)
+            // ConfigManager-managed controls removed: view, tone mapping, colors (Phase 4-7)
+            let should_capture = ui_response.flame_changed; // Transform structure changes (add/delete/modify)
             if should_capture {
                 self.capture_state();
             }
