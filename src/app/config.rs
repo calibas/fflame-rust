@@ -2,6 +2,21 @@ use crate::app::App;
 use crate::config::FractalConfig;
 
 impl App {
+    /// Load config via ConfigManager and sync app state
+    /// Creates snapshot-based undo entry and triggers GPU update
+    pub fn load_config_with_undo(&mut self, config: FractalConfig, description: String) -> Result<(), String> {
+        // Load via ConfigManager (creates before/after snapshots for undo)
+        self.config_manager
+            .load_config(config, description)
+            .map_err(|e| format!("{}", e))?;
+
+        // Sync all app state from ConfigManager (triggers GPU update)
+        let active_config = self.config_manager.active_config().clone();
+        self.import_config(active_config);
+
+        Ok(())
+    }
+
     pub fn export_config(&self) -> FractalConfig {
         // Get the current palette from the library
         let palette = self.palette_library.get(self.current_palette_index).cloned();

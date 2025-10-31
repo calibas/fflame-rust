@@ -477,12 +477,8 @@ impl App {
         if let Some(json) = ui_response.config_import_requested {
             match FractalConfig::from_json(&json) {
                 Ok(config) => {
-                    // Load via ConfigManager (creates snapshot-based undo entry)
-                    if let Err(e) = self.config_manager.load_config(config.clone(), "Import Config".to_string()) {
+                    if let Err(e) = self.load_config_with_undo(config, "Import Config".to_string()) {
                         eprintln!("Failed to import config: {}", e);
-                    } else {
-                        // Sync all app state from config (includes GPU update trigger)
-                        self.import_config(config);
                     }
                 }
                 Err(e) => {
@@ -589,12 +585,9 @@ impl App {
                 {
                     match FractalConfig::load_from_file(&path) {
                         Ok(config) => {
-                            // Load via ConfigManager (creates snapshot-based undo entry)
-                            if let Err(e) = self.config_manager.load_config(config.clone(), "Load Config".to_string()) {
+                            if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
                                 eprintln!("Failed to load config: {}", e);
                             } else {
-                                // Sync all app state from config (includes GPU update trigger)
-                                self.import_config(config);
                                 println!("Config loaded from: {}", path.display());
                             }
                         }
@@ -644,11 +637,9 @@ impl App {
                                     } else if configs.len() == 1 {
                                         // Single flame: import directly
                                         let config = configs.into_iter().next().unwrap();
-                                        if let Err(e) = self.config_manager.load_config(config.clone(), "Import Apophysis Flame".to_string()) {
+                                        if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
                                             eprintln!("Failed to import flame: {}", e);
                                         } else {
-                                            // Sync all app state from config (includes GPU update trigger)
-                                            self.import_config(config);
                                             println!("Imported Apophysis flame from: {}", path.display());
                                         }
                                     } else {
@@ -656,11 +647,8 @@ impl App {
                                         // TODO: Add multi-flame selection dialog
                                         println!("Found {} flames, importing first one", configs.len());
                                         let config = configs.into_iter().next().unwrap();
-                                        if let Err(e) = self.config_manager.load_config(config.clone(), "Import Apophysis Flame".to_string()) {
+                                        if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
                                             eprintln!("Failed to import flame: {}", e);
-                                        } else {
-                                            // Sync all app state from config (includes GPU update trigger)
-                                            self.import_config(config);
                                         }
                                     }
                                 }
