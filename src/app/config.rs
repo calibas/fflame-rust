@@ -127,12 +127,6 @@ impl App {
         }
     }
 
-    /// Capture current state to undo history before making a change
-    pub(super) fn capture_state(&mut self) {
-        let config = self.export_config();
-        self.undo_history.push(config);
-    }
-
     /// Undo to previous state
     pub fn undo(&mut self) {
         if let Ok(_update_type) = self.config_manager.undo() {
