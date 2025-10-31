@@ -795,18 +795,19 @@ lazy_slider(ui, config_manager, ConfigPath::PanX, -5.0..=5.0)
 
 ### Project Documentation
 
-**Main Plan:**
-- [delta-based-state-management.md](projects/delta-based-state-management.md) - Original 2,600-line plan (RETIRED, historical reference)
+**COMPLETED - All documentation archived to [docs/archive/delta-migration/](archive/delta-migration/)**
 
-**Sub-Projects:**
-- [complete-delta-migration.md](projects/complete-delta-migration.md) - Phases 11-14 (active work)
-- [lazy-undo-implementation.md](projects/lazy-undo-implementation.md) - LazyUndoHelper design
-- [live-mode-accumulation-problem.md](projects/live-mode-accumulation-problem.md) - Preview mode solution
-- [palette-editor-live-undo.md](projects/palette-editor-live-undo.md) - Palette editor integration
+**Historical Reference:**
+- [delta-based-state-management.md](archive/delta-migration/delta-based-state-management.md) - Original 2,600-line plan (RETIRED)
+- [delta-system-completed.md](archive/delta-migration/delta-system-completed.md) - Completed work summary (Phases 1-10)
+- [complete-delta-migration.md](archive/delta-migration/complete-delta-migration.md) - Final migration phases (11-16)
+- [MIGRATION-STATUS.md](archive/delta-migration/MIGRATION-STATUS.md) - Detailed migration tracking
+- [lazy-undo-implementation.md](archive/delta-migration/lazy-undo-implementation.md) - LazyUndoHelper design
+- [live-mode-accumulation-problem.md](archive/delta-migration/live-mode-accumulation-problem.md) - Preview mode solution
+- [palette-editor-live-undo.md](archive/delta-migration/palette-editor-live-undo.md) - Palette editor integration
 
-**Status:**
-- [MIGRATION-STATUS.md](projects/MIGRATION-STATUS.md) - Detailed migration tracking
-- [delta-system-completed.md](projects/delta-system-completed.md) - Completed work summary (Phases 1-10)
+**Current Work:**
+- [centralized-update-logic.md](projects/centralized-update-logic.md) - Future work: Centralize UpdateType handling
 
 ### Performance Characteristics
 
