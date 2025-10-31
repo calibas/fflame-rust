@@ -2377,6 +2377,130 @@ Preset loading fully integrated with delta-based state management via clean flag
 
 ---
 
+## Phase 9: Cleanup - Remove Dual Undo System (2025-10-30) 🚧 IN PROGRESS
+
+### Problem: Dual Undo Systems
+
+After migrating UI controls to ConfigManager, we have **two undo systems running in parallel**:
+
+1. **New System (ConfigManager)**: Delta-based undo via `config_manager.update_param()`
+2. **Old System (capture_state)**: Snapshot-based undo via `app.capture_state()`
+
+**Example from tone_mapping.rs (lines 50-53)**:
+```rust
+if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Linear.into(), false) {
+    *tonemap_mode = config_manager.active_config().tonemap_mode;  // Sync app state
+    *tonemap_mode_changed = true;  // ❌ REDUNDANT - ConfigManager already tracked this
+    max_update = max_update.max(update);
+}
+```
+
+**Problem in app.rs (lines 957-962)**:
+```rust
+let should_capture = view_changed
+    || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed
+    || ui_response.tonemap_mode_changed || ui_response.tonemap_curve_changed  // ❌ REDUNDANT
+    || ui_response.flame_changed;
+if should_capture {
+    self.capture_state();  // ❌ Creates duplicate undo entries!
+}
+```
+
+**Result**: Every ConfigManager-managed change creates TWO undo entries:
+- One from ConfigManager (delta-based, correct)
+- One from capture_state (snapshot-based, redundant)
+
+### Solution Strategy
+
+**Step 1: Remove redundant flag assignments**
+- Tone mapping controls (Phase 7 migrated)
+- View controls (Phase 4 migrated)
+- Variation controls (Phase 6 migrated)
+
+**Step 2: Update app.rs undo logic**
+- Remove ConfigManager-managed flags from `should_capture`
+- Keep flags for non-migrated controls (flame structure changes, etc.)
+
+**Step 3: Remove old undo system**
+- Remove `app.undo_history` field
+- Remove `app.capture_state()` method
+- Remove `app/config.rs` if all undo logic moved to ConfigManager
+
+**Step 4: Update reset logic**
+- Some flags still needed for GPU reset triggers
+- Keep flags that signal side effects (not undo)
+
+### What Stays vs What Goes
+
+**Keep These Flags** (needed for side effects):
+- `flame_changed` - Triggers GPU upload of transform data
+- `view_changed` - Triggers camera update
+- `preset_changed` - Triggers full config sync
+- `reset_requested` - User action
+- `palette_changed` - Triggers palette upload
+- `color_mode_changed` - Triggers color mode change
+
+**Remove These Flag Assignments** (ConfigManager handles undo):
+- `tonemap_mode_changed = true` in tone_mapping.rs
+- `tonemap_curve_changed = true` in tone_mapping.rs
+- `exposure_changed = true` in tone_mapping.rs
+- `gamma_changed = true` in tone_mapping.rs
+- `background_color_changed = true` in tone_mapping.rs
+- `density_changed = true` in view.rs
+- Similar redundant assignments in other migrated controls
+
+**But Keep Checking These Flags** (for GPU side effects):
+- App.rs still needs to check flags to trigger GPU updates/resets
+- Just don't call `capture_state()` for ConfigManager-managed controls
+
+### Implementation
+
+**Files Modified:**
+
+1. **src/ui/tone_mapping.rs** - Removed 8 redundant flag assignments:
+   - Lines 52, 59, 66: `*tonemap_mode_changed = true` → Removed
+   - Lines 123, 130, 137, 146: `*tonemap_curve_changed = true` → Removed
+   - Line 318: `*background_color_changed = true` → Removed
+   - Added comments: "ConfigManager handles undo, flag removed to avoid dual undo"
+
+2. **src/app/mod.rs** - Cleaned up capture_state() condition (lines 952-961):
+   ```rust
+   // Before: Called capture_state() for view, tone mapping, colors
+   let should_capture = view_changed
+       || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed
+       || ui_response.tonemap_mode_changed || ui_response.tonemap_curve_changed
+       || ui_response.flame_changed;
+
+   // After: Only call for non-ConfigManager controls
+   let should_capture = ui_response.flame_changed; // Transform structure changes only
+   ```
+
+**What Was NOT Changed:**
+
+1. **Flag definitions in UiResponse** - Kept for GPU side effects
+2. **Flag assignments in view.rs** - Still needed for `view_changed` aggregation
+3. **Flag checks for GPU updates/resets** - Still needed for side effects
+
+### Testing Results ✅
+
+All 5 test cases passed:
+1. ✅ Tonemap mode change → Ctrl+Z undoes (single entry, no duplicates)
+2. ✅ Exposure/gamma change → Ctrl+Z undoes (single entry)
+3. ✅ Background color change → Ctrl+Z undoes (single entry)
+4. ✅ Zoom/pan/rotation change → Ctrl+Z undoes (single entry)
+5. ✅ Undo history window shows clean single entries
+
+### Result
+
+✅ **Phase 9 Complete** - Dual undo system eliminated for ConfigManager-managed controls!
+
+**Before cleanup**: Tone mapping changes created 2 undo entries (ConfigManager + capture_state)
+**After cleanup**: Tone mapping changes create 1 undo entry (ConfigManager only)
+
+**Remaining work**: Transform window structure changes (add/delete/modify transforms) still use `capture_state()`. This is acceptable for now as those operations are not yet migrated to ConfigManager.
+
+---
+
 ## Open Questions
 
 1. ~~**Preset loading**: Should loading a preset clear undo history? Or create a single "Load preset: X" undo point?~~ ✅ RESOLVED
