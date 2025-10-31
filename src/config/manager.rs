@@ -475,8 +475,13 @@ impl ConfigManager {
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
-                let key = format!("{}.{}", variation, param);
-                let value = xform.variation_params.get(&key).copied().unwrap_or(0.0);
+
+                // Use same default lookup as UI to ensure undo history shows correct values
+                let value = xform.get_variation_param_or_default(
+                    variation,
+                    param,
+                    &crate::variations::global_registry()
+                );
                 Ok(value.into())
             }
 
