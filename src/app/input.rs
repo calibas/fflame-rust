@@ -35,53 +35,102 @@ impl App {
 
         let pan_step = 0.1 / self.zoom;
 
+        // Pre-calculate rotation for arrow controls
+        // Negate rotation to convert screen space to fractal space
+        let cos_r = (-self.rotation).cos();
+        let sin_r = (-self.rotation).sin();
+
         match event.physical_key {
             PhysicalKey::Code(KeyCode::ArrowUp) => {
                 // Up in screen space: (0, -1), rotate to fractal space
-                let cos_r = (-self.rotation).cos();
-                let sin_r = (-self.rotation).sin();
                 let screen_dx = 0.0;
                 let screen_dy = -pan_step;
-                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
-                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
+                let new_pan_x = self.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
+                let new_pan_y = self.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                let _ = self.config_manager.update_batch(
+                    vec![
+                        (crate::config::ConfigPath::PanX, new_pan_x.into()),
+                        (crate::config::ConfigPath::PanY, new_pan_y.into()),
+                    ],
+                    "Pan Up (Keyboard)".to_string(),
+                    false  // Immediate capture for keyboard input
+                );
+                self.pan_x = self.config_manager.active_config().pan_x;
+                self.pan_y = self.config_manager.active_config().pan_y;
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::ArrowDown) => {
                 // Down in screen space: (0, 1), rotate to fractal space
-                let cos_r = (-self.rotation).cos();
-                let sin_r = (-self.rotation).sin();
                 let screen_dx = 0.0;
                 let screen_dy = pan_step;
-                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
-                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
+                let new_pan_x = self.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
+                let new_pan_y = self.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                let _ = self.config_manager.update_batch(
+                    vec![
+                        (crate::config::ConfigPath::PanX, new_pan_x.into()),
+                        (crate::config::ConfigPath::PanY, new_pan_y.into()),
+                    ],
+                    "Pan Down (Keyboard)".to_string(),
+                    false  // Immediate capture for keyboard input
+                );
+                self.pan_x = self.config_manager.active_config().pan_x;
+                self.pan_y = self.config_manager.active_config().pan_y;
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::ArrowLeft) => {
                 // Left in screen space: (-1, 0), rotate to fractal space
-                let cos_r = (-self.rotation).cos();
-                let sin_r = (-self.rotation).sin();
                 let screen_dx = -pan_step;
                 let screen_dy = 0.0;
-                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
-                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
+                let new_pan_x = self.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
+                let new_pan_y = self.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                let _ = self.config_manager.update_batch(
+                    vec![
+                        (crate::config::ConfigPath::PanX, new_pan_x.into()),
+                        (crate::config::ConfigPath::PanY, new_pan_y.into()),
+                    ],
+                    "Pan Left (Keyboard)".to_string(),
+                    false  // Immediate capture for keyboard input
+                );
+                self.pan_x = self.config_manager.active_config().pan_x;
+                self.pan_y = self.config_manager.active_config().pan_y;
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::ArrowRight) => {
                 // Right in screen space: (1, 0), rotate to fractal space
-                let cos_r = (-self.rotation).cos();
-                let sin_r = (-self.rotation).sin();
                 let screen_dx = pan_step;
                 let screen_dy = 0.0;
-                self.pan_x += screen_dx * cos_r - screen_dy * sin_r;
-                self.pan_y += screen_dx * sin_r + screen_dy * cos_r;
+                let new_pan_x = self.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
+                let new_pan_y = self.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                let _ = self.config_manager.update_batch(
+                    vec![
+                        (crate::config::ConfigPath::PanX, new_pan_x.into()),
+                        (crate::config::ConfigPath::PanY, new_pan_y.into()),
+                    ],
+                    "Pan Right (Keyboard)".to_string(),
+                    false  // Immediate capture for keyboard input
+                );
+                self.pan_x = self.config_manager.active_config().pan_x;
+                self.pan_y = self.config_manager.active_config().pan_y;
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::Equal) | PhysicalKey::Code(KeyCode::NumpadAdd) => {
-                self.zoom *= 1.5;
+                let new_zoom = self.zoom * 1.5;
+                let _ = self.config_manager.update_param(
+                    crate::config::ConfigPath::Zoom,
+                    new_zoom.into(),
+                    false  // Immediate capture for keyboard input
+                );
+                self.zoom = self.config_manager.active_config().zoom;
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::Minus) | PhysicalKey::Code(KeyCode::NumpadSubtract) => {
-                self.zoom /= 1.5;
+                let new_zoom = self.zoom / 1.5;
+                let _ = self.config_manager.update_param(
+                    crate::config::ConfigPath::Zoom,
+                    new_zoom.into(),
+                    false  // Immediate capture for keyboard input
+                );
+                self.zoom = self.config_manager.active_config().zoom;
                 self.view_changed_by_keyboard = true;
             }
             _ => {}
@@ -98,9 +147,21 @@ impl App {
                     }
                 }
                 ElementState::Released => {
+                    // If we were dragging, commit the preview to finalize the pan operation
+                    let was_dragging = self.mouse_dragging;
+
                     // Always clear dragging state on release, even if egui consumed it
                     self.mouse_dragging = false;
                     self.last_mouse_pos = None;
+
+                    // Commit mouse pan preview if we were dragging
+                    // Note: UI controls (sliders, triangle editor) handle their own force_commit
+                    // so this only affects mouse viewport panning
+                    if was_dragging {
+                        // Force commit any pending pan preview from mouse drag
+                        // Use PanX as representative path (batch updates share same preview state)
+                        let _ = self.config_manager.force_commit_preview(&crate::config::ConfigPath::PanX);
+                    }
                 }
             }
         }
@@ -126,9 +187,23 @@ impl App {
                 let rotated_dx = pan_dx * cos_r - pan_dy * sin_r;
                 let rotated_dy = pan_dx * sin_r + pan_dy * cos_r;
 
-                self.pan_x += rotated_dx;
-                self.pan_y += rotated_dy;
-                self.view_changed_by_keyboard = true; // Reuse same flag for mouse
+                // Route pan changes through ConfigManager for undo/redo support and live preview
+                // Use update_batch to capture both X and Y as a single atomic operation
+                let new_pan_x = self.pan_x + rotated_dx;
+                let new_pan_y = self.pan_y + rotated_dy;
+                let _ = self.config_manager.update_batch(
+                    vec![
+                        (crate::config::ConfigPath::PanX, new_pan_x.into()),
+                        (crate::config::ConfigPath::PanY, new_pan_y.into()),
+                    ],
+                    "Pan (Mouse)".to_string(),
+                    true  // Lazy mode for drag
+                );
+
+                // Read back from ConfigManager (gets preview value during drag)
+                self.pan_x = self.config_manager.active_config().pan_x;
+                self.pan_y = self.config_manager.active_config().pan_y;
+                // Note: Don't set view_changed_by_keyboard here - preview mode handles updates via overwrite mode
             }
         }
         // Always update mouse position for zoom-to-cursor
@@ -183,23 +258,45 @@ impl App {
                     let point_x = self.pan_x + fractal_offset_x;
                     let point_y = self.pan_y + fractal_offset_y;
 
-                    // Apply zoom
-                    self.zoom *= zoom_factor;
+                    // Apply zoom and adjust pan via ConfigManager
+                    let new_zoom = self.zoom * zoom_factor;
+                    let new_fractal_offset_x = mouse_offset_x / (scale * new_zoom);
+                    let new_fractal_offset_y = mouse_offset_y / (scale * new_zoom);
+                    let new_pan_x = point_x - new_fractal_offset_x;
+                    let new_pan_y = point_y - new_fractal_offset_y;
 
-                    // Adjust pan so the point under the mouse stays in the same place
-                    // After zoom, the fractal coordinates change, so we need to compensate
-                    let new_fractal_offset_x = mouse_offset_x / (scale * self.zoom);
-                    let new_fractal_offset_y = mouse_offset_y / (scale * self.zoom);
-
-                    self.pan_x = point_x - new_fractal_offset_x;
-                    self.pan_y = point_y - new_fractal_offset_y;
+                    // Update all three parameters atomically
+                    let _ = self.config_manager.update_batch(
+                        vec![
+                            (crate::config::ConfigPath::Zoom, new_zoom.into()),
+                            (crate::config::ConfigPath::PanX, new_pan_x.into()),
+                            (crate::config::ConfigPath::PanY, new_pan_y.into()),
+                        ],
+                        "Zoom In (Wheel)".to_string(),
+                        false  // Immediate capture for mouse wheel
+                    );
+                    self.zoom = self.config_manager.active_config().zoom;
+                    self.pan_x = self.config_manager.active_config().pan_x;
+                    self.pan_y = self.config_manager.active_config().pan_y;
                 } else {
                     // No mouse position, zoom to center
-                    self.zoom *= zoom_factor;
+                    let new_zoom = self.zoom * zoom_factor;
+                    let _ = self.config_manager.update_param(
+                        crate::config::ConfigPath::Zoom,
+                        new_zoom.into(),
+                        false  // Immediate capture for mouse wheel
+                    );
+                    self.zoom = self.config_manager.active_config().zoom;
                 }
             } else {
                 // Zooming out - always zoom from center
-                self.zoom *= zoom_factor;
+                let new_zoom = self.zoom * zoom_factor;
+                let _ = self.config_manager.update_param(
+                    crate::config::ConfigPath::Zoom,
+                    new_zoom.into(),
+                    false  // Immediate capture for mouse wheel
+                );
+                self.zoom = self.config_manager.active_config().zoom;
             }
 
             self.view_changed_by_keyboard = true; // Reuse same flag

@@ -1,4 +1,5 @@
 use crate::scene::{presets::PresetLibrary, transforms::Flame};
+use crate::config::{ConfigManager, ConfigPath, UpdateType};
 use super::formatting::format_iterations;
 
 /// Render the Settings window with all control panels
@@ -30,6 +31,7 @@ pub fn render_settings_window(
     iterations_changed: &mut bool,
     deterministic_rng: &mut bool,
     speed_multiplier: &mut u32,
+    config_manager: &mut ConfigManager,
     histogram_color_scale: &mut f32,
     histogram_color_scale_changed: &mut bool,
     low_density_smoothing: &mut f32,
@@ -42,7 +44,8 @@ pub fn render_settings_window(
     use_dynamic_blend_changed: &mut bool,
     target_iterations_per_pixel: &mut u32,
     target_iterations_changed: &mut bool,
-) {
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
     egui::Window::new("Settings")
         .open(show_settings)
         .show(ctx, |ui| {
@@ -98,8 +101,19 @@ pub fn render_settings_window(
                         .show_ui(ui, |ui| {
                             for (idx, preset) in presets.iter().enumerate() {
                                 if ui.selectable_value(current_preset_index, idx, &preset.flame.name).changed() {
-                                    println!("UI: Preset changed to {} ({})", preset.flame.name, idx);
-                                    *preset_changed = true;
+                                    println!("UI: Loading preset: {} ({})", preset.flame.name, idx);
+                                    // Load preset via ConfigManager (creates two undo points)
+                                    if let Err(e) = config_manager.load_config(
+                                        preset.clone(),
+                                        format!("Load Preset: {}", preset.flame.name),
+                                    ) {
+                                        log::error!("Failed to load preset: {}", e);
+                                    } else {
+                                        // Update flame reference from config
+                                        *flame = config_manager.active_config().flame.clone();
+                                        *preset_changed = true;
+                                        *flame_changed = true;  // Triggers GPU upload
+                                    }
                                 }
                             }
                         });
@@ -204,13 +218,35 @@ pub fn render_settings_window(
 
                     ui.separator();
 
-                    // Render settings
-                    if ui.add(egui::Slider::new(iterations_per_thread, 64..=4096).text("Iterations per Thread")).changed() {
-                        *iterations_changed = true;
+                    // Render settings - Iterations per thread
+                    let mut temp_iterations = *iterations_per_thread;
+                    let response = ui.add(egui::Slider::new(&mut temp_iterations, 64..=4096)
+                        .text("Iterations per Thread"))
+                        .on_hover_text(
+                            "GPU workgroup performance tuning.\n\
+                            Higher values = fewer dispatches, better GPU utilization.\n\
+                            Lower values = more frequent updates, smoother animation."
+                        );
+
+                    if response.changed() {
+                        if let Ok(update_type) = config_manager.update_param(
+                            ConfigPath::IterationsPerThread,
+                            temp_iterations.into(),
+                            true  // Lazy undo
+                        ) {
+                            *iterations_per_thread = config_manager.active_config().iterations_per_thread;
+                            *iterations_changed = true;
+                            max_update = max_update.max(update_type);
+                        }
+                    }
+
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::IterationsPerThread);
                     }
 
                     // Histogram color scale
-                    if ui.add(egui::Slider::new(histogram_color_scale, 1.0..=100.0)
+                    let mut temp_histogram = *histogram_color_scale;
+                    let response = ui.add(egui::Slider::new(&mut temp_histogram, 1.0..=100.0)
                         .logarithmic(true)
                         .text("Histogram Color Scale"))
                         .on_hover_text(
@@ -221,14 +257,27 @@ pub fn render_settings_window(
                             10: Balanced (6553 hits, 10 color levels) - recommended default\n\
                             50: Higher precision (1310 hits, 50 color levels)\n\
                             100: Maximum precision (655 hits, 100 color levels) - classic"
-                        )
-                        .changed()
-                    {
-                        *histogram_color_scale_changed = true;
+                        );
+
+                    if response.changed() {
+                        if let Ok(update_type) = config_manager.update_param(
+                            ConfigPath::HistogramColorScale,
+                            temp_histogram.into(),
+                            true  // Lazy undo
+                        ) {
+                            *histogram_color_scale = config_manager.active_config().histogram_color_scale;
+                            *histogram_color_scale_changed = true;
+                            max_update = max_update.max(update_type);
+                        }
+                    }
+
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::HistogramColorScale);
                     }
 
                     // Low-density smoothing
-                    if ui.add(egui::Slider::new(low_density_smoothing, 0.0..=1.0)
+                    let mut temp_smoothing = *low_density_smoothing;
+                    let response = ui.add(egui::Slider::new(&mut temp_smoothing, 0.0..=1.0)
                         .text("Low-Density Smoothing"))
                         .on_hover_text(
                             "Reduces noise in low-density (sparse) areas by limiting single-hit weight.\n\
@@ -236,10 +285,22 @@ pub fn render_settings_window(
                             0.0: No smoothing (accurate but noisy single hits)\n\
                             0.5: Moderate smoothing (balanced) - recommended default\n\
                             1.0: Maximum smoothing (very smooth but slow to converge)"
-                        )
-                        .changed()
-                    {
-                        *low_density_smoothing_changed = true;
+                        );
+
+                    if response.changed() {
+                        if let Ok(update_type) = config_manager.update_param(
+                            ConfigPath::LowDensitySmoothing,
+                            temp_smoothing.into(),
+                            true  // Lazy undo
+                        ) {
+                            *low_density_smoothing = config_manager.active_config().low_density_smoothing;
+                            *low_density_smoothing_changed = true;
+                            max_update = max_update.max(update_type);
+                        }
+                    }
+
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::LowDensitySmoothing);
                     }
 
                     // Dynamic blend toggle
@@ -259,7 +320,8 @@ pub fn render_settings_window(
 
                     // Blend factor (accumulation rate) - only when dynamic blend is OFF
                     ui.add_enabled_ui(!*use_dynamic_blend, |ui| {
-                        if ui.add(egui::Slider::new(blend_factor, 0.01..=1.0)
+                        let mut temp_blend = *blend_factor;
+                        let response = ui.add(egui::Slider::new(&mut temp_blend, 0.01..=1.0)
                             .logarithmic(true)
                             .text("Fixed Blend Rate"))
                             .on_hover_text(
@@ -269,15 +331,28 @@ pub fn render_settings_window(
                                 0.1: Balanced (10% per frame) - default\n\
                                 0.5: Fast (50% per frame)\n\
                                 1.0: Instant (100% per frame)"
-                            )
-                            .changed()
-                        {
-                            *blend_factor_changed = true;
+                            );
+
+                        if response.changed() {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::BlendFactor,
+                                temp_blend.into(),
+                                true  // Lazy undo
+                            ) {
+                                *blend_factor = config_manager.active_config().blend_factor;
+                                *blend_factor_changed = true;
+                                max_update = max_update.max(update_type);
+                            }
+                        }
+
+                        if response.drag_stopped() {
+                            let _ = config_manager.force_commit_preview(&ConfigPath::BlendFactor);
                         }
                     });
 
                     // Density compression strength
-                    if ui.add(egui::Slider::new(density_compression_strength, 0.0..=100.0)
+                    let mut temp_compression = *density_compression_strength;
+                    let response = ui.add(egui::Slider::new(&mut temp_compression, 0.0..=100.0)
                         .text("Density Compression"))
                         .on_hover_text(
                             "Slows accumulation in bright areas to reveal core detail.\n\
@@ -288,10 +363,22 @@ pub fn render_settings_window(
                             100: Strong - bright areas accumulate at ~1% rate\n\n\
                             Higher Blend Rate makes compression effect more visible.\n\
                             Use this to prevent bright cores from washing out detail."
-                        )
-                        .changed()
-                    {
-                        *density_compression_changed = true;
+                        );
+
+                    if response.changed() {
+                        if let Ok(update_type) = config_manager.update_param(
+                            ConfigPath::DensityCompressionStrength,
+                            temp_compression.into(),
+                            true  // Lazy undo
+                        ) {
+                            *density_compression_strength = config_manager.active_config().density_compression_strength;
+                            *density_compression_changed = true;
+                            max_update = max_update.max(update_type);
+                        }
+                    }
+
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::DensityCompressionStrength);
                     }
 
                     // Per-pixel iteration limit
@@ -302,7 +389,7 @@ pub fn render_settings_window(
                         (*target_iterations_per_pixel as f64).log10()
                     };
 
-                    if ui.add(egui::Slider::new(&mut log_value, 0.0..=6.0)
+                    let response = ui.add(egui::Slider::new(&mut log_value, 0.0..=6.0)
                         .custom_formatter(|n, _| {
                             if n < 0.5 {
                                 "Disabled".to_string()
@@ -320,25 +407,82 @@ pub fn render_settings_window(
                             100,000: Conservative - allows good convergence\n\
                             1,000,000: Very conservative - high quality\n\n\
                             Works independently of blend_factor and density compression."
-                        )
-                        .changed()
-                    {
-                        *target_iterations_per_pixel = if log_value < 0.5 {
+                        );
+
+                    if response.changed() {
+                        let new_value = if log_value < 0.5 {
                             0  // Disabled
                         } else {
                             10f64.powf(log_value) as u32
                         };
-                        *target_iterations_changed = true;
+                        if let Ok(update_type) = config_manager.update_param(
+                            ConfigPath::TargetIterationsPerPixel,
+                            new_value.into(),
+                            true  // Lazy undo
+                        ) {
+                            *target_iterations_per_pixel = config_manager.active_config().target_iterations_per_pixel;
+                            *target_iterations_changed = true;
+                            max_update = max_update.max(update_type);
+                        }
+                    }
+
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::TargetIterationsPerPixel);
                     }
 
                     // Speed multiplier for frame rate (1x = 60 FPS, 2x = 120 FPS, etc.)
                     ui.horizontal(|ui| {
                         ui.label("Speed:");
-                        if ui.selectable_label(*speed_multiplier == 1, "1x").clicked() { *speed_multiplier = 1; }
-                        if ui.selectable_label(*speed_multiplier == 2, "2x").clicked() { *speed_multiplier = 2; }
-                        if ui.selectable_label(*speed_multiplier == 4, "4x").clicked() { *speed_multiplier = 4; }
-                        if ui.selectable_label(*speed_multiplier == 8, "8x").clicked() { *speed_multiplier = 8; }
-                        if ui.selectable_label(*speed_multiplier == 16, "16x").clicked() { *speed_multiplier = 16; }
+                        if ui.selectable_label(*speed_multiplier == 1, "1x").clicked() {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::SpeedMultiplier,
+                                1u32.into(),
+                                false  // Immediate capture
+                            ) {
+                                *speed_multiplier = config_manager.active_config().speed_multiplier;
+                                max_update = max_update.max(update_type);
+                            }
+                        }
+                        if ui.selectable_label(*speed_multiplier == 2, "2x").clicked() {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::SpeedMultiplier,
+                                2u32.into(),
+                                false
+                            ) {
+                                *speed_multiplier = config_manager.active_config().speed_multiplier;
+                                max_update = max_update.max(update_type);
+                            }
+                        }
+                        if ui.selectable_label(*speed_multiplier == 4, "4x").clicked() {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::SpeedMultiplier,
+                                4u32.into(),
+                                false
+                            ) {
+                                *speed_multiplier = config_manager.active_config().speed_multiplier;
+                                max_update = max_update.max(update_type);
+                            }
+                        }
+                        if ui.selectable_label(*speed_multiplier == 8, "8x").clicked() {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::SpeedMultiplier,
+                                8u32.into(),
+                                false
+                            ) {
+                                *speed_multiplier = config_manager.active_config().speed_multiplier;
+                                max_update = max_update.max(update_type);
+                            }
+                        }
+                        if ui.selectable_label(*speed_multiplier == 16, "16x").clicked() {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::SpeedMultiplier,
+                                16u32.into(),
+                                false
+                            ) {
+                                *speed_multiplier = config_manager.active_config().speed_multiplier;
+                                max_update = max_update.max(update_type);
+                            }
+                        }
                     });
                     ui.label(format!("Target FPS: {}", 60 * *speed_multiplier)).on_hover_text(
                         "Speed multiplier increases frame rate for smoother progressive rendering.\n\
@@ -363,4 +507,6 @@ pub fn render_settings_window(
                     }
                 });
         });
+
+    max_update
 }

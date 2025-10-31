@@ -16,11 +16,11 @@ use crate::scene::transforms::Flame;
 use crate::scene::palette::{PaletteLibrary, ColorMode};
 use crate::scene::presets::PresetLibrary;
 use crate::util::PerformanceMetrics;
-use crate::config::FractalConfig;
-use crate::undo::UndoHistory;
+use crate::config::{FractalConfig, ConfigManager};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 
 pub struct App {
+    pub(super) config_manager: ConfigManager,
     pub(super) gpu: GpuContext,
     pub(super) egui_layer: EguiLayer,
     pub(super) flame_renderer: Option<FlameRenderer>,
@@ -45,7 +45,6 @@ pub struct App {
     pub(super) paused: bool,
     pub(super) max_iterations: Option<u64>,
     pub(super) speed_factor: f32,
-    pub(super) undo_history: UndoHistory,
     pub(super) modifiers: winit::keyboard::ModifiersState,
     pub(super) background_color: [f32; 3],
     // Tone mapping
@@ -111,14 +110,19 @@ impl App {
             exposure: 1.0,
             gamma: 2.2,
             deterministic_rng: false,
-            histogram_color_scale: 10.0,  // Balanced default
+            histogram_color_scale: 100.0,  // Default (max color depth)
             low_density_smoothing: 0.5,  // Moderate smoothing default
             density_compression_strength: 0.0,  // Linear accumulation default (no compression)
             blend_factor: 0.1,  // 10% blend rate - good balance between speed and smoothness
             target_iterations_per_pixel: 0,  // Disabled by default
+            iterations_per_thread: 256,  // Default GPU workgroup size
+            speed_multiplier: 1,  // Default 1x speed (60 FPS)
         };
 
+        let config_manager = ConfigManager::new(initial_config.clone());
+
         let mut app = Self {
+            config_manager,
             gpu,
             egui_layer,
             flame_renderer: Some(flame_renderer),
@@ -143,7 +147,6 @@ impl App {
             paused: false,
             max_iterations: Some(1_000_000_000),
             speed_factor: 0.5,
-            undo_history: UndoHistory::new(initial_config),
             modifiers: winit::keyboard::ModifiersState::default(),
             background_color: [0.0, 0.0, 0.0], // Default to black
             tonemap_mode: ToneMapMode::Logarithmic,
@@ -157,7 +160,7 @@ impl App {
             // Batched accumulation: 1 = normal (every frame), 4 = experimental batching
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
-            histogram_color_scale: 10.0, // Balanced default
+            histogram_color_scale: 100.0, // Default (max color depth)
             low_density_smoothing: 0.5, // Moderate smoothing default
             density_compression_strength: 0.0, // Linear accumulation default (no compression)
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
@@ -304,6 +307,10 @@ impl App {
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
+            // Live mode: Enable overwrite mode during preview, reset when exiting
+            let in_preview_mode = self.config_manager.is_in_preview_mode();
+            renderer.set_overwrite_mode(in_preview_mode);
+
             // Note: tonemap parameters are updated when they actually change (via ui_response handlers)
             // No need to update every frame
 
@@ -374,6 +381,7 @@ impl App {
             window,
             self.gpu.size,
             &self.metrics,
+            &mut self.config_manager,
             self.flame_renderer.as_mut(),
             &mut self.flame,
             &mut self.iterations_per_thread,
@@ -466,8 +474,9 @@ impl App {
         if let Some(json) = ui_response.config_import_requested {
             match FractalConfig::from_json(&json) {
                 Ok(config) => {
-                    self.capture_state();
-                    self.import_config(config);
+                    if let Err(e) = self.load_config_with_undo(config, "Import Config".to_string()) {
+                        eprintln!("Failed to import config: {}", e);
+                    }
                 }
                 Err(e) => {
                     eprintln!("Failed to import config: {}", e);
@@ -477,7 +486,8 @@ impl App {
 
         // Handle add transform
         if ui_response.add_transform {
-            self.capture_state();
+            // Create new config with added transform
+            let mut new_config = self.config_manager.active_config().clone();
 
             // Create a new default transform
             let new_transform = crate::scene::transforms::Transform {
@@ -499,21 +509,39 @@ impl App {
                 color_speed: 0.5,
             };
 
-            self.flame.transforms.push(new_transform);
+            new_config.flame.transforms.push(new_transform);
+
+            // Load via ConfigManager (creates snapshot-based undo entry)
+            if let Err(e) = self.config_manager.load_config(new_config, "Add Transform".to_string()) {
+                eprintln!("Failed to add transform: {}", e);
+            } else {
+                // Update app state from config
+                self.flame = self.config_manager.active_config().flame.clone();
+            }
         }
 
         // Handle delete transform
         if let Some(idx) = ui_response.delete_transform {
-            if self.flame.transforms.len() > 1 && idx < self.flame.transforms.len() {
-                self.capture_state();
-                self.flame.transforms.remove(idx);
+            if self.config_manager.active_config().flame.transforms.len() > 1
+                && idx < self.config_manager.active_config().flame.transforms.len() {
+                // Create new config with deleted transform
+                let mut new_config = self.config_manager.active_config().clone();
+                new_config.flame.transforms.remove(idx);
+
+                // Load via ConfigManager (creates snapshot-based undo entry)
+                if let Err(e) = self.config_manager.load_config(new_config, format!("Delete Transform {}", idx)) {
+                    eprintln!("Failed to delete transform: {}", e);
+                } else {
+                    // Update app state from config
+                    self.flame = self.config_manager.active_config().flame.clone();
+                }
             }
         }
 
         // Handle custom palette from editor
         if let Some(custom_pal) = ui_response.custom_palette {
-            // Capture state before applying palette change (for undo)
-            self.capture_state();
+            // TODO: Migrate to ConfigManager (custom palette modifies library, not config)
+            // For now, no undo support for palette editor changes
 
             // Check if this palette already exists in library by name
             let palette_lib = &mut self.palette_library;
@@ -554,9 +582,11 @@ impl App {
                 {
                     match FractalConfig::load_from_file(&path) {
                         Ok(config) => {
-                            self.capture_state();
-                            self.import_config(config);
-                            println!("Config loaded from: {}", path.display());
+                            if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
+                                eprintln!("Failed to load config: {}", e);
+                            } else {
+                                println!("Config loaded from: {}", path.display());
+                            }
                         }
                         Err(e) => {
                             eprintln!("Failed to load config: {}", e);
@@ -603,15 +633,20 @@ impl App {
                                         eprintln!("No flames found in file");
                                     } else if configs.len() == 1 {
                                         // Single flame: import directly
-                                        self.capture_state();
-                                        self.import_config(configs.into_iter().next().unwrap());
-                                        println!("Imported Apophysis flame from: {}", path.display());
+                                        let config = configs.into_iter().next().unwrap();
+                                        if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
+                                            eprintln!("Failed to import flame: {}", e);
+                                        } else {
+                                            println!("Imported Apophysis flame from: {}", path.display());
+                                        }
                                     } else {
                                         // Multiple flames: let user choose
                                         // TODO: Add multi-flame selection dialog
                                         println!("Found {} flames, importing first one", configs.len());
-                                        self.capture_state();
-                                        self.import_config(configs.into_iter().next().unwrap());
+                                        let config = configs.into_iter().next().unwrap();
+                                        if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
+                                            eprintln!("Failed to import flame: {}", e);
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -915,52 +950,44 @@ impl App {
         let view_changed = ui_response.view_changed || self.view_changed_by_keyboard || ui_response.camera_rotation_changed;
         let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
             || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed
-            || ui_response.triangle_drag_ended || ui_response.tonemap_curve_changed || ui_response.histogram_color_scale_changed
+            || ui_response.tonemap_curve_changed || ui_response.histogram_color_scale_changed
             || ui_response.low_density_smoothing_changed || ui_response.density_compression_changed || ui_response.blend_factor_changed
             || ui_response.use_dynamic_blend_changed || ui_response.target_iterations_changed;
 
         // Note: density_changed and background_color_changed don't need encoder updates,
         // they're handled every frame before tonemap pass
 
-        // Handle preset change BEFORE other updates (requires mutable self)
-        let preset_loaded = if ui_response.preset_changed {
-            if let Some(preset) = self.preset_library.get(self.current_preset_index).cloned() {
-                println!("Loading preset: {} (index {})", preset.flame.name, self.current_preset_index);
-                println!("  Transforms: {}", preset.flame.transforms.len());
-                self.import_config(preset);
-                // import_config calls capture_state internally and resets accumulation
-                // Skip normal update logic since import_config handled everything
-                true
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        // Only do normal updates if we didn't load a preset
-        if !preset_loaded {
-            // Capture state before applying meaningful changes
-            // Only capture on drag START, not during continuous dragging
-            // Note: palette_changed removed - undo is captured when Apply is clicked (see custom_palette handler)
-            // Note: exposure_changed uses lazy undo to throttle captures during drag
-            let should_capture = ui_response.triangle_drag_started || view_changed
-                || ui_response.color_mode_changed || ui_response.density_changed || ui_response.background_color_changed
-                || ui_response.tonemap_mode_changed || ui_response.tonemap_curve_changed
-                || ui_response.exposure_changed || ui_response.gamma_changed
-                || (ui_response.flame_changed && !ui_response.triangle_drag_started); // Other flame changes (not dragging)
-            if should_capture {
-                self.capture_state();
-            }
+        // Handle preset change: sync app state from ConfigManager
+        // Note: Preset loading happens via ConfigManager in UI layer (settings.rs)
+        // GPU upload and reset handled by normal update path below
+        if ui_response.preset_changed {
+            println!("Preset loaded via ConfigManager, syncing app state");
+            let config = self.config_manager.active_config();
+            self.flame = config.flame.clone();
+            self.zoom = config.zoom;
+            self.pan_x = config.pan_x;
+            self.pan_y = config.pan_y;
+            self.rotation = config.rotation;
+            self.camera_rotation_x = config.camera_rotation_x;
+            self.camera_rotation_y = config.camera_rotation_y;
+            // GPU upload handled below via flame_changed flag
         }
 
-        if needs_update && !preset_loaded {
+        // All controls now use ConfigManager for undo/redo! ✅
+        // Phase 11 (2025-10-31): Transform add/delete migrated to snapshot-based undo
+        // No more capture_state() calls needed here
+
+        if needs_update {
             if let Some(ref mut renderer) = self.flame_renderer {
                 let mut update_encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Update Encoder"),
                 });
 
-                if ui_response.flame_changed {
+                // Update flame if changed OR if in preview mode (live updates during drag)
+                let in_preview_mode = self.config_manager.is_in_preview_mode();
+                if ui_response.flame_changed || in_preview_mode {
+                    // Note: self.flame is synced from ConfigManager at the END of render_ui()
+                    // When in preview mode, this gives live updates every frame during drag
                     renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                 }
 
@@ -1019,7 +1046,12 @@ impl App {
                 }
 
                 if ui_response.palette_changed {
-                    if let Some(palette) = self.palette_library.get(self.current_palette_index) {
+                    // Get palette from ConfigManager (includes preview mode changes from palette editor)
+                    let active_config = self.config_manager.active_config();
+                    let palette = active_config.palette.as_ref()
+                        .or_else(|| self.palette_library.get(active_config.palette_index));
+
+                    if let Some(palette) = palette {
                         renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
                     }
                 }
@@ -1030,18 +1062,18 @@ impl App {
                 }
 
                 // Reset accumulation when view changes, palette changes, color mode changes, background color changes, flame changes, or user requests it
-                // Note: preset_changed is handled separately above with import_config() which also resets
-                // For triangle dragging: reset on first frame (triangle_drag_started) and when drag ends (triangle_drag_ended), but not during continuous drag
                 // Tone mapping: reset on mode change (log vs linear affects accumulation), but not curve/exposure/gamma (post-processing only)
-                let should_reset = ui_response.reset_requested || view_changed || ui_response.palette_changed || ui_response.color_mode_changed
-                    || ui_response.background_color_changed || ui_response.tonemap_mode_changed || ui_response.triangle_drag_started || ui_response.triangle_drag_ended
+                let in_preview_mode = self.config_manager.is_in_preview_mode();
+                let should_reset = ui_response.reset_requested || view_changed || (ui_response.palette_changed && !in_preview_mode) || ui_response.color_mode_changed
+                    || ui_response.background_color_changed || ui_response.tonemap_mode_changed
                     || ui_response.histogram_color_scale_changed  // New scale incompatible with old samples
                     || ui_response.low_density_smoothing_changed  // New smoothing needs fresh samples to see effect
                     || ui_response.density_compression_changed  // New compression needs fresh samples to see effect
                     || ui_response.blend_factor_changed  // New blend rate needs fresh start to see effect
                     || ui_response.use_dynamic_blend_changed  // Switching blend modes needs fresh start
                     || ui_response.target_iterations_changed  // New iteration limit needs fresh iteration counts
-                    || (ui_response.flame_changed && !ui_response.triangle_dragging);
+                    || ui_response.preset_changed  // Preset loading requires fresh start
+                    || (ui_response.flame_changed && !in_preview_mode);  // Reset on flame changes, EXCEPT during preview mode (overwrite mode handles it)
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
                     if ui_response.histogram_color_scale_changed {

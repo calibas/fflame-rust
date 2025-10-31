@@ -42,6 +42,12 @@ pub struct FractalConfig {
     /// Per-pixel iteration limit (0 = disabled, default: 0)
     #[serde(default)]
     pub target_iterations_per_pixel: u32,
+    /// Iterations per thread (GPU workgroup performance tuning, default: 256)
+    #[serde(default = "default_iterations_per_thread")]
+    pub iterations_per_thread: u32,
+    /// Speed multiplier for frame rate (1x-16x, affects quality consistency, default: 1)
+    #[serde(default = "default_speed_multiplier")]
+    pub speed_multiplier: u32,
 
     /// Color settings
     pub color_mode: ColorMode,
@@ -87,7 +93,7 @@ fn default_max_iterations() -> u64 {
 }
 
 fn default_histogram_color_scale() -> f32 {
-    10.0  // Balanced: 6553 hits before overflow, 10 color levels
+    100.0  // Maximum precision: 655 hits before overflow, 100 color levels
 }
 
 fn default_low_density_smoothing() -> f32 {
@@ -96,6 +102,51 @@ fn default_low_density_smoothing() -> f32 {
 
 fn default_blend_factor() -> f32 {
     0.1  // 10% blend rate - good balance between speed and smoothness
+}
+
+fn default_iterations_per_thread() -> u32 {
+    256  // Default iterations per GPU thread
+}
+
+fn default_speed_multiplier() -> u32 {
+    1  // Default 1x speed (60 FPS)
+}
+
+impl Default for FractalConfig {
+    fn default() -> Self {
+        use crate::scene::transforms::Flame;
+        use crate::scene::tonemap::ToneCurve;
+
+        Self {
+            flame: Flame::default(),
+            zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+            rotation: 0.0,
+            camera_rotation_x: 0.0,
+            camera_rotation_y: 0.0,
+            density_scale: 1.0,
+            speed_factor: 0.5,
+            max_iterations: default_max_iterations(),
+            histogram_color_scale: default_histogram_color_scale(),
+            low_density_smoothing: default_low_density_smoothing(),
+            density_compression_strength: 0.0,
+            blend_factor: default_blend_factor(),
+            target_iterations_per_pixel: 0,
+            iterations_per_thread: default_iterations_per_thread(),
+            speed_multiplier: default_speed_multiplier(),
+            color_mode: ColorMode::Transform,
+            palette_index: 0,
+            palette: None,
+            background_color: [0.0, 0.0, 0.0],
+            tonemap_mode: ToneMapMode::default(),
+            tonemap_curve: ToneCurve::default(),
+            use_curve: default_true(),
+            exposure: default_exposure(),
+            gamma: default_gamma(),
+            deterministic_rng: false,
+        }
+    }
 }
 
 impl FractalConfig {

@@ -365,11 +365,13 @@ impl PresetLibrary {
                     exposure: 1.0,
                     gamma: 2.2,
                     deterministic_rng: false,
-                    histogram_color_scale: 10.0,
+                    histogram_color_scale: 100.0,
                     low_density_smoothing: 0.5,
                     density_compression_strength: 0.0,
                     blend_factor: 0.1,
                     target_iterations_per_pixel: 0,
+                    iterations_per_thread: 256,
+                    speed_multiplier: 1,
                 }
             },
         ];
@@ -420,11 +422,13 @@ impl PresetLibrary {
             exposure: 1.0,
             gamma: 2.2,
             deterministic_rng: false,
-            histogram_color_scale: 10.0,
+            histogram_color_scale: 100.0,
             low_density_smoothing: 0.5,
             density_compression_strength: 0.0,
             blend_factor: 0.1,
             target_iterations_per_pixel: 0,
+            iterations_per_thread: 256,
+            speed_multiplier: 1,
         }
     }
 

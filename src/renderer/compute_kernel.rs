@@ -29,6 +29,7 @@ pub struct FlameRenderer {
     blend_factor: f32, // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
     target_iterations_per_pixel: u32, // Per-pixel convergence: stop updating pixel after N iterations (0 = disabled)
+    overwrite_mode: bool, // When true, replace accumulation buffer instead of blending (for live preview)
 }
 
 impl FlameRenderer {
@@ -76,12 +77,13 @@ impl FlameRenderer {
             current_projection: flame.projection,
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
-            histogram_color_scale: 10.0, // Balanced default
+            histogram_color_scale: 100.0, // Default (max color depth)
             low_density_smoothing: 0.5, // Moderate smoothing default
             density_compression_strength: 0.0, // Linear accumulation default (no compression)
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
             use_dynamic_blend: true, // Default to exponential convergence (old behavior)
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
+            overwrite_mode: false, // Default to normal blending (progressive refinement)
         }
     }
 
@@ -190,12 +192,16 @@ impl FlameRenderer {
         self.samples_accumulated += samples_this_frame;
 
         // Calculate blend_factor based on mode
-        let blend_factor = if self.use_dynamic_blend {
-            // Exponential convergence (old behavior): blend_factor decreases over time
+        let blend_factor = if self.overwrite_mode {
+            // Overwrite mode (live preview): Replace old buffer entirely
+            // Prevents mixing of different fractal states during drag
+            1.0
+        } else if self.use_dynamic_blend {
+            // Exponential convergence (normal mode): blend_factor decreases over time
             // Prevents overbright over time, converges to stable image
             samples_this_frame as f32 / self.samples_accumulated as f32
         } else {
-            // Fixed blend rate (new behavior): constant blend per frame
+            // Fixed blend rate (testing mode): constant blend per frame
             // Useful for testing density compression effects
             self.blend_factor
         };
@@ -472,6 +478,12 @@ impl FlameRenderer {
     /// Set per-pixel iteration limit (0 = disabled)
     pub fn set_target_iterations_per_pixel(&mut self, target: u32) {
         self.target_iterations_per_pixel = target;
+    }
+
+    /// Set overwrite mode (live preview)
+    /// When true, accumulation buffer is replaced instead of blended
+    pub fn set_overwrite_mode(&mut self, overwrite: bool) {
+        self.overwrite_mode = overwrite;
     }
 
     /// Update iterations per thread

@@ -2,6 +2,21 @@ use crate::app::App;
 use crate::config::FractalConfig;
 
 impl App {
+    /// Load config via ConfigManager and sync app state
+    /// Creates snapshot-based undo entry and triggers GPU update
+    pub fn load_config_with_undo(&mut self, config: FractalConfig, description: String) -> Result<(), String> {
+        // Load via ConfigManager (creates before/after snapshots for undo)
+        self.config_manager
+            .load_config(config, description)
+            .map_err(|e| format!("{}", e))?;
+
+        // Sync all app state from ConfigManager (triggers GPU update)
+        let active_config = self.config_manager.active_config().clone();
+        self.import_config(active_config);
+
+        Ok(())
+    }
+
     pub fn export_config(&self) -> FractalConfig {
         // Get the current palette from the library
         let palette = self.palette_library.get(self.current_palette_index).cloned();
@@ -32,6 +47,8 @@ impl App {
             density_compression_strength: self.density_compression_strength,
             blend_factor: self.blend_factor,
             target_iterations_per_pixel: self.target_iterations_per_pixel,
+            iterations_per_thread: self.iterations_per_thread,
+            speed_multiplier: self.speed_multiplier,
         }
     }
 
@@ -62,6 +79,8 @@ impl App {
         self.density_compression_strength = config.density_compression_strength;
         self.blend_factor = config.blend_factor;
         self.target_iterations_per_pixel = config.target_iterations_per_pixel;
+        self.iterations_per_thread = config.iterations_per_thread;
+        self.speed_multiplier = config.speed_multiplier;
 
         // If config includes a palette, add it to library or update existing
         if let Some(ref palette) = config.palette {
@@ -108,33 +127,33 @@ impl App {
         }
     }
 
-    /// Capture current state to undo history before making a change
-    pub(super) fn capture_state(&mut self) {
-        let config = self.export_config();
-        self.undo_history.push(config);
-    }
-
     /// Undo to previous state
     pub fn undo(&mut self) {
-        let config = self.undo_history.undo().cloned();
-        if let Some(config) = config {
-            self.import_config(config);
+        if let Ok(_update_type) = self.config_manager.undo() {
+            // Sync App state from ConfigManager
+            let config = self.config_manager.config();
+            self.import_config(config.clone());
         }
     }
 
     /// Redo to next state
     pub fn redo(&mut self) {
-        let config = self.undo_history.redo().cloned();
-        if let Some(config) = config {
-            self.import_config(config);
+        if let Ok(_update_type) = self.config_manager.redo() {
+            // Sync App state from ConfigManager
+            let config = self.config_manager.config();
+            log::debug!("After redo, ConfigManager has: exposure={}, gamma={}, density_scale={}",
+                config.exposure, config.gamma, config.density_scale);
+            self.import_config(config.clone());
+            log::debug!("After import_config, App has: exposure={}, gamma={}, density_scale={}",
+                self.exposure, self.gamma, self.density_scale);
         }
     }
 
     pub fn can_undo(&self) -> bool {
-        self.undo_history.can_undo()
+        self.config_manager.can_undo()
     }
 
     pub fn can_redo(&self) -> bool {
-        self.undo_history.can_redo()
+        self.config_manager.can_redo()
     }
 }
