@@ -287,7 +287,7 @@ impl FlameBuffers {
             perspective_strength: 2.0,
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
-            histogram_color_scale: 100.0,
+            histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             _pad3: 0.0,
         };
 
@@ -310,7 +310,7 @@ impl FlameBuffers {
             width,
             height,
             blend_factor: 1.0,
-            histogram_color_scale: 100.0, // Must match compute shader
+            histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             low_density_smoothing: 0.5, // Default moderate smoothing
             density_compression_strength: 0.0, // Default: linear accumulation (no compression)
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)

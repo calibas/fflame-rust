@@ -77,7 +77,7 @@ impl FlameRenderer {
             current_projection: flame.projection,
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
-            histogram_color_scale: 100.0, // Default (max color depth)
+            histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             low_density_smoothing: 0.5, // Moderate smoothing default
             density_compression_strength: 0.0, // Linear accumulation default (no compression)
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
