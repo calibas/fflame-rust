@@ -220,15 +220,15 @@ pub fn render_settings_window(
 
                     // Render settings - Iterations per thread
                     let mut temp_iterations = *iterations_per_thread;
-                    if ui.add(egui::Slider::new(&mut temp_iterations, 64..=4096)
+                    let response = ui.add(egui::Slider::new(&mut temp_iterations, 64..=4096)
                         .text("Iterations per Thread"))
                         .on_hover_text(
                             "GPU workgroup performance tuning.\n\
                             Higher values = fewer dispatches, better GPU utilization.\n\
                             Lower values = more frequent updates, smoother animation."
-                        )
-                        .changed()
-                    {
+                        );
+
+                    if response.changed() {
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::IterationsPerThread,
                             temp_iterations.into(),
@@ -240,9 +240,13 @@ pub fn render_settings_window(
                         }
                     }
 
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::IterationsPerThread);
+                    }
+
                     // Histogram color scale
                     let mut temp_histogram = *histogram_color_scale;
-                    if ui.add(egui::Slider::new(&mut temp_histogram, 1.0..=100.0)
+                    let response = ui.add(egui::Slider::new(&mut temp_histogram, 1.0..=100.0)
                         .logarithmic(true)
                         .text("Histogram Color Scale"))
                         .on_hover_text(
@@ -253,9 +257,9 @@ pub fn render_settings_window(
                             10: Balanced (6553 hits, 10 color levels) - recommended default\n\
                             50: Higher precision (1310 hits, 50 color levels)\n\
                             100: Maximum precision (655 hits, 100 color levels) - classic"
-                        )
-                        .changed()
-                    {
+                        );
+
+                    if response.changed() {
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::HistogramColorScale,
                             temp_histogram.into(),
@@ -267,9 +271,13 @@ pub fn render_settings_window(
                         }
                     }
 
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::HistogramColorScale);
+                    }
+
                     // Low-density smoothing
                     let mut temp_smoothing = *low_density_smoothing;
-                    if ui.add(egui::Slider::new(&mut temp_smoothing, 0.0..=1.0)
+                    let response = ui.add(egui::Slider::new(&mut temp_smoothing, 0.0..=1.0)
                         .text("Low-Density Smoothing"))
                         .on_hover_text(
                             "Reduces noise in low-density (sparse) areas by limiting single-hit weight.\n\
@@ -277,9 +285,9 @@ pub fn render_settings_window(
                             0.0: No smoothing (accurate but noisy single hits)\n\
                             0.5: Moderate smoothing (balanced) - recommended default\n\
                             1.0: Maximum smoothing (very smooth but slow to converge)"
-                        )
-                        .changed()
-                    {
+                        );
+
+                    if response.changed() {
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::LowDensitySmoothing,
                             temp_smoothing.into(),
@@ -289,6 +297,10 @@ pub fn render_settings_window(
                             *low_density_smoothing_changed = true;
                             max_update = max_update.max(update_type);
                         }
+                    }
+
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::LowDensitySmoothing);
                     }
 
                     // Dynamic blend toggle
@@ -309,7 +321,7 @@ pub fn render_settings_window(
                     // Blend factor (accumulation rate) - only when dynamic blend is OFF
                     ui.add_enabled_ui(!*use_dynamic_blend, |ui| {
                         let mut temp_blend = *blend_factor;
-                        if ui.add(egui::Slider::new(&mut temp_blend, 0.01..=1.0)
+                        let response = ui.add(egui::Slider::new(&mut temp_blend, 0.01..=1.0)
                             .logarithmic(true)
                             .text("Fixed Blend Rate"))
                             .on_hover_text(
@@ -319,9 +331,9 @@ pub fn render_settings_window(
                                 0.1: Balanced (10% per frame) - default\n\
                                 0.5: Fast (50% per frame)\n\
                                 1.0: Instant (100% per frame)"
-                            )
-                            .changed()
-                        {
+                            );
+
+                        if response.changed() {
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::BlendFactor,
                                 temp_blend.into(),
@@ -332,11 +344,15 @@ pub fn render_settings_window(
                                 max_update = max_update.max(update_type);
                             }
                         }
+
+                        if response.drag_stopped() {
+                            let _ = config_manager.force_commit_preview(&ConfigPath::BlendFactor);
+                        }
                     });
 
                     // Density compression strength
                     let mut temp_compression = *density_compression_strength;
-                    if ui.add(egui::Slider::new(&mut temp_compression, 0.0..=100.0)
+                    let response = ui.add(egui::Slider::new(&mut temp_compression, 0.0..=100.0)
                         .text("Density Compression"))
                         .on_hover_text(
                             "Slows accumulation in bright areas to reveal core detail.\n\
@@ -347,9 +363,9 @@ pub fn render_settings_window(
                             100: Strong - bright areas accumulate at ~1% rate\n\n\
                             Higher Blend Rate makes compression effect more visible.\n\
                             Use this to prevent bright cores from washing out detail."
-                        )
-                        .changed()
-                    {
+                        );
+
+                    if response.changed() {
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::DensityCompressionStrength,
                             temp_compression.into(),
@@ -361,6 +377,10 @@ pub fn render_settings_window(
                         }
                     }
 
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::DensityCompressionStrength);
+                    }
+
                     // Per-pixel iteration limit
                     // Use logarithmic slider for better control across large ranges
                     let mut log_value = if *target_iterations_per_pixel == 0 {
@@ -369,7 +389,7 @@ pub fn render_settings_window(
                         (*target_iterations_per_pixel as f64).log10()
                     };
 
-                    if ui.add(egui::Slider::new(&mut log_value, 0.0..=6.0)
+                    let response = ui.add(egui::Slider::new(&mut log_value, 0.0..=6.0)
                         .custom_formatter(|n, _| {
                             if n < 0.5 {
                                 "Disabled".to_string()
@@ -387,9 +407,9 @@ pub fn render_settings_window(
                             100,000: Conservative - allows good convergence\n\
                             1,000,000: Very conservative - high quality\n\n\
                             Works independently of blend_factor and density compression."
-                        )
-                        .changed()
-                    {
+                        );
+
+                    if response.changed() {
                         let new_value = if log_value < 0.5 {
                             0  // Disabled
                         } else {
@@ -404,6 +424,10 @@ pub fn render_settings_window(
                             *target_iterations_changed = true;
                             max_update = max_update.max(update_type);
                         }
+                    }
+
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::TargetIterationsPerPixel);
                     }
 
                     // Speed multiplier for frame rate (1x = 60 FPS, 2x = 120 FPS, etc.)
