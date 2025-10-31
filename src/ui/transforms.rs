@@ -66,7 +66,8 @@ pub fn render_transforms_window(
                                 // Weight control
                                 ui.label("Weight");
                                 let mut temp_weight = transform.weight;
-                                if ui.add(egui::Slider::new(&mut temp_weight, 0.0..=1024.0).logarithmic(true)).changed() {
+                                let response = ui.add(egui::Slider::new(&mut temp_weight, 0.0..=1024.0).logarithmic(true));
+                                if response.changed() {
                                     if let Ok(update_type) = config_manager.update_param(
                                         ConfigPath::TransformWeight { index: i },
                                         temp_weight.into(),
@@ -76,6 +77,9 @@ pub fn render_transforms_window(
                                         *flame_changed = true;
                                         max_update = max_update.max(update_type);
                                     }
+                                }
+                                if response.drag_stopped() {
+                                    let _ = config_manager.force_commit_preview(&ConfigPath::TransformWeight { index: i });
                                 }
 
                                 ui.separator();
@@ -142,7 +146,8 @@ fn render_affine_controls(
     ui.horizontal(|ui| {
         ui.label("a:");
         let mut temp_a = transform.a;
-        if ui.add(egui::DragValue::new(&mut temp_a).speed(0.01)).changed() {
+        let response_a = ui.add(egui::DragValue::new(&mut temp_a).speed(0.01));
+        if response_a.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::A },
                 temp_a.into(),
@@ -153,9 +158,14 @@ fn render_affine_controls(
                 max_update = max_update.max(update_type);
             }
         }
+        if response_a.lost_focus() {
+            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::A });
+        }
+
         ui.label("b:");
         let mut temp_b = transform.b;
-        if ui.add(egui::DragValue::new(&mut temp_b).speed(0.01)).changed() {
+        let response_b = ui.add(egui::DragValue::new(&mut temp_b).speed(0.01));
+        if response_b.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::B },
                 temp_b.into(),
@@ -166,12 +176,16 @@ fn render_affine_controls(
                 max_update = max_update.max(update_type);
             }
         }
+        if response_b.lost_focus() {
+            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::B });
+        }
     });
 
     ui.horizontal(|ui| {
         ui.label("c:");
         let mut temp_c = transform.c;
-        if ui.add(egui::DragValue::new(&mut temp_c).speed(0.01)).changed() {
+        let response_c = ui.add(egui::DragValue::new(&mut temp_c).speed(0.01));
+        if response_c.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::C },
                 temp_c.into(),
@@ -182,9 +196,14 @@ fn render_affine_controls(
                 max_update = max_update.max(update_type);
             }
         }
+        if response_c.lost_focus() {
+            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::C });
+        }
+
         ui.label("d:");
         let mut temp_d = transform.d;
-        if ui.add(egui::DragValue::new(&mut temp_d).speed(0.01)).changed() {
+        let response_d = ui.add(egui::DragValue::new(&mut temp_d).speed(0.01));
+        if response_d.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::D },
                 temp_d.into(),
@@ -195,12 +214,16 @@ fn render_affine_controls(
                 max_update = max_update.max(update_type);
             }
         }
+        if response_d.lost_focus() {
+            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::D });
+        }
     });
 
     ui.horizontal(|ui| {
         ui.label("e:");
         let mut temp_e = transform.e;
-        if ui.add(egui::DragValue::new(&mut temp_e).speed(0.01)).changed() {
+        let response_e = ui.add(egui::DragValue::new(&mut temp_e).speed(0.01));
+        if response_e.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::E },
                 temp_e.into(),
@@ -211,9 +234,14 @@ fn render_affine_controls(
                 max_update = max_update.max(update_type);
             }
         }
+        if response_e.lost_focus() {
+            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::E });
+        }
+
         ui.label("f:");
         let mut temp_f = transform.f;
-        if ui.add(egui::DragValue::new(&mut temp_f).speed(0.01)).changed() {
+        let response_f = ui.add(egui::DragValue::new(&mut temp_f).speed(0.01));
+        if response_f.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::F },
                 temp_f.into(),
@@ -223,6 +251,9 @@ fn render_affine_controls(
                 *flame_changed = true;
                 max_update = max_update.max(update_type);
             }
+        }
+        if response_f.lost_focus() {
+            let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::F });
         }
     });
 
@@ -244,7 +275,8 @@ fn render_color_controls(
     ui.horizontal(|ui| {
         ui.label("R:");
         let mut temp_r = transform.color[0];
-        if ui.add(egui::Slider::new(&mut temp_r, 0.0..=1.0)).changed() {
+        let response_r = ui.add(egui::Slider::new(&mut temp_r, 0.0..=1.0));
+        if response_r.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformColor { index, component: ColorComponent::R },
                 temp_r.into(),
@@ -255,9 +287,14 @@ fn render_color_controls(
                 max_update = max_update.max(update_type);
             }
         }
+        if response_r.drag_stopped() {
+            let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: ColorComponent::R });
+        }
+
         ui.label("G:");
         let mut temp_g = transform.color[1];
-        if ui.add(egui::Slider::new(&mut temp_g, 0.0..=1.0)).changed() {
+        let response_g = ui.add(egui::Slider::new(&mut temp_g, 0.0..=1.0));
+        if response_g.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformColor { index, component: ColorComponent::G },
                 temp_g.into(),
@@ -268,9 +305,14 @@ fn render_color_controls(
                 max_update = max_update.max(update_type);
             }
         }
+        if response_g.drag_stopped() {
+            let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: ColorComponent::G });
+        }
+
         ui.label("B:");
         let mut temp_b = transform.color[2];
-        if ui.add(egui::Slider::new(&mut temp_b, 0.0..=1.0)).changed() {
+        let response_b = ui.add(egui::Slider::new(&mut temp_b, 0.0..=1.0));
+        if response_b.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformColor { index, component: ColorComponent::B },
                 temp_b.into(),
@@ -281,10 +323,14 @@ fn render_color_controls(
                 max_update = max_update.max(update_type);
             }
         }
+        if response_b.drag_stopped() {
+            let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: ColorComponent::B });
+        }
     });
 
     let mut temp_speed = transform.color_speed;
-    if ui.add(egui::Slider::new(&mut temp_speed, 0.0..=1.0).text("Color Speed")).changed() {
+    let response_speed = ui.add(egui::Slider::new(&mut temp_speed, 0.0..=1.0).text("Color Speed"));
+    if response_speed.changed() {
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformColorSpeed { index },
             temp_speed.into(),
@@ -294,6 +340,9 @@ fn render_color_controls(
             *flame_changed = true;
             max_update = max_update.max(update_type);
         }
+    }
+    if response_speed.drag_stopped() {
+        let _ = config_manager.force_commit_preview(&ConfigPath::TransformColorSpeed { index });
     }
 
     max_update
