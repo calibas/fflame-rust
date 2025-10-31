@@ -55,3 +55,4 @@ Timestamp,Fractal,ConfigFile,Resolution,Platform,Commit,CommitName,TotalIteratio
 2025-10-27 11:12:21,simple3,output/simple3.fflame,1920x1080,Windows,9ac278a,"Overflow fix (u32 hist, unoptimized)",39812333568,1024,0.90,128,1577.40,15.88,1.01,1564.38,1599.51,25.24,5,1.87.0,release
 2025-10-27 16:45:54,simple3,output/simple3.fflame,1920x1080,Windows,0c66e57,Current,39812333568,1024,0.90,128,1687.43,18.40,1.09,1666.38,1704.56,23.59,5,1.87.0,release
 2025-10-27 22:15:38,simple3,output/simple3.fflame,1920x1080,Windows,b41e650,Current,39812333568,1024,0.90,128,1739.03,23.79,1.37,1713.68,1763.61,22.89,5,1.87.0,release
+2025-10-30 21:18:05,simple3,output\simple3.fflame,1920x1080,Windows,a1aea64,Current,39812333568,1024,0.90,128,1687.56,9.71,0.58,1677.57,1700.18,23.59,5,1.87.0,release
