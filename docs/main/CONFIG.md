@@ -8,11 +8,15 @@ Complete guide to the delta-based configuration system, ConfigManager, undo/redo
 - [UI.md](UI.md) - Config import/export UI controls and delta-based UI patterns
 - [EXPORT.md](EXPORT.md) - PNG metadata embedding
 
-**Project Documentation (Delta System):**
-- [projects/delta-based-state-management.md](../../docs/projects/delta-based-state-management.md) - Original 2,600-line plan (RETIRED, historical)
-- [projects/delta-system-completed.md](../../docs/projects/delta-system-completed.md) - Summary of completed work (Phases 1-10)
-- [projects/complete-delta-migration.md](../../docs/projects/complete-delta-migration.md) - Active migration plan (Phases 11-14)
-- [projects/MIGRATION-STATUS.md](../../docs/projects/MIGRATION-STATUS.md) - Detailed migration tracking
+**Project Documentation (Delta System - COMPLETED):**
+
+All delta migration documentation has been archived to [archive/delta-migration/](../archive/delta-migration/):
+- [delta-based-state-management.md](../archive/delta-migration/delta-based-state-management.md) - Original 2,600-line plan (RETIRED)
+- [delta-system-completed.md](../archive/delta-migration/delta-system-completed.md) - Summary of completed work (Phases 1-10)
+- [complete-delta-migration.md](../archive/delta-migration/complete-delta-migration.md) - Final migration phases (11-16)
+- [MIGRATION-STATUS.md](../archive/delta-migration/MIGRATION-STATUS.md) - Detailed migration tracking
+
+Current work: [projects/centralized-update-logic.md](../projects/centralized-update-logic.md) - Future centralization of UpdateType handling
 
 ---
 
