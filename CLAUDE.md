@@ -43,11 +43,18 @@
   - `src/app/` - Application state and event handling (modular)
     - `mod.rs` - Core App struct, event loop, render function
     - `input.rs` - Keyboard, mouse, wheel input handlers
-    - `config.rs` - Config export/import, undo/redo
+    - `config.rs` - Config export/import (legacy, being phased out)
     - `export.rs` - Headless PNG export for CLI
+  - `src/config/` - **Delta-based state management system** (Added 2025-10-31)
+    - `manager.rs` - ConfigManager with undo/redo (1,237 lines)
+    - `delta.rs` - ConfigPath, ConfigValue, ConfigDelta enums (568 lines)
+    - `slider.rs` - UI helpers: config_slider, lazy_slider (299 lines)
+    - `fractal_config.rs` - FractalConfig struct (complete state)
+    - `defaults.rs` - Default value constants (single source of truth)
   - `src/renderer/compute_kernel.rs` - GPU rendering orchestration
   - `src/scene/transforms.rs` - Flame algorithm (CPU + GPU)
   - `src/ui/mod.rs` - All UI panels and controls
+  - `src/ui/undo_history.rs` - Visual undo history browser
 
 ### Key Concepts
 - **Fractal Flames**: IFS (Iterated Function System) with variations
@@ -264,12 +271,44 @@ println!("Rendered {} iterations in {:.2}ms",
 - Prefer `&Queue::write_buffer()` over buffer mapping for updates
 - Use `CommandEncoder` for GPU operations, submit once per frame
 
-### State Management
-- Use `LazyUndoHelper` for slider/drag interactions to throttle undo captures
-- Call `app.capture_state()` before making discrete changes (buttons, dropdowns)
-- Reset accumulation when view/flame/palette changes
-- Use `view_changed_by_keyboard` flag pattern for deferred updates
-- See [docs/projects/lazy-undo-implementation.md](docs/projects/lazy-undo-implementation.md) for lazy undo details
+### State Management (Delta-Based System - Added 2025-10-31)
+**All configuration changes now flow through ConfigManager** - see [docs/main/CONFIG.md](docs/main/CONFIG.md) for complete documentation.
+
+**Core Principles:**
+- Use `config_slider()` or `lazy_slider()` helpers from `src/config/slider.rs` for UI controls
+- ConfigManager automatically handles undo/redo with delta tracking
+- Type-safe `ConfigPath` enum identifies all parameters (100+ variants)
+- `UpdateType` return value determines selective GPU updates (View/Color/Flame/ToneMap/Rendering)
+- LazyUndoHelper throttles undo captures for continuous controls (500ms minimum)
+- Live preview mode for temporary changes (palette editor)
+
+**UI Pattern:**
+```rust
+use crate::config::slider::lazy_slider;
+use crate::config::delta::{ConfigPath, UpdateType};
+
+// Lazy undo for continuous controls (view, affine)
+let update_type = lazy_slider(ui, config_manager, ConfigPath::Zoom, 0.1..=10.0)
+    .text("Zoom").show();
+
+// Immediate undo for discrete controls (exposure, gamma)
+let update_type = config_slider(ui, config_manager, ConfigPath::Exposure, 0.1..=5.0)
+    .text("Exposure").show();
+
+// Handle updates
+match update_type {
+    UpdateType::View => { renderer.update_view(...); renderer.reset(); }
+    UpdateType::Flame => { renderer.update_flame(...); renderer.reset(); }
+    UpdateType::ToneMap => { renderer.update_tonemap(...); /* no reset */ }
+    _ => {}
+}
+```
+
+**Key Files:**
+- `src/config/manager.rs` - ConfigManager (1,237 lines)
+- `src/config/delta.rs` - ConfigPath, ConfigValue, ConfigDelta (568 lines)
+- `src/config/slider.rs` - UI helpers (299 lines)
+- See [docs/archive/delta-migration/](docs/archive/delta-migration/) for historical migration docs
 
 ### Variation Registry Architecture
 - **Global Singleton**: `global_registry()` returns `&'static VariationRegistry` (initialized once via `once_cell::Lazy`)
@@ -574,10 +613,17 @@ Thread-safe atomic color accumulation using u32 histogram buffer:
 - Julia variation uses CPU `rand::random()` which doesn't work on GPU (needs RNG passed in)
 - WASM PNG export uses `unsafe` lifetime extension (safe in practice, GPU resources live for program lifetime)
 - No error handling for invalid .fflame or .palette file imports
-- Background color changes don't trigger undo capture in all cases
 - Transparent PNG export reads from accumulation buffer (Rgba16Float) and applies tone mapping on CPU
   - This is necessary because tonemap shader blends RGB with background before alpha is applied
   - Accumulation buffer stores raw fractal colors with separate density channel
+
+## Legacy Code (Being Phased Out)
+The following still use old flag-based state management and will be migrated to ConfigManager:
+- Transform add/delete buttons (uses direct config modification + old undo system)
+- Config import/export handlers (uses `capture_state()` instead of ConfigManager)
+- Some preset loading paths may still use legacy patterns
+
+For most UI controls, the migration to delta-based ConfigManager is complete (see [docs/archive/delta-migration/](docs/archive/delta-migration/)).
 
 ## Mobile Platform Support (Experimental)
 
