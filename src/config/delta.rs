@@ -165,7 +165,7 @@ impl Display for ConfigPath {
 }
 
 /// A value that can be stored in FractalConfig
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConfigValue {
     Float(f32),
     Int(i32),

@@ -18,14 +18,14 @@ impl Default for ColorMode {
 }
 
 /// A single color stop in a gradient palette
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ColorStop {
     pub position: f32, // 0.0 to 1.0
     pub color: [f32; 3], // RGB
 }
 
 /// Palette definition with gradient stops
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Palette {
     pub name: String,
     pub stops: Vec<ColorStop>,

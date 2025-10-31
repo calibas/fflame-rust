@@ -102,12 +102,10 @@ impl App {
                     self.mouse_dragging = false;
                     self.last_mouse_pos = None;
 
-                    // Exit preview mode immediately on mouse release
-                    // force_commit_preview() now just commits preview→current without creating deltas
-                    // (deltas were already captured by throttle during drag)
-                    if self.config_manager.is_in_preview_mode() {
-                        let _ = self.config_manager.force_commit_preview(&crate::config::ConfigPath::PanX);
-                    }
+                    // NOTE: We don't call force_commit_preview() here because:
+                    // 1. UI controls (sliders, triangle editor) handle their own force_commit
+                    // 2. Mouse pan is handled via arrow button drag end (see ui/view_controls.rs)
+                    // 3. Calling with hardcoded PanX path would interfere with other controls
                 }
             }
         }

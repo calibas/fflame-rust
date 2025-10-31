@@ -2501,6 +2501,117 @@ All 5 test cases passed:
 
 ---
 
+## Phase 10: Lazy Undo Force Commit Bug Fix (2025-10-31)
+
+### Problem Discovery
+
+User reported that exposure/gamma sliders created lazy restore points during drag but NOT a final restore point when mouse was released:
+
+```
+[DEBUG] Lazy capture: Exposure = 1.000 → 1.200
+[DEBUG] -> Committed preview to current, undo stack len: 1
+[DEBUG] Force commit: No changes to capture (preview == current)
+```
+
+**Issue**: Quick drags < 500ms (before throttle fires) would not create any undo entry at all.
+
+### Root Causes Identified
+
+1. **`force_commit_preview()` didn't create undo entries** - Original implementation just committed preview→current without checking if final capture was needed
+2. **No helper to extract values from arbitrary configs** - `get_value()` only worked with manager's current/preview, couldn't compare two specific configs
+3. **Input handler interference** - `input.rs` called `force_commit_preview(&PanX)` on ANY mouse release, interfering with slider's correct call
+
+### Solution Implemented
+
+**File: `src/config/manager.rs`**
+
+1. **Added `get_value_from_config()` helper** (lines 365-487):
+   ```rust
+   fn get_value_from_config(
+       config: &FractalConfig,
+       path: &ConfigPath,
+   ) -> Result<ConfigValue, ConfigError>
+   ```
+   - Extracts value from any FractalConfig (not just manager's current/preview)
+   - Used for comparing current vs preview snapshots
+
+2. **Refactored `get_value()`** (lines 489-495):
+   ```rust
+   pub fn get_value(&self, path: &ConfigPath) -> Result<ConfigValue, ConfigError> {
+       let config = self.preview.as_ref().unwrap_or(&self.current);
+       Self::get_value_from_config(config, path)
+   }
+   ```
+   - Now uses helper to avoid code duplication
+   - Single source of truth for value extraction logic
+
+3. **Fixed `force_commit_preview()`** (lines 876-900):
+   ```rust
+   pub fn force_commit_preview(&mut self, path: &ConfigPath) -> Result<UpdateType, ConfigError> {
+       if let Some(preview) = self.preview.take() {
+           // Extract values from both configs
+           let current_value = Self::get_value_from_config(&self.current, path)?;
+           let preview_value = Self::get_value_from_config(&preview, path)?;
+
+           // Create final undo entry if values differ
+           if current_value != preview_value {
+               let delta = ConfigDelta::new(path.clone(), current_value, preview_value.clone());
+               let change = ConfigChange::single(delta);
+               self.push_undo(change);
+           }
+
+           // Commit preview to current
+           self.current = preview;
+           Ok(UpdateType::ViewOnly)
+       } else {
+           Ok(UpdateType::None)
+       }
+   }
+   ```
+
+**File: `src/config/delta.rs`**
+
+4. **Added `PartialEq` to `ConfigValue`** (line 168):
+   ```rust
+   #[derive(Debug, Clone, PartialEq)]
+   pub enum ConfigValue { ... }
+   ```
+   - Required for `current_value != preview_value` comparison
+   - Also added to `ToneCurve`, `Palette`, `ColorStop` (already had it)
+
+**File: `src/app/input.rs`**
+
+5. **Removed interfering `force_commit_preview()` call** (line 105-108):
+   ```rust
+   // Before: Called force_commit_preview(&PanX) on ANY mouse release
+   // After: Removed - UI controls handle their own force_commit
+   ```
+   - Input handler was calling with hardcoded `PanX` path
+   - This interfered with slider calling with correct path (`Exposure`)
+   - UI controls (sliders, triangle editor) now handle force_commit themselves
+
+### Testing Results ✅
+
+Tested exposure slider drag:
+1. ✅ Drag exposure from 1.0 to 1.2 → Throttle captures (1.0→1.2)
+2. ✅ Continue dragging to 3.0 → Preview updates but no throttle (< 500ms)
+3. ✅ Release mouse → `force_commit_preview(&Exposure)` creates final entry (1.2→3.0)
+4. ✅ Ctrl+Z → Undoes to 1.2 (intermediate capture)
+5. ✅ Ctrl+Z → Undoes to 1.0 (initial value)
+
+**Result**: Quick drags now properly captured with final undo entry on mouse release!
+
+### Result
+
+✅ **Phase 10 Complete** - Lazy undo force commit now creates final undo entries!
+
+**Before fix**: Quick drags < 500ms created no undo entry at all
+**After fix**: All drags create final undo entry on mouse release, even if no throttle fired
+
+**Architecture improvement**: Refactored value extraction into reusable helper, eliminating code duplication and enabling config comparison.
+
+---
+
 ## Open Questions
 
 1. ~~**Preset loading**: Should loading a preset clear undo history? Or create a single "Load preset: X" undo point?~~ ✅ RESOLVED

@@ -362,12 +362,11 @@ impl ConfigManager {
             self.undo_stack.len(), redo_cleared);
     }
 
-    /// Get value from config by path
-    /// Returns preview value if in preview mode, otherwise current value
-    pub fn get_value(&self, path: &ConfigPath) -> Result<ConfigValue, ConfigError> {
-        // Use preview if available, otherwise current
-        let config = self.preview.as_ref().unwrap_or(&self.current);
-
+    /// Extract value from any FractalConfig by path (helper for undo/redo)
+    fn get_value_from_config(
+        config: &FractalConfig,
+        path: &ConfigPath,
+    ) -> Result<ConfigValue, ConfigError> {
         match path {
             // View
             ConfigPath::Zoom => Ok(config.zoom.into()),
@@ -485,6 +484,14 @@ impl ConfigManager {
             ConfigPath::RenderMode => Ok(config.flame.render_mode.into()),
             ConfigPath::ProjectionType => Ok(config.flame.projection.into()),
         }
+    }
+
+    /// Get value from config by path
+    /// Returns preview value if in preview mode, otherwise current value
+    pub fn get_value(&self, path: &ConfigPath) -> Result<ConfigValue, ConfigError> {
+        // Use preview if available, otherwise current
+        let config = self.preview.as_ref().unwrap_or(&self.current);
+        Self::get_value_from_config(config, path)
     }
 
     /// Set value in config by path
@@ -864,14 +871,30 @@ impl ConfigManager {
     }
 
     /// Force commit preview to current (call on drag end)
-    /// Simply commits preview to current without capturing to undo
-    /// (deltas are already captured by throttle mechanism during drag)
-    pub fn force_commit_preview(&mut self, _path: &ConfigPath) -> Result<UpdateType, ConfigError> {
+    /// Creates final undo entry if preview differs from current
+    /// This ensures changes are captured even if drag ended before throttle fired
+    pub fn force_commit_preview(&mut self, path: &ConfigPath) -> Result<UpdateType, ConfigError> {
         if let Some(preview) = self.preview.take() {
-            // Just commit preview to current, don't create new deltas
-            // The throttle mechanism already captured changes during drag
+            log::debug!("Force commit for path: {:?}", path);
+
+            // Check if preview actually differs from current
+            let current_value = Self::get_value_from_config(&self.current, path)?;
+            let preview_value = Self::get_value_from_config(&preview, path)?;
+
+            log::debug!("Force commit: Comparing {} (current) vs {} (preview)", current_value, preview_value);
+
+            if current_value != preview_value {
+                // Create final undo entry (preview differs from last capture)
+                let delta = ConfigDelta::new(path.clone(), current_value.clone(), preview_value.clone());
+                let change = ConfigChange::single(delta);
+                self.push_undo(change);
+                log::debug!("Force commit: Created final undo entry {} → {}", current_value, preview_value);
+            } else {
+                log::debug!("Force commit: No changes to capture (preview == current)");
+            }
+
+            // Commit preview to current
             self.current = preview;
-            log::debug!("Force commit: Committed preview to current (no undo capture)");
 
             // Return ViewOnly as a safe default - caller can check if needed
             Ok(UpdateType::ViewOnly)
