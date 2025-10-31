@@ -17,7 +17,6 @@ use crate::scene::palette::{PaletteLibrary, ColorMode};
 use crate::scene::presets::PresetLibrary;
 use crate::util::PerformanceMetrics;
 use crate::config::{FractalConfig, ConfigManager};
-use crate::undo::UndoHistory;
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 
 pub struct App {
@@ -46,7 +45,6 @@ pub struct App {
     pub(super) paused: bool,
     pub(super) max_iterations: Option<u64>,
     pub(super) speed_factor: f32,
-    pub(super) undo_history: UndoHistory,
     pub(super) modifiers: winit::keyboard::ModifiersState,
     pub(super) background_color: [f32; 3],
     // Tone mapping
@@ -149,7 +147,6 @@ impl App {
             paused: false,
             max_iterations: Some(1_000_000_000),
             speed_factor: 0.5,
-            undo_history: UndoHistory::new(initial_config),
             modifiers: winit::keyboard::ModifiersState::default(),
             background_color: [0.0, 0.0, 0.0], // Default to black
             tonemap_mode: ToneMapMode::Logarithmic,
@@ -543,8 +540,8 @@ impl App {
 
         // Handle custom palette from editor
         if let Some(custom_pal) = ui_response.custom_palette {
-            // Capture state before applying palette change (for undo)
-            self.capture_state();
+            // TODO: Migrate to ConfigManager (custom palette modifies library, not config)
+            // For now, no undo support for palette editor changes
 
             // Check if this palette already exists in library by name
             let palette_lib = &mut self.palette_library;
