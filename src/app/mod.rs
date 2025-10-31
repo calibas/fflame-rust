@@ -110,7 +110,7 @@ impl App {
             exposure: 1.0,
             gamma: 2.2,
             deterministic_rng: false,
-            histogram_color_scale: 10.0,  // Balanced default
+            histogram_color_scale: 100.0,  // Default (max color depth)
             low_density_smoothing: 0.5,  // Moderate smoothing default
             density_compression_strength: 0.0,  // Linear accumulation default (no compression)
             blend_factor: 0.1,  // 10% blend rate - good balance between speed and smoothness
@@ -160,7 +160,7 @@ impl App {
             // Batched accumulation: 1 = normal (every frame), 4 = experimental batching
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
-            histogram_color_scale: 10.0, // Balanced default
+            histogram_color_scale: 100.0, // Default (max color depth)
             low_density_smoothing: 0.5, // Moderate smoothing default
             density_compression_strength: 0.0, // Linear accumulation default (no compression)
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness

@@ -187,3 +187,7 @@ Sometimes the solution is to use ui.push_id
 1 giant undo list, redo is determined by the position in the list. Changing settings clears all points after the current point.
 
 
+"Lazy" flag for restore points, restore points save time. When there's several changes in quick succession, combine restore points.
+
+
+Undo/Redo History, save to disk for "unlimited" version?

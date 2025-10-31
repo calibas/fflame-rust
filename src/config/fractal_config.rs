@@ -93,7 +93,7 @@ fn default_max_iterations() -> u64 {
 }
 
 fn default_histogram_color_scale() -> f32 {
-    10.0  // Balanced: 6553 hits before overflow, 10 color levels
+    100.0  // Maximum precision: 655 hits before overflow, 100 color levels
 }
 
 fn default_low_density_smoothing() -> f32 {
