@@ -51,23 +51,27 @@ pub fn render_variation_params(
             &crate::variations::global_registry(),
         );
 
-        let param_changed = match param.param_type {
+        let (param_changed, drag_stopped) = match param.param_type {
             ParamType::Float => render_float_param(ui, param, &mut param_value),
             ParamType::Integer => render_integer_param(ui, param, &mut param_value),
             ParamType::Angle => render_angle_param(ui, param, &mut param_value),
         };
 
+        let path = ConfigPath::TransformVariationParam {
+            index: transform_index,
+            variation: var_name.to_string(),
+            param: param.name.clone(),
+        };
+
         if param_changed {
             // Update via ConfigManager with lazy undo
-            let path = ConfigPath::TransformVariationParam {
-                index: transform_index,
-                variation: var_name.to_string(),
-                param: param.name.clone(),
-            };
-
-            if let Ok(update_type) = config_manager.update_param(path, param_value.into(), true) {
+            if let Ok(update_type) = config_manager.update_param(path.clone(), param_value.into(), true) {
                 max_update = max_update.max(update_type);
             }
+        }
+
+        if drag_stopped {
+            let _ = config_manager.force_commit_preview(&path);
         }
     }
 
@@ -75,33 +79,34 @@ pub fn render_variation_params(
 }
 
 /// Render a float parameter slider
-fn render_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> bool {
+/// Returns (changed, drag_stopped)
+fn render_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let min = param.min_value.unwrap_or(-10.0);
     let max = param.max_value.unwrap_or(10.0);
-    ui.add(
+    let response = ui.add(
         egui::Slider::new(value, min..=max)
             .text(&param.display_name)
             .step_by(0.01),
-    )
-    .changed()
+    );
+    (response.changed(), response.drag_stopped())
 }
 
 /// Render an integer parameter slider
-fn render_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> bool {
+/// Returns (changed, drag_stopped)
+fn render_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let min = param.min_value.unwrap_or(1.0) as i32;
     let max = param.max_value.unwrap_or(10.0) as i32;
     let mut int_val = *value as i32;
-    let changed = ui
-        .add(egui::Slider::new(&mut int_val, min..=max).text(&param.display_name))
-        .changed();
+    let response = ui.add(egui::Slider::new(&mut int_val, min..=max).text(&param.display_name));
     *value = int_val as f32;
-    changed
+    (response.changed(), response.drag_stopped())
 }
 
 /// Render an angle parameter slider (displays degrees, stores as value)
-fn render_angle_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> bool {
+/// Returns (changed, drag_stopped)
+fn render_angle_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let min = param.min_value.unwrap_or(0.0);
     let max = param.max_value.unwrap_or(360.0);
-    ui.add(egui::Slider::new(value, min..=max).text(&param.display_name).suffix("°"))
-        .changed()
+    let response = ui.add(egui::Slider::new(value, min..=max).text(&param.display_name).suffix("°"));
+    (response.changed(), response.drag_stopped())
 }
