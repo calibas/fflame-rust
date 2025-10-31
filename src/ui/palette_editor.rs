@@ -24,6 +24,7 @@ pub fn render_palette_editor_window(
     ctx: &egui::Context,
     show_palette_editor: &mut bool,
     palette_editor: &mut PaletteEditor,
+    config_manager: &mut crate::config::ConfigManager,
     custom_palette: &mut Option<Palette>,
     palette_changed: &mut bool,
     palette_export_json: &mut Option<Palette>,

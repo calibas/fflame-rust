@@ -103,38 +103,50 @@ Used `load_config()` instead of creating new ConfigPath variants because:
 
 **Testing:** ✅ Build successful
 
-### Phase 12: Remove Old Undo System (TODO)
+### Phase 12: Remove Old Undo System ✅ COMPLETE (2025-10-31)
+
+**What Was Removed:**
+- `undo_history` field from App struct (line 49)
+- `undo_history` initialization (line 152)
+- `capture_state()` method from App (config.rs line 131)
+- `use crate::undo::UndoHistory` import
+- `mod undo` declaration from lib.rs
+- Last remaining `capture_state()` call (custom palette)
+
+**Files Modified:**
+- `src/app/mod.rs` - Removed field, import, initialization
+- `src/app/config.rs` - Removed capture_state() method definition
+- `src/lib.rs` - Removed mod undo declaration
+
+**Orphaned Code:**
+- `src/undo.rs` still exists but no longer imported
+- Safe to delete in Phase 14 cleanup
+- Keeping for now as historical reference
+
+**Custom Palette Note:**
+Removed capture_state() call and replaced with TODO comment.
+Custom palette modifies library (not config), so needs different
+approach. Low frequency operation, undo support deferred.
+
+**Testing:** ✅ Build successful
+
+**Result:** Old undo system completely removed! All undo/redo now
+handled exclusively by ConfigManager.
+
+### Phase 13: Final Transform Migration ✅ NOT NEEDED
+
+**Status:** No migration needed - it's a future feature placeholder!
 
 **Current State:**
-- `App.undo_history` field still exists
-- `App.capture_state()` method still exists
-- These are unused (or only used by transforms after Phase 11)
+- `final_transform` field exists in Flame struct
+- Always initialized to `None`
+- No UI controls exist
+- Not used in rendering
 
-**Goal:**
-- Delete old undo_history field from App struct
-- Delete old capture_state() method
-- Clean up any remaining references
-
-**Complexity:** Low (after Phase 11 complete)
-- Simple deletion of dead code
-- Grep for references to ensure nothing breaks
-
-**Files to Update:**
-- `src/app/mod.rs` - Remove undo_history field, capture_state() method
-- Any other files referencing old system
-
-### Phase 13: Migrate Final Transform (TODO)
-
-**Current State:**
-- Final transform exists in code but no UI controls
-- If we add UI, need to use ConfigManager from the start
-
-**Goal:**
-- When adding final transform UI, use ConfigManager immediately
-- Don't repeat mistakes of dual system
-
-**Complexity:** Low (no existing UI to migrate)
-- Just follow existing patterns for sliders/controls
+**Conclusion:**
+Phase 13 is not a migration task. When/if final transform UI is
+added in the future, it will use ConfigManager from day one.
+No old system code to migrate.
 
 ### Phase 14: Cleanup and Documentation (TODO)
 
@@ -239,9 +251,9 @@ For each migrated control:
 
 ### Remaining Work
 - [x] Phase 11: Transform structure operations (add/delete/modify) ✅ COMPLETE (2025-10-31)
-- [ ] Phase 12: Remove old undo system entirely
-- [ ] Phase 13: Final transform UI (when added)
-- [ ] Phase 14: Documentation cleanup
+- [x] Phase 12: Remove old undo system entirely ✅ COMPLETE (2025-10-31)
+- [x] Phase 13: Final transform migration ✅ NOT NEEDED (future feature, no old code)
+- [ ] Phase 14: Documentation cleanup (delete undo.rs, update CLAUDE.md)
 
 ---
 

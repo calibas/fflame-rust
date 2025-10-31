@@ -335,6 +335,7 @@ impl EguiLayer {
                 ctx,
                 &mut self.show_palette_editor,
                 &mut self.palette_editor,
+                config_manager,
                 &mut custom_palette,
                 &mut palette_changed,
                 &mut palette_export_json,
