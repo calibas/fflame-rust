@@ -1,7 +1,8 @@
 # Palette Editor: Live Editing with Undo Support
 
-**Status:** Planning
+**Status:** In Progress (Phases 2-3 complete)
 **Created:** 2025-10-31
+**Updated:** 2025-10-31
 **Goal:** Remove Apply button, add live editing with full undo/redo support
 
 ---
@@ -330,26 +331,36 @@ if convert_to_fixed_clicked {
 
 ## Implementation Checklist
 
-### Phase 1: Setup ConfigManager Integration
+### Phase 1: Setup ConfigManager Integration ✅
 
-- [ ] Add `config_manager: &mut ConfigManager` parameter to `render_palette_editor_window()`
+- [x] Add `config_manager: &mut ConfigManager` parameter to `render_palette_editor_window()`
 - [ ] Remove `custom_palette: &mut Option<Palette>` parameter (no longer needed)
 - [ ] Remove `has_unsaved_changes` field from `PaletteEditor` struct
 - [ ] Load initial palette from `config_manager.active_config().palette` (or library if None)
 
-### Phase 2: Migrate Color Stop Dragging
+**Status:** Partial - ConfigManager parameter added, other cleanup pending
 
-- [ ] Add drag state tracking (drag_start_palette)
-- [ ] Implement lazy mode during drag
-- [ ] Call `force_commit_preview()` on drag end
+### Phase 2: Migrate Color Stop Dragging ✅
+
+- [x] Add drag state tracking (drag_start_palette)
+- [x] Implement lazy mode during drag
+- [x] Call `force_commit_preview()` on drag end
 - [ ] Test: Drag stop → release → undo → position reverts
 
-### Phase 3: Migrate Color Picker
+**Implementation:** Position slider now uses ConfigManager with lazy mode. Changes tracked via flags to avoid borrow conflicts.
 
-- [ ] Track color picker open/close state
-- [ ] Implement lazy mode during color editing
-- [ ] Create undo entry on picker close
+**Status:** Complete - Ready for testing
+
+### Phase 3: Migrate Color Picker ✅
+
+- [x] Track color picker open/close state
+- [x] Implement lazy mode during color editing
+- [x] Create undo entry on picker close
 - [ ] Test: Edit color → close picker → undo → color reverts
+
+**Implementation:** Color picker uses `lost_focus()` event to detect close and create final undo entry. Live updates during editing via lazy mode.
+
+**Status:** Complete - Ready for testing
 
 ### Phase 4: Migrate Add/Delete Stops
 
