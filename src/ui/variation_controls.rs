@@ -57,10 +57,9 @@ pub fn render_variation_category(
         let transform = &config_manager.active_config().flame.transforms[transform_index];
         let mut value = transform.get_variation(&var_info.name);
 
-        if ui
-            .add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name))
-            .changed()
-        {
+        let response = ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name));
+
+        if response.changed() {
             // Update via ConfigManager with lazy undo
             let path = ConfigPath::TransformVariation {
                 index: transform_index,
@@ -70,6 +69,14 @@ pub fn render_variation_category(
             if let Ok(update_type) = config_manager.update_param(path, value.into(), true) {
                 max_update = max_update.max(update_type);
             }
+        }
+
+        if response.drag_stopped() {
+            let path = ConfigPath::TransformVariation {
+                index: transform_index,
+                variation: var_info.name.clone(),
+            };
+            let _ = config_manager.force_commit_preview(&path);
         }
 
         // Show parameters if variation is active and has parameters
