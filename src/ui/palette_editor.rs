@@ -116,6 +116,8 @@ pub fn render_palette_editor_window(
             ui.label("Color Stops:");
 
             let mut stop_to_remove = None;
+            let mut palette_updated = false;
+            let mut force_commit = false;
 
             egui::ScrollArea::vertical()
                 .max_height(250.0)
@@ -135,14 +137,25 @@ pub fn render_palette_editor_window(
                             );
                             if slider_response.changed() {
                                 stop.position = pos_int as f32 / 255.0;
-                                palette_editor.has_unsaved_changes = true;
+                                palette_updated = true;
+                            }
+
+                            // Force commit on drag end to create final undo entry
+                            if slider_response.drag_stopped() {
+                                force_commit = true;
                             }
 
                             // Color picker
                             let mut color = [stop.color[0], stop.color[1], stop.color[2]];
-                            if ui.color_edit_button_rgb(&mut color).changed() {
+                            let color_response = ui.color_edit_button_rgb(&mut color);
+                            if color_response.changed() {
                                 stop.color = color;
-                                palette_editor.has_unsaved_changes = true;
+                                palette_updated = true;
+                            }
+
+                            // Force commit when color picker closes (loses focus)
+                            if color_response.lost_focus() {
+                                force_commit = true;
                             }
 
                             // Remove button (disabled in fixed mode, keep at least 2 stops)
@@ -153,6 +166,24 @@ pub fn render_palette_editor_window(
                         });
                     }
                 });
+
+            // Handle ConfigManager updates after all mutable borrows are done
+            if palette_updated {
+                // Live update via ConfigManager (lazy mode for smooth editing)
+                let palette_box = Box::new(palette_editor.current_palette.clone());
+                if let Ok(_) = config_manager.update_param(
+                    crate::config::ConfigPath::Palette(palette_box.clone()),
+                    crate::config::ConfigValue::Palette((*palette_box).clone()),
+                    true // lazy mode - preview during drag
+                ) {
+                    *palette_changed = true;
+                }
+            }
+
+            if force_commit {
+                let palette_box = Box::new(palette_editor.current_palette.clone());
+                let _ = config_manager.force_commit_preview(&crate::config::ConfigPath::Palette(palette_box));
+            }
 
             // Remove stop if requested
             if let Some(idx) = stop_to_remove {
