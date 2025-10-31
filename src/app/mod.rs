@@ -1046,7 +1046,12 @@ impl App {
                 }
 
                 if ui_response.palette_changed {
-                    if let Some(palette) = self.palette_library.get(self.current_palette_index) {
+                    // Get palette from ConfigManager (includes preview mode changes from palette editor)
+                    let active_config = self.config_manager.active_config();
+                    let palette = active_config.palette.as_ref()
+                        .or_else(|| self.palette_library.get(active_config.palette_index));
+
+                    if let Some(palette) = palette {
                         renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
                     }
                 }
