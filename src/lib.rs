@@ -5,7 +5,6 @@ mod util;
 pub mod scene;
 pub mod renderer;
 pub mod config;
-mod undo;
 pub mod profiler;
 pub mod version;
 pub mod variations;

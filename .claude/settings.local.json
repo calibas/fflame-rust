@@ -11,7 +11,8 @@
       "Bash(cargo doc:*)",
       "Bash(wasm-pack build:*)",
       "Bash(git add:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "Bash(Select-Object -Last 30)"
     ],
     "deny": [],
     "ask": []

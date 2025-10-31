@@ -4,7 +4,6 @@ pub struct PaletteEditor {
     pub current_palette: Palette,
     pub json_buffer: String,
     pub show_fixed_mode_warning: bool,
-    pub has_unsaved_changes: bool,
 }
 
 impl PaletteEditor {
@@ -13,7 +12,6 @@ impl PaletteEditor {
             current_palette: Palette::fire(),
             json_buffer: String::new(),
             show_fixed_mode_warning: false,
-            has_unsaved_changes: false,
         }
     }
 }
@@ -24,6 +22,7 @@ pub fn render_palette_editor_window(
     ctx: &egui::Context,
     show_palette_editor: &mut bool,
     palette_editor: &mut PaletteEditor,
+    config_manager: &mut crate::config::ConfigManager,
     custom_palette: &mut Option<Palette>,
     palette_changed: &mut bool,
     palette_export_json: &mut Option<Palette>,
@@ -41,8 +40,18 @@ pub fn render_palette_editor_window(
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Palette Name:");
-                if ui.text_edit_singleline(&mut palette_editor.current_palette.name).changed() {
-                    palette_editor.has_unsaved_changes = true;
+                let name_response = ui.text_edit_singleline(&mut palette_editor.current_palette.name);
+
+                // Create undo entry when user finishes editing name
+                if name_response.lost_focus() {
+                    let palette_box = Box::new(palette_editor.current_palette.clone());
+                    if let Ok(_) = config_manager.update_param(
+                        crate::config::ConfigPath::Palette(palette_box.clone()),
+                        crate::config::ConfigValue::Palette((*palette_box).clone()),
+                        false // immediate mode - discrete action
+                    ) {
+                        *palette_changed = true;
+                    }
                 }
             });
             ui.separator();
@@ -115,6 +124,8 @@ pub fn render_palette_editor_window(
             ui.label("Color Stops:");
 
             let mut stop_to_remove = None;
+            let mut palette_updated = false;
+            let mut force_commit = false;
 
             egui::ScrollArea::vertical()
                 .max_height(250.0)
@@ -134,28 +145,66 @@ pub fn render_palette_editor_window(
                             );
                             if slider_response.changed() {
                                 stop.position = pos_int as f32 / 255.0;
-                                palette_editor.has_unsaved_changes = true;
+                                palette_updated = true;
+                            }
+
+                            // Force commit on drag end to create final undo entry
+                            if slider_response.drag_stopped() {
+                                force_commit = true;
                             }
 
                             // Color picker
                             let mut color = [stop.color[0], stop.color[1], stop.color[2]];
-                            if ui.color_edit_button_rgb(&mut color).changed() {
+                            let color_response = ui.color_edit_button_rgb(&mut color);
+                            if color_response.changed() {
                                 stop.color = color;
-                                palette_editor.has_unsaved_changes = true;
+                                palette_updated = true;
+                            }
+
+                            // Force commit when color picker closes (loses focus)
+                            if color_response.lost_focus() {
+                                force_commit = true;
                             }
 
                             // Remove button (disabled in fixed mode, keep at least 2 stops)
                             if stops_len > 2 && !palette_editor.current_palette.locked && ui.button("🗑").clicked() {
                                 stop_to_remove = Some(i);
-                                palette_editor.has_unsaved_changes = true;
                             }
                         });
                     }
                 });
 
+            // Handle ConfigManager updates after all mutable borrows are done
+            if palette_updated {
+                // Live update via ConfigManager (lazy mode for smooth editing)
+                let palette_box = Box::new(palette_editor.current_palette.clone());
+                if let Ok(_) = config_manager.update_param(
+                    crate::config::ConfigPath::Palette(palette_box.clone()),
+                    crate::config::ConfigValue::Palette((*palette_box).clone()),
+                    true // lazy mode - preview during drag
+                ) {
+                    *palette_changed = true;
+                }
+            }
+
+            if force_commit {
+                let palette_box = Box::new(palette_editor.current_palette.clone());
+                let _ = config_manager.force_commit_preview(&crate::config::ConfigPath::Palette(palette_box));
+            }
+
             // Remove stop if requested
             if let Some(idx) = stop_to_remove {
                 palette_editor.current_palette.stops.remove(idx);
+
+                // Immediate undo entry for delete operation
+                let palette_box = Box::new(palette_editor.current_palette.clone());
+                if let Ok(_) = config_manager.update_param(
+                    crate::config::ConfigPath::Palette(palette_box.clone()),
+                    crate::config::ConfigValue::Palette((*palette_box).clone()),
+                    false // immediate mode - discrete action
+                ) {
+                    *palette_changed = true;
+                }
             }
 
             ui.separator();
@@ -177,7 +226,16 @@ pub fn render_palette_editor_window(
                 });
                 // Sort by position
                 palette_editor.current_palette.stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap());
-                palette_editor.has_unsaved_changes = true;
+
+                // Immediate undo entry for add operation
+                let palette_box = Box::new(palette_editor.current_palette.clone());
+                if let Ok(_) = config_manager.update_param(
+                    crate::config::ConfigPath::Palette(palette_box.clone()),
+                    crate::config::ConfigValue::Palette((*palette_box).clone()),
+                    false // immediate mode - discrete action
+                ) {
+                    *palette_changed = true;
+                }
             }
 
             ui.separator();
@@ -220,21 +278,8 @@ pub fn render_palette_editor_window(
 
             ui.separator();
 
-            ui.horizontal(|ui| {
-                // Apply button - green with white text when changes exist, grey when no changes
-                let apply_button = if palette_editor.has_unsaved_changes {
-                    egui::Button::new(egui::RichText::new("✅ Apply").color(egui::Color32::WHITE))
-                        .fill(egui::Color32::from_rgb(60, 150, 60))
-                } else {
-                    egui::Button::new("✅ Apply")
-                };
-
-                if ui.add(apply_button).clicked() {
-                    *custom_palette = Some(palette_editor.current_palette.clone());
-                    *palette_changed = true;
-                    palette_editor.has_unsaved_changes = false;
-                }
-            });
+            // Note: Apply button removed - all changes now applied live via ConfigManager
+            ui.label("💡 All changes are applied instantly and tracked in undo history.");
         });
 
     // Fixed mode warning dialog

@@ -11,11 +11,12 @@ mod settings;
 mod tone_mapping;
 mod transforms;
 mod triangle_editor;
+mod undo_history;
 mod variation_controls;
 mod variation_params;
 mod view;
 
-pub use lazy_undo::{LazyUndoHelper, LazyUndoUi, LazySliderResult};
+pub use lazy_undo::LazyUndoHelper;
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
 
@@ -40,10 +41,9 @@ pub struct EguiLayer {
     show_triangle_editor: bool,
     show_tone_mapping: bool,
     show_help: bool,
+    show_undo_history: bool,
     // Lazy undo helpers for throttling undo captures during continuous drag
     lazy_undo_tone_mapping: LazyUndoHelper,
-    lazy_undo_tone_curve: LazyUndoHelper,  // Separate helper for curve editor
-    lazy_undo_view: LazyUndoHelper,
 }
 
 impl EguiLayer {
@@ -75,9 +75,8 @@ impl EguiLayer {
             show_triangle_editor: false,
             show_tone_mapping: true,  // Show by default
             show_help: false,
+            show_undo_history: false,
             lazy_undo_tone_mapping: LazyUndoHelper::new(),
-            lazy_undo_tone_curve: LazyUndoHelper::new(),
-            lazy_undo_view: LazyUndoHelper::new(),
         }
     }
 
@@ -99,6 +98,7 @@ impl EguiLayer {
         window: &Window,
         window_size: winit::dpi::PhysicalSize<u32>,
         metrics: &crate::util::PerformanceMetrics,
+        config_manager: &mut crate::config::ConfigManager,
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
         flame: &mut crate::scene::transforms::Flame,
         iterations_per_thread: &mut u32,
@@ -179,10 +179,11 @@ impl EguiLayer {
         let mut palette_save_file = None;
         let mut palette_import_json = None;
         let mut palette_load_file = false;
-        let mut triangle_drag_started = false;
-        let mut triangle_dragging = false;
-        let mut triangle_drag_ended = false;
 
+
+        // Log ConfigManager state at start of UI render
+        // log::debug!("render_ui start: ConfigManager has exposure={:.3}, gamma={:.3}",
+        //     config_manager.config().exposure, config_manager.config().gamma);
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Render menu bar
@@ -197,6 +198,7 @@ impl EguiLayer {
                 &mut self.show_help,
                 &mut self.show_palette_editor,
                 &mut self.show_config_window,
+                &mut self.show_undo_history,
             );
 
             // Render Performance window
@@ -209,7 +211,7 @@ impl EguiLayer {
             );
 
             // Render Settings window
-            settings::render_settings_window(
+            let settings_update_type = settings::render_settings_window(
                 ctx,
                 &mut self.show_settings,
                 &mut self.show_config_window,
@@ -236,6 +238,7 @@ impl EguiLayer {
                 &mut iterations_changed,
                 deterministic_rng,
                 speed_multiplier,
+                config_manager,
                 histogram_color_scale,
                 &mut histogram_color_scale_changed,
                 low_density_smoothing,
@@ -249,11 +252,13 @@ impl EguiLayer {
                 target_iterations_per_pixel,
                 &mut target_iterations_changed,
             );
+            // TODO: Handle settings_update_type (Phase 4 task)
 
             // Render View window
-            view::render_view_window(
+            let view_update_type = view::render_view_window(
                 ctx,
                 &mut self.show_view,
+                config_manager,
                 zoom,
                 pan_x,
                 pan_y,
@@ -263,38 +268,43 @@ impl EguiLayer {
                 flame,
                 &mut view_changed,
                 &mut camera_rotation_changed,
-                &mut self.lazy_undo_view,
             );
+            // TODO: Handle view_update_type (Phase 4 task)
 
             // Render Help window
             help::render_help_window(ctx, &mut self.show_help);
 
             // Render Transforms window
-            transforms::render_transforms_window(
+            let transforms_update_type = transforms::render_transforms_window(
                 ctx,
                 &mut self.show_transforms,
+                config_manager,
                 flame,
                 &mut flame_changed,
                 &mut add_transform,
                 &mut delete_transform,
             );
+            // TODO: Handle transforms_update_type (Phase 4 task)
 
             // Render Triangle Editor window
-            triangle_editor::render_triangle_editor_window(
+            let triangle_editor_update = triangle_editor::render_triangle_editor_window(
                 ctx,
                 &mut self.show_triangle_editor,
+                config_manager,
                 flame,
-                &mut flame_changed,
-                &mut triangle_drag_started,
-                &mut triangle_dragging,
-                &mut triangle_drag_ended,
             );
+            // Handle triangle editor updates
+            // Set flame_changed if update type requires it OR if in preview mode (live updates during drag)
+            if triangle_editor_update >= crate::config::UpdateType::IterationReset || config_manager.is_in_preview_mode() {
+                flame_changed = true;
+            }
 
             // Render Tone Mapping window
-            tone_mapping::render_tone_mapping_window(
+            let _tonemap_update = tone_mapping::render_tone_mapping_window(
                 ctx,
                 &mut self.show_tone_mapping,
                 &mut self.show_palette_editor,
+                config_manager,
                 tonemap_mode,
                 &mut tonemap_mode_changed,
                 tonemap_curve,
@@ -313,12 +323,10 @@ impl EguiLayer {
                 current_palette_index,
                 &mut palette_changed,
                 &mut self.palette_editor.current_palette,
-                &mut self.palette_editor.has_unsaved_changes,
                 speed_factor,
                 background_color,
                 &mut background_color_changed,
                 &mut self.lazy_undo_tone_mapping,
-                &mut self.lazy_undo_tone_curve,
             );
 
             // Render Palette Editor window
@@ -326,6 +334,7 @@ impl EguiLayer {
                 ctx,
                 &mut self.show_palette_editor,
                 &mut self.palette_editor,
+                config_manager,
                 &mut custom_palette,
                 &mut palette_changed,
                 &mut palette_export_json,
@@ -344,6 +353,15 @@ impl EguiLayer {
                 &mut config_save_file,
                 &mut config_load_file,
                 &mut apophysis_import_file,
+            );
+
+            // Render Undo/Redo History window
+            undo_history::render_undo_history_window(
+                ctx,
+                &mut self.show_undo_history,
+                config_manager,
+                &mut undo_requested,
+                &mut redo_requested,
             );
         });
 
@@ -391,6 +409,10 @@ impl EguiLayer {
             self.renderer.free_texture(id);
         }
 
+        // Sync flame from ConfigManager AFTER UI updates (for live preview during drag)
+        // This ensures app.rs gets the latest preview state when checking is_in_preview_mode()
+        *flame = config_manager.active_config().flame.clone();
+
         UiResponse {
             reset_requested,
             flame_changed,
@@ -423,9 +445,6 @@ impl EguiLayer {
             render_mode_changed,
             projection_changed,
             camera_rotation_changed,
-            triangle_drag_started,
-            triangle_dragging,
-            triangle_drag_ended,
             tonemap_mode_changed,
             tonemap_curve_changed,
             exposure_changed,
