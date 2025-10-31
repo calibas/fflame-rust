@@ -1,12 +1,36 @@
 # Configuration and State Management
 
-Complete guide to the configuration system, state management, undo/redo, and serialization.
+Complete guide to the delta-based configuration system, ConfigManager, undo/redo, and serialization.
 
 **See also:**
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Overview and module organization
 - [TRANSFORMS.md](TRANSFORMS.md) - Transform structure details
-- [UI.md](UI.md) - Config import/export UI controls
+- [UI.md](UI.md) - Config import/export UI controls and delta-based UI patterns
 - [EXPORT.md](EXPORT.md) - PNG metadata embedding
+
+**Project Documentation (Delta System):**
+- [projects/delta-based-state-management.md](../../docs/projects/delta-based-state-management.md) - Original 2,600-line plan (RETIRED, historical)
+- [projects/delta-system-completed.md](../../docs/projects/delta-system-completed.md) - Summary of completed work (Phases 1-10)
+- [projects/complete-delta-migration.md](../../docs/projects/complete-delta-migration.md) - Active migration plan (Phases 11-14)
+- [projects/MIGRATION-STATUS.md](../../docs/projects/MIGRATION-STATUS.md) - Detailed migration tracking
+
+---
+
+## Overview
+
+The application uses a **delta-based state management system** centered around `ConfigManager`. This replaces the previous flag-based approach with:
+- Type-safe parameter identification (`ConfigPath`)
+- Automatic undo/redo with delta tracking
+- Selective GPU updates via `UpdateType` classification
+- Lazy undo helpers for continuous controls (sliders, mouse)
+- Live preview mode for temporary changes (palette editor)
+
+**Key Files:**
+- [src/config/manager.rs](../../src/config/manager.rs) - ConfigManager implementation (1,237 lines)
+- [src/config/delta.rs](../../src/config/delta.rs) - ConfigPath, ConfigValue, ConfigDelta enums (568 lines)
+- [src/config/fractal_config.rs](../../src/config/fractal_config.rs) - FractalConfig struct
+- [src/config/slider.rs](../../src/config/slider.rs) - UI helpers (config_slider, lazy_slider) (299 lines)
+- [src/config/defaults.rs](../../src/config/defaults.rs) - Default value constants
 
 ---
 
@@ -14,7 +38,7 @@ Complete guide to the configuration system, state management, undo/redo, and ser
 
 The `FractalConfig` struct represents **complete application state** for exact reproducibility. Everything needed to recreate a fractal is stored in this single struct.
 
-**Location:** [src/config.rs](../../src/config.rs)
+**Location:** [src/config/fractal_config.rs](../../src/config/fractal_config.rs)
 
 ### Core Fields
 
@@ -353,108 +377,338 @@ pub fn load_config(&mut self, config: &FractalConfig) {
 
 ---
 
-## Undo/Redo System
+## ConfigManager - Delta-Based State Management
 
-The undo system maintains a **50-state circular buffer** of complete configurations.
+The `ConfigManager` is the central gateway for all configuration changes. It replaces the old flag-based system with type-safe delta tracking and automatic undo/redo.
 
-**Location:** [src/undo.rs](../../src/undo.rs)
+**Location:** [src/config/manager.rs](../../src/config/manager.rs)
 
-### UndoHistory Structure
+### Architecture
+
+**Key Components:**
+1. **active_config** - Current state (visible to user)
+2. **preview_config** - Temporary state during live editing (e.g., palette editor)
+3. **undo_stack** - Vec<FractalConfig> (max 50 states)
+4. **redo_stack** - Vec<FractalConfig> (cleared on new changes)
+5. **lazy_undo_helper** - Smart throttling for continuous controls
+
+### Core Structure
 
 ```rust
-pub struct UndoHistory {
-    history: Vec<FractalConfig>,         // Circular buffer (max 50)
-    current: usize,                      // Current position
-    max_size: usize,                     // Buffer limit (50)
+pub struct ConfigManager {
+    active_config: FractalConfig,        // Current state
+    preview_config: Option<FractalConfig>, // Live preview mode
+    undo_stack: Vec<FractalConfig>,      // Undo history (max 50)
+    redo_stack: Vec<FractalConfig>,      // Redo history
+    lazy_undo_helper: LazyUndoHelper,    // Throttled undo for sliders/mouse
 }
 
-impl UndoHistory {
-    pub fn new(max_size: usize) -> Self {
+impl ConfigManager {
+    pub fn new(initial_config: FractalConfig) -> Self {
         Self {
-            history: Vec::new(),
-            current: 0,
-            max_size,
+            active_config: initial_config,
+            preview_config: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            lazy_undo_helper: LazyUndoHelper::new(),
         }
     }
 
-    pub fn push(&mut self, config: FractalConfig) {
-        // Remove future states if we're in the middle
-        self.history.truncate(self.current + 1);
-
-        // Add new state
-        self.history.push(config);
-
-        // Trim if over limit
-        if self.history.len() > self.max_size {
-            self.history.remove(0);
-        } else {
-            self.current += 1;
+    // Main entry point for parameter updates
+    pub fn update_config(&mut self, path: ConfigPath, value: ConfigValue) -> UpdateType {
+        // 1. Compute delta
+        let old_value = self.get_value(&path);
+        if old_value == value {
+            return UpdateType::None; // No change
         }
-    }
 
-    pub fn undo(&mut self) -> Option<&FractalConfig> {
-        if self.current > 0 {
-            self.current -= 1;
-            Some(&self.history[self.current])
-        } else {
-            None
+        // 2. Capture undo state (if not throttled)
+        if self.should_capture_for_path(&path) {
+            self.push_undo();
         }
+
+        // 3. Apply change
+        self.set_value(&path, value);
+
+        // 4. Classify update type for selective GPU updates
+        self.classify_update(&path)
     }
 
-    pub fn redo(&mut self) -> Option<&FractalConfig> {
-        if self.current < self.history.len() - 1 {
-            self.current += 1;
-            Some(&self.history[self.current])
-        } else {
-            None
+    // Undo/redo operations
+    pub fn undo(&mut self) -> Option<ConfigDelta> { /* ... */ }
+    pub fn redo(&mut self) -> Option<ConfigDelta> { /* ... */ }
+
+    // Live preview mode (palette editor)
+    pub fn enter_preview_mode(&mut self) { /* ... */ }
+    pub fn commit_preview(&mut self) { /* ... */ }
+    pub fn revert_preview(&mut self) { /* ... */ }
+}
+```
+
+### ConfigPath - Type-Safe Parameter Identification
+
+**Location:** [src/config/delta.rs](../../src/config/delta.rs)
+
+`ConfigPath` is an enum with 100+ variants covering every editable parameter:
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConfigPath {
+    // View parameters (no fractal recalc)
+    Zoom,
+    PanX,
+    PanY,
+    Rotation,
+    CameraRotationX,
+    CameraRotationY,
+
+    // Tone mapping (no reset needed)
+    Exposure,
+    Gamma,
+    DensityScale,
+    TonemapMode,
+    TonemapCurve,
+    UseCurve,
+
+    // Color (reset needed, no recompute)
+    ColorMode,
+    PaletteIndex,
+    Palette(Box<Palette>),
+    SpeedFactor,
+    BackgroundColor,
+
+    // Rendering settings
+    IterationsPerThread,
+    SpeedMultiplier,
+    HistogramColorScale,
+    LowDensitySmoothing,
+    DensityCompressionStrength,
+    BlendFactor,
+    UseDynamicBlend,
+    TargetIterationsPerPixel,
+    MaxIterations,
+    DeterministicRng,
+
+    // Transform-level (reset + recompute)
+    TransformCount,
+    TransformWeight { index: usize },
+    TransformColor { index: usize, component: ColorComponent },
+    TransformColorSpeed { index: usize },
+    TransformAffine { index: usize, param: AffineParam },
+    TransformVariation { index: usize, variation: String },
+    TransformVariationParam { index: usize, variation: String, param: String },
+
+    // Flame-level
+    RenderMode,
+    ProjectionType,
+}
+
+// Human-readable display for undo history
+impl Display for ConfigPath {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self {
+            ConfigPath::Exposure => write!(f, "Exposure"),
+            ConfigPath::TransformAffine { index, param } =>
+                write!(f, "Transform {} → Affine {}", index + 1, param),
+            ConfigPath::TransformVariation { index, variation } =>
+                write!(f, "Transform {} → {} variation", index + 1, variation),
+            // ... etc (100+ variants)
         }
-    }
-
-    pub fn can_undo(&self) -> bool {
-        self.current > 0
-    }
-
-    pub fn can_redo(&self) -> bool {
-        self.current < self.history.len() - 1
     }
 }
 ```
 
-### State Capture Pattern
+### ConfigValue - Type-Safe Value Container
 
-**Location:** [src/app/config.rs](../../src/app/config.rs)
-
-**Before making changes:**
 ```rust
-// Capture current state for undo
-if ui_response.flame_changed {
-    self.capture_state();
-    // ... apply changes
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigValue {
+    Float(f32),
+    Int(i32),
+    UInt(u32),
+    UInt64(u64),
+    Bool(bool),
+    String(String),
+    ColorRgb([f32; 3]),
+    ToneMapMode(ToneMapMode),
+    ColorMode(ColorMode),
+    RenderMode(RenderMode),
+    ProjectionType(ProjectionType),
+    ToneCurve(ToneCurve),
+    Palette(Box<Palette>),
 }
+```
+
+### UpdateType - Selective GPU Updates
+
+`UpdateType` classifies changes to determine minimal GPU work required:
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateType {
+    None,       // No GPU update
+    View,       // Camera/zoom → reset accumulation
+    Color,      // Palette → reset accumulation
+    Flame,      // Transform/variation → reset accumulation
+    ToneMap,    // Tone mapping → no reset
+    Rendering,  // Speed/quality settings
+}
+```
+
+**Mapping:**
+```rust
+fn classify_update(path: &ConfigPath) -> UpdateType {
+    match path {
+        ConfigPath::Zoom | ConfigPath::PanX | ConfigPath::PanY | ConfigPath::Rotation
+        | ConfigPath::CameraRotationX | ConfigPath::CameraRotationY => UpdateType::View,
+
+        ConfigPath::ColorMode | ConfigPath::PaletteIndex | ConfigPath::Palette(_)
+        | ConfigPath::SpeedFactor | ConfigPath::BackgroundColor => UpdateType::Color,
+
+        ConfigPath::TransformAffine { .. } | ConfigPath::TransformVariation { .. }
+        | ConfigPath::TransformVariationParam { .. } | ConfigPath::TransformWeight { .. }
+        | ConfigPath::TransformColor { .. } | ConfigPath::TransformColorSpeed { .. }
+        | ConfigPath::TransformCount | ConfigPath::RenderMode | ConfigPath::ProjectionType
+            => UpdateType::Flame,
+
+        ConfigPath::Exposure | ConfigPath::Gamma | ConfigPath::TonemapMode
+        | ConfigPath::TonemapCurve | ConfigPath::UseCurve => UpdateType::ToneMap,
+
+        ConfigPath::IterationsPerThread | ConfigPath::SpeedMultiplier
+        | ConfigPath::HistogramColorScale | /* ... */ => UpdateType::Rendering,
+
+        _ => UpdateType::None,
+    }
+}
+```
+
+### Undo/Redo Implementation
+
+**Undo Operation:**
+```rust
+pub fn undo(&mut self) -> Option<ConfigDelta> {
+    if self.undo_stack.is_empty() {
+        return None;
+    }
+
+    // Push current state to redo stack
+    self.redo_stack.push(self.active_config.clone());
+
+    // Pop previous state from undo stack
+    let previous_config = self.undo_stack.pop().unwrap();
+
+    // Compute delta for display
+    let delta = self.compute_delta(&previous_config, &self.active_config);
+
+    // Apply previous state
+    self.active_config = previous_config;
+
+    Some(delta)
+}
+```
+
+**Redo Operation:**
+```rust
+pub fn redo(&mut self) -> Option<ConfigDelta> {
+    if self.redo_stack.is_empty() {
+        return None;
+    }
+
+    // Push current state to undo stack
+    self.undo_stack.push(self.active_config.clone());
+
+    // Pop next state from redo stack
+    let next_config = self.redo_stack.pop().unwrap();
+
+    // Compute delta for display
+    let delta = self.compute_delta(&self.active_config, &next_config);
+
+    // Apply next state
+    self.active_config = next_config;
+
+    Some(delta)
+}
+```
+
+### LazyUndoHelper - Smart Throttling
+
+**Purpose:** Prevent undo stack bloat during continuous slider drags or mouse panning.
+
+**Location:** [src/config/slider.rs](../../src/config/slider.rs)
+
+**Behavior:**
+```rust
+pub struct LazyUndoHelper {
+    last_capture_time: Option<Instant>,
+    throttle_duration: Duration,  // Default: 500ms
+}
+
+impl LazyUndoHelper {
+    // Should we capture undo state now?
+    pub fn should_capture(&mut self) -> bool {
+        let now = Instant::now();
+        if let Some(last) = self.last_capture_time {
+            if now.duration_since(last) < self.throttle_duration {
+                return false; // Too soon, skip capture
+            }
+        }
+        self.last_capture_time = Some(now);
+        true
+    }
+
+    // Force commit on mouse release / slider drag end
+    pub fn force_commit_now(&mut self) -> bool {
+        self.last_capture_time = Some(Instant::now());
+        true // Always capture final state
+    }
+}
+```
+
+**Usage Pattern:**
+- Drag start: Capture initial state
+- During drag: Skip captures (throttled)
+- Drag end: Capture final state (forced commit)
+- Result: 2 undo entries per slider drag (initial + final)
+
+### Live Preview Mode
+
+**Use Case:** Palette editor - allow temporary color changes with instant revert.
+
+**Flow:**
+```rust
+// Enter preview mode (save current state)
+config_manager.enter_preview_mode();
+
+// Make temporary changes
+config_manager.update_config(ConfigPath::PaletteIndex, ConfigValue::UInt(5));
+// User sees immediate visual update
+
+// Option 1: Commit changes (keep modifications)
+config_manager.commit_preview();
+
+// Option 2: Revert changes (restore saved state)
+config_manager.revert_preview();
 ```
 
 **Implementation:**
 ```rust
-pub fn capture_state(&mut self) {
-    let config = self.export_config();
-    self.undo_history.push(config);
+pub fn enter_preview_mode(&mut self) {
+    // Save current state
+    self.preview_config = Some(self.active_config.clone());
 }
 
-pub fn undo(&mut self) -> bool {
-    if let Some(config) = self.undo_history.undo() {
-        self.import_config(config.clone());
-        true
-    } else {
-        false
+pub fn commit_preview(&mut self) {
+    // Capture undo for the entire preview session
+    if self.preview_config.is_some() {
+        self.push_undo();
+        self.preview_config = None;
     }
 }
 
-pub fn redo(&mut self) -> bool {
-    if let Some(config) = self.undo_history.redo() {
-        self.import_config(config.clone());
-        true
-    } else {
-        false
+pub fn revert_preview(&mut self) {
+    // Restore saved state (no undo entry)
+    if let Some(saved) = self.preview_config.take() {
+        self.active_config = saved;
     }
 }
 ```
@@ -751,6 +1005,115 @@ self.renderer.update_view(config.zoom, config.pan_x, config.pan_y, config.rotati
 
 ---
 
+## UI Helpers for ConfigManager
+
+**Location:** [src/config/slider.rs](../../src/config/slider.rs)
+
+### config_slider() - Immediate Undo
+
+Basic slider with automatic undo capture on every change:
+
+```rust
+use crate::config::slider::config_slider;
+
+config_slider(ui, &mut config_manager, ConfigPath::Exposure, 0.1..=5.0)
+    .text("Exposure")
+    .suffix("x")
+    .show();
+```
+
+**Behavior:**
+- Captures undo state on first change
+- No throttling - every value change creates undo entry
+- Best for: Discrete controls, toggles, dropdowns
+- NOT recommended for: Continuous sliders, mouse drags
+
+### lazy_slider() - Throttled Undo
+
+Slider with intelligent undo throttling (500ms minimum between captures):
+
+```rust
+use crate::config::slider::lazy_slider;
+
+lazy_slider(ui, &mut config_manager, ConfigPath::PanX, -5.0..=5.0)
+    .text("Pan X")
+    .show();
+```
+
+**Behavior:**
+- Drag start: Captures initial state
+- During drag: Skips undo captures (throttled)
+- Drag end: Captures final state (forced commit)
+- Result: 2 undo entries per drag session (initial + final)
+- Best for: Continuous sliders, view controls
+
+### config_drag_value() - DragValue with Undo
+
+Similar to config_slider but uses egui's DragValue widget:
+
+```rust
+use crate::config::slider::config_drag_value;
+
+config_drag_value(ui, &mut config_manager, ConfigPath::SpeedMultiplier, 1..=16)
+    .prefix("Speed: ")
+    .suffix("x")
+    .show();
+```
+
+### Handling UpdateType
+
+All helpers return `UpdateType` - handle in App:
+
+```rust
+// In UI window
+let update_type = lazy_slider(ui, config_manager, ConfigPath::Zoom, 0.1..=10.0)
+    .text("Zoom")
+    .show();
+
+// In App::render()
+match update_type {
+    UpdateType::View => {
+        let config = self.config_manager.active_config();
+        self.flame_renderer.update_view(
+            config.zoom, config.pan_x, config.pan_y, config.rotation
+        );
+        self.flame_renderer.reset();
+    }
+    UpdateType::Flame => {
+        let config = self.config_manager.active_config();
+        self.flame_renderer.update_flame(&config.flame, true);
+        self.flame_renderer.reset();
+    }
+    UpdateType::ToneMap => {
+        let config = self.config_manager.active_config();
+        self.flame_renderer.update_tonemap(
+            config.tonemap_mode, config.tonemap_curve,
+            config.use_curve, config.exposure, config.gamma
+        );
+        // No reset needed for tone mapping
+    }
+    _ => {}
+}
+```
+
+### Custom Controls Pattern
+
+For custom UI controls (not using helpers):
+
+```rust
+// Manual ConfigManager integration
+let mut value = config_manager.active_config().exposure;
+if ui.add(egui::Slider::new(&mut value, 0.1..=5.0).text("Exposure")).changed() {
+    let update_type = config_manager.update_config(
+        ConfigPath::Exposure,
+        ConfigValue::Float(value)
+    );
+    // Handle update_type...
+}
+```
+
+---
+
 ## Common Tasks
 
 ### Create New Preset
@@ -791,5 +1154,14 @@ pub fn import_config(&mut self, config: FractalConfig) {
 
 ---
 
-**Last Updated:** 2025-10-28
+**Last Updated:** 2025-10-31
 **Related Docs:** [ARCHITECTURE.md](../ARCHITECTURE.md), [TRANSFORMS.md](TRANSFORMS.md), [UI.md](UI.md), [EXPORT.md](EXPORT.md)
+
+**Major Changes (2025-10-31):**
+- Replaced UndoHistory with ConfigManager delta-based system
+- Added ConfigPath, ConfigValue, ConfigDelta documentation
+- Added UpdateType classification for selective GPU updates
+- Documented LazyUndoHelper for smart undo throttling
+- Added Live Preview Mode documentation
+- Added UI helper functions (config_slider, lazy_slider, etc.)
+- All 100+ parameters now have type-safe ConfigPath variants

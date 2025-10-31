@@ -11,13 +11,13 @@
 
 ## Window Layout
 
-The UI consists of a menu bar plus 5 collapsible windows:
+The UI consists of a menu bar plus 6 collapsible windows:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Menu Bar: View ▼                                        │
 │   ☑ Performance  ☑ Transforms  ☑ Settings              │
-│   ☑ Triangle Editor  ☑ Palette Editor                  │
+│   ☑ Triangle Editor  ☑ Palette Editor  ☑ Undo History  │
 └─────────────────────────────────────────────────────────┘
 
 ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
@@ -39,8 +39,17 @@ The UI consists of a menu bar plus 5 collapsible windows:
 │   editor with drag   │  │ - Color stops        │
 │ - Real-time updates  │  │ - Import/export      │
 │ - Bounding boxes     │  │ - Built-in library   │
-│ - Smart accumulation │  │                      │
+│ - Smart accumulation │  │ - Live preview mode  │
 └──────────────────────┘  └──────────────────────┘
+
+┌─────────────────────────────────┐
+│   Undo History (Added 2025-10-31) │
+│                                   │
+│ - Visual delta browser            │
+│ - Click to jump to any state      │
+│ - Current position indicator      │
+│ - Human-readable descriptions     │
+└───────────────────────────────────┘
 ```
 
 ### Menu Bar (Added 2025-10-21)
@@ -257,6 +266,53 @@ v2' = [b/2 + a/2 + e, 0.866*d + c/2 + f]
 
 **Code:** [src/ui/mod.rs](../../src/ui/mod.rs) - `render_ui()` Palette Editor section
 
+### Undo History Window (Added 2025-10-31)
+**Purpose:** Visual browser for undo/redo history with human-readable delta descriptions
+
+**Sections:**
+
+1. **Undo Stack**
+   - Scrollable list of all undo states (up to 50)
+   - Each entry shows ConfigPath description (e.g., "Transform 2 → Affine a")
+   - Clickable to jump directly to any past state
+   - Current position highlighted
+
+2. **Redo Stack**
+   - Scrollable list of all redo states
+   - Appears after undoing changes
+   - Cleared when new change is made
+
+**Features:**
+- **Jump to State:** Click any delta to jump directly to that configuration
+- **Visual Indicator:** Current position shown with highlighted entry
+- **Human-Readable:** ConfigPath::Display generates descriptions like:
+  - "Exposure" (simple parameter)
+  - "Transform 2 → Affine a" (indexed affine parameter)
+  - "Transform 1 → Linear variation" (variation weight)
+  - "Transform 3 → JuliaN power" (variation parameter)
+- **Real-Time Updates:** Automatically updates as changes are made
+
+**Example Display:**
+```
+Undo History
+┌──────────────────────────────────┐
+│ • Transform 2 → Affine a         │ ← Current
+│   Transform 2 → Affine d         │
+│   Transform 1 → Linear variation │
+│   Exposure                       │
+│   Zoom                           │
+│   ...                            │
+└──────────────────────────────────┘
+
+Redo Stack
+┌──────────────────────────────────┐
+│   Gamma                          │
+│   Background Color               │
+└──────────────────────────────────┘
+```
+
+**Code:** [src/ui/undo_history.rs](../../src/ui/undo_history.rs)
+
 ---
 
 ## UI Response System
@@ -424,32 +480,75 @@ new_pan_x = pan_x + (cursor_world_x - new_cursor_world_x);
 
 ## State Management Integration
 
-### Undo/Redo System
-**Location:** [src/undo.rs](../../src/undo.rs)
+**See [CONFIG.md](CONFIG.md)** for complete ConfigManager documentation.
 
-**Trigger Points:**
-- Before any flame parameter change (affine, variations, color, weight)
-- Before palette change
-- Before view change (zoom, pan, rotation, camera)
-- Before adding/deleting transforms
-- Before loading preset or config
+### Delta-Based State Management (Added 2025-10-31)
 
-**Capture:**
+The UI uses **ConfigManager** for all parameter updates, replacing the old flag-based approach.
+
+**Location:** [src/config/manager.rs](../../src/config/manager.rs)
+
+**Key Principles:**
+1. All parameter changes flow through ConfigManager
+2. Automatic undo/redo with delta tracking
+3. Type-safe ConfigPath identification
+4. Selective GPU updates via UpdateType
+5. Lazy undo throttling for continuous controls
+
+**Modern UI Pattern (Slider Helpers):**
 ```rust
-// In app.rs before making change:
-app.capture_state();  // Pushes current FractalConfig to undo stack
+use crate::config::slider::{lazy_slider, config_slider};
+use crate::config::delta::{ConfigPath, UpdateType};
 
-// Make change...
-flame.transforms[idx].a = new_value;
+// View Window (lazy undo for smooth dragging)
+let update_type = lazy_slider(ui, config_manager, ConfigPath::Zoom, 0.1..=10.0)
+    .text("Zoom")
+    .show();
 
-// On undo:
-let prev_config = undo_history.undo();
-app.import_config(prev_config);  // Restores complete state
+// Tone Mapping Window (immediate undo)
+let update_type = config_slider(ui, config_manager, ConfigPath::Exposure, 0.1..=5.0)
+    .text("Exposure")
+    .suffix("x")
+    .show();
+
+// Handle updates in App::render()
+match update_type {
+    UpdateType::View => {
+        let config = config_manager.active_config();
+        renderer.update_view(config.zoom, config.pan_x, config.pan_y, config.rotation);
+        renderer.reset();
+    }
+    UpdateType::ToneMap => {
+        let config = config_manager.active_config();
+        renderer.update_tonemap(/* ... */);
+        // No reset for tone mapping
+    }
+    _ => {}
+}
 ```
 
-**History Depth:** 50 states (circular buffer)
+**Legacy Pattern (Being Phased Out):**
+```rust
+// OLD: Manual flags and capture_state()
+if ui.add(egui::Slider::new(&mut value, 0.0..=1.0)).changed() {
+    app.capture_state();
+    flame_changed = true;
+}
+// NEW: ConfigManager with automatic undo
+let update_type = config_slider(ui, config_manager, ConfigPath::SomeParam, 0.0..=1.0).show();
+```
 
-**Code:** [src/app/config.rs](../../src/app/config.rs) - `capture_state()`, `undo()`, `redo()`
+**Undo/Redo:**
+- **Automatic:** ConfigManager captures undo states on parameter changes
+- **Throttled:** LazyUndoHelper prevents spam during slider drags (500ms minimum)
+- **History:** 50 states (circular buffer, oldest states dropped)
+- **Keyboard:** Ctrl+Z (undo), Ctrl+Y (redo)
+- **Visual History:** Undo History window shows all deltas with descriptions
+
+**Code:**
+- [src/config/manager.rs](../../src/config/manager.rs) - ConfigManager implementation
+- [src/config/slider.rs](../../src/config/slider.rs) - UI helpers (lazy_slider, config_slider)
+- [src/ui/undo_history.rs](../../src/ui/undo_history.rs) - Undo history window
 
 ### Accumulation Reset
 **When to reset:**
