@@ -28,8 +28,6 @@ pub fn render_tone_mapping_window(
     egui::Window::new("Tone Mapping & Colors")
         .open(show_tone_mapping)
         .show(ctx, |ui| {
-            // Read config values fresh inside closure to avoid borrow conflicts
-            let config = config_manager.active_config();
             // Section 1: Tone Mapping
             egui::CollapsingHeader::new("Tone Mapping")
                 .default_open(true)
@@ -174,9 +172,11 @@ pub fn render_tone_mapping_window(
                         });
 
                     // Show palette selector for Palette and Speed modes
-                    if matches!(config.color_mode, ColorMode::Palette | ColorMode::Speed) {
+                    let current_color_mode = config_manager.active_config().color_mode;
+                    if matches!(current_color_mode, ColorMode::Palette | ColorMode::Speed) {
                         let palettes = palette_library.palettes();
-                        let mut temp_palette_index = config.palette_index;
+                        let current_palette_index = config_manager.active_config().palette_index;
+                        let mut temp_palette_index = current_palette_index;
                         let current_palette_name = palettes.get(temp_palette_index)
                             .map(|p| p.name.as_str())
                             .unwrap_or("Unknown");
@@ -224,7 +224,8 @@ pub fn render_tone_mapping_window(
                             if ui.button("🎨 Edit Palette").clicked() {
                                 *show_palette_editor = !*show_palette_editor;
                                 // Load current palette into editor
-                                if let Some(pal) = palette_library.get(config.palette_index) {
+                                let edit_palette_index = config_manager.active_config().palette_index;
+                                if let Some(pal) = palette_library.get(edit_palette_index) {
                                     let mut edited_palette = pal.clone();
 
                                     // Always generate unique name for built-in palettes to prevent editing originals
@@ -252,7 +253,8 @@ pub fn render_tone_mapping_window(
                             // Clone button - always creates a copy with unique name
                             if ui.button("📋 Clone").clicked() {
                                 *show_palette_editor = !*show_palette_editor;
-                                if let Some(pal) = palette_library.get(config.palette_index) {
+                                let clone_palette_index = config_manager.active_config().palette_index;
+                                if let Some(pal) = palette_library.get(clone_palette_index) {
                                     let mut edited_palette = pal.clone();
                                     edited_palette.built_in = false; // Clones are never built-in
 
@@ -275,8 +277,10 @@ pub fn render_tone_mapping_window(
                     }
 
                     // Show speed factor slider in Speed mode
-                    if matches!(config.color_mode, ColorMode::Speed) {
-                        let mut temp_speed_factor = config.speed_factor;
+                    let current_color_mode_2 = config_manager.active_config().color_mode;
+                    if matches!(current_color_mode_2, ColorMode::Speed) {
+                        let current_speed_factor = config_manager.active_config().speed_factor;
+                        let mut temp_speed_factor = current_speed_factor;
                         if ui.add(egui::Slider::new(&mut temp_speed_factor, 0.0..=1.0).text("Speed Blend Factor")).changed() {
                             if let Ok(update) = config_manager.update_param(ConfigPath::SpeedFactor, temp_speed_factor.into(), true) {
                                 *color_mode_changed = true;
@@ -289,7 +293,8 @@ pub fn render_tone_mapping_window(
 
                     // Background color picker
                     ui.label("Background Color");
-                    let mut temp_bg_color = config.background_color;
+                    let current_bg_color = config_manager.active_config().background_color;
+                    let mut temp_bg_color = current_bg_color;
                     if ui.color_edit_button_rgb(&mut temp_bg_color).changed() {
                         if let Ok(update) = config_manager.update_param(ConfigPath::BackgroundColor, temp_bg_color.into(), false) {
                             *background_color_changed = true;

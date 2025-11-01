@@ -18,8 +18,8 @@ pub fn render_view_window(
         .show(ctx, |ui| {
             use crate::config::slider::LazyUndoUi;
 
-            // Read current config values inside closure to avoid borrow conflicts
-            let config = config_manager.active_config();
+            // Clone config to avoid borrow conflicts (allows mutation of config_manager in closures)
+            let config = config_manager.active_config().clone();
 
             ui.label("Zoom");
             ui.horizontal(|ui| {

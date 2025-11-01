@@ -96,6 +96,7 @@ impl App {
             low_density_smoothing: crate::config::DEFAULT_LOW_DENSITY_SMOOTHING,
             density_compression_strength: crate::config::DEFAULT_DENSITY_COMPRESSION,
             blend_factor: crate::config::DEFAULT_BLEND_FACTOR,
+            use_dynamic_blend: crate::config::DEFAULT_USE_DYNAMIC_BLEND,
             target_iterations_per_pixel: crate::config::DEFAULT_TARGET_ITERATIONS_PER_PIXEL as u32,
             iterations_per_thread: crate::config::DEFAULT_ITERATIONS_PER_THREAD,
             speed_multiplier: crate::config::DEFAULT_SPEED_MULTIPLIER,
@@ -695,7 +696,12 @@ impl App {
                     // Add to library
                     self.palette_library.add(palette.clone());
                     // Set to the newly added palette (last in list)
-                    self.current_palette_index = self.palette_library.palettes().len() - 1;
+                    let new_idx = self.palette_library.palettes().len() - 1;
+                    let _ = self.config_manager.update_param(
+                        crate::config::ConfigPath::PaletteIndex,
+                        (new_idx as u32).into(),
+                        false
+                    );
 
                     // Update renderer
                     if let Some(ref mut renderer) = self.flame_renderer {
@@ -727,7 +733,12 @@ impl App {
                                     // Add to library
                                     self.palette_library.add(palette.clone());
                                     // Set to the newly added palette (last in list)
-                                    self.current_palette_index = self.palette_library.palettes().len() - 1;
+                                    let new_idx = self.palette_library.palettes().len() - 1;
+                                    let _ = self.config_manager.update_param(
+                                        crate::config::ConfigPath::PaletteIndex,
+                                        (new_idx as u32).into(),
+                                        false
+                                    );
 
                                     // Update renderer
                                     if let Some(ref mut renderer) = self.flame_renderer {
