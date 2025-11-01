@@ -779,6 +779,8 @@ impl ConfigManager {
             ConfigPath::PaletteIndex => {
                 let idx: u32 = value.try_into()?;
                 self.current.palette_index = idx as usize;
+                // Clear embedded palette when selecting from library
+                self.current.palette = None;
             }
             ConfigPath::Palette(p) => {
                 if let ConfigValue::Palette(palette) = value {
@@ -975,6 +977,8 @@ impl ConfigManager {
             ConfigPath::PaletteIndex => {
                 let idx: u32 = value.try_into()?;
                 preview.palette_index = idx as usize;
+                // Clear embedded palette when selecting from library
+                preview.palette = None;
             }
             ConfigPath::Palette(p) => {
                 if let ConfigValue::Palette(palette) = value {
