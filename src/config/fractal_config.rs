@@ -39,6 +39,9 @@ pub struct FractalConfig {
     /// Blend factor for accumulation (0.01 = slow/smooth, 1.0 = fast/flickery, default: 0.1)
     #[serde(default = "default_blend_factor")]
     pub blend_factor: f32,
+    /// Use dynamic blend (true = exponential convergence, false = fixed blend rate, default: true)
+    #[serde(default = "default_use_dynamic_blend")]
+    pub use_dynamic_blend: bool,
     /// Per-pixel iteration limit (0 = disabled, default: 0)
     #[serde(default)]
     pub target_iterations_per_pixel: u32,
@@ -104,6 +107,10 @@ fn default_blend_factor() -> f32 {
     super::defaults::DEFAULT_BLEND_FACTOR
 }
 
+fn default_use_dynamic_blend() -> bool {
+    super::defaults::DEFAULT_USE_DYNAMIC_BLEND
+}
+
 fn default_iterations_per_thread() -> u32 {
     super::defaults::DEFAULT_ITERATIONS_PER_THREAD
 }
@@ -132,6 +139,7 @@ impl Default for FractalConfig {
             low_density_smoothing: default_low_density_smoothing(),
             density_compression_strength: 0.0,
             blend_factor: default_blend_factor(),
+            use_dynamic_blend: default_use_dynamic_blend(),
             target_iterations_per_pixel: 0,
             iterations_per_thread: default_iterations_per_thread(),
             speed_multiplier: default_speed_multiplier(),

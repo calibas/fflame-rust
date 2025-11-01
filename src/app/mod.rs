@@ -495,16 +495,26 @@ impl App {
             if let Some(idx) = found_index {
                 // Palette exists, update it in place
                 palette_lib.update(idx, custom_pal);
-                self.current_palette_index = idx;
+                let _ = self.config_manager.update_param(
+                    crate::config::ConfigPath::PaletteIndex,
+                    (idx as u32).into(),
+                    false
+                );
             } else {
                 // New palette, add to library
                 palette_lib.add(custom_pal);
-                self.current_palette_index = palette_lib.palettes().len() - 1;
+                let new_idx = palette_lib.palettes().len() - 1;
+                let _ = self.config_manager.update_param(
+                    crate::config::ConfigPath::PaletteIndex,
+                    (new_idx as u32).into(),
+                    false
+                );
             }
 
             // Update renderer
+            let config = self.config_manager.active_config();
             if let Some(ref mut renderer) = self.flame_renderer {
-                if let Some(palette) = palette_lib.get(self.current_palette_index) {
+                if let Some(palette) = palette_lib.get(config.palette_index) {
                     renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
                 }
             }
