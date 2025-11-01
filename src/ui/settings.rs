@@ -37,11 +37,11 @@ pub fn render_settings_window(
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
-    // Read config values for UI display
-    let config = config_manager.active_config();
     egui::Window::new("Settings")
         .open(show_settings)
         .show(ctx, |ui| {
+            // Clone config to avoid borrow conflicts (allows mutation of config_manager in closures)
+            let config = config_manager.active_config().clone();
             // Section 1: File & Project
             egui::CollapsingHeader::new("File & Project")
                 .default_open(true)
