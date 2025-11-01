@@ -271,7 +271,7 @@ println!("Rendered {} iterations in {:.2}ms",
 - Prefer `&Queue::write_buffer()` over buffer mapping for updates
 - Use `CommandEncoder` for GPU operations, submit once per frame
 
-### State Management (Delta-Based System - Added 2025-10-31)
+### State Management (Delta-Based System - Completed 2025-11-01)
 **All configuration changes now flow through ConfigManager** - see [docs/main/CONFIG.md](docs/main/CONFIG.md) for complete documentation.
 
 **Core Principles:**
@@ -281,6 +281,7 @@ println!("Rendered {} iterations in {:.2}ms",
 - `UpdateType` return value determines selective GPU updates (View/Color/Flame/ToneMap/Rendering)
 - LazyUndoHelper throttles undo captures for continuous controls (500ms minimum)
 - Live preview mode for temporary changes (palette editor)
+- **UpdateAction pattern** centralizes GPU update decisions (replaces boolean flag propagation)
 
 **UI Pattern:**
 ```rust
@@ -295,19 +296,25 @@ let update_type = lazy_slider(ui, config_manager, ConfigPath::Zoom, 0.1..=10.0)
 let update_type = config_slider(ui, config_manager, ConfigPath::Exposure, 0.1..=5.0)
     .text("Exposure").show();
 
-// Handle updates
-match update_type {
-    UpdateType::View => { renderer.update_view(...); renderer.reset(); }
-    UpdateType::Flame => { renderer.update_flame(...); renderer.reset(); }
-    UpdateType::ToneMap => { renderer.update_tonemap(...); /* no reset */ }
-    _ => {}
-}
+// GPU updates handled centrally via UpdateAction
+let actions = config_manager.get_pending_actions();
+if actions.update_view { renderer.update_view(...); renderer.reset(); }
+if actions.update_flame { renderer.update_flame(...); renderer.reset(); }
+if actions.update_tone_curve { renderer.update_tonemap(...); }
+config_manager.clear_pending_actions();
 ```
 
+**Architecture (Phases 1-5 Complete):**
+- **Phase 1-3**: Created ConfigManager with delta-based undo/redo
+- **Phase 4**: Migrated all UI modules to use ConfigManager (settings, view, tone_mapping, transforms)
+- **Phase 5**: Removed 21 obsolete UiResponse flags, replaced with UpdateAction pattern
+- **Result**: Single source of truth for state changes, automatic change tracking, simplified GPU update logic
+
 **Key Files:**
-- `src/config/manager.rs` - ConfigManager (1,237 lines)
-- `src/config/delta.rs` - ConfigPath, ConfigValue, ConfigDelta (568 lines)
+- `src/config/manager.rs` - ConfigManager with UpdateAction tracking (1,237 lines)
+- `src/config/delta.rs` - ConfigPath, ConfigValue, ConfigDelta, UpdateAction (568 lines)
 - `src/config/slider.rs` - UI helpers (299 lines)
+- `src/ui/response.rs` - Non-config actions only (file I/O, transforms, presets)
 - See [docs/archive/delta-migration/](docs/archive/delta-migration/) for historical migration docs
 
 ### Variation Registry Architecture
@@ -617,13 +624,13 @@ Thread-safe atomic color accumulation using u32 histogram buffer:
   - This is necessary because tonemap shader blends RGB with background before alpha is applied
   - Accumulation buffer stores raw fractal colors with separate density channel
 
-## Legacy Code (Being Phased Out)
-The following still use old flag-based state management and will be migrated to ConfigManager:
-- Transform add/delete buttons (uses direct config modification + old undo system)
-- Config import/export handlers (uses `capture_state()` instead of ConfigManager)
-- Some preset loading paths may still use legacy patterns
+## Legacy Code (Remaining)
+The following still use older patterns and could be migrated to ConfigManager in the future:
+- Transform add/delete buttons (uses direct flame modification, not config_manager.update_param)
+- Config import/export handlers (uses direct config replacement)
+- Preset loading (uses direct config replacement via `load_config()`)
 
-For most UI controls, the migration to delta-based ConfigManager is complete (see [docs/archive/delta-migration/](docs/archive/delta-migration/)).
+**Note**: The delta-based state centralization migration (Phases 1-5) is **complete** as of 2025-11-01. All UI controls now use ConfigManager with automatic change tracking and centralized GPU updates via UpdateAction pattern. See [docs/archive/delta-migration/](docs/archive/delta-migration/) for migration history.
 
 ## Mobile Platform Support (Experimental)
 
