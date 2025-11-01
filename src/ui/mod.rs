@@ -101,40 +101,17 @@ impl EguiLayer {
         config_manager: &mut crate::config::ConfigManager,
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
         flame: &mut crate::scene::transforms::Flame,
-        iterations_per_thread: &mut u32,
-        zoom: &mut f32,
-        pan_x: &mut f32,
-        pan_y: &mut f32,
-        rotation: &mut f32,
-        camera_rotation_x: &mut f32,
-        camera_rotation_y: &mut f32,
-        density_scale: &mut f32,
         palette_library: &crate::scene::palette::PaletteLibrary,
-        current_palette_index: &mut usize,
         preset_library: &crate::scene::presets::PresetLibrary,
         current_preset_index: &mut usize,
-        color_mode: &mut crate::scene::palette::ColorMode,
         paused: &mut bool,
-        max_iterations: &mut Option<u64>,
-        speed_factor: &mut f32,
         can_undo: bool,
         can_redo: bool,
-        background_color: &mut [f32; 3],
-        tonemap_mode: &mut crate::scene::tonemap::ToneMapMode,
-        tonemap_curve: &mut crate::scene::tonemap::ToneCurve,
-        use_curve: &mut bool,
-        exposure: &mut f32,
-        gamma: &mut f32,
-        deterministic_rng: &mut bool,
-        speed_multiplier: &mut u32,
-        histogram_color_scale: &mut f32,
-        low_density_smoothing: &mut f32,
-        density_compression_strength: &mut f32,
-        blend_factor: &mut f32,
-        use_dynamic_blend: &mut bool,
-        target_iterations_per_pixel: &mut u32,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
+
+        // Get config once for reading (UI mutates via config_manager methods)
+        let config = config_manager.active_config();
 
         let mut reset_requested = false;
         let mut flame_changed = false;
