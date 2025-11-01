@@ -169,7 +169,7 @@ pub fn render_settings_window(
                             ));
                         }
 
-                        // Max iterations slider (10M to 1T with logarithmic scale)
+                        // Max iterations slider (30M to 1T with logarithmic scale)
                         let mut log_value = (config.max_iterations as f64).log10();
                         if ui.add(egui::Slider::new(&mut log_value, 7.47713..=12.0)
                             .text("Max Iterations")
