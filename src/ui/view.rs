@@ -7,17 +7,15 @@ pub fn render_view_window(
     ctx: &egui::Context,
     show_view: &mut bool,
     config_manager: &mut ConfigManager,
-    zoom: &mut f32,
-    pan_x: &mut f32,
-    pan_y: &mut f32,
-    rotation: &mut f32,
-    camera_rotation_x: &mut f32,
-    camera_rotation_y: &mut f32,
     flame: &Flame,
     view_changed: &mut bool,
     camera_rotation_changed: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
+
+    // Read current config values
+    let config = config_manager.active_config();
+
     egui::Window::new("View")
         .open(show_view)
         .show(ctx, |ui| {
@@ -27,25 +25,23 @@ pub fn render_view_window(
             ui.label("Zoom");
             ui.horizontal(|ui| {
                 if ui.button("➕ Zoom In").clicked() {
-                    let new_zoom = *zoom * 1.5;
+                    let new_zoom = config.zoom * 1.5;
                     if let Ok(update_type) = config_manager.update_param(
                         ConfigPath::Zoom,
                         new_zoom.into(),
                         false  // Immediate capture for button click
                     ) {
-                        *zoom = new_zoom;
                         *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
                 }
                 if ui.button("➖ Zoom Out").clicked() {
-                    let new_zoom = *zoom / 1.5;
+                    let new_zoom = config.zoom / 1.5;
                     if let Ok(update_type) = config_manager.update_param(
                         ConfigPath::Zoom,
                         new_zoom.into(),
                         false  // Immediate capture for button click
                     ) {
-                        *zoom = new_zoom;
                         *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
@@ -55,7 +51,6 @@ pub fn render_view_window(
                 ui.label("Value:");
                 if let Ok(result) = ui.lazy_drag(config_manager, ConfigPath::Zoom, 0.01, "") {
                     if result.changed {
-                        *zoom = config_manager.active_config().zoom;
                         *view_changed = result.should_capture;
                     }
                     max_update = max_update.max(result.update_type);
@@ -69,7 +64,6 @@ pub fn render_view_window(
                 ui.label("X:");
                 if let Ok(result) = ui.lazy_drag(config_manager, ConfigPath::PanX, 0.01, "") {
                     if result.changed {
-                        *pan_x = config_manager.active_config().pan_x;
                         *view_changed = result.should_capture;
                     }
                     max_update = max_update.max(result.update_type);
@@ -79,7 +73,6 @@ pub fn render_view_window(
                 ui.label("Y:");
                 if let Ok(result) = ui.lazy_drag(config_manager, ConfigPath::PanY, 0.01, "") {
                     if result.changed {
-                        *pan_y = config_manager.active_config().pan_y;
                         *view_changed = result.should_capture;
                     }
                     max_update = max_update.max(result.update_type);
@@ -87,15 +80,15 @@ pub fn render_view_window(
             });
 
             // Pan step size depends on zoom (more zoomed in = smaller steps)
-            let pan_step = 0.1 / *zoom;
+            let pan_step = 0.1 / config.zoom;
 
             ui.separator();
             ui.label("Arrow Controls");
 
             // Pre-calculate rotation for arrow controls
             // Negate rotation to convert screen space to fractal space
-            let cos_r = (-*rotation).cos();
-            let sin_r = (-*rotation).sin();
+            let cos_r = (-config.rotation).cos();
+            let sin_r = (-config.rotation).sin();
 
             // Arrow keys layout
             ui.horizontal(|ui| {
@@ -104,8 +97,8 @@ pub fn render_view_window(
                     // Up in screen space: (0, -1), rotate to fractal space
                     let screen_dx = 0.0;
                     let screen_dy = -pan_step;
-                    let new_pan_x = *pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-                    let new_pan_y = *pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                    let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
+                    let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
                     if let Ok(update_type) = config_manager.update_batch(
                         vec![
                             (ConfigPath::PanX, new_pan_x.into()),
@@ -114,8 +107,6 @@ pub fn render_view_window(
                         "Pan Up".to_string(),
                         false
                     ) {
-                        *pan_x = new_pan_x;
-                        *pan_y = new_pan_y;
                         *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
@@ -126,8 +117,8 @@ pub fn render_view_window(
                     // Left in screen space: (-1, 0), rotate to fractal space
                     let screen_dx = -pan_step;
                     let screen_dy = 0.0;
-                    let new_pan_x = *pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-                    let new_pan_y = *pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                    let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
+                    let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
                     if let Ok(update_type) = config_manager.update_batch(
                         vec![
                             (ConfigPath::PanX, new_pan_x.into()),
@@ -136,8 +127,6 @@ pub fn render_view_window(
                         "Pan Left".to_string(),
                         false
                     ) {
-                        *pan_x = new_pan_x;
-                        *pan_y = new_pan_y;
                         *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
@@ -146,8 +135,8 @@ pub fn render_view_window(
                     // Down in screen space: (0, 1), rotate to fractal space
                     let screen_dx = 0.0;
                     let screen_dy = pan_step;
-                    let new_pan_x = *pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-                    let new_pan_y = *pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                    let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
+                    let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
                     if let Ok(update_type) = config_manager.update_batch(
                         vec![
                             (ConfigPath::PanX, new_pan_x.into()),
@@ -156,8 +145,6 @@ pub fn render_view_window(
                         "Pan Down".to_string(),
                         false
                     ) {
-                        *pan_x = new_pan_x;
-                        *pan_y = new_pan_y;
                         *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
@@ -166,8 +153,8 @@ pub fn render_view_window(
                     // Right in screen space: (1, 0), rotate to fractal space
                     let screen_dx = pan_step;
                     let screen_dy = 0.0;
-                    let new_pan_x = *pan_x + (screen_dx * cos_r - screen_dy * sin_r);
-                    let new_pan_y = *pan_y + (screen_dx * sin_r + screen_dy * cos_r);
+                    let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
+                    let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
                     if let Ok(update_type) = config_manager.update_batch(
                         vec![
                             (ConfigPath::PanX, new_pan_x.into()),
@@ -176,8 +163,6 @@ pub fn render_view_window(
                         "Pan Right".to_string(),
                         false
                     ) {
-                        *pan_x = new_pan_x;
-                        *pan_y = new_pan_y;
                         *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
@@ -189,7 +174,7 @@ pub fn render_view_window(
             ui.label("Rotation");
             ui.horizontal(|ui| {
                 // Convert radians to degrees for display
-                let mut degrees = rotation.to_degrees();
+                let mut degrees = config.rotation.to_degrees();
                 if ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°")).changed() {
                     let new_rotation = degrees.to_radians();
                     if let Ok(update_type) = config_manager.update_param(
@@ -197,7 +182,6 @@ pub fn render_view_window(
                         new_rotation.into(),
                         true  // Lazy undo for slider drag
                     ) {
-                        *rotation = config_manager.active_config().rotation;
                         // Don't trigger reset during preview mode - overwrite mode handles it
                         if !config_manager.is_in_preview_mode() {
                             *view_changed = true;
@@ -214,7 +198,7 @@ pub fn render_view_window(
 
                 ui.horizontal(|ui| {
                     ui.label("Pitch (X):");
-                    let mut degrees_x = camera_rotation_x.to_degrees();
+                    let mut degrees_x = config.camera_rotation_x.to_degrees();
                     if ui.add(egui::Slider::new(&mut degrees_x, -180.0..=180.0).suffix("°")).changed() {
                         let new_camera_x = degrees_x.to_radians();
                         if let Ok(update_type) = config_manager.update_param(
@@ -222,7 +206,6 @@ pub fn render_view_window(
                             new_camera_x.into(),
                             true  // Lazy undo for slider drag
                         ) {
-                            *camera_rotation_x = config_manager.active_config().camera_rotation_x;
                             // Don't trigger reset during preview mode - overwrite mode handles it
                             if !config_manager.is_in_preview_mode() {
                                 *camera_rotation_changed = true;
@@ -234,7 +217,7 @@ pub fn render_view_window(
 
                 ui.horizontal(|ui| {
                     ui.label("Yaw (Y):");
-                    let mut degrees_y = camera_rotation_y.to_degrees();
+                    let mut degrees_y = config.camera_rotation_y.to_degrees();
                     if ui.add(egui::Slider::new(&mut degrees_y, -180.0..=180.0).suffix("°")).changed() {
                         let new_camera_y = degrees_y.to_radians();
                         if let Ok(update_type) = config_manager.update_param(
@@ -242,7 +225,6 @@ pub fn render_view_window(
                             new_camera_y.into(),
                             true  // Lazy undo for slider drag
                         ) {
-                            *camera_rotation_y = config_manager.active_config().camera_rotation_y;
                             // Don't trigger reset during preview mode - overwrite mode handles it
                             if !config_manager.is_in_preview_mode() {
                                 *camera_rotation_changed = true;
@@ -268,12 +250,6 @@ pub fn render_view_window(
                     "Reset View".to_string(),
                     false
                 ) {
-                    *zoom = 1.0;
-                    *pan_x = 0.0;
-                    *pan_y = 0.0;
-                    *rotation = 0.0;
-                    *camera_rotation_x = 0.0;
-                    *camera_rotation_y = 0.0;
                     *view_changed = true;
                     *camera_rotation_changed = true;
                     max_update = max_update.max(update_type);
