@@ -228,7 +228,6 @@ impl EguiLayer {
                 &mut self.show_palette_editor,
                 config_manager,
                 palette_library,
-                &mut self.palette_editor.current_palette,
                 &mut custom_palette,
                 &mut self.lazy_undo_tone_mapping,
             );

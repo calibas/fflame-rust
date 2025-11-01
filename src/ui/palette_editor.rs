@@ -58,7 +58,6 @@ pub fn render_palette_editor_window(
 
                 // Update library and create undo point when user finishes editing name
                 if name_response.lost_focus() {
-                    *custom_palette = Some(palette.clone());
                     let _ = config_manager.update_param(
                         crate::config::ConfigPath::Palette,
                         palette.clone().into(),
@@ -122,7 +121,6 @@ pub fn render_palette_editor_window(
                         // Free mode: just unlock (no data loss, no warning needed)
                         palette.convert_to_free();
                         // Auto-apply the palette when converting to free mode
-                        *custom_palette = Some(palette.clone());
                     } else {
                         // Fixed mode: show warning dialog
                         palette_editor.show_fixed_mode_warning = true;
@@ -188,7 +186,6 @@ pub fn render_palette_editor_window(
             // Handle ConfigManager updates after all mutable borrows are done
             if palette_updated {
                 // Update library (live updates during drag)
-                *custom_palette = Some(palette.clone());
 
                 // Enter preview mode for live rendering
                 let _ = config_manager.update_param(
@@ -203,7 +200,6 @@ pub fn render_palette_editor_window(
                 palette.stops.remove(idx);
 
                 // Update library and create undo point
-                *custom_palette = Some(palette.clone());
                 let _ = config_manager.update_param(
                     crate::config::ConfigPath::Palette,
                     palette.clone().into(),
@@ -232,7 +228,6 @@ pub fn render_palette_editor_window(
                 palette.stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap());
 
                 // Update library and create undo point
-                *custom_palette = Some(palette.clone());
                 let _ = config_manager.update_param(
                     crate::config::ConfigPath::Palette,
                     palette.clone().into(),
@@ -302,7 +297,6 @@ pub fn render_palette_editor_window(
                     if ui.button("✅ Convert to Fixed Mode").clicked() {
                         palette.convert_to_fixed();
                         // Auto-apply the palette when converting to fixed mode
-                        *custom_palette = Some(palette.clone());
                         palette_editor.show_fixed_mode_warning = false;
                     }
 

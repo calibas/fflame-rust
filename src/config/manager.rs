@@ -789,7 +789,14 @@ impl ConfigManager {
                 self.current.palette = None;
             }
             ConfigPath::Palette => {
-                if let ConfigValue::Palette(palette) = value {
+                if let ConfigValue::Palette(mut palette) = value {
+                    // Safety: Never allow built-in flag to be true in config.palette
+                    // Built-ins should only exist in the library
+                    if palette.built_in {
+                        log::warn!("Attempted to set built-in palette in config.palette - forcing built_in=false");
+                        palette.built_in = false;
+                    }
+
                     // Update embedded palette data
                     self.current.palette = Some(palette);
                 }
@@ -987,7 +994,11 @@ impl ConfigManager {
                 preview.palette = None;
             }
             ConfigPath::Palette => {
-                if let ConfigValue::Palette(palette) = value {
+                if let ConfigValue::Palette(mut palette) = value {
+                    // Safety: Never allow built-in flag in preview either
+                    if palette.built_in {
+                        palette.built_in = false;
+                    }
                     preview.palette = Some(palette);
                 }
             }
