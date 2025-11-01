@@ -914,15 +914,6 @@ impl App {
         // View changes can also come from keyboard input
         let view_changed_by_keyboard = self.view_changed_by_keyboard;
 
-        // Handle preset change or config import: sync flame working copy from ConfigManager
-        if ui_response.preset_changed || actions.needs_import {
-            if ui_response.preset_changed {
-                println!("Preset loaded via ConfigManager, syncing flame working copy");
-            }
-            let config = self.config_manager.active_config();
-            self.flame = config.flame.clone();
-            // All other config values (zoom, pan, etc) read directly from config_manager - no sync needed!
-        }
 
         // Determine if any GPU updates are needed
         let needs_update = actions.reset_accumulation || actions.update_flame || actions.update_palette

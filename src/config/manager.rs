@@ -120,9 +120,6 @@ pub struct UpdateAction {
     /// Needed when: active variations change
     pub rebuild_shader: bool,
 
-    /// Full config import needed (preset load, file import)
-    /// Triggers complete GPU state rebuild
-    pub needs_import: bool,
 }
 
 impl UpdateAction {
@@ -171,7 +168,6 @@ impl UpdateAction {
         self.update_tone_curve |= other.update_tone_curve;
         self.update_view |= other.update_view;
         self.rebuild_shader |= other.rebuild_shader;
-        self.needs_import |= other.needs_import;
     }
 }
 
@@ -1180,7 +1176,10 @@ impl ConfigManager {
 
         // Record full config import action
         let mut action = UpdateAction::none();
-        action.needs_import = true;
+        action.update_flame = true;
+        action.update_view = true;
+        action.update_palette = true;
+        action.update_tone_curve = true;
         action.reset_accumulation = true;
         self.pending_actions.merge(&action);
 
