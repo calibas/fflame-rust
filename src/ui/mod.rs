@@ -171,7 +171,7 @@ impl EguiLayer {
             );
 
             // Render Settings window
-            let settings_update_type = settings::render_settings_window(
+            let _settings_update_type = settings::render_settings_window(
                 ctx,
                 &mut self.show_settings,
                 &mut self.show_config_window,
@@ -186,23 +186,11 @@ impl EguiLayer {
                 current_preset_index,
                 &mut preset_changed,
                 flame,
-                &mut render_mode_changed,
-                &mut projection_changed,
-                &mut flame_changed,
                 flame_renderer.as_deref(),
                 paused,
                 &mut pause_changed,
-                &mut reset_requested,
-                &mut iterations_changed,
                 config_manager,
-                &mut histogram_color_scale_changed,
-                &mut low_density_smoothing_changed,
-                &mut density_compression_changed,
-                &mut blend_factor_changed,
-                &mut use_dynamic_blend_changed,
-                &mut target_iterations_changed,
             );
-            // TODO: Handle settings_update_type (Phase 4 task)
 
             // Render View window
             let view_update_type = view::render_view_window(
