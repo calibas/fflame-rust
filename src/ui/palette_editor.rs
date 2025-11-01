@@ -42,13 +42,13 @@ pub fn render_palette_editor_window(
                 ui.label("Palette Name:");
                 let name_response = ui.text_edit_singleline(&mut palette_editor.current_palette.name);
 
-                // Update library and preview when user finishes editing name
+                // Update library and create undo point when user finishes editing name
                 if name_response.lost_focus() {
                     *custom_palette = Some(palette_editor.current_palette.clone());
                     let _ = config_manager.update_param(
                         crate::config::ConfigPath::Palette,
                         palette_editor.current_palette.clone().into(),
-                        true, // lazy mode = preview mode
+                        false, // immediate undo for discrete action
                     );
                 }
             });
@@ -188,12 +188,12 @@ pub fn render_palette_editor_window(
             if let Some(idx) = stop_to_remove {
                 palette_editor.current_palette.stops.remove(idx);
 
-                // Update library and preview
+                // Update library and create undo point
                 *custom_palette = Some(palette_editor.current_palette.clone());
                 let _ = config_manager.update_param(
                     crate::config::ConfigPath::Palette,
                     palette_editor.current_palette.clone().into(),
-                    true, // lazy mode = preview mode
+                    false, // immediate undo for discrete action
                 );
             }
 
@@ -217,12 +217,12 @@ pub fn render_palette_editor_window(
                 // Sort by position
                 palette_editor.current_palette.stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap());
 
-                // Update library and preview
+                // Update library and create undo point
                 *custom_palette = Some(palette_editor.current_palette.clone());
                 let _ = config_manager.update_param(
                     crate::config::ConfigPath::Palette,
                     palette_editor.current_palette.clone().into(),
-                    true, // lazy mode = preview mode
+                    false, // immediate undo for discrete action
                 );
             }
 
