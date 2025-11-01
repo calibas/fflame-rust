@@ -280,7 +280,8 @@ impl App {
             // Check if we should continue iterating
             let max_iterations = Some(config.max_iterations);
             let should_iterate = !self.paused &&
-                max_iterations.map_or(true, |max| renderer.total_iterations() < max);
+                (max_iterations.map_or(true, |max| renderer.total_iterations() < max) ||
+                 self.config_manager.is_in_preview_mode());
 
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;
