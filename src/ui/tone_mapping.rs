@@ -148,105 +148,75 @@ pub fn render_tone_mapping_window(
                     let current_color_mode = config_manager.active_config().color_mode;
                     if matches!(current_color_mode, ColorMode::Palette | ColorMode::Speed) {
                         let palettes = palette_library.palettes();
-                        let current_palette_index = config_manager.active_config().palette_index;
-                        let mut temp_palette_index = current_palette_index;
-                        let current_palette_name = palettes.get(temp_palette_index)
-                            .map(|p| p.name.as_str())
-                            .unwrap_or("Unknown");
+
+                        // Clone current palette name to avoid borrow conflicts in closures
+                        let current_palette = config_manager.active_config().palette.clone();
+                        let current_palette_name = current_palette
+                            .as_ref()
+                            .map(|p| p.name.clone())
+                            .unwrap_or_else(|| "(None)".to_string());
 
                         // Use ID with palette count to force refresh when library changes
                         egui::ComboBox::from_id_source(format!("palette_selector_{}", palettes.len()))
-                            .selected_text(current_palette_name)
+                            .selected_text(&current_palette_name)
                             .show_ui(ui, |ui| {
                                 ui.label("Palette");
-                                for (idx, palette) in palettes.iter().enumerate() {
-                                    if ui.selectable_value(&mut temp_palette_index, idx, &palette.name).changed() {
-                                        if let Ok(update) = config_manager.update_param(ConfigPath::PaletteIndex, (temp_palette_index as u32).into(), false) {
+                                for palette in palettes.iter() {
+                                    let is_selected = current_palette.as_ref().map(|p| &p.name) == Some(&palette.name);
+                                    if ui.selectable_label(is_selected, &palette.name).clicked() {
+                                        // Copy selected palette to config.palette (always editable)
+                                        let mut custom_palette = palette.clone();
+                                        custom_palette.built_in = false; // Always mark as editable
+
+                                        if let Ok(update) = config_manager.update_param(
+                                            ConfigPath::Palette,
+                                            custom_palette.clone().into(),
+                                            false
+                                        ) {
                                             max_update = max_update.max(update);
-
-                                            // Update palette editor when selection changes
-                                            if let Some(pal) = palette_library.get(temp_palette_index) {
-                                                let mut edited_palette = pal.clone();
-
-                                                // Generate unique name for built-in palettes even when switching
-                                                if pal.built_in {
-                                                    let base_name = &pal.name;
-                                                    let mut new_name = format!("{} (Custom)", base_name);
-                                                    let mut counter = 2;
-
-                                                    while palette_library.palettes().iter().any(|p| p.name == new_name) {
-                                                        new_name = format!("{} (Custom {})", base_name, counter);
-                                                        counter += 1;
-                                                    }
-
-                                                    edited_palette.name = new_name;
-                                                    edited_palette.built_in = false;
-                                                }
-
-                                                *palette_editor_palette = edited_palette;
-                                                // Note: Changes now applied live via ConfigManager
-                                            }
+                                            *palette_editor_palette = custom_palette;
                                         }
                                     }
                                 }
                             });
 
                         ui.horizontal(|ui| {
-                            // Edit Palette button - creates copy of built-ins, edits custom palettes in-place
+                            // Edit Palette button - opens editor for config.palette
                             if ui.button("🎨 Edit Palette").clicked() {
                                 *show_palette_editor = !*show_palette_editor;
-                                // Load current palette into editor and add to library
-                                let edit_palette_index = config_manager.active_config().palette_index;
-                                if let Some(pal) = palette_library.get(edit_palette_index) {
-                                    let mut edited_palette = pal.clone();
-
-                                    // Always generate unique name for built-in palettes to prevent editing originals
-                                    if pal.built_in {
-                                        let base_name = &pal.name;
-                                        let mut new_name = format!("{} (Custom)", base_name);
-                                        let mut counter = 2;
-
-                                        // Keep incrementing until we find a unique name
-                                        while palette_library.palettes().iter().any(|p| p.name == new_name) {
-                                            new_name = format!("{} (Custom {})", base_name, counter);
-                                            counter += 1;
-                                        }
-
-                                        edited_palette.name = new_name;
-                                        edited_palette.built_in = false; // Custom palettes are not built-in
-                                    }
-                                    // For custom palettes, keep the same name (will update in place)
-
-                                    *palette_editor_palette = edited_palette.clone();
-
-                                    // Add to library (will be handled by app.rs custom_palette handler)
-                                    *custom_palette = Some(edited_palette);
+                                // Load current palette from config into editor
+                                if let Some(pal) = &current_palette {
+                                    *palette_editor_palette = pal.clone();
                                 }
                             }
 
-                            // Clone button - always creates a copy with unique name
+                            // Clone button - makes a copy with unique name
                             if ui.button("📋 Clone").clicked() {
-                                *show_palette_editor = !*show_palette_editor;
-                                let clone_palette_index = config_manager.active_config().palette_index;
-                                if let Some(pal) = palette_library.get(clone_palette_index) {
-                                    let mut edited_palette = pal.clone();
-                                    edited_palette.built_in = false; // Clones are never built-in
-
+                                if let Some(pal) = &current_palette {
+                                    let mut cloned_palette = pal.clone();
                                     let base_name = &pal.name;
                                     let mut new_name = format!("{} (Copy)", base_name);
                                     let mut counter = 2;
 
-                                    // Keep incrementing until we find a unique name
+                                    // Find unique name
                                     while palette_library.palettes().iter().any(|p| p.name == new_name) {
                                         new_name = format!("{} (Copy {})", base_name, counter);
                                         counter += 1;
                                     }
 
-                                    edited_palette.name = new_name;
-                                    *palette_editor_palette = edited_palette.clone();
+                                    cloned_palette.name = new_name;
+                                    cloned_palette.built_in = false;
 
-                                    // Add to library (will be handled by app.rs custom_palette handler)
-                                    *custom_palette = Some(edited_palette);
+                                    // Set as current palette and open editor
+                                    if let Ok(update) = config_manager.update_param(
+                                        ConfigPath::Palette,
+                                        cloned_palette.clone().into(),
+                                        false
+                                    ) {
+                                        max_update = max_update.max(update);
+                                        *palette_editor_palette = cloned_palette;
+                                        *show_palette_editor = true;
+                                    }
                                 }
                             }
                         });
