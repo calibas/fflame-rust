@@ -1128,6 +1128,14 @@ impl ConfigManager {
         self.pending_actions = UpdateAction::none();
     }
 
+    /// Request an explicit accumulation reset (e.g., from Reset button)
+    ///
+    /// This sets the reset_accumulation flag without modifying any config state.
+    /// Useful for UI actions that need to clear buffers without changing parameters.
+    pub fn request_reset(&mut self) {
+        self.pending_actions.reset_accumulation = true;
+    }
+
     /// Record an action for later retrieval
     ///
     /// Called internally when config changes occur
