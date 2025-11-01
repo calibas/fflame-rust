@@ -5,6 +5,7 @@
 /// - Delta-based undo/redo with lazy throttling
 /// - Selective updates based on change type
 /// - Human-readable change descriptions
+/// - Centralized update action tracking (what needs GPU updates)
 
 use super::delta::{
     AffineParam, ColorComponent, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, UpdateType,
@@ -12,6 +13,92 @@ use super::delta::{
 use super::fractal_config::FractalConfig;
 use std::time::Duration;
 use web_time::Instant;
+
+/// Actions needed after configuration changes
+///
+/// ConfigManager tracks changes and provides this struct to tell the App layer
+/// exactly what GPU/renderer updates are needed. This centralizes all "what needs
+/// updating" logic in one place.
+#[derive(Debug, Clone, Default)]
+pub struct UpdateAction {
+    /// Reset accumulation buffers and restart rendering from scratch
+    /// Needed when: flame changes, view changes, color mode changes, palette changes (non-preview)
+    pub reset_accumulation: bool,
+
+    /// Update flame parameters on GPU (transforms, variations, weights)
+    /// Needed when: flame changes, or during preview mode (live updates)
+    pub update_flame: bool,
+
+    /// Update palette texture on GPU
+    /// Needed when: palette changes (including preview mode)
+    pub update_palette: bool,
+
+    /// Update tone curve LUT texture
+    /// Needed when: tone curve changes
+    pub update_tone_curve: bool,
+
+    /// Update view transform on GPU (zoom, pan, rotation, camera)
+    /// Needed when: any view parameter changes
+    pub update_view: bool,
+
+    /// Rebuild shader pipeline (variation changes require recompilation)
+    /// Needed when: active variations change
+    pub rebuild_shader: bool,
+
+    /// Full config import needed (preset load, file import)
+    /// Triggers complete GPU state rebuild
+    pub needs_import: bool,
+}
+
+impl UpdateAction {
+    /// No actions needed
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Create from UpdateType (used when building from delta changes)
+    pub fn from_update_type(update_type: UpdateType, in_preview_mode: bool) -> Self {
+        match update_type {
+            UpdateType::None => Self::none(),
+
+            UpdateType::ViewOnly => Self {
+                update_view: true,
+                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                ..Default::default()
+            },
+
+            UpdateType::ToneMappingOnly => Self {
+                update_tone_curve: true,
+                // No reset - tone mapping is post-processing only
+                ..Default::default()
+            },
+
+            UpdateType::ColorOnly => Self {
+                update_palette: true,
+                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                ..Default::default()
+            },
+
+            UpdateType::IterationReset => Self {
+                update_flame: true,
+                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                rebuild_shader: false, // TODO: detect variation changes
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Merge two actions (take union of all flags)
+    pub fn merge(&mut self, other: &UpdateAction) {
+        self.reset_accumulation |= other.reset_accumulation;
+        self.update_flame |= other.update_flame;
+        self.update_palette |= other.update_palette;
+        self.update_tone_curve |= other.update_tone_curve;
+        self.update_view |= other.update_view;
+        self.rebuild_shader |= other.rebuild_shader;
+        self.needs_import |= other.needs_import;
+    }
+}
 
 /// Central manager for configuration state and undo/redo
 pub struct ConfigManager {
@@ -37,6 +124,10 @@ pub struct ConfigManager {
 
     /// Lazy undo throttle duration (500ms)
     lazy_throttle: Duration,
+
+    /// Pending actions accumulated since last get_pending_actions() call
+    /// This tracks what GPU updates are needed based on recent changes
+    pending_actions: UpdateAction,
 }
 
 impl ConfigManager {
@@ -49,6 +140,7 @@ impl ConfigManager {
             max_undo_depth: 500,  // ~5MB max memory (500 states × ~10KB each)
             last_lazy_undo: None,
             lazy_throttle: Duration::from_millis(500),
+            pending_actions: UpdateAction::none(),
         }
     }
 
@@ -104,6 +196,9 @@ impl ConfigManager {
                 self.current = self.preview.clone().unwrap();
                 log::debug!("  -> Committed preview to current, undo stack len: {}", self.undo_stack.len());
 
+                // Record action for GPU updates
+                self.record_action(update_type);
+
                 return Ok(update_type);
             }
 
@@ -131,6 +226,9 @@ impl ConfigManager {
 
             // Apply change to current
             self.set_value(&path, new_value)?;
+
+            // Record action for GPU updates
+            self.record_action(update_type);
 
             Ok(update_type)
         }
@@ -193,6 +291,9 @@ impl ConfigManager {
                 self.current = self.preview.clone().unwrap();
                 log::debug!("  -> Committed batch preview to current, undo stack len: {}", self.undo_stack.len());
 
+                // Record action for GPU updates
+                self.record_action(update_type);
+
                 return Ok(update_type);
             }
 
@@ -225,7 +326,12 @@ impl ConfigManager {
                 self.set_value(&delta.path, delta.new_value.clone())?;
             }
 
-            Ok(change.update_type())
+            let update_type = change.update_type();
+
+            // Record action for GPU updates
+            self.record_action(update_type);
+
+            Ok(update_type)
         }
     }
 
@@ -265,7 +371,12 @@ impl ConfigManager {
         log::debug!("  Undo stack now: {} items, Redo stack now: {} items",
             self.undo_stack.len(), self.redo_stack.len());
 
-        Ok(inverted.update_type())
+        let update_type = inverted.update_type();
+
+        // Record action for GPU updates
+        self.record_action(update_type);
+
+        Ok(update_type)
     }
 
     /// Redo last undone change
@@ -303,7 +414,12 @@ impl ConfigManager {
         log::debug!("  Undo stack now: {} items, Redo stack now: {} items",
             self.undo_stack.len(), self.redo_stack.len());
 
-        Ok(change.update_type())
+        let update_type = change.update_type();
+
+        // Record action for GPU updates
+        self.record_action(update_type);
+
+        Ok(update_type)
     }
 
     /// Check if we should capture lazy undo (throttling logic)
@@ -901,8 +1017,13 @@ impl ConfigManager {
             // Commit preview to current
             self.current = preview;
 
-            // Return ViewOnly as a safe default - caller can check if needed
-            Ok(UpdateType::ViewOnly)
+            // Return update type based on path
+            let update_type = path.update_type();
+
+            // Record action for GPU updates
+            self.record_action(update_type);
+
+            Ok(update_type)
         } else {
             Ok(UpdateType::None)
         }
@@ -953,6 +1074,12 @@ impl ConfigManager {
         );
         self.push_undo(new_snapshot);
 
+        // Record full config import action
+        let mut action = UpdateAction::none();
+        action.needs_import = true;
+        action.reset_accumulation = true;
+        self.pending_actions.merge(&action);
+
         Ok(())
     }
 
@@ -974,6 +1101,33 @@ impl ConfigManager {
     /// Check if can redo
     pub fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
+    }
+
+    /// Get pending GPU update actions based on recent changes
+    ///
+    /// This method analyzes all changes since the last call and returns
+    /// a consolidated UpdateAction telling the App layer what needs updating.
+    ///
+    /// Call this once per frame after all UI updates, execute the actions,
+    /// then call clear_pending_actions().
+    pub fn get_pending_actions(&self) -> UpdateAction {
+        self.pending_actions.clone()
+    }
+
+    /// Clear pending actions after executing them
+    ///
+    /// Call this after handling the UpdateAction from get_pending_actions()
+    pub fn clear_pending_actions(&mut self) {
+        self.pending_actions = UpdateAction::none();
+    }
+
+    /// Record an action for later retrieval
+    ///
+    /// Called internally when config changes occur
+    fn record_action(&mut self, update_type: UpdateType) {
+        let in_preview = self.is_in_preview_mode();
+        let action = UpdateAction::from_update_type(update_type, in_preview);
+        self.pending_actions.merge(&action);
     }
 }
 
