@@ -907,29 +907,26 @@ impl App {
         }
 
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
-        let view_changed = ui_response.view_changed || self.view_changed_by_keyboard || ui_response.camera_rotation_changed;
-        let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
-            || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed
-            || ui_response.tonemap_curve_changed || ui_response.histogram_color_scale_changed
-            || ui_response.low_density_smoothing_changed || ui_response.density_compression_changed || ui_response.blend_factor_changed
-            || ui_response.use_dynamic_blend_changed || ui_response.target_iterations_changed;
+        // Get pending actions from ConfigManager (replaces individual boolean flags)
+        let actions = self.config_manager.get_pending_actions();
 
-        // Note: density_changed and background_color_changed don't need encoder updates,
-        // they're handled every frame before tonemap pass
+        // View changes can also come from keyboard input
+        let view_changed_by_keyboard = self.view_changed_by_keyboard;
 
-        // Handle preset change: sync flame working copy from ConfigManager
-        // Note: Preset loading happens via ConfigManager in UI layer (settings.rs)
-        // GPU upload and reset handled by normal update path below
-        if ui_response.preset_changed {
-            println!("Preset loaded via ConfigManager, syncing flame working copy");
+        // Handle preset change or config import: sync flame working copy from ConfigManager
+        if ui_response.preset_changed || actions.needs_import {
+            if ui_response.preset_changed {
+                println!("Preset loaded via ConfigManager, syncing flame working copy");
+            }
             let config = self.config_manager.active_config();
             self.flame = config.flame.clone();
             // All other config values (zoom, pan, etc) read directly from config_manager - no sync needed!
         }
 
-        // All controls now use ConfigManager for undo/redo! ✅
-        // Phase 11 (2025-10-31): Transform add/delete migrated to snapshot-based undo
-        // No more capture_state() calls needed here
+        // Determine if any GPU updates are needed
+        let needs_update = actions.reset_accumulation || actions.update_flame || actions.update_palette
+            || actions.update_tone_curve || actions.update_view || actions.rebuild_shader
+            || view_changed_by_keyboard;
 
         if needs_update {
             if let Some(ref mut renderer) = self.flame_renderer {
@@ -940,77 +937,23 @@ impl App {
                     label: Some("Update Encoder"),
                 });
 
-                // Update flame if changed OR if in preview mode (live updates during drag)
-                let in_preview_mode = self.config_manager.is_in_preview_mode();
-                if ui_response.flame_changed || in_preview_mode {
-                    // Note: self.flame is synced from ConfigManager at the END of render_ui()
-                    // When in preview mode, this gives live updates every frame during drag
+                // Update flame if UpdateAction indicates (includes preview mode live updates)
+                if actions.update_flame {
                     renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame,
                         update_config.iterations_per_thread, update_config.zoom, update_config.pan_x, update_config.pan_y,
                         update_config.rotation, update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
                 }
 
-                if ui_response.iterations_changed || view_changed {
+                // Update view parameters (includes view changes and iteration changes)
+                if actions.update_view || view_changed_by_keyboard {
                     renderer.set_deterministic_rng(update_config.deterministic_rng);
                     renderer.update_iterations(&self.gpu.queue, update_config.iterations_per_thread,
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
                 }
 
-                if ui_response.histogram_color_scale_changed {
-                    // Update the renderer's histogram color scale and GPU params
-                    renderer.set_histogram_color_scale(&self.gpu.queue, update_config.histogram_color_scale,
-                        update_config.iterations_per_thread, update_config.zoom, update_config.pan_x, update_config.pan_y,
-                        update_config.rotation, update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
-                    // Reset will be triggered below in should_reset
-                }
-
-                if ui_response.low_density_smoothing_changed {
-                    // Update the renderer's low-density smoothing parameter
-                    renderer.set_low_density_smoothing(update_config.low_density_smoothing);
-                    // No reset needed - smoothing is applied during accumulation
-                }
-
-                if ui_response.density_compression_changed {
-                    // Update the renderer's density compression strength
-                    renderer.set_density_compression_strength(update_config.density_compression_strength);
-                    // No reset needed - compression is applied during accumulation
-                }
-
-                if ui_response.blend_factor_changed {
-                    // Update the renderer's blend factor
-                    renderer.set_blend_factor(update_config.blend_factor);
-                    // No reset needed - blend factor is applied during accumulation
-                }
-
-                if ui_response.use_dynamic_blend_changed {
-                    // Update the renderer's dynamic blend setting
-                    renderer.set_use_dynamic_blend(update_config.use_dynamic_blend);
-                    // Reset needed to see effect immediately
-                }
-
-                if ui_response.target_iterations_changed {
-                    // Update the renderer's per-pixel iteration limit
-                    renderer.set_target_iterations_per_pixel(update_config.target_iterations_per_pixel);
-                }
-
-                // Note: density_scale and background_color are updated every frame before tonemap pass
-                // so we don't need to update them here
-
-                if ui_response.color_mode_changed {
-                    renderer.set_color_mode(&self.gpu.queue, update_config.color_mode,
-                        update_config.iterations_per_thread, update_config.zoom, update_config.pan_x, update_config.pan_y,
-                        update_config.rotation, update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
-
-                    // When switching to Palette or Speed mode, ensure the correct palette is loaded
-                    if matches!(update_config.color_mode, ColorMode::Palette | ColorMode::Speed) {
-                        if let Some(palette) = self.palette_library.get(update_config.palette_index) {
-                            renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
-                        }
-                    }
-                }
-
-                if ui_response.palette_changed {
+                // Update palette if needed
+                if actions.update_palette {
                     // Get palette from ConfigManager (includes preview mode changes from palette editor)
                     let active_config = self.config_manager.active_config();
                     let palette = active_config.palette.as_ref()
@@ -1021,36 +964,32 @@ impl App {
                     }
                 }
 
-                // Update tone curve LUT if curve changed
-                if ui_response.tonemap_curve_changed {
+                // Update tone curve LUT if changed
+                if actions.update_tone_curve {
                     renderer.update_curve_lut(&self.gpu.queue, &update_config.tonemap_curve);
                 }
 
-                // Reset accumulation when view changes, palette changes, color mode changes, background color changes, flame changes, or user requests it
-                // Tone mapping: reset on mode change (log vs linear affects accumulation), but not curve/exposure/gamma (post-processing only)
-                let in_preview_mode = self.config_manager.is_in_preview_mode();
-                let should_reset = ui_response.reset_requested || view_changed || (ui_response.palette_changed && !in_preview_mode) || ui_response.color_mode_changed
-                    || ui_response.background_color_changed || ui_response.tonemap_mode_changed
-                    || ui_response.histogram_color_scale_changed  // New scale incompatible with old samples
-                    || ui_response.low_density_smoothing_changed  // New smoothing needs fresh samples to see effect
-                    || ui_response.density_compression_changed  // New compression needs fresh samples to see effect
-                    || ui_response.blend_factor_changed  // New blend rate needs fresh start to see effect
-                    || ui_response.use_dynamic_blend_changed  // Switching blend modes needs fresh start
-                    || ui_response.target_iterations_changed  // New iteration limit needs fresh iteration counts
-                    || ui_response.preset_changed  // Preset loading requires fresh start
-                    || (ui_response.flame_changed && !in_preview_mode);  // Reset on flame changes, EXCEPT during preview mode (overwrite mode handles it)
+                // Rebuild shader if variation set changed
+                if actions.rebuild_shader {
+                    // TODO: Implement shader rebuild logic when variation system supports it
+                    // For now, this would require recreating the compute pipeline
+                }
+
+                // Reset accumulation if UpdateAction indicates (or keyboard view change)
+                let should_reset = actions.reset_accumulation || view_changed_by_keyboard;
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, update_config.iterations_per_thread,
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
-                    if ui_response.histogram_color_scale_changed {
-                        self.frames_since_accumulation = 0;  // Reset batch counter
-                    }
+                    self.frames_since_accumulation = 0;  // Reset batch counter
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
             }
         }
+
+        // Clear pending actions after executing them
+        self.config_manager.clear_pending_actions();
 
         // Clear keyboard flag for next frame
         self.view_changed_by_keyboard = false;

@@ -110,52 +110,35 @@ impl EguiLayer {
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
-        // Get config once for reading (UI mutates via config_manager methods)
-        let config = config_manager.active_config();
+        // Note: Config change tracking now handled by ConfigManager.get_pending_actions()
+        // Only non-config actions tracked here (file I/O, palette library, transforms, etc.)
 
-        let mut reset_requested = false;
-        let mut flame_changed = false;
-        let mut iterations_changed = false;
-        let mut view_changed = false;
-        let mut density_changed = false;
-        let mut palette_changed = false;
-        let mut color_mode_changed = false;
         let mut pause_changed = false;
         let mut preset_changed = false;
-        let mut histogram_color_scale_changed = false;
-        let mut low_density_smoothing_changed = false;
-        let mut density_compression_changed = false;
-        let mut blend_factor_changed = false;
-        let mut use_dynamic_blend_changed = false;
-        let mut target_iterations_changed = false;
         let mut add_transform = false;
         let mut delete_transform = None;
-        let mut render_mode_changed = false;
-        let mut projection_changed = false;
-        let mut camera_rotation_changed = false;
-        // Config import/export window
+
+        // Config import/export
         let mut config_export_json = None;
         let mut config_import_json = None;
         let mut config_save_file = false;
         let mut config_load_file = false;
         let mut apophysis_import_file = false;
+
+        // Palette library management
         let mut custom_palette = None;
-        let mut undo_requested = false;
-        let mut redo_requested = false;
-        let mut background_color_changed = false;
-        let mut png_export_with_background = false;
-        // Tone mapping
-        let mut tonemap_mode_changed = false;
-        let mut tonemap_curve_changed = false;
-        let mut use_curve_changed = false;
-        let mut exposure_changed = false;
-        let mut gamma_changed = false;
-        let mut png_export_transparent = false;
-        // Palette import/export
         let mut palette_export_json = None;
         let mut palette_save_file = None;
         let mut palette_import_json = None;
         let mut palette_load_file = false;
+
+        // Undo/redo
+        let mut undo_requested = false;
+        let mut redo_requested = false;
+
+        // Export
+        let mut png_export_with_background = false;
+        let mut png_export_transparent = false;
 
 
         // Log ConfigManager state at start of UI render
@@ -365,13 +348,6 @@ impl EguiLayer {
         *flame = config_manager.active_config().flame.clone();
 
         UiResponse {
-            reset_requested,
-            flame_changed,
-            iterations_changed,
-            view_changed,
-            density_changed,
-            palette_changed,
-            color_mode_changed,
             pause_changed,
             config_export_requested: config_export_json,
             config_import_requested: config_import_json,
@@ -380,32 +356,18 @@ impl EguiLayer {
             apophysis_import_file_requested: apophysis_import_file,
             apophysis_import_configs: None,
             custom_palette,
-            undo_requested,
-            redo_requested,
-            background_color_changed,
-            png_export_with_background,
-            png_export_transparent,
             palette_export_json,
             palette_save_file,
             palette_import_json,
             palette_load_file,
             palette_imported: None,
+            undo_requested,
+            redo_requested,
+            png_export_with_background,
+            png_export_transparent,
             preset_changed,
             add_transform,
             delete_transform,
-            render_mode_changed,
-            projection_changed,
-            camera_rotation_changed,
-            tonemap_mode_changed,
-            tonemap_curve_changed,
-            exposure_changed,
-            gamma_changed,
-            histogram_color_scale_changed,
-            low_density_smoothing_changed,
-            density_compression_changed,
-            blend_factor_changed,
-            use_dynamic_blend_changed,
-            target_iterations_changed,
         }
     }
 }
