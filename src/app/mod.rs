@@ -20,52 +20,34 @@ use crate::config::{FractalConfig, ConfigManager};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 
 pub struct App {
-    pub(super) config_manager: ConfigManager,
+    // Core state management
+    pub(super) config_manager: ConfigManager,  // Single source of truth for all config
+
+    // GPU and rendering resources
     pub(super) gpu: GpuContext,
     pub(super) egui_layer: EguiLayer,
     pub(super) flame_renderer: Option<FlameRenderer>,
-    pub(super) flame: Flame,
-    pub(super) iterations_per_thread: u32,
-    pub(super) zoom: f32,
-    pub(super) pan_x: f32,
-    pub(super) pan_y: f32,
-    pub(super) rotation: f32,
-    pub(super) camera_rotation_x: f32, // 3D camera pitch
-    pub(super) camera_rotation_y: f32, // 3D camera yaw
-    pub(super) density_scale: f32,
+    pub(super) flame: Flame,  // Working copy for renderer (synced from config_manager)
+
+    // UI state (not saved in config)
     pub(super) view_changed_by_keyboard: bool,
     pub(super) mouse_dragging: bool,
     pub(super) last_mouse_pos: Option<(f32, f32)>,
-    pub(super) metrics: PerformanceMetrics,
-    pub(super) palette_library: PaletteLibrary,
-    pub(super) current_palette_index: usize,
-    pub(super) preset_library: PresetLibrary,
-    pub(super) current_preset_index: usize,
-    pub(super) color_mode: ColorMode,
     pub(super) paused: bool,
-    pub(super) max_iterations: Option<u64>,
-    pub(super) speed_factor: f32,
     pub(super) modifiers: winit::keyboard::ModifiersState,
-    pub(super) background_color: [f32; 3],
-    // Tone mapping
-    pub(super) tonemap_mode: ToneMapMode,
-    pub(super) tonemap_curve: ToneCurve,
-    pub(super) use_curve: bool,
-    pub(super) exposure: f32,
-    pub(super) gamma: f32,
-    // Rendering
-    pub(super) deterministic_rng: bool,
-    pub(super) speed_multiplier: u32,  // 1x, 2x, 4x, 8x, 16x (target FPS = 60 * multiplier)
+
+    // Libraries (not saved in config)
+    pub(super) palette_library: PaletteLibrary,
+    pub(super) preset_library: PresetLibrary,
+    pub(super) current_preset_index: usize,  // UI state, not config
+
+    // Performance tracking
+    pub(super) metrics: PerformanceMetrics,
+
+    // Rendering internals (frame timing and batching)
     pub(super) last_frame_time: Option<web_time::Instant>,
-    // Batched accumulation experiment
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
-    pub(super) histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
-    pub(super) low_density_smoothing: f32,  // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
-    pub(super) density_compression_strength: f32,  // 0.0 = linear, 5.0 = strong compression (default: 0.0)
-    pub(super) blend_factor: f32,  // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
-    pub(super) use_dynamic_blend: bool,  // true = exponential convergence (old), false = fixed blend rate (new)
-    pub(super) target_iterations_per_pixel: u32,  // Per-pixel convergence: stop updating pixel after N iterations (0 = disabled)
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -127,44 +109,18 @@ impl App {
             egui_layer,
             flame_renderer: Some(flame_renderer),
             flame,
-            iterations_per_thread: initial_config.iterations_per_thread,
-            zoom: initial_config.zoom,
-            pan_x: initial_config.pan_x,
-            pan_y: initial_config.pan_y,
-            rotation: initial_config.rotation,
-            camera_rotation_x: initial_config.camera_rotation_x,
-            camera_rotation_y: initial_config.camera_rotation_y,
-            density_scale: initial_config.density_scale,
             view_changed_by_keyboard: false,
             mouse_dragging: false,
             last_mouse_pos: None,
-            metrics: PerformanceMetrics::new(),
+            paused: false,
+            modifiers: winit::keyboard::ModifiersState::default(),
             palette_library,
-            current_palette_index: initial_config.palette_index,
             preset_library,
             current_preset_index: 0,
-            color_mode: initial_config.color_mode,
-            paused: false,
-            max_iterations: Some(initial_config.max_iterations),
-            speed_factor: initial_config.speed_factor,
-            modifiers: winit::keyboard::ModifiersState::default(),
-            background_color: initial_config.background_color,
-            tonemap_mode: initial_config.tonemap_mode,
-            tonemap_curve: initial_config.tonemap_curve.clone(),
-            use_curve: initial_config.use_curve,
-            exposure: initial_config.exposure,
-            gamma: initial_config.gamma,
-            deterministic_rng: initial_config.deterministic_rng,
-            speed_multiplier: initial_config.speed_multiplier,
+            metrics: PerformanceMetrics::new(),
             last_frame_time: None,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
-            histogram_color_scale: initial_config.histogram_color_scale,
-            low_density_smoothing: initial_config.low_density_smoothing,
-            density_compression_strength: initial_config.density_compression_strength,
-            blend_factor: initial_config.blend_factor,
-            use_dynamic_blend: crate::config::DEFAULT_USE_DYNAMIC_BLEND,
-            target_iterations_per_pixel: initial_config.target_iterations_per_pixel,
         };
 
         #[allow(deprecated)]
