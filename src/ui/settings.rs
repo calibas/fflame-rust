@@ -145,8 +145,7 @@ pub fn render_settings_window(
                         }
 
                         if ui.button("🔄 Reset Accumulation").clicked() {
-                            // TODO: Need a way to request explicit reset through ConfigManager
-                            // For now, changing any config param will trigger reset
+                            config_manager.request_reset();
                         }
                     }
 
@@ -155,7 +154,6 @@ pub fn render_settings_window(
                     // Max iterations control
                     if let Some(renderer) = &flame_renderer {
                         ui.label("Max Iterations");
-                        ui.label(format!("Current: {}", format_iterations(config.max_iterations)));
 
                         // Show progress
                         let current = renderer.total_iterations();
@@ -171,8 +169,18 @@ pub fn render_settings_window(
                             ));
                         }
 
-                        // Note: max_iterations is now fixed per-config, not runtime adjustable
-                        // To change it, use config import/export
+                        // Max iterations slider (10M to 1T with logarithmic scale)
+                        let mut log_value = (config.max_iterations as f64).log10();
+                        if ui.add(egui::Slider::new(&mut log_value, 7.47713..=12.0)
+                            .text("Max Iterations")
+                            .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64))))
+                            .changed()
+                        {
+                            let new_max_iterations = 10f64.powf(log_value) as u64;
+                            if let Ok(update) = config_manager.update_param(ConfigPath::MaxIterations, new_max_iterations.into(), false) {
+                                max_update = max_update.max(update);
+                            }
+                        }
                     }
 
                     ui.separator();
