@@ -1,11 +1,86 @@
 /// Configuration manager - central authority for all config changes
 ///
-/// Handles:
+/// # Overview
+/// ConfigManager is the single source of truth for all configuration state.
+/// All UI controls should use ConfigManager methods instead of directly modifying config.
+///
+/// # Key Features
 /// - Single gateway for all parameter updates
 /// - Delta-based undo/redo with lazy throttling
 /// - Selective updates based on change type
 /// - Human-readable change descriptions
 /// - Centralized update action tracking (what needs GPU updates)
+///
+/// # Usage Patterns
+///
+/// ## Reading Config Values
+/// ```rust
+/// // Get immutable reference to active config (includes live preview during drag)
+/// let config = config_manager.active_config();
+/// let zoom = config.zoom;
+/// let exposure = config.exposure;
+/// ```
+///
+/// ## Setting Config Values (Immediate Undo)
+/// ```rust
+/// // For discrete controls (buttons, checkboxes, dropdowns)
+/// config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Linear.into(), false)?;
+/// config_manager.update_param(ConfigPath::ColorMode, ColorMode::Palette.into(), false)?;
+/// ```
+///
+/// ## Setting Config Values (Lazy Undo)
+/// ```rust
+/// // For continuous controls (sliders, drag handles) - throttles undo capture
+/// config_manager.update_param(ConfigPath::Zoom, 2.5.into(), true)?;
+/// config_manager.update_param(ConfigPath::Exposure, 1.8.into(), true)?;
+///
+/// // Force commit preview when drag ends (optional, auto-commits on next non-lazy update)
+/// if !mouse_down && config_manager.is_in_preview_mode() {
+///     config_manager.force_commit_preview(&ConfigPath::Zoom)?;
+/// }
+/// ```
+///
+/// ## Handling GPU Updates
+/// ```rust
+/// // After all UI updates each frame, check what needs updating
+/// let actions = config_manager.get_pending_actions();
+///
+/// // Execute needed updates
+/// if actions.update_view {
+///     renderer.update_view(...);
+///     renderer.reset(...);  // if actions.reset_accumulation
+/// }
+/// if actions.update_flame {
+///     renderer.update_flame(...);
+/// }
+/// if actions.update_palette {
+///     renderer.update_palette(...);
+/// }
+/// if actions.update_tone_curve {
+///     renderer.update_curve_lut(...);
+/// }
+///
+/// // Clear actions after handling
+/// config_manager.clear_pending_actions();
+/// ```
+///
+/// ## Requesting Actions Without Config Changes
+/// ```rust
+/// // Reset button - doesn't change config, just requests buffer clear
+/// config_manager.request_reset();
+///
+/// // Next get_pending_actions() will include reset_accumulation=true
+/// ```
+///
+/// ## Undo/Redo
+/// ```rust
+/// if config_manager.can_undo() {
+///     config_manager.undo()?;
+/// }
+/// if config_manager.can_redo() {
+///     config_manager.redo()?;
+/// }
+/// ```
 
 use super::delta::{
     AffineParam, ColorComponent, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, UpdateType,
