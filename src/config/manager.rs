@@ -435,6 +435,10 @@ impl ConfigManager {
 
     /// Undo last change
     pub fn undo(&mut self) -> Result<UpdateType, ConfigError> {
+        // Clear preview mode before undo (if active)
+        self.preview = None;
+        self.preview_needs_overwrite = false;
+
         let change = self
             .undo_stack
             .pop()
@@ -479,6 +483,10 @@ impl ConfigManager {
 
     /// Redo last undone change
     pub fn redo(&mut self) -> Result<UpdateType, ConfigError> {
+        // Clear preview mode before redo (if active)
+        self.preview = None;
+        self.preview_needs_overwrite = false;
+
         let change = self
             .redo_stack
             .pop()
