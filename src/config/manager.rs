@@ -286,8 +286,10 @@ impl ConfigManager {
                 return Ok(update_type);
             }
 
-            // No capture yet, just return update type based on path
-            Ok(path.update_type())
+            // No capture yet, but still record action for GPU updates during preview
+            let update_type = path.update_type();
+            self.record_action(update_type);
+            Ok(update_type)
 
         } else {
             // Non-lazy mode: Update current directly and capture immediately
@@ -328,10 +330,21 @@ impl ConfigManager {
         if lazy {
             // Lazy mode: Update preview, capture on throttle (same logic as update_param)
 
+            // Determine if this batch needs overwrite rendering (check first path's update type)
+            let needs_overwrite = if !changes.is_empty() {
+                let first_update_type = changes[0].0.update_type();
+                matches!(first_update_type,
+                    UpdateType::ViewOnly | UpdateType::IterationReset | UpdateType::ColorOnly
+                )
+            } else {
+                false
+            };
+
             // Create preview if it doesn't exist (first update in drag sequence)
             if self.preview.is_none() {
                 self.preview = Some(self.current.clone());
-                log::trace!("Created preview from current (batch)");
+                self.preview_needs_overwrite = needs_overwrite;
+                log::trace!("Created preview from current (batch, overwrite={})", needs_overwrite);
             }
 
             // Create deltas from preview to new values
@@ -381,7 +394,8 @@ impl ConfigManager {
                 return Ok(update_type);
             }
 
-            // No capture yet, just return update type
+            // No capture yet, but still record action for GPU updates during preview
+            self.record_action(update_type);
             Ok(update_type)
 
         } else {
