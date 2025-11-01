@@ -3,7 +3,9 @@ use crate::config::{ConfigManager, ConfigPath, UpdateType};
 use super::formatting::format_iterations;
 
 /// Render the Settings window with all control panels
-#[allow(clippy::too_many_arguments)]
+///
+/// Note: Config change tracking is now handled by ConfigManager.get_pending_actions()
+/// This function no longer needs *_changed parameters for config updates
 pub fn render_settings_window(
     ctx: &egui::Context,
     show_settings: &mut bool,
@@ -19,21 +21,10 @@ pub fn render_settings_window(
     current_preset_index: &mut usize,
     preset_changed: &mut bool,
     flame: &mut Flame,
-    render_mode_changed: &mut bool,
-    projection_changed: &mut bool,
-    flame_changed: &mut bool,
     flame_renderer: Option<&crate::renderer::compute_kernel::FlameRenderer>,
     paused: &mut bool,
     pause_changed: &mut bool,
-    reset_requested: &mut bool,
-    iterations_changed: &mut bool,
     config_manager: &mut ConfigManager,
-    histogram_color_scale_changed: &mut bool,
-    low_density_smoothing_changed: &mut bool,
-    density_compression_changed: &mut bool,
-    blend_factor_changed: &mut bool,
-    use_dynamic_blend_changed: &mut bool,
-    target_iterations_changed: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
@@ -105,7 +96,6 @@ pub fn render_settings_window(
                                         // Update flame reference from config
                                         *flame = config_manager.active_config().flame.clone();
                                         *preset_changed = true;
-                                        *flame_changed = true;  // Triggers GPU upload
                                     }
                                 }
                             }
@@ -119,13 +109,9 @@ pub fn render_settings_window(
                         let was_2d = matches!(flame.render_mode, crate::scene::transforms::RenderMode::TwoD);
                         if ui.selectable_label(was_2d, "2D").clicked() {
                             flame.render_mode = crate::scene::transforms::RenderMode::TwoD;
-                            *render_mode_changed = true;
-                            *flame_changed = true;
                         }
                         if ui.selectable_label(!was_2d, "3D").clicked() {
                             flame.render_mode = crate::scene::transforms::RenderMode::ThreeD;
-                            *render_mode_changed = true;
-                            *flame_changed = true;
                         }
                     });
 
@@ -136,22 +122,15 @@ pub fn render_settings_window(
                             let is_ortho = matches!(flame.projection, crate::scene::transforms::ProjectionType::Orthographic);
                             if ui.selectable_label(is_ortho, "Orthographic").clicked() {
                                 flame.projection = crate::scene::transforms::ProjectionType::Orthographic;
-                                *projection_changed = true;
-                                *flame_changed = true;
                             }
                             if ui.selectable_label(!is_ortho, "Perspective").clicked() {
                                 flame.projection = crate::scene::transforms::ProjectionType::Perspective { strength: 2.0 };
-                                *projection_changed = true;
-                                *flame_changed = true;
                             }
                         });
 
                         // Perspective strength slider
                         if let crate::scene::transforms::ProjectionType::Perspective { strength } = &mut flame.projection {
-                            if ui.add(egui::Slider::new(strength, 0.5..=10.0).text("Perspective Strength")).changed() {
-                                *projection_changed = true;
-                                *flame_changed = true;
-                            }
+                            ui.add(egui::Slider::new(strength, 0.5..=10.0).text("Perspective Strength"));
                         }
                     }
 
@@ -166,7 +145,8 @@ pub fn render_settings_window(
                         }
 
                         if ui.button("🔄 Reset Accumulation").clicked() {
-                            *reset_requested = true;
+                            // TODO: Need a way to request explicit reset through ConfigManager
+                            // For now, changing any config param will trigger reset
                         }
                     }
 
@@ -213,7 +193,6 @@ pub fn render_settings_window(
                             temp_iterations.into(),
                             true  // Lazy undo
                         ) {
-                            *iterations_changed = true;
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -243,7 +222,6 @@ pub fn render_settings_window(
                             temp_histogram.into(),
                             true  // Lazy undo
                         ) {
-                            *histogram_color_scale_changed = true;
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -270,7 +248,6 @@ pub fn render_settings_window(
                             temp_smoothing.into(),
                             true  // Lazy undo
                         ) {
-                            *low_density_smoothing_changed = true;
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -297,7 +274,6 @@ pub fn render_settings_window(
                             temp_use_dynamic.into(),
                             false  // Immediate
                         );
-                        *use_dynamic_blend_changed = true;
                     }
 
                     // Blend factor (accumulation rate) - only when dynamic blend is OFF
@@ -321,7 +297,6 @@ pub fn render_settings_window(
                                 temp_blend.into(),
                                 true  // Lazy undo
                             ) {
-                                *blend_factor_changed = true;
                                 max_update = max_update.max(update_type);
                             }
                         }
@@ -352,7 +327,6 @@ pub fn render_settings_window(
                             temp_compression.into(),
                             true  // Lazy undo
                         ) {
-                            *density_compression_changed = true;
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -400,7 +374,6 @@ pub fn render_settings_window(
                             new_value.into(),
                             true  // Lazy undo
                         ) {
-                            *target_iterations_changed = true;
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -483,7 +456,6 @@ pub fn render_settings_window(
                             temp_deterministic.into(),
                             false  // Immediate
                         );
-                        *iterations_changed = true; // Trigger renderer update
                     }
                 });
         });
