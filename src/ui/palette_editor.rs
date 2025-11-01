@@ -42,14 +42,14 @@ pub fn render_palette_editor_window(
                 ui.label("Palette Name:");
                 let name_response = ui.text_edit_singleline(&mut palette_editor.current_palette.name);
 
-                // Create undo entry when user finishes editing name
+                // Update library and preview when user finishes editing name
                 if name_response.lost_focus() {
-                    if let Ok(_) = config_manager.update_param(
+                    *custom_palette = Some(palette_editor.current_palette.clone());
+                    let _ = config_manager.update_param(
                         crate::config::ConfigPath::Palette,
-                        crate::config::ConfigValue::Palette(palette_editor.current_palette.clone()),
-                        false // immediate mode - discrete action
-                    ) {
-                    }
+                        palette_editor.current_palette.clone().into(),
+                        true, // lazy mode = preview mode
+                    );
                 }
             });
             ui.separator();
@@ -173,33 +173,28 @@ pub fn render_palette_editor_window(
 
             // Handle ConfigManager updates after all mutable borrows are done
             if palette_updated {
-                // Live update via ConfigManager (lazy mode for smooth editing)
-                // Palette update
-                if let Ok(_) = config_manager.update_param(
-                    crate::config::ConfigPath::Palette,
-                    crate::config::ConfigValue::Palette(palette_editor.current_palette.clone()),
-                    true // lazy mode - preview during drag
-                ) {
-                }
-            }
+                // Update library (live updates during drag)
+                *custom_palette = Some(palette_editor.current_palette.clone());
 
-            if force_commit {
-                // Palette update
-                let _ = config_manager.force_commit_preview(&crate::config::ConfigPath::Palette);
+                // Enter preview mode for live rendering
+                let _ = config_manager.update_param(
+                    crate::config::ConfigPath::Palette,
+                    palette_editor.current_palette.clone().into(),
+                    true, // lazy mode = preview mode
+                );
             }
 
             // Remove stop if requested
             if let Some(idx) = stop_to_remove {
                 palette_editor.current_palette.stops.remove(idx);
 
-                // Immediate undo entry for delete operation
-                // Palette update
-                if let Ok(_) = config_manager.update_param(
+                // Update library and preview
+                *custom_palette = Some(palette_editor.current_palette.clone());
+                let _ = config_manager.update_param(
                     crate::config::ConfigPath::Palette,
-                    crate::config::ConfigValue::Palette(palette_editor.current_palette.clone()),
-                    false // immediate mode - discrete action
-                ) {
-                }
+                    palette_editor.current_palette.clone().into(),
+                    true, // lazy mode = preview mode
+                );
             }
 
             ui.separator();
@@ -222,14 +217,13 @@ pub fn render_palette_editor_window(
                 // Sort by position
                 palette_editor.current_palette.stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap());
 
-                // Immediate undo entry for add operation
-                // Palette update
-                if let Ok(_) = config_manager.update_param(
+                // Update library and preview
+                *custom_palette = Some(palette_editor.current_palette.clone());
+                let _ = config_manager.update_param(
                     crate::config::ConfigPath::Palette,
-                    crate::config::ConfigValue::Palette(palette_editor.current_palette.clone()),
-                    false // immediate mode - discrete action
-                ) {
-                }
+                    palette_editor.current_palette.clone().into(),
+                    true, // lazy mode = preview mode
+                );
             }
 
             ui.separator();
