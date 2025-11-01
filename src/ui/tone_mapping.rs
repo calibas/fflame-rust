@@ -4,23 +4,15 @@ use crate::ui::LazyUndoHelper;
 use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
 
 /// Render the Tone Mapping window with all tone mapping and color controls
-#[allow(clippy::too_many_arguments)]
+///
+/// Note: Config change tracking is now handled by ConfigManager.get_pending_actions()
 pub fn render_tone_mapping_window(
     ctx: &egui::Context,
     show_tone_mapping: &mut bool,
     show_palette_editor: &mut bool,
     config_manager: &mut ConfigManager,
-    tonemap_mode_changed: &mut bool,
-    tonemap_curve_changed: &mut bool,
-    use_curve_changed: &mut bool,
-    exposure_changed: &mut bool,
-    gamma_changed: &mut bool,
-    density_changed: &mut bool,
-    color_mode_changed: &mut bool,
     palette_library: &PaletteLibrary,
-    palette_changed: &mut bool,
     palette_editor_palette: &mut crate::scene::palette::Palette,
-    background_color_changed: &mut bool,
     lazy_undo: &mut LazyUndoHelper,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
@@ -38,19 +30,16 @@ pub fn render_tone_mapping_window(
                     ui.horizontal(|ui| {
                         if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Linear), "Linear").clicked() {
                             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Linear.into(), false) {
-                                *tonemap_mode_changed = true;
                                 max_update = max_update.max(update);
                             }
                         }
                         if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Logarithmic), "Logarithmic").clicked() {
                             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into(), false) {
-                                *tonemap_mode_changed = true;
                                 max_update = max_update.max(update);
                             }
                         }
                         if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::DensityVisualization), "Density").clicked() {
                             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::DensityVisualization.into(), false) {
-                                *tonemap_mode_changed = true;
                                 max_update = max_update.max(update);
                             }
                         }
@@ -60,23 +49,14 @@ pub fn render_tone_mapping_window(
 
                     // Convert sliders to use ConfigManager
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.1..=5.0, "Exposure") {
-                        if result.changed {
-                            *exposure_changed = result.should_capture;
-                        }
                         max_update = max_update.max(result.update_type);
                     }
 
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, 1.0..=3.0, "Gamma") {
-                        if result.changed {
-                            *gamma_changed = result.should_capture;
-                        }
                         max_update = max_update.max(result.update_type);
                     }
 
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::DensityScale, 0.01..=10.0, "Density Scale") {
-                        if result.changed {
-                            *density_changed = result.should_capture;
-                        }
                         max_update = max_update.max(result.update_type);
                     }
                 });
@@ -89,7 +69,6 @@ pub fn render_tone_mapping_window(
                     let mut temp_use_curve = config_manager.active_config().use_curve;
                     if ui.checkbox(&mut temp_use_curve, "Enable Tone Curve").changed() {
                         if let Ok(update) = config_manager.update_param(ConfigPath::UseCurve, temp_use_curve.into(), false) {
-                            *use_curve_changed = true;
                             max_update = max_update.max(update);
                         }
                     }
@@ -102,19 +81,16 @@ pub fn render_tone_mapping_window(
                         ui.horizontal(|ui| {
                             if ui.button("Linear").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::linear().into(), false) {
-                                    *tonemap_curve_changed = true;
                                     max_update = max_update.max(update);
                                 }
                             }
                             if ui.button("S-Curve").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::s_curve().into(), false) {
-                                    *tonemap_curve_changed = true;
                                     max_update = max_update.max(update);
                                 }
                             }
                             if ui.button("Brighten Shadows").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::brighten_shadows().into(), false) {
-                                    *tonemap_curve_changed = true;
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -122,7 +98,6 @@ pub fn render_tone_mapping_window(
                         ui.horizontal(|ui| {
                             if ui.button("Darken Highlights").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::darken_highlights().into(), false) {
-                                    *tonemap_curve_changed = true;
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -131,7 +106,7 @@ pub fn render_tone_mapping_window(
                         ui.separator();
 
                         // Curve editor
-                        let curve_update = render_curve_editor(ui, config_manager, tonemap_curve_changed);
+                        let curve_update = render_curve_editor(ui, config_manager);
                         max_update = max_update.max(curve_update);
                     });
                 });
@@ -153,19 +128,16 @@ pub fn render_tone_mapping_window(
                         .show_ui(ui, |ui| {
                             if ui.selectable_value(&mut temp_color_mode, ColorMode::Transform, "Transform Colors").changed() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
-                                    *color_mode_changed = true;
                                     max_update = max_update.max(update);
                                 }
                             }
                             if ui.selectable_value(&mut temp_color_mode, ColorMode::Palette, "Palette").changed() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
-                                    *color_mode_changed = true;
                                     max_update = max_update.max(update);
                                 }
                             }
                             if ui.selectable_value(&mut temp_color_mode, ColorMode::Speed, "Speed").changed() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
-                                    *color_mode_changed = true;
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -189,7 +161,6 @@ pub fn render_tone_mapping_window(
                                 for (idx, palette) in palettes.iter().enumerate() {
                                     if ui.selectable_value(&mut temp_palette_index, idx, &palette.name).changed() {
                                         if let Ok(update) = config_manager.update_param(ConfigPath::PaletteIndex, (temp_palette_index as u32).into(), false) {
-                                            *palette_changed = true;
                                             max_update = max_update.max(update);
 
                                             // Update palette editor when selection changes
@@ -283,7 +254,6 @@ pub fn render_tone_mapping_window(
                         let mut temp_speed_factor = current_speed_factor;
                         if ui.add(egui::Slider::new(&mut temp_speed_factor, 0.0..=1.0).text("Speed Blend Factor")).changed() {
                             if let Ok(update) = config_manager.update_param(ConfigPath::SpeedFactor, temp_speed_factor.into(), true) {
-                                *color_mode_changed = true;
                                 max_update = max_update.max(update);
                             }
                         }
@@ -297,7 +267,6 @@ pub fn render_tone_mapping_window(
                     let mut temp_bg_color = current_bg_color;
                     if ui.color_edit_button_rgb(&mut temp_bg_color).changed() {
                         if let Ok(update) = config_manager.update_param(ConfigPath::BackgroundColor, temp_bg_color.into(), false) {
-                            *background_color_changed = true;
                             max_update = max_update.max(update);
                         }
                     }
@@ -311,7 +280,6 @@ pub fn render_tone_mapping_window(
 fn render_curve_editor(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    curve_changed: &mut bool,
 ) -> UpdateType {
     ui.label("Curve Editor");
     let mut max_update = UpdateType::None;
@@ -431,7 +399,6 @@ fn render_curve_editor(
 
             // Update via ConfigManager with lazy mode (throttled)
             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, modified_curve.into(), true) {
-                *curve_changed = true;
                 max_update = max_update.max(update);
             }
         }
@@ -463,7 +430,6 @@ fn render_curve_editor(
 
             // Update via ConfigManager (not lazy - immediate capture for discrete action)
             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, modified_curve.into(), false) {
-                *curve_changed = true;
                 max_update = max_update.max(update);
             }
         }

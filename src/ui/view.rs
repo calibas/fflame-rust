@@ -2,14 +2,13 @@ use crate::scene::transforms::{Flame, RenderMode};
 use crate::config::{ConfigManager, ConfigPath, UpdateType};
 
 /// Render the View window with navigation controls
-#[allow(clippy::too_many_arguments)]
+///
+/// Note: Config change tracking is now handled by ConfigManager.get_pending_actions()
 pub fn render_view_window(
     ctx: &egui::Context,
     show_view: &mut bool,
     config_manager: &mut ConfigManager,
     flame: &Flame,
-    view_changed: &mut bool,
-    camera_rotation_changed: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
@@ -30,7 +29,6 @@ pub fn render_view_window(
                         new_zoom.into(),
                         false  // Immediate capture for button click
                     ) {
-                        *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
                 }
@@ -41,7 +39,6 @@ pub fn render_view_window(
                         new_zoom.into(),
                         false  // Immediate capture for button click
                     ) {
-                        *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
                 }
@@ -49,9 +46,6 @@ pub fn render_view_window(
             ui.horizontal(|ui| {
                 ui.label("Value:");
                 if let Ok(result) = ui.lazy_drag(config_manager, ConfigPath::Zoom, 0.01, "") {
-                    if result.changed {
-                        *view_changed = result.should_capture;
-                    }
                     max_update = max_update.max(result.update_type);
                 }
             });
@@ -62,18 +56,12 @@ pub fn render_view_window(
             ui.horizontal(|ui| {
                 ui.label("X:");
                 if let Ok(result) = ui.lazy_drag(config_manager, ConfigPath::PanX, 0.01, "") {
-                    if result.changed {
-                        *view_changed = result.should_capture;
-                    }
                     max_update = max_update.max(result.update_type);
                 }
             });
             ui.horizontal(|ui| {
                 ui.label("Y:");
                 if let Ok(result) = ui.lazy_drag(config_manager, ConfigPath::PanY, 0.01, "") {
-                    if result.changed {
-                        *view_changed = result.should_capture;
-                    }
                     max_update = max_update.max(result.update_type);
                 }
             });
@@ -106,7 +94,6 @@ pub fn render_view_window(
                         "Pan Up".to_string(),
                         false
                     ) {
-                        *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
                 }
@@ -126,7 +113,6 @@ pub fn render_view_window(
                         "Pan Left".to_string(),
                         false
                     ) {
-                        *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
                 }
@@ -144,7 +130,6 @@ pub fn render_view_window(
                         "Pan Down".to_string(),
                         false
                     ) {
-                        *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
                 }
@@ -162,7 +147,6 @@ pub fn render_view_window(
                         "Pan Right".to_string(),
                         false
                     ) {
-                        *view_changed = true;
                         max_update = max_update.max(update_type);
                     }
                 }
@@ -181,10 +165,6 @@ pub fn render_view_window(
                         new_rotation.into(),
                         true  // Lazy undo for slider drag
                     ) {
-                        // Don't trigger reset during preview mode - overwrite mode handles it
-                        if !config_manager.is_in_preview_mode() {
-                            *view_changed = true;
-                        }
                         max_update = max_update.max(update_type);
                     }
                 }
@@ -205,10 +185,6 @@ pub fn render_view_window(
                             new_camera_x.into(),
                             true  // Lazy undo for slider drag
                         ) {
-                            // Don't trigger reset during preview mode - overwrite mode handles it
-                            if !config_manager.is_in_preview_mode() {
-                                *camera_rotation_changed = true;
-                            }
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -224,10 +200,6 @@ pub fn render_view_window(
                             new_camera_y.into(),
                             true  // Lazy undo for slider drag
                         ) {
-                            // Don't trigger reset during preview mode - overwrite mode handles it
-                            if !config_manager.is_in_preview_mode() {
-                                *camera_rotation_changed = true;
-                            }
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -249,8 +221,6 @@ pub fn render_view_window(
                     "Reset View".to_string(),
                     false
                 ) {
-                    *view_changed = true;
-                    *camera_rotation_changed = true;
                     max_update = max_update.max(update_type);
                 }
             }

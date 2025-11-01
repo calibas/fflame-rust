@@ -17,14 +17,14 @@ impl PaletteEditor {
 }
 
 /// Render the Palette Editor window
-#[allow(clippy::too_many_arguments)]
+///
+/// Note: Config change tracking is now handled by ConfigManager.get_pending_actions()
 pub fn render_palette_editor_window(
     ctx: &egui::Context,
     show_palette_editor: &mut bool,
     palette_editor: &mut PaletteEditor,
     config_manager: &mut crate::config::ConfigManager,
     custom_palette: &mut Option<Palette>,
-    palette_changed: &mut bool,
     palette_export_json: &mut Option<Palette>,
     palette_save_file: &mut Option<Palette>,
     palette_import_json: &mut Option<String>,
@@ -50,7 +50,6 @@ pub fn render_palette_editor_window(
                         crate::config::ConfigValue::Palette((*palette_box).clone()),
                         false // immediate mode - discrete action
                     ) {
-                        *palette_changed = true;
                     }
                 }
             });
@@ -109,7 +108,6 @@ pub fn render_palette_editor_window(
                     if palette_editor.current_palette.locked {
                         // Free mode: just unlock (no data loss, no warning needed)
                         palette_editor.current_palette.convert_to_free();
-                        *palette_changed = true;
                         // Auto-apply the palette when converting to free mode
                         *custom_palette = Some(palette_editor.current_palette.clone());
                     } else {
@@ -183,7 +181,6 @@ pub fn render_palette_editor_window(
                     crate::config::ConfigValue::Palette((*palette_box).clone()),
                     true // lazy mode - preview during drag
                 ) {
-                    *palette_changed = true;
                 }
             }
 
@@ -203,7 +200,6 @@ pub fn render_palette_editor_window(
                     crate::config::ConfigValue::Palette((*palette_box).clone()),
                     false // immediate mode - discrete action
                 ) {
-                    *palette_changed = true;
                 }
             }
 
@@ -234,7 +230,6 @@ pub fn render_palette_editor_window(
                     crate::config::ConfigValue::Palette((*palette_box).clone()),
                     false // immediate mode - discrete action
                 ) {
-                    *palette_changed = true;
                 }
             }
 
@@ -299,7 +294,6 @@ pub fn render_palette_editor_window(
                 ui.horizontal(|ui| {
                     if ui.button("✅ Convert to Fixed Mode").clicked() {
                         palette_editor.current_palette.convert_to_fixed();
-                        *palette_changed = true;
                         // Auto-apply the palette when converting to fixed mode
                         *custom_palette = Some(palette_editor.current_palette.clone());
                         palette_editor.show_fixed_mode_warning = false;
