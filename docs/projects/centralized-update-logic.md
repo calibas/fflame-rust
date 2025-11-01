@@ -1,8 +1,9 @@
-# Centralized Update Logic via ConfigManager
+# State Centralization: ConfigManager as Single Source of Truth
 
-**Status:** Discussion / Planning
+**Status:** In Progress (Branch: state-centralization)
 **Created:** 2025-10-31
-**Goal:** Move all "what needs updating" logic into ConfigManager, away from UI and App
+**Updated:** 2025-10-31
+**Goal:** Eliminate state duplication between App and ConfigManager, centralize all update logic
 
 ---
 
@@ -79,31 +80,59 @@ impl ConfigPath {
 
 **Each one is slightly different, easy to miss one (palette bug)**
 
+### Problem 4: State Duplication Between App and ConfigManager
+
+**App struct (lines 28-68) duplicates ~30 fields from FractalConfig:**
+- View: `zoom`, `pan_x`, `pan_y`, `rotation`, `camera_rotation_x/y`
+- Rendering: `density_scale`, `speed_factor`, `iterations_per_thread`, `speed_multiplier`
+- Color: `color_mode`, `current_palette_index`, `background_color`
+- Tone mapping: `tonemap_mode`, `tonemap_curve`, `use_curve`, `exposure`, `gamma`
+- Histogram/blend: `histogram_color_scale`, `low_density_smoothing`, etc.
+
+**Consequences:**
+- Manual synchronization required (line 964-972: preset loading syncs 8+ fields)
+- Potential for inconsistent state (App fields vs ConfigManager)
+- UI receives mutable references to App fields AND mutates ConfigManager
+- Renderer reads from App fields instead of canonical state
+- Cannot trust any single source as "ground truth"
+
 ---
 
 ## Proposed Architecture
 
 ### Vision: ConfigManager as Single Source of Truth
 
+**Architecture Flow:**
 ```
 UI Layer (egui controls)
   ↓
-  Updates ConfigManager only (update_param, force_commit_preview, load_config)
+  Reads from ConfigManager (no mutable references to App fields)
+  Updates via ConfigManager.update_param(), load_config()
   ↓
-ConfigManager
-  • Tracks all changes
+ConfigManager (ONLY state holder)
+  • Owns FractalConfig (canonical state)
+  • Tracks all changes with deltas
   • Knows UpdateType for each change
   • Knows if in preview mode
-  • Calculates: what needs updating? reset needed?
+  • Provides UpdateAction (what needs updating)
   ↓
-App Layer
-  • Asks ConfigManager: "What needs updating?"
-  • Gets back: UpdateAction struct
-  • Executes actions (no decision logic)
+App Layer (thin orchestration)
+  • NO duplicate fields (removed ~30 fields!)
+  • Reads state from ConfigManager
+  • Asks: "What needs updating?" → gets UpdateAction
+  • Executes rendering actions
+  • Manages GPU resources only
   ↓
-Renderer
-  • Pure execution (no decision logic)
+Renderer (pure execution)
+  • Receives parameters from App
+  • No state, no decisions
 ```
+
+**Key Changes:**
+1. **App struct shrinks** - Remove all duplicate config fields
+2. **Single source of truth** - ConfigManager.active_config() is THE state
+3. **No synchronization** - Can't have inconsistent state when there's only one copy
+4. **Centralized logic** - UpdateAction replaces 30+ boolean flags
 
 ### Proposed API
 
@@ -206,44 +235,95 @@ self.config_manager.clear_pending_actions();
 ## Implementation Phases
 
 ### Phase 1: Add UpdateAction Infrastructure (Low Risk)
+**Goal:** Build the mechanism without breaking existing code
 
-- [ ] Create `UpdateAction` struct in `config/delta.rs`
-- [ ] Add `pending_actions` tracking to ConfigManager
-- [ ] Implement `get_pending_actions()` method
-- [ ] **Don't change app.rs yet** - just build the infrastructure
+- [ ] Create `UpdateAction` struct in `config/manager.rs`
+- [ ] Add `pending_actions: UpdateAction` field to ConfigManager
+- [ ] Implement `get_pending_actions()` method that analyzes recent changes
+- [ ] Implement `clear_pending_actions()` method
+- [ ] **Don't change app.rs or UI yet** - parallel infrastructure
 
-**Result:** ConfigManager can now track actions, but app still uses old flags
+**Testing:** Compiles, existing functionality unchanged
 
-### Phase 2: Gradual Migration (Medium Risk)
+### Phase 2: Remove State Duplication from App (High Risk)
+**Goal:** Eliminate duplicate fields, force all reads through ConfigManager
 
-Start with simplest case, validate, then expand:
+**2a. Identify Fields to Remove:**
+- [ ] List all App fields that duplicate FractalConfig
+- [ ] Identify fields that must stay (GPU resources, UI state, metrics)
+- [ ] Document which fields go where
 
-#### 2a. Migrate Tone Mapping (Safest)
-- [ ] App checks `actions.update_tone_curve` instead of `ui_response.tonemap_curve_changed`
-- [ ] Test exposure/gamma sliders work
-- [ ] Remove tonemap flags from UiResponse
+**2b. Remove Duplicate Fields:**
+- [ ] Remove view fields: `zoom`, `pan_x`, `pan_y`, `rotation`, `camera_rotation_x/y`
+- [ ] Remove rendering fields: `density_scale`, `speed_factor`, `iterations_per_thread`, `speed_multiplier`
+- [ ] Remove color fields: `color_mode`, `current_palette_index`, `background_color`
+- [ ] Remove tonemap fields: `tonemap_mode`, `tonemap_curve`, `use_curve`, `exposure`, `gamma`
+- [ ] Remove histogram/blend fields: `histogram_color_scale`, `low_density_smoothing`, etc.
+- [ ] Keep: `flame` (working copy for renderer), `flame_renderer`, `gpu`, `egui_layer`, `metrics`, libraries, UI state
 
-#### 2b. Migrate Palette (Next Safest)
-- [ ] App checks `actions.update_palette` instead of `ui_response.palette_changed`
-- [ ] Test palette editor live preview
-- [ ] Remove palette flags from UiResponse
+**2c. Update App::run() initialization:**
+- [ ] Remove field initialization for removed fields
+- [ ] ConfigManager already initialized with FractalConfig
 
-#### 2c. Migrate View (Simple)
-- [ ] App checks `actions.update_view` instead of `ui_response.view_changed`
-- [ ] Test zoom/pan/rotation
-- [ ] Remove view flags from UiResponse
+**Testing:** Won't compile yet - need Phase 3
 
-#### 2d. Migrate Reset Logic (Most Complex)
-- [ ] App checks `actions.reset_accumulation` instead of massive `should_reset` calculation
-- [ ] **Preview mode handled automatically** - ConfigManager decides
-- [ ] Test all reset scenarios
-- [ ] Remove remaining flags from UiResponse
+### Phase 3: Refactor Rendering to Read from ConfigManager (High Risk)
+**Goal:** All rendering code reads canonical state
 
-### Phase 3: Cleanup (Low Risk)
+**3a. Update render() method:**
+- [ ] Replace `self.zoom` → `config.zoom` (read from ConfigManager)
+- [ ] Replace `self.iterations_per_thread` → `config.iterations_per_thread`
+- [ ] Replace all other field references throughout render()
 
-- [ ] Remove unused UiResponse fields (only keep non-config actions like export/import)
-- [ ] Add documentation to ConfigManager
+**3b. Update helper methods:**
+- [ ] Update `export_config()` to read from ConfigManager
+- [ ] Update `load_config_with_undo()` to not sync App fields (ConfigManager is source)
+
+**Testing:** Should compile and run, but UI won't work (still has mutable refs)
+
+### Phase 4: Refactor UI Layer (Highest Risk)
+**Goal:** Remove all mutable references to removed App fields
+
+**4a. Update render_ui() signature:**
+- [ ] Remove ~25 mutable reference parameters
+- [ ] Keep only: `config_manager`, `flame_renderer`, `flame` (working copy), libraries, pause/max_iterations (UI state)
+- [ ] UI reads from `config_manager.active_config()`
+- [ ] UI writes via `config_manager.update_param()`
+
+**4b. Update all UI panels:**
+- [ ] Update view controls (zoom, pan, rotation)
+- [ ] Update rendering controls (iterations, density, speed)
+- [ ] Update color controls (color mode, palette, background)
+- [ ] Update tonemap controls (mode, curve, exposure, gamma)
+- [ ] Update histogram/blend controls
+
+**Testing:** Full functionality should work
+
+### Phase 5: Replace UiResponse Flags with UpdateAction (Medium Risk)
+**Goal:** Centralize "what needs updating" logic
+
+**5a. Implement get_pending_actions():**
+- [ ] Track changes since last call
+- [ ] Consider preview mode (suppress reset during preview)
+- [ ] Merge multiple UpdateTypes intelligently
+- [ ] Return consolidated UpdateAction
+
+**5b. Replace App update logic:**
+- [ ] Replace `if ui_response.palette_changed` → `if actions.update_palette`
+- [ ] Replace massive `should_reset` calculation → `if actions.reset_accumulation`
+- [ ] Remove all UiResponse config-related flags
+- [ ] Keep non-config flags: export/import requests, add/delete transform
+
+**Testing:** All functionality works, cleaner code
+
+### Phase 6: Final Cleanup (Low Risk)
+
+- [ ] Remove unused UiResponse fields
+- [ ] Add comprehensive documentation to ConfigManager
 - [ ] Update CLAUDE.md with new architecture
+- [ ] Update docs/main/CONFIG.md if needed
+- [ ] Run full test suite (unit + regression)
+- [ ] Manual testing of all features
 
 ---
 
@@ -410,23 +490,30 @@ impl ConfigManager {
 
 ## Recommendation
 
-**Proceed with implementation?** Yes, with gradual migration approach
+**Status:** APPROVED - Implementation in progress (Branch: state-centralization)
 
 **Why it's worth it:**
-1. Fixes entire class of bugs (palette preview, missing flags, etc)
-2. Makes future changes trivial (add param, set UpdateType, done)
-3. Reduces app.rs complexity by ~200 lines
-4. Centralizes decision logic where it belongs
+1. **Eliminates entire class of bugs** - State duplication, sync issues, palette preview, missing flags
+2. **True single source of truth** - ConfigManager is THE state, no duplication
+3. **Makes future changes trivial** - Add param to ConfigPath, automatic undo/update handling
+4. **Reduces app.rs complexity** - ~30 duplicate fields removed, ~200 lines of logic simplified
+5. **Centralizes all decision logic** - ConfigManager knows everything, App just executes
 
 **Estimated effort:**
-- Phase 1 (infrastructure): 2-3 hours
-- Phase 2 (migration): 4-6 hours (careful, incremental)
-- Phase 3 (cleanup): 1 hour
-- **Total: 7-10 hours** for significant long-term maintainability win
+- Phase 1 (UpdateAction infrastructure): 2-3 hours
+- Phase 2 (Remove duplicate App fields): 1-2 hours
+- Phase 3 (Refactor rendering): 2-3 hours
+- Phase 4 (Refactor UI layer): 4-6 hours (most complex)
+- Phase 5 (Replace UiResponse flags): 2-3 hours
+- Phase 6 (Cleanup + testing): 2-3 hours
+- **Total: 13-20 hours** for major architectural improvement
 
-**Risk level:** Medium (incremental approach mitigates)
+**Risk level:** High (touching core state management), mitigated by:
+- Incremental approach (6 phases, test each)
+- Can rollback via git branch
+- Comprehensive test suite to catch regressions
 
-**When to do it:** After palette editor is fully complete (not blocking current work)
+**Impact:** Transformational - this is the "right" architecture we should have had from the start
 
 ---
 
