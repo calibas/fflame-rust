@@ -203,6 +203,11 @@ pub struct ConfigManager {
     /// Pending actions accumulated since last get_pending_actions() call
     /// This tracks what GPU updates are needed based on recent changes
     pending_actions: UpdateAction,
+
+    /// Whether the current preview requires overwrite rendering
+    /// True for iteration-affecting parameters (view, flame, color)
+    /// False for post-processing parameters (tone mapping)
+    preview_needs_overwrite: bool,
 }
 
 impl ConfigManager {
@@ -216,6 +221,7 @@ impl ConfigManager {
             last_lazy_undo: None,
             lazy_throttle: Duration::from_millis(500),
             pending_actions: UpdateAction::none(),
+            preview_needs_overwrite: false,
         }
     }
 
@@ -229,10 +235,17 @@ impl ConfigManager {
         if lazy {
             // Lazy mode: Update preview, capture on throttle
 
+            // Determine if this parameter type needs overwrite rendering
+            let update_type = path.update_type();
+            let needs_overwrite = matches!(update_type,
+                UpdateType::ViewOnly | UpdateType::IterationReset | UpdateType::ColorOnly
+            );
+
             // Create preview if it doesn't exist (first update in drag sequence)
             if self.preview.is_none() {
                 self.preview = Some(self.current.clone());
-                log::trace!("Created preview from current");
+                self.preview_needs_overwrite = needs_overwrite;
+                log::trace!("Created preview from current (overwrite={})", needs_overwrite);
             }
 
             // Get preview value (will exist now)
@@ -527,8 +540,15 @@ impl ConfigManager {
     }
 
     /// Check if ConfigManager is in preview mode (during lazy drag)
+    ///
+    /// This returns true only if:
+    /// 1. A preview is active (lazy drag in progress), AND
+    /// 2. The parameter being previewed requires overwrite rendering
+    ///
+    /// Tone mapping parameters use lazy undo but NOT preview mode since
+    /// they're post-processing and don't need overwrite rendering.
     pub fn is_in_preview_mode(&self) -> bool {
-        self.preview.is_some()
+        self.preview.is_some() && self.preview_needs_overwrite
     }
 
     /// Push change to undo stack, maintaining depth limit
@@ -1078,6 +1098,7 @@ impl ConfigManager {
     /// This ensures changes are captured even if drag ended before throttle fired
     pub fn force_commit_preview(&mut self, path: &ConfigPath) -> Result<UpdateType, ConfigError> {
         if let Some(preview) = self.preview.take() {
+            self.preview_needs_overwrite = false;  // Clear overwrite flag
             log::debug!("Force commit for path: {:?}", path);
 
             // Check if preview actually differs from current
@@ -1138,6 +1159,7 @@ impl ConfigManager {
     pub fn load_config(&mut self, new_config: FractalConfig, description: String) -> Result<(), ConfigError> {
         // Clear any preview state
         self.preview = None;
+        self.preview_needs_overwrite = false;
 
         // Create snapshot of current state (for undo)
         let old_snapshot = ConfigChange::snapshot(
