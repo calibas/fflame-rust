@@ -184,10 +184,29 @@ pub fn render_tone_mapping_window(
                             // Edit Palette button - opens editor for config.palette
                             if ui.button("🎨 Edit Palette").clicked() {
                                 *show_palette_editor = !*show_palette_editor;
-                                // Load current palette from config into editor
-                                if let Some(pal) = &current_palette {
-                                    *palette_editor_palette = pal.clone();
-                                }
+
+                                // Ensure config.palette is set (copy from library if None)
+                                let palette_to_edit = if let Some(pal) = &current_palette {
+                                    pal.clone()
+                                } else {
+                                    // No custom palette, copy from library
+                                    let palette_index = config_manager.active_config().palette_index;
+                                    if let Some(lib_pal) = palette_library.get(palette_index) {
+                                        let mut pal = lib_pal.clone();
+                                        pal.built_in = false; // Always mark as editable
+                                        // Set it in config
+                                        let _ = config_manager.update_param(
+                                            ConfigPath::Palette,
+                                            pal.clone().into(),
+                                            false
+                                        );
+                                        pal
+                                    } else {
+                                        return; // No palette available
+                                    }
+                                };
+
+                                *palette_editor_palette = palette_to_edit;
                             }
 
                             // Clone button - makes a copy with unique name
