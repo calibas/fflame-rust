@@ -226,7 +226,11 @@ impl Display for ConfigValue {
             ConfigValue::ColorMode(m) => write!(f, "{:?}", m),
             ConfigValue::RenderMode(m) => write!(f, "{:?}", m),
             ConfigValue::ProjectionType(p) => write!(f, "{:?}", p),
-            ConfigValue::ToneCurve(_) => write!(f, "[Tone Curve]"),
+            ConfigValue::ToneCurve(curve) => {
+                write!(f, "[Tone Curve: {} pts: {:?}]",
+                    curve.points.len(),
+                    curve.points.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>())
+            }
             ConfigValue::Palette(p) => write!(f, "{}", p.name),
         }
     }
