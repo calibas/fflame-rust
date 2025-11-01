@@ -44,10 +44,9 @@ pub fn render_palette_editor_window(
 
                 // Create undo entry when user finishes editing name
                 if name_response.lost_focus() {
-                    let palette_box = Box::new(palette_editor.current_palette.clone());
                     if let Ok(_) = config_manager.update_param(
-                        crate::config::ConfigPath::Palette(palette_box.clone()),
-                        crate::config::ConfigValue::Palette((*palette_box).clone()),
+                        crate::config::ConfigPath::Palette,
+                        crate::config::ConfigValue::Palette(palette_editor.current_palette.clone()),
                         false // immediate mode - discrete action
                     ) {
                     }
@@ -175,18 +174,18 @@ pub fn render_palette_editor_window(
             // Handle ConfigManager updates after all mutable borrows are done
             if palette_updated {
                 // Live update via ConfigManager (lazy mode for smooth editing)
-                let palette_box = Box::new(palette_editor.current_palette.clone());
+                // Palette update
                 if let Ok(_) = config_manager.update_param(
-                    crate::config::ConfigPath::Palette(palette_box.clone()),
-                    crate::config::ConfigValue::Palette((*palette_box).clone()),
+                    crate::config::ConfigPath::Palette,
+                    crate::config::ConfigValue::Palette(palette_editor.current_palette.clone()),
                     true // lazy mode - preview during drag
                 ) {
                 }
             }
 
             if force_commit {
-                let palette_box = Box::new(palette_editor.current_palette.clone());
-                let _ = config_manager.force_commit_preview(&crate::config::ConfigPath::Palette(palette_box));
+                // Palette update
+                let _ = config_manager.force_commit_preview(&crate::config::ConfigPath::Palette);
             }
 
             // Remove stop if requested
@@ -194,10 +193,10 @@ pub fn render_palette_editor_window(
                 palette_editor.current_palette.stops.remove(idx);
 
                 // Immediate undo entry for delete operation
-                let palette_box = Box::new(palette_editor.current_palette.clone());
+                // Palette update
                 if let Ok(_) = config_manager.update_param(
-                    crate::config::ConfigPath::Palette(palette_box.clone()),
-                    crate::config::ConfigValue::Palette((*palette_box).clone()),
+                    crate::config::ConfigPath::Palette,
+                    crate::config::ConfigValue::Palette(palette_editor.current_palette.clone()),
                     false // immediate mode - discrete action
                 ) {
                 }
@@ -224,10 +223,10 @@ pub fn render_palette_editor_window(
                 palette_editor.current_palette.stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap());
 
                 // Immediate undo entry for add operation
-                let palette_box = Box::new(palette_editor.current_palette.clone());
+                // Palette update
                 if let Ok(_) = config_manager.update_param(
-                    crate::config::ConfigPath::Palette(palette_box.clone()),
-                    crate::config::ConfigValue::Palette((*palette_box).clone()),
+                    crate::config::ConfigPath::Palette,
+                    crate::config::ConfigValue::Palette(palette_editor.current_palette.clone()),
                     false // immediate mode - discrete action
                 ) {
                 }

@@ -1,7 +1,7 @@
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::palette::{ColorMode, PaletteLibrary};
 use crate::ui::LazyUndoHelper;
-use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
+use crate::config::{ConfigManager, ConfigPath, ConfigValue, LazyUndoUi, UpdateType};
 
 /// Render the Tone Mapping window with all tone mapping and color controls
 ///
@@ -13,6 +13,7 @@ pub fn render_tone_mapping_window(
     config_manager: &mut ConfigManager,
     palette_library: &PaletteLibrary,
     palette_editor_palette: &mut crate::scene::palette::Palette,
+    custom_palette: &mut Option<crate::scene::palette::Palette>,
     lazy_undo: &mut LazyUndoHelper,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
@@ -194,7 +195,7 @@ pub fn render_tone_mapping_window(
                             // Edit Palette button - creates copy of built-ins, edits custom palettes in-place
                             if ui.button("🎨 Edit Palette").clicked() {
                                 *show_palette_editor = !*show_palette_editor;
-                                // Load current palette into editor
+                                // Load current palette into editor and add to library
                                 let edit_palette_index = config_manager.active_config().palette_index;
                                 if let Some(pal) = palette_library.get(edit_palette_index) {
                                     let mut edited_palette = pal.clone();
@@ -216,8 +217,10 @@ pub fn render_tone_mapping_window(
                                     }
                                     // For custom palettes, keep the same name (will update in place)
 
-                                    *palette_editor_palette = edited_palette;
-                                    // Note: Changes now applied live via ConfigManager
+                                    *palette_editor_palette = edited_palette.clone();
+
+                                    // Add to library (will be handled by app.rs custom_palette handler)
+                                    *custom_palette = Some(edited_palette);
                                 }
                             }
 
@@ -240,8 +243,10 @@ pub fn render_tone_mapping_window(
                                     }
 
                                     edited_palette.name = new_name;
-                                    *palette_editor_palette = edited_palette;
-                                    // Note: Changes now applied live via ConfigManager
+                                    *palette_editor_palette = edited_palette.clone();
+
+                                    // Add to library (will be handled by app.rs custom_palette handler)
+                                    *custom_palette = Some(edited_palette);
                                 }
                             }
                         });

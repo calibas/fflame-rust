@@ -36,7 +36,7 @@ pub enum ConfigPath {
     // ===== Color (no iteration reset, just color buffer update) =====
     ColorMode,
     PaletteIndex,
-    Palette(Box<Palette>), // Embed palette data for undo
+    Palette, // Embedded palette data (custom palettes)
     SpeedFactor,
     BackgroundColor,
 
@@ -112,7 +112,7 @@ impl Display for ConfigPath {
             // Color
             ConfigPath::ColorMode => write!(f, "Color Mode"),
             ConfigPath::PaletteIndex => write!(f, "Palette"),
-            ConfigPath::Palette(_) => write!(f, "Palette Data"),
+            ConfigPath::Palette => write!(f, "Palette Data"),
             ConfigPath::SpeedFactor => write!(f, "Speed Blend Factor"),
             ConfigPath::BackgroundColor => write!(f, "Background Color"),
 
@@ -468,7 +468,7 @@ impl ConfigPath {
             // Color parameters - re-run accumulation with new colors
             ConfigPath::ColorMode
             | ConfigPath::PaletteIndex
-            | ConfigPath::Palette(_)
+            | ConfigPath::Palette
             | ConfigPath::SpeedFactor => UpdateType::ColorOnly,
 
             // Rendering settings - affect iteration behavior

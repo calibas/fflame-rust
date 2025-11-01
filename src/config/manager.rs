@@ -616,7 +616,13 @@ impl ConfigManager {
             // Color
             ConfigPath::ColorMode => Ok(config.color_mode.into()),
             ConfigPath::PaletteIndex => Ok((config.palette_index as u32).into()),
-            ConfigPath::Palette(p) => Ok(ConfigValue::Palette((**p).clone())),
+            ConfigPath::Palette => {
+                // Return embedded palette if it exists, otherwise None
+                match &config.palette {
+                    Some(pal) => Ok(ConfigValue::Palette(pal.clone())),
+                    None => Err(ConfigError::TypeMismatch), // No embedded palette
+                }
+            }
             ConfigPath::SpeedFactor => Ok(config.speed_factor.into()),
             ConfigPath::BackgroundColor => Ok(config.background_color.into()),
 
@@ -782,7 +788,7 @@ impl ConfigManager {
                 // Clear embedded palette when selecting from library
                 self.current.palette = None;
             }
-            ConfigPath::Palette(p) => {
+            ConfigPath::Palette => {
                 if let ConfigValue::Palette(palette) = value {
                     // Update embedded palette data
                     self.current.palette = Some(palette);
@@ -980,7 +986,7 @@ impl ConfigManager {
                 // Clear embedded palette when selecting from library
                 preview.palette = None;
             }
-            ConfigPath::Palette(p) => {
+            ConfigPath::Palette => {
                 if let ConfigValue::Palette(palette) = value {
                     preview.palette = Some(palette);
                 }
