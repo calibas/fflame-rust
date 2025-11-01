@@ -193,43 +193,33 @@ impl EguiLayer {
             );
 
             // Render View window
-            let view_update_type = view::render_view_window(
+            let _view_update_type = view::render_view_window(
                 ctx,
                 &mut self.show_view,
                 config_manager,
                 flame,
-                &mut view_changed,
-                &mut camera_rotation_changed,
             );
-            // TODO: Handle view_update_type (Phase 4 task)
 
             // Render Help window
             help::render_help_window(ctx, &mut self.show_help);
 
             // Render Transforms window
-            let transforms_update_type = transforms::render_transforms_window(
+            let _transforms_update_type = transforms::render_transforms_window(
                 ctx,
                 &mut self.show_transforms,
                 config_manager,
                 flame,
-                &mut flame_changed,
                 &mut add_transform,
                 &mut delete_transform,
             );
-            // TODO: Handle transforms_update_type (Phase 4 task)
 
             // Render Triangle Editor window
-            let triangle_editor_update = triangle_editor::render_triangle_editor_window(
+            let _triangle_editor_update = triangle_editor::render_triangle_editor_window(
                 ctx,
                 &mut self.show_triangle_editor,
                 config_manager,
                 flame,
             );
-            // Handle triangle editor updates
-            // Set flame_changed if update type requires it OR if in preview mode (live updates during drag)
-            if triangle_editor_update >= crate::config::UpdateType::IterationReset || config_manager.is_in_preview_mode() {
-                flame_changed = true;
-            }
 
             // Render Tone Mapping window
             let _tonemap_update = tone_mapping::render_tone_mapping_window(
@@ -237,17 +227,8 @@ impl EguiLayer {
                 &mut self.show_tone_mapping,
                 &mut self.show_palette_editor,
                 config_manager,
-                &mut tonemap_mode_changed,
-                &mut tonemap_curve_changed,
-                &mut use_curve_changed,
-                &mut exposure_changed,
-                &mut gamma_changed,
-                &mut density_changed,
-                &mut color_mode_changed,
                 palette_library,
-                &mut palette_changed,
                 &mut self.palette_editor.current_palette,
-                &mut background_color_changed,
                 &mut self.lazy_undo_tone_mapping,
             );
 
@@ -258,7 +239,6 @@ impl EguiLayer {
                 &mut self.palette_editor,
                 config_manager,
                 &mut custom_palette,
-                &mut palette_changed,
                 &mut palette_export_json,
                 &mut palette_save_file,
                 &mut palette_import_json,
