@@ -944,7 +944,7 @@ impl App {
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
                 }
 
-                // Update palette if needed
+                // Update palette if needed (also handles color mode changes)
                 if actions.update_palette {
                     // Get palette from ConfigManager (includes preview mode changes from palette editor)
                     let active_config = self.config_manager.active_config();
@@ -954,6 +954,12 @@ impl App {
                     if let Some(palette) = palette {
                         renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
                     }
+
+                    // Update color mode in GPU params (ColorMode changes trigger update_palette)
+                    renderer.set_color_mode(&self.gpu.queue, update_config.color_mode,
+                        update_config.iterations_per_thread, update_config.zoom, update_config.pan_x,
+                        update_config.pan_y, update_config.rotation, update_config.camera_rotation_x,
+                        update_config.camera_rotation_y, update_config.speed_factor);
                 }
 
                 // Update tone curve LUT if changed
