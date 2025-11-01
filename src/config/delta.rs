@@ -45,6 +45,7 @@ pub enum ConfigPath {
     LowDensitySmoothing,
     DensityCompressionStrength,
     BlendFactor,
+    UseDynamicBlend,
     TargetIterationsPerPixel,
     IterationsPerThread,
     SpeedMultiplier,
@@ -120,6 +121,7 @@ impl Display for ConfigPath {
             ConfigPath::LowDensitySmoothing => write!(f, "Low-Density Smoothing"),
             ConfigPath::DensityCompressionStrength => write!(f, "Density Compression"),
             ConfigPath::BlendFactor => write!(f, "Blend Factor"),
+            ConfigPath::UseDynamicBlend => write!(f, "Use Dynamic Blend"),
             ConfigPath::TargetIterationsPerPixel => write!(f, "Target Iterations Per Pixel"),
             ConfigPath::IterationsPerThread => write!(f, "Iterations Per Thread"),
             ConfigPath::SpeedMultiplier => write!(f, "Speed Multiplier"),
@@ -470,6 +472,7 @@ impl ConfigPath {
             | ConfigPath::LowDensitySmoothing
             | ConfigPath::DensityCompressionStrength
             | ConfigPath::BlendFactor
+            | ConfigPath::UseDynamicBlend
             | ConfigPath::TargetIterationsPerPixel
             | ConfigPath::IterationsPerThread
             | ConfigPath::SpeedMultiplier => UpdateType::IterationReset,

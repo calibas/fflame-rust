@@ -514,6 +514,7 @@ impl ConfigManager {
                 Ok(config.density_compression_strength.into())
             }
             ConfigPath::BlendFactor => Ok(config.blend_factor.into()),
+            ConfigPath::UseDynamicBlend => Ok(config.use_dynamic_blend.into()),
             ConfigPath::TargetIterationsPerPixel => {
                 Ok(config.target_iterations_per_pixel.into())
             }
@@ -691,6 +692,9 @@ impl ConfigManager {
             }
             ConfigPath::BlendFactor => {
                 self.current.blend_factor = value.try_into()?;
+            }
+            ConfigPath::UseDynamicBlend => {
+                self.current.use_dynamic_blend = value.try_into()?;
             }
             ConfigPath::TargetIterationsPerPixel => {
                 self.current.target_iterations_per_pixel = value.try_into()?;
@@ -883,6 +887,9 @@ impl ConfigManager {
             }
             ConfigPath::BlendFactor => {
                 preview.blend_factor = value.try_into()?;
+            }
+            ConfigPath::UseDynamicBlend => {
+                preview.use_dynamic_blend = value.try_into()?;
             }
             ConfigPath::TargetIterationsPerPixel => {
                 preview.target_iterations_per_pixel = value.try_into()?;

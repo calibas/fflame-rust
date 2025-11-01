@@ -13,14 +13,13 @@ pub fn render_view_window(
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
-    // Read current config values
-    let config = config_manager.active_config();
-
     egui::Window::new("View")
         .open(show_view)
         .show(ctx, |ui| {
             use crate::config::slider::LazyUndoUi;
-            use crate::config::ConfigValue;
+
+            // Read current config values inside closure to avoid borrow conflicts
+            let config = config_manager.active_config();
 
             ui.label("Zoom");
             ui.horizontal(|ui| {
