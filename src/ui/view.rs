@@ -158,13 +158,20 @@ pub fn render_view_window(
             ui.horizontal(|ui| {
                 // Convert radians to degrees for display
                 let mut degrees = config.rotation.to_degrees();
-                if ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°")).changed() {
+                let response = ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°"));
+                if response.changed() {
                     let new_rotation = degrees.to_radians();
                     if let Ok(update_type) = config_manager.update_param(
                         ConfigPath::Rotation,
                         new_rotation.into(),
                         true  // Lazy undo for slider drag
                     ) {
+                        max_update = max_update.max(update_type);
+                    }
+                }
+                // Force commit preview when drag ends
+                if response.drag_stopped() && config_manager.is_in_preview_mode() {
+                    if let Ok(update_type) = config_manager.force_commit_preview(&ConfigPath::Rotation) {
                         max_update = max_update.max(update_type);
                     }
                 }
@@ -178,7 +185,8 @@ pub fn render_view_window(
                 ui.horizontal(|ui| {
                     ui.label("Pitch (X):");
                     let mut degrees_x = config.camera_rotation_x.to_degrees();
-                    if ui.add(egui::Slider::new(&mut degrees_x, -180.0..=180.0).suffix("°")).changed() {
+                    let response = ui.add(egui::Slider::new(&mut degrees_x, -180.0..=180.0).suffix("°"));
+                    if response.changed() {
                         let new_camera_x = degrees_x.to_radians();
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::CameraRotationX,
@@ -188,18 +196,31 @@ pub fn render_view_window(
                             max_update = max_update.max(update_type);
                         }
                     }
+                    // Force commit preview when drag ends
+                    if response.drag_stopped() && config_manager.is_in_preview_mode() {
+                        if let Ok(update_type) = config_manager.force_commit_preview(&ConfigPath::CameraRotationX) {
+                            max_update = max_update.max(update_type);
+                        }
+                    }
                 });
 
                 ui.horizontal(|ui| {
                     ui.label("Yaw (Y):");
                     let mut degrees_y = config.camera_rotation_y.to_degrees();
-                    if ui.add(egui::Slider::new(&mut degrees_y, -180.0..=180.0).suffix("°")).changed() {
+                    let response = ui.add(egui::Slider::new(&mut degrees_y, -180.0..=180.0).suffix("°"));
+                    if response.changed() {
                         let new_camera_y = degrees_y.to_radians();
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::CameraRotationY,
                             new_camera_y.into(),
                             true  // Lazy undo for slider drag
                         ) {
+                            max_update = max_update.max(update_type);
+                        }
+                    }
+                    // Force commit preview when drag ends
+                    if response.drag_stopped() && config_manager.is_in_preview_mode() {
+                        if let Ok(update_type) = config_manager.force_commit_preview(&ConfigPath::CameraRotationY) {
                             max_update = max_update.max(update_type);
                         }
                     }
