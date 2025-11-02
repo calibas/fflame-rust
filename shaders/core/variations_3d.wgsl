@@ -83,9 +83,8 @@ fn variation_spiral(p: vec3<f32>) -> vec3<f32> {
 }
 
 fn variation_hyperbolic(p: vec3<f32>) -> vec3<f32> {
-    let r = length(p.xy) + 1e-6;
-    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
-    return vec3<f32>(sin(theta) / r, r * cos(theta), p.z);
+    let r2 = dot(p.xy, p.xy) + 1e-6;  // x² + y² + epsilon
+    return vec3<f32>(p.x / r2, p.y, p.z);
 }
 
 fn variation_diamond(p: vec3<f32>) -> vec3<f32> {

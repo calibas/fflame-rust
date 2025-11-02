@@ -93,10 +93,15 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 - ✅ **Swirl** (variation 3) - Rotation by r²: `sin(r²), cos(r²)` applied to XY
 - ✅ **Horseshoe** (variation 4) - `(x² - y²) / r, 2xy / r, z`
 - ✅ **Polar** (variation 5) - `θ / π, r - 1, z` (uses atan2(x,y) convention)
+- ✅ **Disc** (variation 8) - `(θ / π) × sin(π × r), (θ / π) × cos(π × r), z`
 
 **Fixed to Match Apophysis:**
 - ✅ **Flatten** (variation 17) - Changed from `result.z *= (1.0 - weight * 0.5)` to `result.z = 0.0`
   - Apophysis simply does `FPz := 0` unconditionally
+- ✅ **Spiral** (variation 9) - Fixed to use `cos(θ) + sin(r), sin(θ) - cos(r), z`
+  - Was incorrectly using `cos(θ) + sin(θ), cos(θ) - sin(θ)` (using theta for both)
+- ✅ **Hyperbolic** (variation 10) - Fixed to use `x / r², y, z`
+  - Was incorrectly using polar formula `sin(θ) / r, r × cos(θ)` instead of simple division
 
 **Still Need Verification:**
 - ❓ Handkerchief, Heart, Disc, Spiral, Hyperbolic, Diamond, Ex (variations 6-12)
