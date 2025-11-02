@@ -161,20 +161,7 @@ pub fn render_tone_mapping_window(
                             .show_ui(ui, |ui| {
                                 ui.label("Palette");
 
-                                // Show current custom palette first if it's not in library
-                                if let Some(current_pal) = &current_palette {
-                                    let in_library = palettes.iter().any(|p| p.name == current_pal.name);
-                                    if !in_library {
-                                        // Show custom palette with visual indicator
-                                        let label = format!("✏ {} (Current)", current_pal.name);
-                                        if ui.selectable_label(true, label).clicked() {
-                                            // Already selected, do nothing
-                                        }
-                                        ui.separator();
-                                    }
-                                }
-
-                                // Show library palettes
+                                // Show all library palettes (includes custom palettes)
                                 for palette in palettes.iter() {
                                     let is_selected = current_palette.as_ref().map(|p| &p.name) == Some(&palette.name);
                                     if ui.selectable_label(is_selected, &palette.name).clicked() {
