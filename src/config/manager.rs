@@ -1,10 +1,86 @@
 /// Configuration manager - central authority for all config changes
 ///
-/// Handles:
+/// # Overview
+/// ConfigManager is the single source of truth for all configuration state.
+/// All UI controls should use ConfigManager methods instead of directly modifying config.
+///
+/// # Key Features
 /// - Single gateway for all parameter updates
 /// - Delta-based undo/redo with lazy throttling
 /// - Selective updates based on change type
 /// - Human-readable change descriptions
+/// - Centralized update action tracking (what needs GPU updates)
+///
+/// # Usage Patterns
+///
+/// ## Reading Config Values
+/// ```rust
+/// // Get immutable reference to active config (includes live preview during drag)
+/// let config = config_manager.active_config();
+/// let zoom = config.zoom;
+/// let exposure = config.exposure;
+/// ```
+///
+/// ## Setting Config Values (Immediate Undo)
+/// ```rust
+/// // For discrete controls (buttons, checkboxes, dropdowns)
+/// config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Linear.into(), false)?;
+/// config_manager.update_param(ConfigPath::ColorMode, ColorMode::Palette.into(), false)?;
+/// ```
+///
+/// ## Setting Config Values (Lazy Undo)
+/// ```rust
+/// // For continuous controls (sliders, drag handles) - throttles undo capture
+/// config_manager.update_param(ConfigPath::Zoom, 2.5.into(), true)?;
+/// config_manager.update_param(ConfigPath::Exposure, 1.8.into(), true)?;
+///
+/// // Force commit preview when drag ends (optional, auto-commits on next non-lazy update)
+/// if !mouse_down && config_manager.is_in_preview_mode() {
+///     config_manager.force_commit_preview(&ConfigPath::Zoom)?;
+/// }
+/// ```
+///
+/// ## Handling GPU Updates
+/// ```rust
+/// // After all UI updates each frame, check what needs updating
+/// let actions = config_manager.get_pending_actions();
+///
+/// // Execute needed updates
+/// if actions.update_view {
+///     renderer.update_view(...);
+///     renderer.reset(...);  // if actions.reset_accumulation
+/// }
+/// if actions.update_flame {
+///     renderer.update_flame(...);
+/// }
+/// if actions.update_palette {
+///     renderer.update_palette(...);
+/// }
+/// if actions.update_tone_curve {
+///     renderer.update_curve_lut(...);
+/// }
+///
+/// // Clear actions after handling
+/// config_manager.clear_pending_actions();
+/// ```
+///
+/// ## Requesting Actions Without Config Changes
+/// ```rust
+/// // Reset button - doesn't change config, just requests buffer clear
+/// config_manager.request_reset();
+///
+/// // Next get_pending_actions() will include reset_accumulation=true
+/// ```
+///
+/// ## Undo/Redo
+/// ```rust
+/// if config_manager.can_undo() {
+///     config_manager.undo()?;
+/// }
+/// if config_manager.can_redo() {
+///     config_manager.redo()?;
+/// }
+/// ```
 
 use super::delta::{
     AffineParam, ColorComponent, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, UpdateType,
@@ -12,6 +88,88 @@ use super::delta::{
 use super::fractal_config::FractalConfig;
 use std::time::Duration;
 use web_time::Instant;
+
+/// Actions needed after configuration changes
+///
+/// ConfigManager tracks changes and provides this struct to tell the App layer
+/// exactly what GPU/renderer updates are needed. This centralizes all "what needs
+/// updating" logic in one place.
+#[derive(Debug, Clone, Default)]
+pub struct UpdateAction {
+    /// Reset accumulation buffers and restart rendering from scratch
+    /// Needed when: flame changes, view changes, color mode changes, palette changes (non-preview)
+    pub reset_accumulation: bool,
+
+    /// Update flame parameters on GPU (transforms, variations, weights)
+    /// Needed when: flame changes, or during preview mode (live updates)
+    pub update_flame: bool,
+
+    /// Update palette texture on GPU
+    /// Needed when: palette changes (including preview mode)
+    pub update_palette: bool,
+
+    /// Update tone curve LUT texture
+    /// Needed when: tone curve changes
+    pub update_tone_curve: bool,
+
+    /// Update view transform on GPU (zoom, pan, rotation, camera)
+    /// Needed when: any view parameter changes
+    pub update_view: bool,
+
+    /// Rebuild shader pipeline (variation changes require recompilation)
+    /// Needed when: active variations change
+    pub rebuild_shader: bool,
+
+}
+
+impl UpdateAction {
+    /// No actions needed
+    pub fn none() -> Self {
+        Self::default()
+    }
+
+    /// Create from UpdateType (used when building from delta changes)
+    pub fn from_update_type(update_type: UpdateType, in_preview_mode: bool) -> Self {
+        match update_type {
+            UpdateType::None => Self::none(),
+
+            UpdateType::ViewOnly => Self {
+                update_view: true,
+                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                ..Default::default()
+            },
+
+            UpdateType::ToneMappingOnly => Self {
+                update_tone_curve: true,
+                // No reset - tone mapping is post-processing only
+                ..Default::default()
+            },
+
+            UpdateType::ColorOnly => Self {
+                update_palette: true,
+                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                ..Default::default()
+            },
+
+            UpdateType::IterationReset => Self {
+                update_flame: true,
+                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                rebuild_shader: false, // TODO: detect variation changes
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Merge two actions (take union of all flags)
+    pub fn merge(&mut self, other: &UpdateAction) {
+        self.reset_accumulation |= other.reset_accumulation;
+        self.update_flame |= other.update_flame;
+        self.update_palette |= other.update_palette;
+        self.update_tone_curve |= other.update_tone_curve;
+        self.update_view |= other.update_view;
+        self.rebuild_shader |= other.rebuild_shader;
+    }
+}
 
 /// Central manager for configuration state and undo/redo
 pub struct ConfigManager {
@@ -37,6 +195,15 @@ pub struct ConfigManager {
 
     /// Lazy undo throttle duration (500ms)
     lazy_throttle: Duration,
+
+    /// Pending actions accumulated since last get_pending_actions() call
+    /// This tracks what GPU updates are needed based on recent changes
+    pending_actions: UpdateAction,
+
+    /// Whether the current preview requires overwrite rendering
+    /// True for iteration-affecting parameters (view, flame, color)
+    /// False for post-processing parameters (tone mapping)
+    preview_needs_overwrite: bool,
 }
 
 impl ConfigManager {
@@ -49,6 +216,8 @@ impl ConfigManager {
             max_undo_depth: 500,  // ~5MB max memory (500 states × ~10KB each)
             last_lazy_undo: None,
             lazy_throttle: Duration::from_millis(500),
+            pending_actions: UpdateAction::none(),
+            preview_needs_overwrite: false,
         }
     }
 
@@ -62,10 +231,17 @@ impl ConfigManager {
         if lazy {
             // Lazy mode: Update preview, capture on throttle
 
+            // Determine if this parameter type needs overwrite rendering
+            let update_type = path.update_type();
+            let needs_overwrite = matches!(update_type,
+                UpdateType::ViewOnly | UpdateType::IterationReset | UpdateType::ColorOnly
+            );
+
             // Create preview if it doesn't exist (first update in drag sequence)
             if self.preview.is_none() {
                 self.preview = Some(self.current.clone());
-                log::trace!("Created preview from current");
+                self.preview_needs_overwrite = needs_overwrite;
+                log::trace!("Created preview from current (overwrite={})", needs_overwrite);
             }
 
             // Get preview value (will exist now)
@@ -104,11 +280,16 @@ impl ConfigManager {
                 self.current = self.preview.clone().unwrap();
                 log::debug!("  -> Committed preview to current, undo stack len: {}", self.undo_stack.len());
 
+                // Record action for GPU updates
+                self.record_action(update_type);
+
                 return Ok(update_type);
             }
 
-            // No capture yet, just return update type based on path
-            Ok(path.update_type())
+            // No capture yet, but still record action for GPU updates during preview
+            let update_type = path.update_type();
+            self.record_action(update_type);
+            Ok(update_type)
 
         } else {
             // Non-lazy mode: Update current directly and capture immediately
@@ -132,6 +313,9 @@ impl ConfigManager {
             // Apply change to current
             self.set_value(&path, new_value)?;
 
+            // Record action for GPU updates
+            self.record_action(update_type);
+
             Ok(update_type)
         }
     }
@@ -146,10 +330,21 @@ impl ConfigManager {
         if lazy {
             // Lazy mode: Update preview, capture on throttle (same logic as update_param)
 
+            // Determine if this batch needs overwrite rendering (check first path's update type)
+            let needs_overwrite = if !changes.is_empty() {
+                let first_update_type = changes[0].0.update_type();
+                matches!(first_update_type,
+                    UpdateType::ViewOnly | UpdateType::IterationReset | UpdateType::ColorOnly
+                )
+            } else {
+                false
+            };
+
             // Create preview if it doesn't exist (first update in drag sequence)
             if self.preview.is_none() {
                 self.preview = Some(self.current.clone());
-                log::trace!("Created preview from current (batch)");
+                self.preview_needs_overwrite = needs_overwrite;
+                log::trace!("Created preview from current (batch, overwrite={})", needs_overwrite);
             }
 
             // Create deltas from preview to new values
@@ -193,10 +388,14 @@ impl ConfigManager {
                 self.current = self.preview.clone().unwrap();
                 log::debug!("  -> Committed batch preview to current, undo stack len: {}", self.undo_stack.len());
 
+                // Record action for GPU updates
+                self.record_action(update_type);
+
                 return Ok(update_type);
             }
 
-            // No capture yet, just return update type
+            // No capture yet, but still record action for GPU updates during preview
+            self.record_action(update_type);
             Ok(update_type)
 
         } else {
@@ -225,12 +424,21 @@ impl ConfigManager {
                 self.set_value(&delta.path, delta.new_value.clone())?;
             }
 
-            Ok(change.update_type())
+            let update_type = change.update_type();
+
+            // Record action for GPU updates
+            self.record_action(update_type);
+
+            Ok(update_type)
         }
     }
 
     /// Undo last change
     pub fn undo(&mut self) -> Result<UpdateType, ConfigError> {
+        // Clear preview mode before undo (if active)
+        self.preview = None;
+        self.preview_needs_overwrite = false;
+
         let change = self
             .undo_stack
             .pop()
@@ -265,11 +473,20 @@ impl ConfigManager {
         log::debug!("  Undo stack now: {} items, Redo stack now: {} items",
             self.undo_stack.len(), self.redo_stack.len());
 
-        Ok(inverted.update_type())
+        let update_type = inverted.update_type();
+
+        // Record action for GPU updates
+        self.record_action(update_type);
+
+        Ok(update_type)
     }
 
     /// Redo last undone change
     pub fn redo(&mut self) -> Result<UpdateType, ConfigError> {
+        // Clear preview mode before redo (if active)
+        self.preview = None;
+        self.preview_needs_overwrite = false;
+
         let change = self
             .redo_stack
             .pop()
@@ -303,7 +520,12 @@ impl ConfigManager {
         log::debug!("  Undo stack now: {} items, Redo stack now: {} items",
             self.undo_stack.len(), self.redo_stack.len());
 
-        Ok(change.update_type())
+        let update_type = change.update_type();
+
+        // Record action for GPU updates
+        self.record_action(update_type);
+
+        Ok(update_type)
     }
 
     /// Check if we should capture lazy undo (throttling logic)
@@ -336,8 +558,15 @@ impl ConfigManager {
     }
 
     /// Check if ConfigManager is in preview mode (during lazy drag)
+    ///
+    /// This returns true only if:
+    /// 1. A preview is active (lazy drag in progress), AND
+    /// 2. The parameter being previewed requires overwrite rendering
+    ///
+    /// Tone mapping parameters use lazy undo but NOT preview mode since
+    /// they're post-processing and don't need overwrite rendering.
     pub fn is_in_preview_mode(&self) -> bool {
-        self.preview.is_some()
+        self.preview.is_some() && self.preview_needs_overwrite
     }
 
     /// Push change to undo stack, maintaining depth limit
@@ -387,7 +616,13 @@ impl ConfigManager {
             // Color
             ConfigPath::ColorMode => Ok(config.color_mode.into()),
             ConfigPath::PaletteIndex => Ok((config.palette_index as u32).into()),
-            ConfigPath::Palette(p) => Ok(ConfigValue::Palette((**p).clone())),
+            ConfigPath::Palette => {
+                // Return embedded palette if it exists, otherwise None
+                match &config.palette {
+                    Some(pal) => Ok(ConfigValue::Palette(pal.clone())),
+                    None => Err(ConfigError::TypeMismatch), // No embedded palette
+                }
+            }
             ConfigPath::SpeedFactor => Ok(config.speed_factor.into()),
             ConfigPath::BackgroundColor => Ok(config.background_color.into()),
 
@@ -398,6 +633,7 @@ impl ConfigManager {
                 Ok(config.density_compression_strength.into())
             }
             ConfigPath::BlendFactor => Ok(config.blend_factor.into()),
+            ConfigPath::UseDynamicBlend => Ok(config.use_dynamic_blend.into()),
             ConfigPath::TargetIterationsPerPixel => {
                 Ok(config.target_iterations_per_pixel.into())
             }
@@ -549,9 +785,18 @@ impl ConfigManager {
             ConfigPath::PaletteIndex => {
                 let idx: u32 = value.try_into()?;
                 self.current.palette_index = idx as usize;
+                // Clear embedded palette when selecting from library
+                self.current.palette = None;
             }
-            ConfigPath::Palette(p) => {
-                if let ConfigValue::Palette(palette) = value {
+            ConfigPath::Palette => {
+                if let ConfigValue::Palette(mut palette) = value {
+                    // Safety: Never allow built-in flag to be true in config.palette
+                    // Built-ins should only exist in the library
+                    if palette.built_in {
+                        log::warn!("Attempted to set built-in palette in config.palette - forcing built_in=false");
+                        palette.built_in = false;
+                    }
+
                     // Update embedded palette data
                     self.current.palette = Some(palette);
                 }
@@ -575,6 +820,9 @@ impl ConfigManager {
             }
             ConfigPath::BlendFactor => {
                 self.current.blend_factor = value.try_into()?;
+            }
+            ConfigPath::UseDynamicBlend => {
+                self.current.use_dynamic_blend = value.try_into()?;
             }
             ConfigPath::TargetIterationsPerPixel => {
                 self.current.target_iterations_per_pixel = value.try_into()?;
@@ -742,9 +990,15 @@ impl ConfigManager {
             ConfigPath::PaletteIndex => {
                 let idx: u32 = value.try_into()?;
                 preview.palette_index = idx as usize;
+                // Clear embedded palette when selecting from library
+                preview.palette = None;
             }
-            ConfigPath::Palette(p) => {
-                if let ConfigValue::Palette(palette) = value {
+            ConfigPath::Palette => {
+                if let ConfigValue::Palette(mut palette) = value {
+                    // Safety: Never allow built-in flag in preview either
+                    if palette.built_in {
+                        palette.built_in = false;
+                    }
                     preview.palette = Some(palette);
                 }
             }
@@ -767,6 +1021,9 @@ impl ConfigManager {
             }
             ConfigPath::BlendFactor => {
                 preview.blend_factor = value.try_into()?;
+            }
+            ConfigPath::UseDynamicBlend => {
+                preview.use_dynamic_blend = value.try_into()?;
             }
             ConfigPath::TargetIterationsPerPixel => {
                 preview.target_iterations_per_pixel = value.try_into()?;
@@ -880,6 +1137,7 @@ impl ConfigManager {
     /// This ensures changes are captured even if drag ended before throttle fired
     pub fn force_commit_preview(&mut self, path: &ConfigPath) -> Result<UpdateType, ConfigError> {
         if let Some(preview) = self.preview.take() {
+            self.preview_needs_overwrite = false;  // Clear overwrite flag
             log::debug!("Force commit for path: {:?}", path);
 
             // Check if preview actually differs from current
@@ -901,8 +1159,13 @@ impl ConfigManager {
             // Commit preview to current
             self.current = preview;
 
-            // Return ViewOnly as a safe default - caller can check if needed
-            Ok(UpdateType::ViewOnly)
+            // Return update type based on path
+            let update_type = path.update_type();
+
+            // Record action for GPU updates
+            self.record_action(update_type);
+
+            Ok(update_type)
         } else {
             Ok(UpdateType::None)
         }
@@ -935,6 +1198,7 @@ impl ConfigManager {
     pub fn load_config(&mut self, new_config: FractalConfig, description: String) -> Result<(), ConfigError> {
         // Clear any preview state
         self.preview = None;
+        self.preview_needs_overwrite = false;
 
         // Create snapshot of current state (for undo)
         let old_snapshot = ConfigChange::snapshot(
@@ -952,6 +1216,15 @@ impl ConfigManager {
             description,
         );
         self.push_undo(new_snapshot);
+
+        // Record full config import action
+        let mut action = UpdateAction::none();
+        action.update_flame = true;
+        action.update_view = true;
+        action.update_palette = true;
+        action.update_tone_curve = true;
+        action.reset_accumulation = true;
+        self.pending_actions.merge(&action);
 
         Ok(())
     }
@@ -974,6 +1247,41 @@ impl ConfigManager {
     /// Check if can redo
     pub fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
+    }
+
+    /// Get pending GPU update actions based on recent changes
+    ///
+    /// This method analyzes all changes since the last call and returns
+    /// a consolidated UpdateAction telling the App layer what needs updating.
+    ///
+    /// Call this once per frame after all UI updates, execute the actions,
+    /// then call clear_pending_actions().
+    pub fn get_pending_actions(&self) -> UpdateAction {
+        self.pending_actions.clone()
+    }
+
+    /// Clear pending actions after executing them
+    ///
+    /// Call this after handling the UpdateAction from get_pending_actions()
+    pub fn clear_pending_actions(&mut self) {
+        self.pending_actions = UpdateAction::none();
+    }
+
+    /// Request an explicit accumulation reset (e.g., from Reset button)
+    ///
+    /// This sets the reset_accumulation flag without modifying any config state.
+    /// Useful for UI actions that need to clear buffers without changing parameters.
+    pub fn request_reset(&mut self) {
+        self.pending_actions.reset_accumulation = true;
+    }
+
+    /// Record an action for later retrieval
+    ///
+    /// Called internally when config changes occur
+    fn record_action(&mut self, update_type: UpdateType) {
+        let in_preview = self.is_in_preview_mode();
+        let action = UpdateAction::from_update_type(update_type, in_preview);
+        self.pending_actions.merge(&action);
     }
 }
 

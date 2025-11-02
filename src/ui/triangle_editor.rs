@@ -509,30 +509,58 @@ pub fn render_triangle_editor_window(
                 ui.label(format!("Triangle Coordinates (Transform {}):", selected_transform + 1));
 
                 let mut coords_changed = false;
+                let mut dragging = false;
+                let mut drag_stopped = false;
 
                 ui.columns(2, |columns| {
                     // Left column: Coordinates
                     columns[0].vertical(|ui| {
                         ui.horizontal(|ui| {
                             ui.label("X:");
-                            coords_changed |= ui.add(egui::DragValue::new(&mut x[0]).speed(0.01).prefix("x: ")).changed();
-                            coords_changed |= ui.add(egui::DragValue::new(&mut x[1]).speed(0.01).prefix("y: ")).changed();
+                            let x0_resp = ui.add(egui::DragValue::new(&mut x[0]).speed(0.01).prefix("x: "));
+                            let x1_resp = ui.add(egui::DragValue::new(&mut x[1]).speed(0.01).prefix("y: "));
+                            coords_changed |= x0_resp.changed() || x1_resp.changed();
+                            dragging |= x0_resp.dragged() || x1_resp.dragged();
+                            drag_stopped |= x0_resp.drag_stopped() || x1_resp.drag_stopped();
                         });
                         ui.horizontal(|ui| {
                             ui.label("Y:");
-                            coords_changed |= ui.add(egui::DragValue::new(&mut y[0]).speed(0.01).prefix("x: ")).changed();
-                            coords_changed |= ui.add(egui::DragValue::new(&mut y[1]).speed(0.01).prefix("y: ")).changed();
+                            let y0_resp = ui.add(egui::DragValue::new(&mut y[0]).speed(0.01).prefix("x: "));
+                            let y1_resp = ui.add(egui::DragValue::new(&mut y[1]).speed(0.01).prefix("y: "));
+                            coords_changed |= y0_resp.changed() || y1_resp.changed();
+                            dragging |= y0_resp.dragged() || y1_resp.dragged();
+                            drag_stopped |= y0_resp.drag_stopped() || y1_resp.drag_stopped();
                         });
                         ui.horizontal(|ui| {
                             ui.label("O:");
-                            coords_changed |= ui.add(egui::DragValue::new(&mut o[0]).speed(0.01).prefix("x: ")).changed();
-                            coords_changed |= ui.add(egui::DragValue::new(&mut o[1]).speed(0.01).prefix("y: ")).changed();
+                            let o0_resp = ui.add(egui::DragValue::new(&mut o[0]).speed(0.01).prefix("x: "));
+                            let o1_resp = ui.add(egui::DragValue::new(&mut o[1]).speed(0.01).prefix("y: "));
+                            coords_changed |= o0_resp.changed() || o1_resp.changed();
+                            dragging |= o0_resp.dragged() || o1_resp.dragged();
+                            drag_stopped |= o0_resp.drag_stopped() || o1_resp.drag_stopped();
                         });
                     });
 
                     // Right column: Quick action buttons
                     columns[1].vertical(|ui| {
                         ui.label("Quick Actions:");
+
+                        // Helper closure to apply triangle changes via ConfigManager
+                        let mut apply_triangle_change = |transform_ref: &crate::scene::transforms::Transform,
+                                                           o: [f32; 2], x: [f32; 2], y: [f32; 2],
+                                                           description: &str| {
+                            let mut temp = transform_ref.clone();
+                            temp.from_triangle(o, x, y);
+                            let changes = vec![
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, temp.a.into()),
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, temp.b.into()),
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, temp.c.into()),
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, temp.d.into()),
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, temp.e.into()),
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, temp.f.into()),
+                            ];
+                            config_manager.update_batch(changes, description.to_string(), false)
+                        };
 
                         // Translate arrow keys layout (matching View panel)
                         ui.horizontal(|ui| {
@@ -542,8 +570,10 @@ pub fn render_triangle_editor_window(
                                 o_new[1] += 0.1;
                                 x_new[1] += 0.1;
                                 y_new[1] += 0.1;
-                                transform.from_triangle(o_new, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                    &format!("Translate up (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                         });
                         ui.horizontal(|ui| {
@@ -552,24 +582,30 @@ pub fn render_triangle_editor_window(
                                 o_new[0] -= 0.1;
                                 x_new[0] -= 0.1;
                                 y_new[0] -= 0.1;
-                                transform.from_triangle(o_new, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                    &format!("Translate left (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                             if ui.button("  v  ").clicked() {
                                 let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
                                 o_new[1] -= 0.1;
                                 x_new[1] -= 0.1;
                                 y_new[1] -= 0.1;
-                                transform.from_triangle(o_new, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                    &format!("Translate down (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                             if ui.button("  >  ").clicked() {
                                 let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
                                 o_new[0] += 0.1;
                                 x_new[0] += 0.1;
                                 y_new[0] += 0.1;
-                                transform.from_triangle(o_new, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                    &format!("Translate right (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                         });
 
@@ -592,8 +628,10 @@ pub fn render_triangle_editor_window(
                                 let x_new = [o_curr[0] + x_rot[0], o_curr[1] + x_rot[1]];
                                 let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
 
-                                transform.from_triangle(o_curr, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                    &format!("Rotate CW (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                             if ui.button("↺ Rotate CCW").clicked() {
                                 let angle = 15.0_f32.to_radians();
@@ -610,8 +648,10 @@ pub fn render_triangle_editor_window(
                                 let x_new = [o_curr[0] + x_rot[0], o_curr[1] + x_rot[1]];
                                 let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
 
-                                transform.from_triangle(o_curr, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                    &format!("Rotate CCW (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                         });
 
@@ -625,8 +665,10 @@ pub fn render_triangle_editor_window(
                                 let x_new = [o_curr[0] + x_vec[0] * 1.1, o_curr[1] + x_vec[1] * 1.1];
                                 let y_new = [o_curr[0] + y_vec[0] * 1.1, o_curr[1] + y_vec[1] * 1.1];
 
-                                transform.from_triangle(o_curr, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                    &format!("Scale up (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                             if ui.button("⇄ Scale Down").clicked() {
                                 let (o_curr, x_curr, y_curr) = transform.to_triangle();
@@ -636,37 +678,146 @@ pub fn render_triangle_editor_window(
                                 let x_new = [o_curr[0] + x_vec[0] * 0.9, o_curr[1] + x_vec[1] * 0.9];
                                 let y_new = [o_curr[0] + y_vec[0] * 0.9, o_curr[1] + y_vec[1] * 0.9];
 
-                                transform.from_triangle(o_curr, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                    &format!("Scale down (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                         });
                     });
                 });
 
                 if coords_changed {
-                    transform.from_triangle(o, x, y);
-                    // TODO: Migrate affine parameter sliders to use update_param()
+                    // Convert triangle coords to affine parameters
+                    let mut temp_transform = transform.clone();
+                    temp_transform.from_triangle(o, x, y);
+
+                    // Batch update all affine parameters via ConfigManager
+                    let changes = vec![
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, temp_transform.a.into()),
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, temp_transform.b.into()),
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, temp_transform.c.into()),
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, temp_transform.d.into()),
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, temp_transform.e.into()),
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, temp_transform.f.into()),
+                    ];
+
+                    // Use lazy=true while dragging
+                    if let Ok(update) = config_manager.update_batch(
+                        changes,
+                        format!("Edit triangle coordinates (Transform {})", selected_transform + 1),
+                        dragging && !drag_stopped // lazy while dragging
+                    ) {
+                        max_update = max_update.max(update);
+                    }
+                }
+
+                // Force commit preview when drag stops
+                if drag_stopped && config_manager.is_in_preview_mode() {
+                    // Use first affine parameter as representative for batch
+                    let path = ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A };
+                    if let Ok(update) = config_manager.force_commit_preview(&path) {
+                        max_update = max_update.max(update);
+                    }
+                    config_manager.reset_lazy_undo();
                 }
 
                 ui.separator();
 
                 ui.label("Affine Coefficients:");
 
-                let mut affine_changed = false;
+                // Track drag state for preview mode
+                let mut dragging = false;
+                let mut drag_stopped = false;
 
                 ui.horizontal(|ui| {
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.a).speed(0.01).prefix("a: ")).changed();
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.b).speed(0.01).prefix("b: ")).changed();
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.e).speed(0.01).prefix("e: ")).changed();
+                    let a_resp = ui.add(egui::DragValue::new(&mut transform.a).speed(0.01).prefix("a: "));
+                    if a_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A },
+                            transform.a.into(),
+                            a_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= a_resp.dragged();
+                    drag_stopped |= a_resp.drag_stopped();
+
+                    let b_resp = ui.add(egui::DragValue::new(&mut transform.b).speed(0.01).prefix("b: "));
+                    if b_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B },
+                            transform.b.into(),
+                            b_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= b_resp.dragged();
+                    drag_stopped |= b_resp.drag_stopped();
+
+                    let e_resp = ui.add(egui::DragValue::new(&mut transform.e).speed(0.01).prefix("e: "));
+                    if e_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E },
+                            transform.e.into(),
+                            e_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= e_resp.dragged();
+                    drag_stopped |= e_resp.drag_stopped();
                 });
                 ui.horizontal(|ui| {
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.c).speed(0.01).prefix("c: ")).changed();
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.d).speed(0.01).prefix("d: ")).changed();
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.f).speed(0.01).prefix("f: ")).changed();
+                    let c_resp = ui.add(egui::DragValue::new(&mut transform.c).speed(0.01).prefix("c: "));
+                    if c_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C },
+                            transform.c.into(),
+                            c_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= c_resp.dragged();
+                    drag_stopped |= c_resp.drag_stopped();
+
+                    let d_resp = ui.add(egui::DragValue::new(&mut transform.d).speed(0.01).prefix("d: "));
+                    if d_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D },
+                            transform.d.into(),
+                            d_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= d_resp.dragged();
+                    drag_stopped |= d_resp.drag_stopped();
+
+                    let f_resp = ui.add(egui::DragValue::new(&mut transform.f).speed(0.01).prefix("f: "));
+                    if f_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F },
+                            transform.f.into(),
+                            f_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= f_resp.dragged();
+                    drag_stopped |= f_resp.drag_stopped();
                 });
 
-                if affine_changed {
-                    // TODO: Migrate affine parameter sliders to use update_param()
+                // Force commit preview when drag stops
+                if drag_stopped && config_manager.is_in_preview_mode() {
+                    let path = ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A };
+                    if let Ok(update) = config_manager.force_commit_preview(&path) {
+                        max_update = max_update.max(update);
+                    }
+                    config_manager.reset_lazy_undo();
                 }
 
                 ui.separator();
@@ -674,8 +825,21 @@ pub fn render_triangle_editor_window(
                 // Control buttons
                 {
                     if ui.button("Reset to Identity").clicked() {
-                        transform.reset_to_identity();
-                        // TODO: Migrate affine parameter sliders to use update_param()
+                        let changes = vec![
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, 1.0f32.into()),
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, 0.0f32.into()),
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, 0.0f32.into()),
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, 1.0f32.into()),
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, 0.0f32.into()),
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, 0.0f32.into()),
+                        ];
+                        if let Ok(update) = config_manager.update_batch(
+                            changes,
+                            format!("Reset to identity (Transform {})", selected_transform + 1),
+                            false
+                        ) {
+                            max_update = max_update.max(update);
+                        }
                     }
                 }
             }

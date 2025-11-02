@@ -239,11 +239,12 @@ impl ConfigSliderUi for egui::Ui {
             // Value changed - update config with lazy undo
             update_type = manager.update_param(path.clone(), current_value.into(), true)?;
             should_capture = true;
+        }
 
-            // On drag end, reset lazy timer
-            if response.drag_stopped() {
-                manager.reset_lazy_undo();
-            }
+        // Force commit preview when drag ends
+        if response.drag_stopped() && manager.is_in_preview_mode() {
+            update_type = update_type.merge(manager.force_commit_preview(&path)?);
+            manager.reset_lazy_undo();
         }
 
         Ok(ConfigSliderResult {

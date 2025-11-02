@@ -20,5 +20,5 @@ pub use delta::{
     AffineParam, ColorComponent, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, UpdateType,
 };
 pub use fractal_config::FractalConfig;
-pub use manager::{ConfigError, ConfigManager};
+pub use manager::{ConfigError, ConfigManager, UpdateAction};
 pub use slider::{ConfigSlider, ConfigSliderResult, ConfigSliderUi, LazyUndoUi};

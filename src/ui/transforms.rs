@@ -4,12 +4,13 @@ use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam};
 use super::variation_controls::render_variation_category;
 
 /// Render the Transforms window with transform editing controls
+///
+/// Note: Config change tracking is now handled by ConfigManager.get_pending_actions()
 pub fn render_transforms_window(
     ctx: &egui::Context,
     show_transforms: &mut bool,
     config_manager: &mut ConfigManager,
     flame: &mut Flame,
-    flame_changed: &mut bool,
     add_transform: &mut bool,
     delete_transform: &mut Option<usize>,
 ) -> UpdateType {
@@ -23,7 +24,6 @@ pub fn render_transforms_window(
             ui.horizontal(|ui| {
                 if ui.button("➕ Add Transform").clicked() {
                     *add_transform = true;
-                    *flame_changed = true;
                 }
                 ui.label(format!("({} transforms)", flame.transforms.len()));
             });
@@ -39,7 +39,7 @@ pub fn render_transforms_window(
                             .default_open(i == 0)
                             .show(ui, |ui| {
                                 // Affine Matrix controls
-                                let affine_update = render_affine_controls(ui, config_manager, i, transform, flame_changed);
+                                let affine_update = render_affine_controls(ui, config_manager, i, transform);
                                 max_update = max_update.max(affine_update);
 
                                 // Z offset (only in 3D mode)
@@ -54,8 +54,7 @@ pub fn render_transforms_window(
                                                 true  // Lazy undo
                                             ) {
                                                 transform.g = config_manager.active_config().flame.transforms[i].g;
-                                                *flame_changed = true;
-                                                max_update = max_update.max(update_type);
+                                                                            max_update = max_update.max(update_type);
                                             }
                                         }
                                     });
@@ -74,8 +73,7 @@ pub fn render_transforms_window(
                                         true  // Lazy undo
                                     ) {
                                         transform.weight = config_manager.active_config().flame.transforms[i].weight;
-                                        *flame_changed = true;
-                                        max_update = max_update.max(update_type);
+                                                            max_update = max_update.max(update_type);
                                     }
                                 }
                                 if response.drag_stopped() {
@@ -85,7 +83,7 @@ pub fn render_transforms_window(
                                 ui.separator();
 
                                 // Color controls
-                                let color_update = render_color_controls(ui, config_manager, i, transform, flame_changed);
+                                let color_update = render_color_controls(ui, config_manager, i, transform);
                                 max_update = max_update.max(color_update);
 
                                 // Variation controls by category
@@ -113,8 +111,7 @@ pub fn render_transforms_window(
                                 if num_transforms > 1 {
                                     if ui.button("🗑 Delete Transform").clicked() {
                                         delete_index = Some(i);
-                                        *flame_changed = true;
-                                    }
+                                                        }
                                 }
                             });
                     });
@@ -136,9 +133,7 @@ fn render_affine_controls(
     config_manager: &mut ConfigManager,
     index: usize,
     transform: &mut crate::scene::transforms::Transform,
-    flame_changed: &mut bool
 ) -> UpdateType {
-    use crate::config::ConfigValue;
     let mut max_update = UpdateType::None;
 
     ui.label("Affine Matrix");
@@ -154,7 +149,6 @@ fn render_affine_controls(
                 true  // Lazy undo
             ) {
                 transform.a = config_manager.active_config().flame.transforms[index].a;
-                *flame_changed = true;
                 max_update = max_update.max(update_type);
             }
         }
@@ -172,7 +166,6 @@ fn render_affine_controls(
                 true  // Lazy undo
             ) {
                 transform.b = config_manager.active_config().flame.transforms[index].b;
-                *flame_changed = true;
                 max_update = max_update.max(update_type);
             }
         }
@@ -192,7 +185,6 @@ fn render_affine_controls(
                 true  // Lazy undo
             ) {
                 transform.c = config_manager.active_config().flame.transforms[index].c;
-                *flame_changed = true;
                 max_update = max_update.max(update_type);
             }
         }
@@ -210,7 +202,6 @@ fn render_affine_controls(
                 true  // Lazy undo
             ) {
                 transform.d = config_manager.active_config().flame.transforms[index].d;
-                *flame_changed = true;
                 max_update = max_update.max(update_type);
             }
         }
@@ -230,7 +221,6 @@ fn render_affine_controls(
                 true  // Lazy undo
             ) {
                 transform.e = config_manager.active_config().flame.transforms[index].e;
-                *flame_changed = true;
                 max_update = max_update.max(update_type);
             }
         }
@@ -248,7 +238,6 @@ fn render_affine_controls(
                 true  // Lazy undo
             ) {
                 transform.f = config_manager.active_config().flame.transforms[index].f;
-                *flame_changed = true;
                 max_update = max_update.max(update_type);
             }
         }
@@ -266,7 +255,6 @@ fn render_color_controls(
     config_manager: &mut ConfigManager,
     index: usize,
     transform: &mut crate::scene::transforms::Transform,
-    flame_changed: &mut bool
 ) -> UpdateType {
     use crate::config::ColorComponent;
     let mut max_update = UpdateType::None;
@@ -283,7 +271,6 @@ fn render_color_controls(
                 true  // Lazy undo
             ) {
                 transform.color[0] = config_manager.active_config().flame.transforms[index].color[0];
-                *flame_changed = true;
                 max_update = max_update.max(update_type);
             }
         }
@@ -301,7 +288,6 @@ fn render_color_controls(
                 true  // Lazy undo
             ) {
                 transform.color[1] = config_manager.active_config().flame.transforms[index].color[1];
-                *flame_changed = true;
                 max_update = max_update.max(update_type);
             }
         }
@@ -319,7 +305,6 @@ fn render_color_controls(
                 true  // Lazy undo
             ) {
                 transform.color[2] = config_manager.active_config().flame.transforms[index].color[2];
-                *flame_changed = true;
                 max_update = max_update.max(update_type);
             }
         }
@@ -337,7 +322,6 @@ fn render_color_controls(
             true  // Lazy undo
         ) {
             transform.color_speed = config_manager.active_config().flame.transforms[index].color_speed;
-            *flame_changed = true;
             max_update = max_update.max(update_type);
         }
     }

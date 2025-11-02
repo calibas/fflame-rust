@@ -36,7 +36,7 @@ pub enum ConfigPath {
     // ===== Color (no iteration reset, just color buffer update) =====
     ColorMode,
     PaletteIndex,
-    Palette(Box<Palette>), // Embed palette data for undo
+    Palette, // Embedded palette data (custom palettes)
     SpeedFactor,
     BackgroundColor,
 
@@ -45,6 +45,7 @@ pub enum ConfigPath {
     LowDensitySmoothing,
     DensityCompressionStrength,
     BlendFactor,
+    UseDynamicBlend,
     TargetIterationsPerPixel,
     IterationsPerThread,
     SpeedMultiplier,
@@ -111,7 +112,7 @@ impl Display for ConfigPath {
             // Color
             ConfigPath::ColorMode => write!(f, "Color Mode"),
             ConfigPath::PaletteIndex => write!(f, "Palette"),
-            ConfigPath::Palette(_) => write!(f, "Palette Data"),
+            ConfigPath::Palette => write!(f, "Palette Data"),
             ConfigPath::SpeedFactor => write!(f, "Speed Blend Factor"),
             ConfigPath::BackgroundColor => write!(f, "Background Color"),
 
@@ -120,6 +121,7 @@ impl Display for ConfigPath {
             ConfigPath::LowDensitySmoothing => write!(f, "Low-Density Smoothing"),
             ConfigPath::DensityCompressionStrength => write!(f, "Density Compression"),
             ConfigPath::BlendFactor => write!(f, "Blend Factor"),
+            ConfigPath::UseDynamicBlend => write!(f, "Use Dynamic Blend"),
             ConfigPath::TargetIterationsPerPixel => write!(f, "Target Iterations Per Pixel"),
             ConfigPath::IterationsPerThread => write!(f, "Iterations Per Thread"),
             ConfigPath::SpeedMultiplier => write!(f, "Speed Multiplier"),
@@ -224,7 +226,11 @@ impl Display for ConfigValue {
             ConfigValue::ColorMode(m) => write!(f, "{:?}", m),
             ConfigValue::RenderMode(m) => write!(f, "{:?}", m),
             ConfigValue::ProjectionType(p) => write!(f, "{:?}", p),
-            ConfigValue::ToneCurve(_) => write!(f, "[Tone Curve]"),
+            ConfigValue::ToneCurve(curve) => {
+                write!(f, "[Tone Curve: {} pts: {:?}]",
+                    curve.points.len(),
+                    curve.points.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>())
+            }
             ConfigValue::Palette(p) => write!(f, "{}", p.name),
         }
     }
@@ -462,7 +468,7 @@ impl ConfigPath {
             // Color parameters - re-run accumulation with new colors
             ConfigPath::ColorMode
             | ConfigPath::PaletteIndex
-            | ConfigPath::Palette(_)
+            | ConfigPath::Palette
             | ConfigPath::SpeedFactor => UpdateType::ColorOnly,
 
             // Rendering settings - affect iteration behavior
@@ -470,6 +476,7 @@ impl ConfigPath {
             | ConfigPath::LowDensitySmoothing
             | ConfigPath::DensityCompressionStrength
             | ConfigPath::BlendFactor
+            | ConfigPath::UseDynamicBlend
             | ConfigPath::TargetIterationsPerPixel
             | ConfigPath::IterationsPerThread
             | ConfigPath::SpeedMultiplier => UpdateType::IterationReset,
