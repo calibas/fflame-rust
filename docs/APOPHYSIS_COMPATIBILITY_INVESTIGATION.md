@@ -115,6 +115,9 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 **Not Used in Apophysis (different or unused variations):**
 - ⚠️ **Heart** (variation 7) - Our implementation `r × sin(r × θ), -r × cos(r × θ)` doesn't match any active Apophysis variation
   - Apophysis has "xheart" plugin with parameters, but simple "Heart" appears to be unused/deprecated
+- ⚠️ **Blob** (variation 25) - Not found in Apophysis source code
+  - Our implementation: `r × (p2 + ((p1 - p2)/2)(sin(p3×θ) + 1))` with parameters high, low, waves
+  - Likely from another fractal flame implementation or custom design
 
 **Complex Variations Needing More Work:**
 - ⚠️ **Julia** (variation 13) - Our simple 2D implementation needs comparison with Apophysis Julia3D
@@ -126,7 +129,7 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 - ❓ Bent, Waves (variations 14-15)
 - ❓ ZCone, Hemisphere (variations 16, 18)
 - ❓ Pre/Post Rotate (variations 19-22)
-- ❓ ZScale, Blob (variations 23, 25)
+- ❓ ZScale (variation 23)
 
 ## Summary
 
