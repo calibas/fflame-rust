@@ -1,9 +1,22 @@
 # State Centralization: ConfigManager as Single Source of Truth
 
-**Status:** In Progress (Branch: state-centralization)
+> **ARCHIVED - COMPLETED 2025-11-01**
+>
+> This document described planned work that has now been completed. All UI controls
+> now use ConfigManager with delta-based undo/redo. The UpdateType pattern is fully
+> implemented and working correctly. Preview mode issues have been resolved.
+>
+> **See:**
+> - [ARCHITECTURE.md](../../ARCHITECTURE.md) - Current state management documentation
+> - [CONFIG.md](../../main/CONFIG.md) - ConfigManager reference
+> - State centralization branch merged into main on 2025-11-01
+
+---
+
+**Original Status:** In Progress (Branch: state-centralization)
 **Created:** 2025-10-31
-**Updated:** 2025-10-31
-**Goal:** Eliminate state duplication between App and ConfigManager, centralize all update logic
+**Completed:** 2025-11-01
+**Original Goal:** Eliminate state duplication between App and ConfigManager, centralize all update logic
 
 ---
 

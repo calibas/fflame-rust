@@ -6,6 +6,8 @@
 
 The ConfigManager implements delta-based undo/redo with a 50-state history. However, there are bugs in how it records or applies changes.
 
+UPDATE: This may have been related to preview mode issues.
+
 ## Observed Issues
 
 **Symptoms:**
