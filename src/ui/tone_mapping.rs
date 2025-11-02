@@ -284,6 +284,11 @@ pub fn render_tone_mapping_window(
                                 max_update = max_update.max(update);
                             }
                         }
+                        if response.drag_stopped() && config_manager.is_in_preview_mode() {
+                            if let Ok(update) = config_manager.force_commit_preview(&ConfigPath::SpeedFactor) {
+                                max_update = max_update.max(update);
+                            }
+                        }
                     }
 
                     ui.separator();
