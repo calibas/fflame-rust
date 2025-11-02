@@ -145,7 +145,71 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
   - Our simple formula: `sqrt(r) × [cos/sin](θ/2 + ω)` where ω is randomly 0 or π
   - May need to implement full Julia3D to match Apophysis exactly
 
-**All Core Variations Verified!** ✅
+**All 26 Core Variations Verified!** ✅
+
+## Next Steps: Apophysis Compatibility Plan
+
+**Phase 1: Add Missing Apophysis Equivalents**
+
+To achieve full Apophysis compatibility, we'll add proper implementations for variations that don't currently match:
+
+1. **Waves2** (variation 26) - Add as new variation
+   - 6 parameters: freqx, freqy, freqz, scalex, scaley, scalez
+   - Formula: `x + scalex × sin(y × freqx), y + scaley × sin(x × freqy), z + scalez × sin(r × freqz)`
+   - Replaces functionality of current "Waves" variation
+
+2. **Julia3D** (variation 27) - Add as new variation
+   - Full 3D Julia set implementation from Apophysis
+   - Replaces functionality of current simple "Julia" variation
+
+**Phase 2: Add Additional Apophysis Core Variations**
+
+Core variations that exist in Apophysis but not in our implementation:
+
+3. **Eyefish** - Fisheye lens distortion
+4. **Bubble** - Bubble-like inversion
+5. **Cylinder** - Cylindrical projection
+6. **Noise** - Random displacement
+7. **Blur** - Random circular blur
+8. **Gaussian_Blur** - Gaussian distribution blur
+9. **ZBlur** - Z-axis blur
+10. **Blur3D** - 3D spherical blur
+11. **Pre_Blur** - Pre-phase blur (applied before variations)
+12. **Pre_ZScale** - Pre-phase Z scaling
+13. **Pre_ZTranslate** - Pre-phase Z translation
+14. **ZTranslate** - Normal-phase Z translation
+
+**Phase 3: Legacy Variation Handling**
+
+Keep existing non-Apophysis variations for backward compatibility:
+- **Heart** (variation 7) - Mark as legacy/custom
+- **Bent** (variation 14) - Mark as legacy/custom
+- **Waves** (variation 15) - Mark as legacy, superseded by Waves2
+- **Blob** (variation 25) - Mark as legacy/custom
+- **Julia** (variation 13) - Mark as legacy, superseded by Julia3D
+
+These may be removed later if they duplicate Apophysis variation functionality.
+
+**Phase 4: Extended Apophysis Plugin Variations**
+
+Apophysis has dozens of additional plugin variations beyond the core set. These should be added progressively based on:
+- Usage frequency in existing flame files
+- Visual impact and uniqueness
+- Implementation complexity
+
+Examples include (but not limited to):
+- Advanced distortions (fisheye, perspective, etc.)
+- Fractal variations (mandelbrot, phoenix, etc.)
+- Mathematical variations (polynomial, trigonometric, etc.)
+- Special effects (glitch, pixelize, etc.)
+
+This phase will be ongoing as we prioritize which variations to implement.
+
+**Result After Phase 1-3:**
+- All core variations will match Apophysis exactly
+- 5 legacy variations retained for backward compatibility
+- Full compatibility with standard Apophysis flame files
+- Foundation for adding extended plugin variations in Phase 4
 
 ## Summary
 
