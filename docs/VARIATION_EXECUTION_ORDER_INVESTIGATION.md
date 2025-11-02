@@ -2,16 +2,18 @@
 
 ## The Problem
 
-User correctly identified that variation execution order matters significantly for mathematical correctness. Apophysis uses a **sequential execution model** with three phases, while we use a **weighted sum blend model**. These produce COMPLETELY DIFFERENT results!
+User correctly identified that variation execution order matters significantly for mathematical correctness.
 
-## Our Current Implementation (WRONG)
+**CLARIFICATION (2025-11-02):** We DO use weighted sum correctly (same as Apophysis). The bug is the **ORDER** in which variations execute, not the blending math.
+
+## Our Current Implementation
 
 **File:** `src/shader_builder_v2.rs:171-177`
 
 ```rust
 code.push_str(&format!(
     "if (xform.variations[{}] != 0.0) {{\n\
-     \x20   result += xform.variations[{}] * {};\n\  // ← WEIGHTED SUM
+     \x20   result += xform.variations[{}] * {};\n\  // ← WEIGHTED SUM ✅
      }}\n",
     idx, idx, call
 ));
@@ -22,57 +24,83 @@ code.push_str(&format!(
 fn apply_variations(p: vec2<f32>) -> vec2<f32> {
     var result = vec2(0.0, 0.0);
 
-    if (weight[0] > 0.0) {  // Linear
+    // Index 0: Linear
+    if (weight[0] > 0.0) {
         result += weight[0] * variation_linear(p);
     }
-    if (weight[2] > 0.0) {  // Spherical
+
+    // Index 2: Spherical
+    if (weight[2] > 0.0) {
         result += weight[2] * variation_spherical(p);
     }
-    if (weight[11] > 0.0) {  // Diamond
+
+    // Index 11: Diamond
+    if (weight[11] > 0.0) {
         result += weight[11] * variation_diamond(p);
     }
 
-    return result;  // Weighted average of all variations
+    // Index 20: Pre_rotate_y (WRONG POSITION!)
+    if (weight[20] > 0.0) {
+        result = rotate_y(result, weight[20]);
+    }
+
+    return result;
 }
 ```
 
-**This is a WEIGHTED BLEND - all variations operate on the SAME input point `p` and their outputs are mixed together.**
+**✅ CORRECT: Weighted sum blending**
+- All normal variations operate on the SAME input point `p`
+- Their outputs are accumulated: `result = w0*var0(p) + w1*var1(p) + w2*var2(p)`
+- Weights don't need to sum to 1.0 (just like Apophysis XForm.pas:1074-1086)
+- This matches Apophysis exactly
 
-## Apophysis Implementation (CORRECT)
+**❌ WRONG: Execution ORDER**
+- All variations sorted by registry index (0-25)
+- Pre_rotate (index 20) executes AFTER Linear (index 0) and Spherical (index 2)
+- Should execute BEFORE to modify input point!
 
-Based on the conversation summary mentioning "pre/normal/post sequence", Apophysis uses **SEQUENTIAL APPLICATION**.
+## Apophysis Implementation (VERIFIED from XForm.pas:343-383)
 
-### Expected Execution Model (needs verification from Apophysis source)
+**Four-phase execution model:**
 
 ```pascal
-// Apophysis XForm.pas (HYPOTHETICAL - needs source verification)
-function ApplyVariations(p: TPoint): TPoint;
-var
-  temp: TPoint;
-begin
-  temp := p;
+// Phase 1: Pre-variations (lines 343-349)
+// Directly modify input coordinates FTx, FTy, FTz (NOT weighted sum!)
+for i := 0 to NrVar - 1 do
+  if (variation_name starts with 'pre_') then
+    variation[i](vars[i]);  // e.g., PreBlur:960 does FTx := FTx + r * cosa
 
-  // Phase 1: Pre-variations (execute first, sequentially)
-  if (pre_blur_weight > 0) then
-    temp := ApplyPreBlur(temp, pre_blur_weight);
-  if (pre_rotate_x_weight > 0) then
-    temp := ApplyPreRotateX(temp, pre_rotate_x_weight);
+// Phase 2: Precalculation (lines 351-361)
+// Calculate polar coordinates from MODIFIED input
+FLength := sqrt(FTx * FTx + FTy * FTy);
+FAngle := arctan2(FTx, FTy);  // Note: atan2(x,y) not atan2(y,x)
+SinCos(FAngle, FSinA, FCosA);
 
-  // Phase 2: Normal variations (accumulate into result)
-  Result := ZeroPoint;
-  if (linear_weight > 0) then
-    Result := Result + linear_weight * ApplyLinear(temp);
-  if (spherical_weight > 0) then
-    Result := Result + spherical_weight * ApplySpherical(temp);
-  // ... more variations
+// Phase 3: Normal variations (lines 363-373)
+// Weighted sum accumulation to output FPx, FPy, FPz
+FPx := 0; FPy := 0; FPz := 0;
+for i := 0 to NrVar - 1 do
+  if (not pre_ and not post_ and not flatten) then
+    variation[i](vars[i]);  // e.g., Linear:585 does FPx := FPx + vars[0] * FTx
 
-  // Phase 3: Post-variations (execute last, sequentially on accumulated result)
-  if (post_rotate_y_weight > 0) then
-    Result := ApplyPostRotateY(Result, post_rotate_y_weight);
-  if (flatten_weight > 0) then
-    Result := ApplyFlatten(Result, flatten_weight);
-end;
+// Phase 4: Post-variations (lines 375-383)
+// Directly modify output coordinates FPx, FPy, FPz (NOT weighted sum!)
+// NOTE: 'flatten' (index 1) is treated as a post-variation!
+for i := 0 to NrVar - 1 do
+  if (variation_name starts with 'post_' OR name is 'flatten') then
+    variation[i](vars[i]);  // e.g., PostRotateX:1045 rotates FPy/FPz, Flatten:613 does FPz := 0
 ```
+
+**Key differences between variation types:**
+- **Pre-variations:** DIRECTLY modify `FTx`/`FTy`/`FTz` (input transformation, NOT weighted)
+- **Normal variations:** Use WEIGHTED SUM to accumulate into `FPx`/`FPy`/`FPz`
+- **Post-variations:** DIRECTLY modify `FPx`/`FPy`/`FPz` (output transformation, NOT weighted)
+
+**Examples from Apophysis source:**
+- PreBlur (line 960): `FTx := FTx + r * cosa` (direct modification of input)
+- Linear (line 585): `FPx := FPx + vars[0] * FTx` (weighted sum to output)
+- PostRotateX (line 1045): Rotates `FPy`/`FPz` directly (direct modification of output)
+- Flatten (line 613): `FPz := 0` (direct modification, treated as post despite index 1!)
 
 ## Mathematical Difference
 
