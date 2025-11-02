@@ -628,8 +628,10 @@ pub fn render_triangle_editor_window(
                                 let x_new = [o_curr[0] + x_rot[0], o_curr[1] + x_rot[1]];
                                 let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
 
-                                transform.from_triangle(o_curr, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                    &format!("Rotate CW (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                             if ui.button("↺ Rotate CCW").clicked() {
                                 let angle = 15.0_f32.to_radians();
@@ -646,8 +648,10 @@ pub fn render_triangle_editor_window(
                                 let x_new = [o_curr[0] + x_rot[0], o_curr[1] + x_rot[1]];
                                 let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
 
-                                transform.from_triangle(o_curr, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                    &format!("Rotate CCW (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                         });
 
@@ -661,8 +665,10 @@ pub fn render_triangle_editor_window(
                                 let x_new = [o_curr[0] + x_vec[0] * 1.1, o_curr[1] + x_vec[1] * 1.1];
                                 let y_new = [o_curr[0] + y_vec[0] * 1.1, o_curr[1] + y_vec[1] * 1.1];
 
-                                transform.from_triangle(o_curr, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                    &format!("Scale up (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                             if ui.button("⇄ Scale Down").clicked() {
                                 let (o_curr, x_curr, y_curr) = transform.to_triangle();
@@ -672,8 +678,10 @@ pub fn render_triangle_editor_window(
                                 let x_new = [o_curr[0] + x_vec[0] * 0.9, o_curr[1] + x_vec[1] * 0.9];
                                 let y_new = [o_curr[0] + y_vec[0] * 0.9, o_curr[1] + y_vec[1] * 0.9];
 
-                                transform.from_triangle(o_curr, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                    &format!("Scale down (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                         });
                     });
