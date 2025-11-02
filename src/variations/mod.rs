@@ -159,20 +159,16 @@ impl VariationRegistry {
         registry.register_core("waves", "Waves", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 15
 
         // Register 3D depth variations - Indices 16-17, 23
-        registry.register_core("zcone", "Z-Cone", VariationCategory::Depth3D, VariationPhase::Normal, false);            // 16
-        registry.register_core("flatten", "Flatten", VariationCategory::Depth3D, VariationPhase::Post, false);           // 17 - POST! (Apophysis special case)
-
-        // Register full 3D variations - Index 18
-        registry.register_core("hemisphere", "Hemisphere", VariationCategory::Full3D, VariationPhase::Normal, false);    // 18
+        registry.register_core("zcone", "Z-Cone", VariationCategory::Depth3D, VariationPhase::Normal, false);            // 16 - Adds to Z based on XY distance
+        registry.register_core("flatten", "Flatten", VariationCategory::Depth3D, VariationPhase::Post, false);           // 17 - POST! Compresses Z toward zero
+        registry.register_core("hemisphere", "Hemisphere", VariationCategory::Full3D, VariationPhase::Normal, false);    // 18 - Full 3D projection
 
         // Register 3D rotation variations - Indices 19-22
         registry.register_core("pre_rotate_x", "Pre-Rotate X", VariationCategory::Rotation3D, VariationPhase::Pre, false);   // 19 - PRE!
         registry.register_core("pre_rotate_y", "Pre-Rotate Y", VariationCategory::Rotation3D, VariationPhase::Pre, false);   // 20 - PRE!
         registry.register_core("post_rotate_x", "Post-Rotate X", VariationCategory::Rotation3D, VariationPhase::Post, false); // 21 - POST!
         registry.register_core("post_rotate_y", "Post-Rotate Y", VariationCategory::Rotation3D, VariationPhase::Post, false); // 22 - POST!
-
-        // Register 3D depth variations (continued) - Index 23
-        registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, VariationPhase::Normal, false);         // 23
+        registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, VariationPhase::Post, false);         // 23 - POST! Scales Z depth
 
         // NEW VARIATIONS (added after original 24) - Indices 24-25
         // IMPORTANT: Always add new variations at the end to preserve index compatibility
