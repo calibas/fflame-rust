@@ -297,27 +297,43 @@ impl ShaderBuilder {
         code.push_str("    var result = vec3<f32>(0.0, 0.0, 0.0);\n\n");
 
         for (name, idx, info) in &normal_variations {
-            let call = if !info.parameters.is_empty() {
-                if info.needs_rng {
-                    format!("{}(temp, xform_id, rng)", info.wgsl_function)
-                } else {
-                    format!("{}(temp, xform_id)", info.wgsl_function)
+            // Special inline implementations for Z-only variations
+            match name.as_str() {
+                "zcone" => {
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL - Z-only)\n\
+                         \x20   if (xform.variations[{}] != 0.0) {{\n\
+                         \x20       let r = length(temp.xy);\n\
+                         \x20       result.z += xform.variations[{}] * r;\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, idx, idx
+                    ));
                 }
-            } else {
-                if info.needs_rng {
-                    format!("{}(temp, rng)", info.wgsl_function)
-                } else {
-                    format!("{}(temp)", info.wgsl_function)
-                }
-            };
+                _ => {
+                    // Standard variation with function call
+                    let call = if !info.parameters.is_empty() {
+                        if info.needs_rng {
+                            format!("{}(temp, xform_id, rng)", info.wgsl_function)
+                        } else {
+                            format!("{}(temp, xform_id)", info.wgsl_function)
+                        }
+                    } else {
+                        if info.needs_rng {
+                            format!("{}(temp, rng)", info.wgsl_function)
+                        } else {
+                            format!("{}(temp)", info.wgsl_function)
+                        }
+                    };
 
-            code.push_str(&format!(
-                "    // {}: {} (NORMAL)\n\
-                 \x20   if (xform.variations[{}] != 0.0) {{\n\
-                 \x20       result += xform.variations[{}] * {};\n\
-                 \x20   }}\n\n",
-                idx, info.display_name, idx, idx, call
-            ));
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL)\n\
+                         \x20   if (xform.variations[{}] != 0.0) {{\n\
+                         \x20       result += xform.variations[{}] * {};\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, idx, idx, call
+                    ));
+                }
+            }
         }
 
         // PHASE 4: Post-variations - directly modify output coordinates (lines 375-383)
@@ -326,25 +342,38 @@ impl ShaderBuilder {
 
             for (name, idx, info) in &post_variations {
                 // Post-variations directly modify result (NOT weighted sum!)
-                if name == "flatten" {
-                    // Flatten sets Z to 0
-                    code.push_str(&format!(
-                        "    // {}: {} (POST - special)\n\
-                         \x20   if (xform.variations[{}] != 0.0) {{\n\
-                         \x20       result.z = 0.0;\n\
-                         \x20   }}\n\n",
-                        idx, info.display_name, idx
-                    ));
-                } else {
-                    // Post-rotate variations
-                    let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
-                    code.push_str(&format!(
-                        "    // {}: {} (POST)\n\
-                         \x20   if (xform.variations[{}] != 0.0) {{\n\
-                         \x20       result = {}(result, xform.variations[{}]);\n\
-                         \x20   }}\n\n",
-                        idx, info.display_name, idx, rotate_fn, idx
-                    ));
+                match name.as_str() {
+                    "flatten" => {
+                        // Flatten compresses Z toward zero
+                        code.push_str(&format!(
+                            "    // {}: {} (POST - Z-only)\n\
+                             \x20   if (xform.variations[{}] != 0.0) {{\n\
+                             \x20       result.z *= (1.0 - xform.variations[{}] * 0.5);\n\
+                             \x20   }}\n\n",
+                            idx, info.display_name, idx, idx
+                        ));
+                    }
+                    "zscale" => {
+                        // ZScale scales Z depth
+                        code.push_str(&format!(
+                            "    // {}: {} (POST - Z-only)\n\
+                             \x20   if (xform.variations[{}] != 0.0) {{\n\
+                             \x20       result.z *= (1.0 + xform.variations[{}]);\n\
+                             \x20   }}\n\n",
+                            idx, info.display_name, idx, idx
+                        ));
+                    }
+                    _ => {
+                        // Post-rotate variations
+                        let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
+                        code.push_str(&format!(
+                            "    // {}: {} (POST)\n\
+                             \x20   if (xform.variations[{}] != 0.0) {{\n\
+                             \x20       result = {}(result, xform.variations[{}]);\n\
+                             \x20   }}\n\n",
+                            idx, info.display_name, idx, rotate_fn, idx
+                        ));
+                    }
                 }
             }
         }
