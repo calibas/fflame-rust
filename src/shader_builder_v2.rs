@@ -142,12 +142,6 @@ impl ShaderBuilder {
         let mut code = String::from(
             "// Apply all variations with weights\n\
              fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {\n\
-             \x20   // Precalculate common values (Apophysis optimization)\n\
-             \x20   let r = length(p);\n\
-             \x20   let r2 = dot(p, p);\n\
-             \x20   let theta = atan2(p.x, p.y);\n\
-             \x20   let sin_theta = sin(theta);\n\
-             \x20   let cos_theta = cos(theta);\n\n\
              \x20   var result = vec2<f32>(0.0, 0.0);\n\n"
         );
 
@@ -157,60 +151,20 @@ impl ShaderBuilder {
 
         for (name, idx) in entries {
             if let Some(info) = self.registry.get(&name) {
-                // Determine function call signature based on variation needs
-                let call = match name.as_str() {
-                    // Variations that don't use precalculated values
-                    "linear" | "sinusoidal" => {
-                        format!("{}(p)", info.wgsl_function)
+                // Determine function call signature based on needs
+                let call = if !info.parameters.is_empty() {
+                    // Has parameters - needs xform_id
+                    if info.needs_rng {
+                        format!("{}(p, xform_id, rng)", info.wgsl_function)
+                    } else {
+                        format!("{}(p, xform_id)", info.wgsl_function)
                     }
-                    // Variations that use r2
-                    "spherical" | "swirl" => {
-                        format!("{}(p, r2)", info.wgsl_function)
-                    }
-                    // Variations that use r only
-                    "horseshoe" => {
-                        format!("{}(p, r)", info.wgsl_function)
-                    }
-                    // Variations that use theta and r (polar coordinates)
-                    "polar" => {
-                        format!("{}(theta, r)", info.wgsl_function)
-                    }
-                    "handkerchief" | "heart" => {
-                        format!("{}(r, theta)", info.wgsl_function)
-                    }
-                    "disc" => {
-                        format!("{}(theta, r)", info.wgsl_function)
-                    }
-                    "ex" => {
-                        format!("{}(r, theta)", info.wgsl_function)
-                    }
-                    // Variations that use r, sin_theta, cos_theta
-                    "spiral" | "hyperbolic" | "diamond" => {
-                        format!("{}(r, sin_theta, cos_theta)", info.wgsl_function)
-                    }
-                    // Variations with RNG (not optimized yet, keep standard call)
-                    "julia" => {
+                } else {
+                    // No parameters - original signature
+                    if info.needs_rng {
                         format!("{}(p, rng)", info.wgsl_function)
-                    }
-                    // Blob: parameterized + optimized (uses precalculated values)
-                    "blob" => {
-                        format!("{}(r, theta, sin_theta, cos_theta, xform_id)", info.wgsl_function)
-                    }
-                    // Parameterized variations
-                    _ if !info.parameters.is_empty() => {
-                        if info.needs_rng {
-                            format!("{}(p, xform_id, rng)", info.wgsl_function)
-                        } else {
-                            format!("{}(p, xform_id)", info.wgsl_function)
-                        }
-                    }
-                    // Default: standard variations
-                    _ => {
-                        if info.needs_rng {
-                            format!("{}(p, rng)", info.wgsl_function)
-                        } else {
-                            format!("{}(p)", info.wgsl_function)
-                        }
+                    } else {
+                        format!("{}(p)", info.wgsl_function)
                     }
                 };
 
@@ -233,12 +187,6 @@ impl ShaderBuilder {
         let mut code = String::from(
             "// Apply all variations with weights (3D)\n\
              fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {\n\
-             \x20   // Precalculate common values (Apophysis optimization)\n\
-             \x20   let r = length(p.xy);\n\
-             \x20   let r2 = dot(p.xy, p.xy);\n\
-             \x20   let theta = atan2(p.x, p.y);\n\
-             \x20   let sin_theta = sin(theta);\n\
-             \x20   let cos_theta = cos(theta);\n\n\
              \x20   var result = vec3<f32>(0.0, 0.0, 0.0);\n\n"
         );
 
@@ -289,60 +237,20 @@ impl ShaderBuilder {
                         ));
                     }
                     _ => {
-                        // Standard variation - same call pattern matching as 2D
-                        let call = match name.as_str() {
-                            // Basic variations that don't use precalc
-                            "linear" | "sinusoidal" | "bent" | "waves" => {
-                                format!("{}(p)", info.wgsl_function)
+                        // Standard variation
+                        let call = if !info.parameters.is_empty() {
+                            // Has parameters - needs xform_id
+                            if info.needs_rng {
+                                format!("{}(p, xform_id, rng)", info.wgsl_function)
+                            } else {
+                                format!("{}(p, xform_id)", info.wgsl_function)
                             }
-                            // Variations using r2
-                            "spherical" | "swirl" => {
-                                format!("{}(p, r2)", info.wgsl_function)
-                            }
-                            // Variations using r
-                            "horseshoe" => {
-                                format!("{}(p, r)", info.wgsl_function)
-                            }
-                            // Variations using theta, r, z
-                            "polar" => {
-                                format!("{}(theta, r, p.z)", info.wgsl_function)
-                            }
-                            "handkerchief" | "heart" => {
-                                format!("{}(r, theta, p.z)", info.wgsl_function)
-                            }
-                            "disc" => {
-                                format!("{}(theta, r, p.z)", info.wgsl_function)
-                            }
-                            "ex" => {
-                                format!("{}(r, theta, p.z)", info.wgsl_function)
-                            }
-                            // Variations using r, sin_theta, cos_theta, z
-                            "spiral" | "hyperbolic" | "diamond" => {
-                                format!("{}(r, sin_theta, cos_theta, p.z)", info.wgsl_function)
-                            }
-                            // RNG variations
-                            "julia" => {
+                        } else {
+                            // No parameters - original signature
+                            if info.needs_rng {
                                 format!("{}(p, rng)", info.wgsl_function)
-                            }
-                            // Blob: parameterized + optimized
-                            "blob" => {
-                                format!("{}(r, theta, sin_theta, cos_theta, p.z, xform_id)", info.wgsl_function)
-                            }
-                            // Parameterized variations
-                            _ if !info.parameters.is_empty() => {
-                                if info.needs_rng {
-                                    format!("{}(p, xform_id, rng)", info.wgsl_function)
-                                } else {
-                                    format!("{}(p, xform_id)", info.wgsl_function)
-                                }
-                            }
-                            // Default fallback
-                            _ => {
-                                if info.needs_rng {
-                                    format!("{}(p, rng)", info.wgsl_function)
-                                } else {
-                                    format!("{}(p)", info.wgsl_function)
-                                }
+                            } else {
+                                format!("{}(p)", info.wgsl_function)
                             }
                         };
 
