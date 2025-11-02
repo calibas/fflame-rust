@@ -115,6 +115,11 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 **Not Used in Apophysis (different or unused variations):**
 - ⚠️ **Heart** (variation 7) - Our implementation `r × sin(r × θ), -r × cos(r × θ)` doesn't match any active Apophysis variation
   - Apophysis has "xheart" plugin with parameters, but simple "Heart" appears to be unused/deprecated
+- ⚠️ **Waves** (variation 15) - Our implementation doesn't match Apophysis
+  - Our formula: `x + 0.5 × sin(y / 0.25), y + 0.5 × sin(x / 0.25)` (hardcoded constants)
+  - Apophysis has old "waves" (deactivated) and active "waves2" (6 parameters: freqx/y/z, scalex/y/z)
+  - Apophysis waves2 formula: `x + scalex × sin(y × freqx), y + scaley × sin(x × freqy), z + scalez × sin(r × freqz)`
+  - Our implementation appears to be based on deactivated old version with arbitrary constants
 - ⚠️ **Blob** (variation 25) - Not found in Apophysis source code
   - Our implementation: `r × (p2 + ((p1 - p2)/2)(sin(p3×θ) + 1))` with parameters high, low, waves
   - Likely from another fractal flame implementation or custom design
@@ -126,7 +131,7 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
   - May need to implement full Julia3D to match Apophysis exactly
 
 **Still Need Verification:**
-- ❓ Bent, Waves (variations 14-15)
+- ❓ Bent (variation 14)
 - ❓ ZCone, Hemisphere (variations 16, 18)
 - ❓ Pre/Post Rotate (variations 19-22)
 - ❓ ZScale (variation 23)
