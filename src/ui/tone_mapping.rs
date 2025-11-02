@@ -179,7 +179,7 @@ pub fn render_tone_mapping_window(
                                     let is_selected = current_palette.as_ref().map(|p| &p.name) == Some(&palette.name);
                                     if ui.selectable_label(is_selected, &palette.name).clicked() {
                                         // Copy selected palette to config.palette (always editable)
-                                        let mut custom_palette = palette.clone();
+                                        let mut palette_copy = palette.clone();
 
                                         // If it's a built-in, rename it to avoid confusion
                                         if palette.built_in {
@@ -194,14 +194,14 @@ pub fn render_tone_mapping_window(
                                                 counter += 1;
                                             }
 
-                                            custom_palette.name = new_name;
+                                            palette_copy.name = new_name;
                                         }
 
-                                        custom_palette.built_in = false; // Always mark as editable
+                                        palette_copy.built_in = false; // Always mark as editable
 
                                         if let Ok(update) = config_manager.update_param(
                                             ConfigPath::Palette,
-                                            custom_palette.clone().into(),
+                                            palette_copy.clone().into(),
                                             false
                                         ) {
                                             max_update = max_update.max(update);
