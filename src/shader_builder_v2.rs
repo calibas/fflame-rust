@@ -139,134 +139,217 @@ impl ShaderBuilder {
 
     /// Build apply_variations function for 2D mode
     fn build_apply_variations_2d(&self, active_variations: &[(String, u32)]) -> String {
+        use crate::variations::VariationPhase;
+
         let mut code = String::from(
-            "// Apply all variations with weights\n\
-             fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {\n\
-             \x20   var result = vec2<f32>(0.0, 0.0);\n\n"
+            "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
+             fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {\n"
         );
 
-        // Sort by registry index for deterministic shader generation
-        let mut entries = active_variations.to_vec();
-        entries.sort_by_key(|(_, idx)| *idx);
+        // Separate variations by phase
+        let mut pre_variations = Vec::new();
+        let mut normal_variations = Vec::new();
+        let mut post_variations = Vec::new();
 
-        for (name, idx) in entries {
-            if let Some(info) = self.registry.get(&name) {
-                // Determine function call signature based on needs
-                let call = if !info.parameters.is_empty() {
-                    // Has parameters - needs xform_id
-                    if info.needs_rng {
-                        format!("{}(p, xform_id, rng)", info.wgsl_function)
-                    } else {
-                        format!("{}(p, xform_id)", info.wgsl_function)
-                    }
-                } else {
-                    // No parameters - original signature
-                    if info.needs_rng {
-                        format!("{}(p, rng)", info.wgsl_function)
-                    } else {
-                        format!("{}(p)", info.wgsl_function)
-                    }
-                };
+        for (name, idx) in active_variations {
+            if let Some(info) = self.registry.get(name) {
+                match info.phase {
+                    VariationPhase::Pre => pre_variations.push((name.clone(), *idx, info)),
+                    VariationPhase::Normal => normal_variations.push((name.clone(), *idx, info)),
+                    VariationPhase::Post => post_variations.push((name.clone(), *idx, info)),
+                }
+            }
+        }
 
+        // Sort each phase by registry index for determinism
+        pre_variations.sort_by_key(|(_, idx, _)| *idx);
+        normal_variations.sort_by_key(|(_, idx, _)| *idx);
+        post_variations.sort_by_key(|(_, idx, _)| *idx);
+
+        // PHASE 1: Pre-variations - directly modify input coordinates (rare in 2D)
+        if !pre_variations.is_empty() {
+            code.push_str("    // Phase 1: Pre-variations (modify input)\n");
+            code.push_str("    var temp = p;\n\n");
+
+            for (name, idx, info) in &pre_variations {
+                // Pre-variations directly modify temp (NOT weighted sum!)
+                // Note: 2D mode shouldn't have pre-variations (they're 3D rotation only)
+                // But support the model for consistency
                 code.push_str(&format!(
-                    "    // {}: {}\n\
+                    "    // {}: {} (PRE)\n\
                      \x20   if (xform.variations[{}] != 0.0) {{\n\
-                     \x20       result += xform.variations[{}] * {};\n\
-                     \x20   }}\n",
-                    idx, info.display_name, idx, idx, call
+                     \x20       temp = {}(temp, xform.variations[{}]);\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, idx, info.wgsl_function, idx
+                ));
+            }
+        } else {
+            code.push_str("    var temp = p;\n\n");
+        }
+
+        // PHASE 2: Precalculation (handled per-variation)
+        code.push_str("    // Phase 2: Precalculation handled per-variation\n\n");
+
+        // PHASE 3: Normal variations - weighted sum accumulation
+        code.push_str("    // Phase 3: Normal variations (weighted sum from modified input)\n");
+        code.push_str("    var result = vec2<f32>(0.0, 0.0);\n\n");
+
+        for (name, idx, info) in &normal_variations {
+            let call = if !info.parameters.is_empty() {
+                if info.needs_rng {
+                    format!("{}(temp, xform_id, rng)", info.wgsl_function)
+                } else {
+                    format!("{}(temp, xform_id)", info.wgsl_function)
+                }
+            } else {
+                if info.needs_rng {
+                    format!("{}(temp, rng)", info.wgsl_function)
+                } else {
+                    format!("{}(temp)", info.wgsl_function)
+                }
+            };
+
+            code.push_str(&format!(
+                "    // {}: {} (NORMAL)\n\
+                 \x20   if (xform.variations[{}] != 0.0) {{\n\
+                 \x20       result += xform.variations[{}] * {};\n\
+                 \x20   }}\n\n",
+                idx, info.display_name, idx, idx, call
+            ));
+        }
+
+        // PHASE 4: Post-variations - directly modify output coordinates (rare in 2D)
+        if !post_variations.is_empty() {
+            code.push_str("    // Phase 4: Post-variations (modify output)\n\n");
+
+            for (name, idx, info) in &post_variations {
+                // Post-variations directly modify result (NOT weighted sum!)
+                // Note: 2D mode shouldn't have post-variations (they're 3D rotation/flatten only)
+                // But support the model for consistency
+                code.push_str(&format!(
+                    "    // {}: {} (POST)\n\
+                     \x20   if (xform.variations[{}] != 0.0) {{\n\
+                     \x20       result = {}(result, xform.variations[{}]);\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, idx, info.wgsl_function, idx
                 ));
             }
         }
 
-        code.push_str("\n    return result;\n}\n");
+        code.push_str("    return result;\n}\n");
         code
     }
 
     /// Build apply_variations function for 3D mode
     fn build_apply_variations_3d(&self, active_variations: &[(String, u32)]) -> String {
+        use crate::variations::VariationPhase;
+
         let mut code = String::from(
-            "// Apply all variations with weights (3D)\n\
-             fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {\n\
-             \x20   var result = vec3<f32>(0.0, 0.0, 0.0);\n\n"
+            "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
+             fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {\n"
         );
 
-        // Sort by registry index
-        let mut entries = active_variations.to_vec();
-        entries.sort_by_key(|(_, idx)| *idx);
+        // Separate variations by phase
+        let mut pre_variations = Vec::new();
+        let mut normal_variations = Vec::new();
+        let mut post_variations = Vec::new();
 
-        for (name, idx) in entries {
-            if let Some(info) = self.registry.get(&name) {
-                // Special handling for Z-only and rotation variations
-                match name.as_str() {
-                    "zcone" => {
-                        code.push_str(&format!(
-                            "    // {}: {} (Z-only)\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       let r = length(p.xy);\n\
-                             \x20       result.z += xform.variations[{}] * r;\n\
-                             \x20   }}\n",
-                            idx, info.display_name, idx, idx
-                        ));
-                    }
-                    "flatten" => {
-                        code.push_str(&format!(
-                            "    // {}: {} (Z-only)\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result.z *= (1.0 - xform.variations[{}] * 0.5);\n\
-                             \x20   }}\n",
-                            idx, info.display_name, idx, idx
-                        ));
-                    }
-                    "zscale" => {
-                        code.push_str(&format!(
-                            "    // {}: {} (Z-only)\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result.z *= (1.0 + xform.variations[{}]);\n\
-                             \x20   }}\n",
-                            idx, info.display_name, idx, idx
-                        ));
-                    }
-                    "pre_rotate_x" | "pre_rotate_y" | "post_rotate_x" | "post_rotate_y" => {
-                        let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
-                        code.push_str(&format!(
-                            "    // {}: {} (Rotation)\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result = {}(result, xform.variations[{}]);\n\
-                             \x20   }}\n",
-                            idx, info.display_name, idx, rotate_fn, idx
-                        ));
-                    }
-                    _ => {
-                        // Standard variation
-                        let call = if !info.parameters.is_empty() {
-                            // Has parameters - needs xform_id
-                            if info.needs_rng {
-                                format!("{}(p, xform_id, rng)", info.wgsl_function)
-                            } else {
-                                format!("{}(p, xform_id)", info.wgsl_function)
-                            }
-                        } else {
-                            // No parameters - original signature
-                            if info.needs_rng {
-                                format!("{}(p, rng)", info.wgsl_function)
-                            } else {
-                                format!("{}(p)", info.wgsl_function)
-                            }
-                        };
-
-                        code.push_str(&format!(
-                            "    // {}: {}\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result += xform.variations[{}] * {};\n\
-                             \x20   }}\n",
-                            idx, info.display_name, idx, idx, call
-                        ));
-                    }
+        for (name, idx) in active_variations {
+            if let Some(info) = self.registry.get(name) {
+                match info.phase {
+                    VariationPhase::Pre => pre_variations.push((name.clone(), *idx, info)),
+                    VariationPhase::Normal => normal_variations.push((name.clone(), *idx, info)),
+                    VariationPhase::Post => post_variations.push((name.clone(), *idx, info)),
                 }
             }
         }
 
-        code.push_str("\n    return result;\n}\n");
+        // Sort each phase by registry index for determinism
+        pre_variations.sort_by_key(|(_, idx, _)| *idx);
+        normal_variations.sort_by_key(|(_, idx, _)| *idx);
+        post_variations.sort_by_key(|(_, idx, _)| *idx);
+
+        // PHASE 1: Pre-variations - directly modify input coordinates (lines 343-349)
+        if !pre_variations.is_empty() {
+            code.push_str("    // Phase 1: Pre-variations (modify input)\n");
+            code.push_str("    var temp = p;\n\n");
+
+            for (name, idx, info) in &pre_variations {
+                // Pre-variations directly modify temp (NOT weighted sum!)
+                let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
+                code.push_str(&format!(
+                    "    // {}: {} (PRE)\n\
+                     \x20   if (xform.variations[{}] != 0.0) {{\n\
+                     \x20       temp = {}(temp, xform.variations[{}]);\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, idx, rotate_fn, idx
+                ));
+            }
+        } else {
+            code.push_str("    var temp = p;\n\n");
+        }
+
+        // PHASE 2: Precalculation (would go here if needed - currently in shader functions)
+        code.push_str("    // Phase 2: Precalculation handled per-variation\n\n");
+
+        // PHASE 3: Normal variations - weighted sum accumulation (lines 363-373)
+        code.push_str("    // Phase 3: Normal variations (weighted sum from modified input)\n");
+        code.push_str("    var result = vec3<f32>(0.0, 0.0, 0.0);\n\n");
+
+        for (name, idx, info) in &normal_variations {
+            let call = if !info.parameters.is_empty() {
+                if info.needs_rng {
+                    format!("{}(temp, xform_id, rng)", info.wgsl_function)
+                } else {
+                    format!("{}(temp, xform_id)", info.wgsl_function)
+                }
+            } else {
+                if info.needs_rng {
+                    format!("{}(temp, rng)", info.wgsl_function)
+                } else {
+                    format!("{}(temp)", info.wgsl_function)
+                }
+            };
+
+            code.push_str(&format!(
+                "    // {}: {} (NORMAL)\n\
+                 \x20   if (xform.variations[{}] != 0.0) {{\n\
+                 \x20       result += xform.variations[{}] * {};\n\
+                 \x20   }}\n\n",
+                idx, info.display_name, idx, idx, call
+            ));
+        }
+
+        // PHASE 4: Post-variations - directly modify output coordinates (lines 375-383)
+        if !post_variations.is_empty() {
+            code.push_str("    // Phase 4: Post-variations (modify output)\n\n");
+
+            for (name, idx, info) in &post_variations {
+                // Post-variations directly modify result (NOT weighted sum!)
+                if name == "flatten" {
+                    // Flatten sets Z to 0
+                    code.push_str(&format!(
+                        "    // {}: {} (POST - special)\n\
+                         \x20   if (xform.variations[{}] != 0.0) {{\n\
+                         \x20       result.z = 0.0;\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, idx
+                    ));
+                } else {
+                    // Post-rotate variations
+                    let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
+                    code.push_str(&format!(
+                        "    // {}: {} (POST)\n\
+                         \x20   if (xform.variations[{}] != 0.0) {{\n\
+                         \x20       result = {}(result, xform.variations[{}]);\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, idx, rotate_fn, idx
+                    ));
+                }
+            }
+        }
+
+        code.push_str("    return result;\n}\n");
         code
     }
 
