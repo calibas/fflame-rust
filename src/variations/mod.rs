@@ -34,6 +34,23 @@ pub struct VariationParameter {
     pub max_value: Option<f32>,
 }
 
+/// Execution phase for variations (Apophysis XForm.pas:343-383)
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VariationPhase {
+    /// Pre-variations: Directly modify input coordinates FTx/FTy/FTz (NOT weighted sum)
+    /// Execute before normal variations and precalculation
+    Pre,
+
+    /// Normal variations: Weighted sum accumulation to output FPx/FPy/FPz
+    /// Execute after precalculation
+    Normal,
+
+    /// Post-variations: Directly modify output coordinates FPx/FPy/FPz (NOT weighted sum)
+    /// Execute after all normal variations
+    /// NOTE: Flatten is treated as post despite being index 1!
+    Post,
+}
+
 /// Variation metadata and registration
 #[derive(Clone, Debug)]
 pub struct VariationInfo {
@@ -45,6 +62,9 @@ pub struct VariationInfo {
 
     /// Category for organization
     pub category: VariationCategory,
+
+    /// Execution phase (pre/normal/post)
+    pub phase: VariationPhase,
 
     /// WGSL function name (e.g., "variation_linear")
     pub wgsl_function: String,
@@ -119,45 +139,41 @@ impl VariationRegistry {
         log::info!("=== VARIATION REGISTRY INITIALIZATION ===");
 
         // Register core 2D variations (Basic) - Indices 0-4
-        registry.register_core("linear", "Linear", VariationCategory::Basic2D, false);          // 0
-        registry.register_core("sinusoidal", "Sinusoidal", VariationCategory::Basic2D, false);  // 1
-        registry.register_core("spherical", "Spherical", VariationCategory::Basic2D, false);    // 2
-        registry.register_core("swirl", "Swirl", VariationCategory::Basic2D, false);            // 3
-        registry.register_core("horseshoe", "Horseshoe", VariationCategory::Basic2D, false);    // 4
+        registry.register_core("linear", "Linear", VariationCategory::Basic2D, VariationPhase::Normal, false);          // 0
+        registry.register_core("sinusoidal", "Sinusoidal", VariationCategory::Basic2D, VariationPhase::Normal, false);  // 1
+        registry.register_core("spherical", "Spherical", VariationCategory::Basic2D, VariationPhase::Normal, false);    // 2
+        registry.register_core("swirl", "Swirl", VariationCategory::Basic2D, VariationPhase::Normal, false);            // 3
+        registry.register_core("horseshoe", "Horseshoe", VariationCategory::Basic2D, VariationPhase::Normal, false);    // 4
 
         // Register core 2D variations (Advanced) - Indices 5-15
-        registry.register_core("polar", "Polar", VariationCategory::Advanced2D, false);          // 5
-        registry.register_core("handkerchief", "Handkerchief", VariationCategory::Advanced2D, false); // 6
-        registry.register_core("heart", "Heart", VariationCategory::Advanced2D, false);          // 7
-        registry.register_core("disc", "Disc", VariationCategory::Advanced2D, false);            // 8
-        registry.register_core("spiral", "Spiral", VariationCategory::Advanced2D, false);        // 9
-        registry.register_core("hyperbolic", "Hyperbolic", VariationCategory::Advanced2D, false); // 10
-        registry.register_core("diamond", "Diamond", VariationCategory::Advanced2D, false);      // 11
-        registry.register_core("ex", "Ex", VariationCategory::Advanced2D, false);                // 12
-        registry.register_core("julia", "Julia", VariationCategory::Advanced2D, true);           // 13 (Needs RNG)
-        registry.register_core("bent", "Bent", VariationCategory::Advanced2D, false);            // 14
-        registry.register_core("waves", "Waves", VariationCategory::Advanced2D, false);          // 15
+        registry.register_core("polar", "Polar", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 5
+        registry.register_core("handkerchief", "Handkerchief", VariationCategory::Advanced2D, VariationPhase::Normal, false); // 6
+        registry.register_core("heart", "Heart", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 7
+        registry.register_core("disc", "Disc", VariationCategory::Advanced2D, VariationPhase::Normal, false);            // 8
+        registry.register_core("spiral", "Spiral", VariationCategory::Advanced2D, VariationPhase::Normal, false);        // 9
+        registry.register_core("hyperbolic", "Hyperbolic", VariationCategory::Advanced2D, VariationPhase::Normal, false); // 10
+        registry.register_core("diamond", "Diamond", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 11
+        registry.register_core("ex", "Ex", VariationCategory::Advanced2D, VariationPhase::Normal, false);                // 12
+        registry.register_core("julia", "Julia", VariationCategory::Advanced2D, VariationPhase::Normal, true);           // 13 (Needs RNG)
+        registry.register_core("bent", "Bent", VariationCategory::Advanced2D, VariationPhase::Normal, false);            // 14
+        registry.register_core("waves", "Waves", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 15
 
         // Register 3D depth variations - Indices 16-17, 23
-        registry.register_core("zcone", "Z-Cone", VariationCategory::Depth3D, false);            // 16
-        registry.register_core("flatten", "Flatten", VariationCategory::Depth3D, false);         // 17
-
-        // Register full 3D variations - Index 18
-        registry.register_core("hemisphere", "Hemisphere", VariationCategory::Full3D, false);    // 18
+        registry.register_core("zcone", "Z-Cone", VariationCategory::Depth3D, VariationPhase::Normal, false);            // 16 - Adds to Z based on XY distance
+        registry.register_core("flatten", "Flatten", VariationCategory::Depth3D, VariationPhase::Post, false);           // 17 - POST! Compresses Z toward zero
+        registry.register_core("hemisphere", "Hemisphere", VariationCategory::Full3D, VariationPhase::Normal, false);    // 18 - Full 3D projection
 
         // Register 3D rotation variations - Indices 19-22
-        registry.register_core("pre_rotate_x", "Pre-Rotate X", VariationCategory::Rotation3D, false);   // 19
-        registry.register_core("pre_rotate_y", "Pre-Rotate Y", VariationCategory::Rotation3D, false);   // 20
-        registry.register_core("post_rotate_x", "Post-Rotate X", VariationCategory::Rotation3D, false); // 21
-        registry.register_core("post_rotate_y", "Post-Rotate Y", VariationCategory::Rotation3D, false); // 22
-
-        // Register 3D depth variations (continued) - Index 23
-        registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, false);         // 23
+        registry.register_core("pre_rotate_x", "Pre-Rotate X", VariationCategory::Rotation3D, VariationPhase::Pre, false);   // 19 - PRE!
+        registry.register_core("pre_rotate_y", "Pre-Rotate Y", VariationCategory::Rotation3D, VariationPhase::Pre, false);   // 20 - PRE!
+        registry.register_core("post_rotate_x", "Post-Rotate X", VariationCategory::Rotation3D, VariationPhase::Post, false); // 21 - POST!
+        registry.register_core("post_rotate_y", "Post-Rotate Y", VariationCategory::Rotation3D, VariationPhase::Post, false); // 22 - POST!
+        registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, VariationPhase::Post, false);         // 23 - POST! Scales Z depth
 
         // NEW VARIATIONS (added after original 24) - Indices 24-25
         // IMPORTANT: Always add new variations at the end to preserve index compatibility
-        registry.register_core("julian", "JuliaN", VariationCategory::Advanced2D, true);        // 24 (Needs RNG)
-        registry.register_core("blob", "Blob", VariationCategory::Advanced2D, false);           // 25
+        registry.register_core("julian", "JuliaN", VariationCategory::Advanced2D, VariationPhase::Normal, true);        // 24 (Needs RNG)
+        registry.register_core("blob", "Blob", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 25
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -217,7 +233,7 @@ impl VariationRegistry {
     }
 
     /// Register a core (built-in) variation
-    fn register_core(&mut self, name: &str, display_name: &str, category: VariationCategory, needs_rng: bool) {
+    fn register_core(&mut self, name: &str, display_name: &str, category: VariationCategory, phase: VariationPhase, needs_rng: bool) {
         let wgsl_function = if name == "julia" {
             // Julia is special - doesn't have "variation_" prefix in shader
             name.to_string()
@@ -229,6 +245,7 @@ impl VariationRegistry {
             name: name.to_string(),
             display_name: display_name.to_string(),
             category,
+            phase,
             wgsl_function,
             needs_rng,
             is_core: true,
@@ -241,13 +258,14 @@ impl VariationRegistry {
     }
 
     /// Register a plugin variation
-    pub fn register_plugin(&mut self, name: String, display_name: String, category: VariationCategory, wgsl_source: String, needs_rng: bool) {
+    pub fn register_plugin(&mut self, name: String, display_name: String, category: VariationCategory, phase: VariationPhase, wgsl_source: String, needs_rng: bool) {
         let wgsl_function = format!("variation_{}", name);
 
         let info = VariationInfo {
             name: name.clone(),
             display_name,
             category,
+            phase,
             wgsl_function,
             needs_rng,
             is_core: false,
