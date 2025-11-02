@@ -17,14 +17,14 @@ impl PaletteEditor {
 }
 
 /// Render the Palette Editor window
-#[allow(clippy::too_many_arguments)]
+///
+/// Note: Config change tracking is now handled by ConfigManager.get_pending_actions()
 pub fn render_palette_editor_window(
     ctx: &egui::Context,
     show_palette_editor: &mut bool,
     palette_editor: &mut PaletteEditor,
     config_manager: &mut crate::config::ConfigManager,
     custom_palette: &mut Option<Palette>,
-    palette_changed: &mut bool,
     palette_export_json: &mut Option<Palette>,
     palette_save_file: &mut Option<Palette>,
     palette_import_json: &mut Option<String>,
@@ -34,24 +34,35 @@ pub fn render_palette_editor_window(
         return;
     }
 
+    // Always read from config.palette (single source of truth)
+    let Some(config_palette) = &config_manager.active_config().palette else {
+        // No palette to edit
+        egui::Window::new("Palette Editor")
+            .open(show_palette_editor)
+            .show(ctx, |ui| {
+                ui.label("⚠ No palette selected");
+            });
+        return;
+    };
+
+    // Work on a mutable copy for this frame
+    let mut palette = config_palette.clone();
+
     egui::Window::new("Palette Editor")
         .open(show_palette_editor)
         .default_width(600.0)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Palette Name:");
-                let name_response = ui.text_edit_singleline(&mut palette_editor.current_palette.name);
+                let name_response = ui.text_edit_singleline(&mut palette.name);
 
-                // Create undo entry when user finishes editing name
+                // Update library and create undo point when user finishes editing name
                 if name_response.lost_focus() {
-                    let palette_box = Box::new(palette_editor.current_palette.clone());
-                    if let Ok(_) = config_manager.update_param(
-                        crate::config::ConfigPath::Palette(palette_box.clone()),
-                        crate::config::ConfigValue::Palette((*palette_box).clone()),
-                        false // immediate mode - discrete action
-                    ) {
-                        *palette_changed = true;
-                    }
+                    let _ = config_manager.update_param(
+                        crate::config::ConfigPath::Palette,
+                        palette.clone().into(),
+                        false, // immediate undo for discrete action
+                    );
                 }
             });
             ui.separator();
@@ -70,7 +81,7 @@ pub fn render_palette_editor_window(
                 let steps = rect.width() as usize;
                 for i in 0..steps {
                     let t = i as f32 / steps as f32;
-                    let color = palette_editor.current_palette.sample_color(t);
+                    let color = palette.sample_color(t);
                     let x = rect.left() + i as f32;
                     let color_u8 = egui::Color32::from_rgb(
                         (color[0] * 255.0) as u8,
@@ -92,26 +103,24 @@ pub fn render_palette_editor_window(
 
             // Mode indicator and toggle
             ui.horizontal(|ui| {
-                if palette_editor.current_palette.locked {
+                if palette.locked {
                     ui.label("Mode: 🔒 Fixed 256-Color");
                 } else {
                     ui.label("Mode: 🎨 Free Gradient");
                 }
 
                 // Toggle button
-                let button_text = if palette_editor.current_palette.locked {
+                let button_text = if palette.locked {
                     "Switch to Free Mode"
                 } else {
                     "Switch to Fixed 256-Color Mode"
                 };
 
                 if ui.button(button_text).clicked() {
-                    if palette_editor.current_palette.locked {
+                    if palette.locked {
                         // Free mode: just unlock (no data loss, no warning needed)
-                        palette_editor.current_palette.convert_to_free();
-                        *palette_changed = true;
+                        palette.convert_to_free();
                         // Auto-apply the palette when converting to free mode
-                        *custom_palette = Some(palette_editor.current_palette.clone());
                     } else {
                         // Fixed mode: show warning dialog
                         palette_editor.show_fixed_mode_warning = true;
@@ -130,17 +139,17 @@ pub fn render_palette_editor_window(
             egui::ScrollArea::vertical()
                 .max_height(250.0)
                 .show(ui, |ui| {
-                    let stops_len = palette_editor.current_palette.stops.len();
+                    let stops_len = palette.stops.len();
                     for i in 0..stops_len {
                         ui.horizontal(|ui| {
-                            let stop = &mut palette_editor.current_palette.stops[i];
+                            let stop = &mut palette.stops[i];
 
                             ui.label(format!("Stop {}:", i));
 
                             // Position slider - locked in fixed mode
                             let mut pos_int = (stop.position * 255.0) as i32;
                             let slider_response = ui.add_enabled(
-                                !palette_editor.current_palette.locked,
+                                !palette.locked,
                                 egui::Slider::new(&mut pos_int, 0..=255).text("Position")
                             );
                             if slider_response.changed() {
@@ -167,7 +176,7 @@ pub fn render_palette_editor_window(
                             }
 
                             // Remove button (disabled in fixed mode, keep at least 2 stops)
-                            if stops_len > 2 && !palette_editor.current_palette.locked && ui.button("🗑").clicked() {
+                            if stops_len > 2 && !palette.locked && ui.button("🗑").clicked() {
                                 stop_to_remove = Some(i);
                             }
                         });
@@ -176,66 +185,54 @@ pub fn render_palette_editor_window(
 
             // Handle ConfigManager updates after all mutable borrows are done
             if palette_updated {
-                // Live update via ConfigManager (lazy mode for smooth editing)
-                let palette_box = Box::new(palette_editor.current_palette.clone());
-                if let Ok(_) = config_manager.update_param(
-                    crate::config::ConfigPath::Palette(palette_box.clone()),
-                    crate::config::ConfigValue::Palette((*palette_box).clone()),
-                    true // lazy mode - preview during drag
-                ) {
-                    *palette_changed = true;
-                }
-            }
+                // Update library (live updates during drag)
 
-            if force_commit {
-                let palette_box = Box::new(palette_editor.current_palette.clone());
-                let _ = config_manager.force_commit_preview(&crate::config::ConfigPath::Palette(palette_box));
+                // Enter preview mode for live rendering
+                let _ = config_manager.update_param(
+                    crate::config::ConfigPath::Palette,
+                    palette.clone().into(),
+                    true, // lazy mode = preview mode
+                );
             }
 
             // Remove stop if requested
             if let Some(idx) = stop_to_remove {
-                palette_editor.current_palette.stops.remove(idx);
+                palette.stops.remove(idx);
 
-                // Immediate undo entry for delete operation
-                let palette_box = Box::new(palette_editor.current_palette.clone());
-                if let Ok(_) = config_manager.update_param(
-                    crate::config::ConfigPath::Palette(palette_box.clone()),
-                    crate::config::ConfigValue::Palette((*palette_box).clone()),
-                    false // immediate mode - discrete action
-                ) {
-                    *palette_changed = true;
-                }
+                // Update library and create undo point
+                let _ = config_manager.update_param(
+                    crate::config::ConfigPath::Palette,
+                    palette.clone().into(),
+                    false, // immediate undo for discrete action
+                );
             }
 
             ui.separator();
 
             // Add stop button (disabled in fixed mode)
             if ui.add_enabled(
-                !palette_editor.current_palette.locked,
+                !palette.locked,
                 egui::Button::new("➕ Add Color Stop")
             ).clicked() {
-                let new_position = if palette_editor.current_palette.stops.is_empty() {
+                let new_position = if palette.stops.is_empty() {
                     0.5
                 } else {
                     // Find a gap to insert
-                    palette_editor.current_palette.stops.last().unwrap().position
+                    palette.stops.last().unwrap().position
                 };
-                palette_editor.current_palette.stops.push(ColorStop {
+                palette.stops.push(ColorStop {
                     position: new_position,
                     color: [1.0, 1.0, 1.0],
                 });
                 // Sort by position
-                palette_editor.current_palette.stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap());
+                palette.stops.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap());
 
-                // Immediate undo entry for add operation
-                let palette_box = Box::new(palette_editor.current_palette.clone());
-                if let Ok(_) = config_manager.update_param(
-                    crate::config::ConfigPath::Palette(palette_box.clone()),
-                    crate::config::ConfigValue::Palette((*palette_box).clone()),
-                    false // immediate mode - discrete action
-                ) {
-                    *palette_changed = true;
-                }
+                // Update library and create undo point
+                let _ = config_manager.update_param(
+                    crate::config::ConfigPath::Palette,
+                    palette.clone().into(),
+                    false, // immediate undo for discrete action
+                );
             }
 
             ui.separator();
@@ -244,11 +241,11 @@ pub fn render_palette_editor_window(
             ui.collapsing("Import/Export Palette", |ui| {
                 ui.horizontal(|ui| {
                     if ui.button("📋 Export to Clipboard").clicked() {
-                        *palette_export_json = Some(palette_editor.current_palette.clone());
+                        *palette_export_json = Some(palette.clone());
                     }
 
                     if ui.button("💾 Save as .palette").clicked() {
-                        *palette_save_file = Some(palette_editor.current_palette.clone());
+                        *palette_save_file = Some(palette.clone());
                     }
                 });
 
@@ -298,10 +295,8 @@ pub fn render_palette_editor_window(
 
                 ui.horizontal(|ui| {
                     if ui.button("✅ Convert to Fixed Mode").clicked() {
-                        palette_editor.current_palette.convert_to_fixed();
-                        *palette_changed = true;
+                        palette.convert_to_fixed();
                         // Auto-apply the palette when converting to fixed mode
-                        *custom_palette = Some(palette_editor.current_palette.clone());
                         palette_editor.show_fixed_mode_warning = false;
                     }
 

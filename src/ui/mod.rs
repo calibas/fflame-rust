@@ -101,84 +101,44 @@ impl EguiLayer {
         config_manager: &mut crate::config::ConfigManager,
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
         flame: &mut crate::scene::transforms::Flame,
-        iterations_per_thread: &mut u32,
-        zoom: &mut f32,
-        pan_x: &mut f32,
-        pan_y: &mut f32,
-        rotation: &mut f32,
-        camera_rotation_x: &mut f32,
-        camera_rotation_y: &mut f32,
-        density_scale: &mut f32,
         palette_library: &crate::scene::palette::PaletteLibrary,
-        current_palette_index: &mut usize,
         preset_library: &crate::scene::presets::PresetLibrary,
         current_preset_index: &mut usize,
-        color_mode: &mut crate::scene::palette::ColorMode,
         paused: &mut bool,
-        max_iterations: &mut Option<u64>,
-        speed_factor: &mut f32,
         can_undo: bool,
         can_redo: bool,
-        background_color: &mut [f32; 3],
-        tonemap_mode: &mut crate::scene::tonemap::ToneMapMode,
-        tonemap_curve: &mut crate::scene::tonemap::ToneCurve,
-        use_curve: &mut bool,
-        exposure: &mut f32,
-        gamma: &mut f32,
-        deterministic_rng: &mut bool,
-        speed_multiplier: &mut u32,
-        histogram_color_scale: &mut f32,
-        low_density_smoothing: &mut f32,
-        density_compression_strength: &mut f32,
-        blend_factor: &mut f32,
-        use_dynamic_blend: &mut bool,
-        target_iterations_per_pixel: &mut u32,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
-        let mut reset_requested = false;
-        let mut flame_changed = false;
-        let mut iterations_changed = false;
-        let mut view_changed = false;
-        let mut density_changed = false;
-        let mut palette_changed = false;
-        let mut color_mode_changed = false;
+        // Note: Config change tracking now handled by ConfigManager.get_pending_actions()
+        // Only non-config actions tracked here (file I/O, palette library, transforms, etc.)
+
         let mut pause_changed = false;
         let mut preset_changed = false;
-        let mut histogram_color_scale_changed = false;
-        let mut low_density_smoothing_changed = false;
-        let mut density_compression_changed = false;
-        let mut blend_factor_changed = false;
-        let mut use_dynamic_blend_changed = false;
-        let mut target_iterations_changed = false;
         let mut add_transform = false;
         let mut delete_transform = None;
-        let mut render_mode_changed = false;
-        let mut projection_changed = false;
-        let mut camera_rotation_changed = false;
-        // Config import/export window
+
+        // Config import/export
         let mut config_export_json = None;
         let mut config_import_json = None;
         let mut config_save_file = false;
         let mut config_load_file = false;
         let mut apophysis_import_file = false;
+
+        // Palette library management
         let mut custom_palette = None;
-        let mut undo_requested = false;
-        let mut redo_requested = false;
-        let mut background_color_changed = false;
-        let mut png_export_with_background = false;
-        // Tone mapping
-        let mut tonemap_mode_changed = false;
-        let mut tonemap_curve_changed = false;
-        let mut use_curve_changed = false;
-        let mut exposure_changed = false;
-        let mut gamma_changed = false;
-        let mut png_export_transparent = false;
-        // Palette import/export
         let mut palette_export_json = None;
         let mut palette_save_file = None;
         let mut palette_import_json = None;
         let mut palette_load_file = false;
+
+        // Undo/redo
+        let mut undo_requested = false;
+        let mut redo_requested = false;
+
+        // Export
+        let mut png_export_with_background = false;
+        let mut png_export_transparent = false;
 
 
         // Log ConfigManager state at start of UI render
@@ -211,7 +171,7 @@ impl EguiLayer {
             );
 
             // Render Settings window
-            let settings_update_type = settings::render_settings_window(
+            let _settings_update_type = settings::render_settings_window(
                 ctx,
                 &mut self.show_settings,
                 &mut self.show_config_window,
@@ -226,78 +186,40 @@ impl EguiLayer {
                 current_preset_index,
                 &mut preset_changed,
                 flame,
-                &mut render_mode_changed,
-                &mut projection_changed,
-                &mut flame_changed,
                 flame_renderer.as_deref(),
                 paused,
                 &mut pause_changed,
-                &mut reset_requested,
-                max_iterations,
-                iterations_per_thread,
-                &mut iterations_changed,
-                deterministic_rng,
-                speed_multiplier,
                 config_manager,
-                histogram_color_scale,
-                &mut histogram_color_scale_changed,
-                low_density_smoothing,
-                &mut low_density_smoothing_changed,
-                density_compression_strength,
-                &mut density_compression_changed,
-                blend_factor,
-                &mut blend_factor_changed,
-                use_dynamic_blend,
-                &mut use_dynamic_blend_changed,
-                target_iterations_per_pixel,
-                &mut target_iterations_changed,
             );
-            // TODO: Handle settings_update_type (Phase 4 task)
 
             // Render View window
-            let view_update_type = view::render_view_window(
+            let _view_update_type = view::render_view_window(
                 ctx,
                 &mut self.show_view,
                 config_manager,
-                zoom,
-                pan_x,
-                pan_y,
-                rotation,
-                camera_rotation_x,
-                camera_rotation_y,
                 flame,
-                &mut view_changed,
-                &mut camera_rotation_changed,
             );
-            // TODO: Handle view_update_type (Phase 4 task)
 
             // Render Help window
             help::render_help_window(ctx, &mut self.show_help);
 
             // Render Transforms window
-            let transforms_update_type = transforms::render_transforms_window(
+            let _transforms_update_type = transforms::render_transforms_window(
                 ctx,
                 &mut self.show_transforms,
                 config_manager,
                 flame,
-                &mut flame_changed,
                 &mut add_transform,
                 &mut delete_transform,
             );
-            // TODO: Handle transforms_update_type (Phase 4 task)
 
             // Render Triangle Editor window
-            let triangle_editor_update = triangle_editor::render_triangle_editor_window(
+            let _triangle_editor_update = triangle_editor::render_triangle_editor_window(
                 ctx,
                 &mut self.show_triangle_editor,
                 config_manager,
                 flame,
             );
-            // Handle triangle editor updates
-            // Set flame_changed if update type requires it OR if in preview mode (live updates during drag)
-            if triangle_editor_update >= crate::config::UpdateType::IterationReset || config_manager.is_in_preview_mode() {
-                flame_changed = true;
-            }
 
             // Render Tone Mapping window
             let _tonemap_update = tone_mapping::render_tone_mapping_window(
@@ -305,27 +227,8 @@ impl EguiLayer {
                 &mut self.show_tone_mapping,
                 &mut self.show_palette_editor,
                 config_manager,
-                tonemap_mode,
-                &mut tonemap_mode_changed,
-                tonemap_curve,
-                &mut tonemap_curve_changed,
-                use_curve,
-                &mut use_curve_changed,
-                exposure,
-                &mut exposure_changed,
-                gamma,
-                &mut gamma_changed,
-                density_scale,
-                &mut density_changed,
-                color_mode,
-                &mut color_mode_changed,
                 palette_library,
-                current_palette_index,
-                &mut palette_changed,
-                &mut self.palette_editor.current_palette,
-                speed_factor,
-                background_color,
-                &mut background_color_changed,
+                &mut custom_palette,
                 &mut self.lazy_undo_tone_mapping,
             );
 
@@ -336,7 +239,6 @@ impl EguiLayer {
                 &mut self.palette_editor,
                 config_manager,
                 &mut custom_palette,
-                &mut palette_changed,
                 &mut palette_export_json,
                 &mut palette_save_file,
                 &mut palette_import_json,
@@ -414,13 +316,6 @@ impl EguiLayer {
         *flame = config_manager.active_config().flame.clone();
 
         UiResponse {
-            reset_requested,
-            flame_changed,
-            iterations_changed,
-            view_changed,
-            density_changed,
-            palette_changed,
-            color_mode_changed,
             pause_changed,
             config_export_requested: config_export_json,
             config_import_requested: config_import_json,
@@ -429,32 +324,18 @@ impl EguiLayer {
             apophysis_import_file_requested: apophysis_import_file,
             apophysis_import_configs: None,
             custom_palette,
-            undo_requested,
-            redo_requested,
-            background_color_changed,
-            png_export_with_background,
-            png_export_transparent,
             palette_export_json,
             palette_save_file,
             palette_import_json,
             palette_load_file,
             palette_imported: None,
+            undo_requested,
+            redo_requested,
+            png_export_with_background,
+            png_export_transparent,
             preset_changed,
             add_transform,
             delete_transform,
-            render_mode_changed,
-            projection_changed,
-            camera_rotation_changed,
-            tonemap_mode_changed,
-            tonemap_curve_changed,
-            exposure_changed,
-            gamma_changed,
-            histogram_color_scale_changed,
-            low_density_smoothing_changed,
-            density_compression_changed,
-            blend_factor_changed,
-            use_dynamic_blend_changed,
-            target_iterations_changed,
         }
     }
 }

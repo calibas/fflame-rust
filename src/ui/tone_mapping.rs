@@ -1,39 +1,22 @@
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::palette::{ColorMode, PaletteLibrary};
 use crate::ui::LazyUndoHelper;
-use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
+use crate::config::{ConfigManager, ConfigPath, ConfigValue, LazyUndoUi, UpdateType};
 
 /// Render the Tone Mapping window with all tone mapping and color controls
-#[allow(clippy::too_many_arguments)]
+///
+/// Note: Config change tracking is now handled by ConfigManager.get_pending_actions()
 pub fn render_tone_mapping_window(
     ctx: &egui::Context,
     show_tone_mapping: &mut bool,
     show_palette_editor: &mut bool,
     config_manager: &mut ConfigManager,
-    tonemap_mode: &mut ToneMapMode,
-    tonemap_mode_changed: &mut bool,
-    tonemap_curve: &mut ToneCurve,
-    tonemap_curve_changed: &mut bool,
-    use_curve: &mut bool,
-    use_curve_changed: &mut bool,
-    exposure: &mut f32,
-    exposure_changed: &mut bool,
-    gamma: &mut f32,
-    gamma_changed: &mut bool,
-    density_scale: &mut f32,
-    density_changed: &mut bool,
-    color_mode: &mut ColorMode,
-    color_mode_changed: &mut bool,
     palette_library: &PaletteLibrary,
-    current_palette_index: &mut usize,
-    palette_changed: &mut bool,
-    palette_editor_palette: &mut crate::scene::palette::Palette,
-    speed_factor: &mut f32,
-    background_color: &mut [f32; 3],
-    background_color_changed: &mut bool,
+    custom_palette: &mut Option<crate::scene::palette::Palette>,
     lazy_undo: &mut LazyUndoHelper,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
+
     egui::Window::new("Tone Mapping & Colors")
         .open(show_tone_mapping)
         .show(ctx, |ui| {
@@ -47,22 +30,16 @@ pub fn render_tone_mapping_window(
                     ui.horizontal(|ui| {
                         if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Linear), "Linear").clicked() {
                             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Linear.into(), false) {
-                                *tonemap_mode = config_manager.active_config().tonemap_mode;
-                                // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                 max_update = max_update.max(update);
                             }
                         }
                         if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Logarithmic), "Logarithmic").clicked() {
                             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into(), false) {
-                                *tonemap_mode = config_manager.active_config().tonemap_mode;
-                                // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                 max_update = max_update.max(update);
                             }
                         }
                         if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::DensityVisualization), "Density").clicked() {
                             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::DensityVisualization.into(), false) {
-                                *tonemap_mode = config_manager.active_config().tonemap_mode;
-                                // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                 max_update = max_update.max(update);
                             }
                         }
@@ -72,26 +49,14 @@ pub fn render_tone_mapping_window(
 
                     // Convert sliders to use ConfigManager
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.1..=5.0, "Exposure") {
-                        if result.changed {
-                            *exposure = config_manager.active_config().exposure;
-                            *exposure_changed = result.should_capture;
-                        }
                         max_update = max_update.max(result.update_type);
                     }
 
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, 1.0..=3.0, "Gamma") {
-                        if result.changed {
-                            *gamma = config_manager.active_config().gamma;
-                            *gamma_changed = result.should_capture;
-                        }
                         max_update = max_update.max(result.update_type);
                     }
 
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::DensityScale, 0.01..=10.0, "Density Scale") {
-                        if result.changed {
-                            *density_scale = config_manager.active_config().density_scale;
-                            *density_changed = result.should_capture;
-                        }
                         max_update = max_update.max(result.update_type);
                     }
                 });
@@ -104,8 +69,6 @@ pub fn render_tone_mapping_window(
                     let mut temp_use_curve = config_manager.active_config().use_curve;
                     if ui.checkbox(&mut temp_use_curve, "Enable Tone Curve").changed() {
                         if let Ok(update) = config_manager.update_param(ConfigPath::UseCurve, temp_use_curve.into(), false) {
-                            *use_curve = config_manager.active_config().use_curve;
-                            *use_curve_changed = true;
                             max_update = max_update.max(update);
                         }
                     }
@@ -118,22 +81,16 @@ pub fn render_tone_mapping_window(
                         ui.horizontal(|ui| {
                             if ui.button("Linear").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::linear().into(), false) {
-                                    *tonemap_curve = config_manager.active_config().tonemap_curve.clone();
-                                    // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                     max_update = max_update.max(update);
                                 }
                             }
                             if ui.button("S-Curve").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::s_curve().into(), false) {
-                                    *tonemap_curve = config_manager.active_config().tonemap_curve.clone();
-                                    // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                     max_update = max_update.max(update);
                                 }
                             }
                             if ui.button("Brighten Shadows").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::brighten_shadows().into(), false) {
-                                    *tonemap_curve = config_manager.active_config().tonemap_curve.clone();
-                                    // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -141,8 +98,6 @@ pub fn render_tone_mapping_window(
                         ui.horizontal(|ui| {
                             if ui.button("Darken Highlights").clicked() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::darken_highlights().into(), false) {
-                                    *tonemap_curve = config_manager.active_config().tonemap_curve.clone();
-                                    // Note: ConfigManager handles undo, flag removed to avoid dual undo
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -151,7 +106,7 @@ pub fn render_tone_mapping_window(
                         ui.separator();
 
                         // Curve editor
-                        let curve_update = render_curve_editor(ui, config_manager, tonemap_curve, tonemap_curve_changed);
+                        let curve_update = render_curve_editor(ui, config_manager);
                         max_update = max_update.max(curve_update);
                     });
                 });
@@ -173,134 +128,164 @@ pub fn render_tone_mapping_window(
                         .show_ui(ui, |ui| {
                             if ui.selectable_value(&mut temp_color_mode, ColorMode::Transform, "Transform Colors").changed() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
-                                    *color_mode = config_manager.active_config().color_mode;
-                                    *color_mode_changed = true;
                                     max_update = max_update.max(update);
                                 }
                             }
                             if ui.selectable_value(&mut temp_color_mode, ColorMode::Palette, "Palette").changed() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
-                                    *color_mode = config_manager.active_config().color_mode;
-                                    *color_mode_changed = true;
                                     max_update = max_update.max(update);
                                 }
                             }
                             if ui.selectable_value(&mut temp_color_mode, ColorMode::Speed, "Speed").changed() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
-                                    *color_mode = config_manager.active_config().color_mode;
-                                    *color_mode_changed = true;
                                     max_update = max_update.max(update);
                                 }
                             }
                         });
 
                     // Show palette selector for Palette and Speed modes
-                    if matches!(*color_mode, ColorMode::Palette | ColorMode::Speed) {
+                    let current_color_mode = config_manager.active_config().color_mode;
+                    if matches!(current_color_mode, ColorMode::Palette | ColorMode::Speed) {
                         let palettes = palette_library.palettes();
-                        let current_palette_name = palettes.get(*current_palette_index)
-                            .map(|p| p.name.as_str())
-                            .unwrap_or("Unknown");
+
+                        // Clone current palette name to avoid borrow conflicts in closures
+                        let current_palette = config_manager.active_config().palette.clone();
+                        let current_palette_name = current_palette
+                            .as_ref()
+                            .map(|p| p.name.clone())
+                            .unwrap_or_else(|| "(None)".to_string());
 
                         // Use ID with palette count to force refresh when library changes
                         egui::ComboBox::from_id_source(format!("palette_selector_{}", palettes.len()))
-                            .selected_text(current_palette_name)
+                            .selected_text(&current_palette_name)
                             .show_ui(ui, |ui| {
                                 ui.label("Palette");
-                                for (idx, palette) in palettes.iter().enumerate() {
-                                    if ui.selectable_value(current_palette_index, idx, &palette.name).changed() {
-                                        if let Ok(update) = config_manager.update_param(ConfigPath::PaletteIndex, (*current_palette_index as u32).into(), false) {
-                                            *palette_changed = true;
-                                            max_update = max_update.max(update);
 
-                                            // Update palette editor when selection changes
-                                            if let Some(pal) = palette_library.get(*current_palette_index) {
-                                                let mut edited_palette = pal.clone();
+                                // Show all library palettes (includes custom palettes)
+                                for palette in palettes.iter() {
+                                    let is_selected = current_palette.as_ref().map(|p| &p.name) == Some(&palette.name);
+                                    if ui.selectable_label(is_selected, &palette.name).clicked() {
+                                        // Copy selected palette to config.palette (always editable)
+                                        let mut palette_copy = palette.clone();
 
-                                                // Generate unique name for built-in palettes even when switching
-                                                if pal.built_in {
-                                                    let base_name = &pal.name;
-                                                    let mut new_name = format!("{} (Custom)", base_name);
-                                                    let mut counter = 2;
+                                        // If it's a built-in, rename it to avoid confusion
+                                        if palette.built_in {
+                                            let base_name = &palette.name;
+                                            let mut new_name = format!("{} (Custom)", base_name);
+                                            let mut counter = 2;
 
-                                                    while palette_library.palettes().iter().any(|p| p.name == new_name) {
-                                                        new_name = format!("{} (Custom {})", base_name, counter);
-                                                        counter += 1;
-                                                    }
-
-                                                    edited_palette.name = new_name;
-                                                    edited_palette.built_in = false;
-                                                }
-
-                                                *palette_editor_palette = edited_palette;
-                                                // Note: Changes now applied live via ConfigManager
+                                            // Find unique name
+                                            while palette_library.palettes().iter().any(|p| p.name == new_name)
+                                                || (current_palette.as_ref().map(|p| &p.name) == Some(&new_name)) {
+                                                new_name = format!("{} (Custom {})", base_name, counter);
+                                                counter += 1;
                                             }
+
+                                            palette_copy.name = new_name;
                                         }
+
+                                        palette_copy.built_in = false; // Always mark as editable
+
+                                        if let Ok(update) = config_manager.update_param(
+                                            ConfigPath::Palette,
+                                            palette_copy.clone().into(),
+                                            false
+                                        ) {
+                                            max_update = max_update.max(update);
+                                        }
+
+                                        // Add to library for persistence (doesn't change palette_index)
+                                        *custom_palette = Some(palette_copy);
                                     }
                                 }
                             });
 
                         ui.horizontal(|ui| {
-                            // Edit Palette button - creates copy of built-ins, edits custom palettes in-place
+                            // Edit Palette button - opens editor for config.palette
                             if ui.button("🎨 Edit Palette").clicked() {
                                 *show_palette_editor = !*show_palette_editor;
-                                // Load current palette into editor
-                                if let Some(pal) = palette_library.get(*current_palette_index) {
-                                    let mut edited_palette = pal.clone();
 
-                                    // Always generate unique name for built-in palettes to prevent editing originals
-                                    if pal.built_in {
-                                        let base_name = &pal.name;
-                                        let mut new_name = format!("{} (Custom)", base_name);
-                                        let mut counter = 2;
+                                // Ensure config.palette is set (copy from library if None)
+                                if current_palette.is_none() {
+                                    // No custom palette, copy from library
+                                    let palette_index = config_manager.active_config().palette_index;
+                                    if let Some(lib_pal) = palette_library.get(palette_index) {
+                                        let mut pal = lib_pal.clone();
 
-                                        // Keep incrementing until we find a unique name
-                                        while palette_library.palettes().iter().any(|p| p.name == new_name) {
-                                            new_name = format!("{} (Custom {})", base_name, counter);
-                                            counter += 1;
+                                        // If it's a built-in, rename it
+                                        if lib_pal.built_in {
+                                            let base_name = &lib_pal.name;
+                                            let mut new_name = format!("{} (Custom)", base_name);
+                                            let mut counter = 2;
+
+                                            // Find unique name
+                                            while palette_library.palettes().iter().any(|p| p.name == new_name) {
+                                                new_name = format!("{} (Custom {})", base_name, counter);
+                                                counter += 1;
+                                            }
+
+                                            pal.name = new_name;
                                         }
 
-                                        edited_palette.name = new_name;
-                                        edited_palette.built_in = false; // Custom palettes are not built-in
-                                    }
-                                    // For custom palettes, keep the same name (will update in place)
+                                        pal.built_in = false; // Always mark as editable
 
-                                    *palette_editor_palette = edited_palette;
-                                    // Note: Changes now applied live via ConfigManager
+                                        // Set it in config
+                                        let _ = config_manager.update_param(
+                                            ConfigPath::Palette,
+                                            pal.into(),
+                                            false
+                                        );
+                                    }
                                 }
                             }
 
-                            // Clone button - always creates a copy with unique name
+                            // Clone button - makes a copy with unique name
                             if ui.button("📋 Clone").clicked() {
-                                *show_palette_editor = !*show_palette_editor;
-                                if let Some(pal) = palette_library.get(*current_palette_index) {
-                                    let mut edited_palette = pal.clone();
-                                    edited_palette.built_in = false; // Clones are never built-in
-
+                                if let Some(pal) = &current_palette {
+                                    let mut cloned_palette = pal.clone();
                                     let base_name = &pal.name;
                                     let mut new_name = format!("{} (Copy)", base_name);
                                     let mut counter = 2;
 
-                                    // Keep incrementing until we find a unique name
+                                    // Find unique name
                                     while palette_library.palettes().iter().any(|p| p.name == new_name) {
                                         new_name = format!("{} (Copy {})", base_name, counter);
                                         counter += 1;
                                     }
 
-                                    edited_palette.name = new_name;
-                                    *palette_editor_palette = edited_palette;
-                                    // Note: Changes now applied live via ConfigManager
+                                    cloned_palette.name = new_name;
+                                    cloned_palette.built_in = false;
+
+                                    // Set as current palette and open editor
+                                    if let Ok(update) = config_manager.update_param(
+                                        ConfigPath::Palette,
+                                        cloned_palette.clone().into(),
+                                        false
+                                    ) {
+                                        max_update = max_update.max(update);
+                                        *show_palette_editor = true;
+
+                                        // Add to library for persistence
+                                        *custom_palette = Some(cloned_palette);
+                                    }
                                 }
                             }
                         });
                     }
 
                     // Show speed factor slider in Speed mode
-                    if matches!(*color_mode, ColorMode::Speed) {
-                        let mut temp_speed_factor = config_manager.active_config().speed_factor;
-                        if ui.add(egui::Slider::new(&mut temp_speed_factor, 0.0..=1.0).text("Speed Blend Factor")).changed() {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::SpeedFactor, temp_speed_factor.into(), true) {
-                                *speed_factor = config_manager.active_config().speed_factor;
-                                *color_mode_changed = true;
+                    let current_color_mode_2 = config_manager.active_config().color_mode;
+                    if matches!(current_color_mode_2, ColorMode::Speed) {
+                        let current_speed_factor = config_manager.active_config().speed_factor;
+                        let mut temp_speed_factor = current_speed_factor;
+                        let response = ui.add(egui::Slider::new(&mut temp_speed_factor, 0.0..=1.0).text("Speed Blend Factor"));
+                        if response.changed() {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::SpeedFactor, temp_speed_factor.into(), response.dragged()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if response.drag_stopped() && config_manager.is_in_preview_mode() {
+                            if let Ok(update) = config_manager.force_commit_preview(&ConfigPath::SpeedFactor) {
                                 max_update = max_update.max(update);
                             }
                         }
@@ -310,11 +295,10 @@ pub fn render_tone_mapping_window(
 
                     // Background color picker
                     ui.label("Background Color");
-                    let mut temp_bg_color = config_manager.active_config().background_color;
+                    let current_bg_color = config_manager.active_config().background_color;
+                    let mut temp_bg_color = current_bg_color;
                     if ui.color_edit_button_rgb(&mut temp_bg_color).changed() {
                         if let Ok(update) = config_manager.update_param(ConfigPath::BackgroundColor, temp_bg_color.into(), false) {
-                            *background_color = config_manager.active_config().background_color;
-                            // Note: ConfigManager handles undo, flag removed to avoid dual undo
                             max_update = max_update.max(update);
                         }
                     }
@@ -328,11 +312,12 @@ pub fn render_tone_mapping_window(
 fn render_curve_editor(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
-    curve: &mut ToneCurve,
-    curve_changed: &mut bool,
 ) -> UpdateType {
     ui.label("Curve Editor");
     let mut max_update = UpdateType::None;
+
+    // Clone curve to avoid borrow conflicts
+    let curve = config_manager.active_config().tonemap_curve.clone();
 
     // Plot the curve
     let (response, painter) = ui.allocate_painter(
@@ -446,8 +431,6 @@ fn render_curve_editor(
 
             // Update via ConfigManager with lazy mode (throttled)
             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, modified_curve.into(), true) {
-                *curve = config_manager.active_config().tonemap_curve.clone();
-                *curve_changed = true;
                 max_update = max_update.max(update);
             }
         }
@@ -479,8 +462,6 @@ fn render_curve_editor(
 
             // Update via ConfigManager (not lazy - immediate capture for discrete action)
             if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, modified_curve.into(), false) {
-                *curve = config_manager.active_config().tonemap_curve.clone();
-                *curve_changed = true;
                 max_update = max_update.max(update);
             }
         }

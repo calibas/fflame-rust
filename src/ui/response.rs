@@ -1,58 +1,46 @@
 /// Response from the UI layer indicating what actions should be taken
+///
+/// Note: Config-related change tracking has been moved to ConfigManager.get_pending_actions()
+/// This struct now only contains non-config actions (file I/O, palette library, transforms, etc.)
 pub struct UiResponse {
-    pub reset_requested: bool,
-    pub flame_changed: bool,
-    pub iterations_changed: bool,
-    pub view_changed: bool,
-    pub density_changed: bool,
-    pub palette_changed: bool,
-    pub color_mode_changed: bool,
+    // UI-only state (not in config)
     pub pause_changed: bool,
+
+    // File I/O operations
     pub config_export_requested: Option<String>,
     pub config_import_requested: Option<String>,
     pub config_save_file_requested: bool,
     pub config_load_file_requested: bool,
     pub apophysis_import_file_requested: bool,
     pub apophysis_import_configs: Option<Vec<crate::config::FractalConfig>>,
+
+    // Palette library management (not stored in config directly)
     pub custom_palette: Option<crate::scene::palette::Palette>,
-    pub undo_requested: bool,
-    pub redo_requested: bool,
-    pub background_color_changed: bool,
-    pub png_export_with_background: bool,
-    pub png_export_transparent: bool,
     pub palette_export_json: Option<crate::scene::palette::Palette>,
     pub palette_save_file: Option<crate::scene::palette::Palette>,
     pub palette_import_json: Option<String>,
     pub palette_load_file: bool,
     pub palette_imported: Option<crate::scene::palette::Palette>,
+
+    // Undo/redo (handled by ConfigManager but triggered from UI)
+    pub undo_requested: bool,
+    pub redo_requested: bool,
+
+    // Export operations
+    pub png_export_with_background: bool,
+    pub png_export_transparent: bool,
+
+    // Preset loading (triggers flame sync)
     pub preset_changed: bool,
+
+    // Transform management (creates config deltas but needs special handling)
     pub add_transform: bool,
-    pub delete_transform: Option<usize>, // Index of transform to delete
-    pub render_mode_changed: bool,
-    pub projection_changed: bool,
-    pub camera_rotation_changed: bool,
-    pub tonemap_mode_changed: bool,
-    pub tonemap_curve_changed: bool,
-    pub exposure_changed: bool,
-    pub gamma_changed: bool,
-    pub histogram_color_scale_changed: bool,
-    pub low_density_smoothing_changed: bool,
-    pub density_compression_changed: bool,
-    pub blend_factor_changed: bool,
-    pub use_dynamic_blend_changed: bool,
-    pub target_iterations_changed: bool,
+    pub delete_transform: Option<usize>,
 }
 
 impl Default for UiResponse {
     fn default() -> Self {
         Self {
-            reset_requested: false,
-            flame_changed: false,
-            iterations_changed: false,
-            view_changed: false,
-            density_changed: false,
-            palette_changed: false,
-            color_mode_changed: false,
             pause_changed: false,
             config_export_requested: None,
             config_import_requested: None,
@@ -61,32 +49,18 @@ impl Default for UiResponse {
             apophysis_import_file_requested: false,
             apophysis_import_configs: None,
             custom_palette: None,
-            undo_requested: false,
-            redo_requested: false,
-            background_color_changed: false,
-            png_export_with_background: false,
-            png_export_transparent: false,
             palette_export_json: None,
             palette_save_file: None,
             palette_import_json: None,
             palette_load_file: false,
             palette_imported: None,
+            undo_requested: false,
+            redo_requested: false,
+            png_export_with_background: false,
+            png_export_transparent: false,
             preset_changed: false,
             add_transform: false,
             delete_transform: None,
-            render_mode_changed: false,
-            projection_changed: false,
-            camera_rotation_changed: false,
-            tonemap_mode_changed: false,
-            tonemap_curve_changed: false,
-            exposure_changed: false,
-            gamma_changed: false,
-            histogram_color_scale_changed: false,
-            low_density_smoothing_changed: false,
-            density_compression_changed: false,
-            blend_factor_changed: false,
-            use_dynamic_blend_changed: false,
-            target_iterations_changed: false,
         }
     }
 }

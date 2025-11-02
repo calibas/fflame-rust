@@ -20,52 +20,34 @@ use crate::config::{FractalConfig, ConfigManager};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 
 pub struct App {
-    pub(super) config_manager: ConfigManager,
+    // Core state management
+    pub(super) config_manager: ConfigManager,  // Single source of truth for all config
+
+    // GPU and rendering resources
     pub(super) gpu: GpuContext,
     pub(super) egui_layer: EguiLayer,
     pub(super) flame_renderer: Option<FlameRenderer>,
-    pub(super) flame: Flame,
-    pub(super) iterations_per_thread: u32,
-    pub(super) zoom: f32,
-    pub(super) pan_x: f32,
-    pub(super) pan_y: f32,
-    pub(super) rotation: f32,
-    pub(super) camera_rotation_x: f32, // 3D camera pitch
-    pub(super) camera_rotation_y: f32, // 3D camera yaw
-    pub(super) density_scale: f32,
+    pub(super) flame: Flame,  // Working copy for renderer (synced from config_manager)
+
+    // UI state (not saved in config)
     pub(super) view_changed_by_keyboard: bool,
     pub(super) mouse_dragging: bool,
     pub(super) last_mouse_pos: Option<(f32, f32)>,
-    pub(super) metrics: PerformanceMetrics,
-    pub(super) palette_library: PaletteLibrary,
-    pub(super) current_palette_index: usize,
-    pub(super) preset_library: PresetLibrary,
-    pub(super) current_preset_index: usize,
-    pub(super) color_mode: ColorMode,
     pub(super) paused: bool,
-    pub(super) max_iterations: Option<u64>,
-    pub(super) speed_factor: f32,
     pub(super) modifiers: winit::keyboard::ModifiersState,
-    pub(super) background_color: [f32; 3],
-    // Tone mapping
-    pub(super) tonemap_mode: ToneMapMode,
-    pub(super) tonemap_curve: ToneCurve,
-    pub(super) use_curve: bool,
-    pub(super) exposure: f32,
-    pub(super) gamma: f32,
-    // Rendering
-    pub(super) deterministic_rng: bool,
-    pub(super) speed_multiplier: u32,  // 1x, 2x, 4x, 8x, 16x (target FPS = 60 * multiplier)
+
+    // Libraries (not saved in config)
+    pub(super) palette_library: PaletteLibrary,
+    pub(super) preset_library: PresetLibrary,
+    pub(super) current_preset_index: usize,  // UI state, not config
+
+    // Performance tracking
+    pub(super) metrics: PerformanceMetrics,
+
+    // Rendering internals (frame timing and batching)
     pub(super) last_frame_time: Option<web_time::Instant>,
-    // Batched accumulation experiment
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
-    pub(super) histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
-    pub(super) low_density_smoothing: f32,  // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
-    pub(super) density_compression_strength: f32,  // 0.0 = linear, 5.0 = strong compression (default: 0.0)
-    pub(super) blend_factor: f32,  // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
-    pub(super) use_dynamic_blend: bool,  // true = exponential convergence (old), false = fixed blend rate (new)
-    pub(super) target_iterations_per_pixel: u32,  // Per-pixel convergence: stop updating pixel after N iterations (0 = disabled)
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -86,7 +68,20 @@ impl App {
             &flame,
         );
 
-        let palette_library = PaletteLibrary::new();
+        let mut palette_library = PaletteLibrary::new();
+
+        // Create initial custom palette and add to library
+        let initial_palette = {
+            let mut pal = palette_library.get(1).unwrap().clone();
+            // Rename if built-in to avoid confusion
+            if pal.built_in {
+                pal.name = format!("{} (Custom)", pal.name);
+                pal.built_in = false;
+            }
+            // Add to library so it appears in dropdown
+            palette_library.add(pal.clone());
+            pal
+        };
 
         // Create initial config for undo history
         let initial_config = FractalConfig {
@@ -102,7 +97,7 @@ impl App {
             max_iterations: crate::config::DEFAULT_MAX_ITERATIONS,
             color_mode: ColorMode::Transform,
             palette_index: 1,
-            palette: Some(palette_library.get(1).unwrap().clone()),
+            palette: Some(initial_palette),
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::Logarithmic,
             tonemap_curve: ToneCurve::linear(),
@@ -114,6 +109,7 @@ impl App {
             low_density_smoothing: crate::config::DEFAULT_LOW_DENSITY_SMOOTHING,
             density_compression_strength: crate::config::DEFAULT_DENSITY_COMPRESSION,
             blend_factor: crate::config::DEFAULT_BLEND_FACTOR,
+            use_dynamic_blend: crate::config::DEFAULT_USE_DYNAMIC_BLEND,
             target_iterations_per_pixel: crate::config::DEFAULT_TARGET_ITERATIONS_PER_PIXEL as u32,
             iterations_per_thread: crate::config::DEFAULT_ITERATIONS_PER_THREAD,
             speed_multiplier: crate::config::DEFAULT_SPEED_MULTIPLIER,
@@ -127,44 +123,18 @@ impl App {
             egui_layer,
             flame_renderer: Some(flame_renderer),
             flame,
-            iterations_per_thread: initial_config.iterations_per_thread,
-            zoom: initial_config.zoom,
-            pan_x: initial_config.pan_x,
-            pan_y: initial_config.pan_y,
-            rotation: initial_config.rotation,
-            camera_rotation_x: initial_config.camera_rotation_x,
-            camera_rotation_y: initial_config.camera_rotation_y,
-            density_scale: initial_config.density_scale,
             view_changed_by_keyboard: false,
             mouse_dragging: false,
             last_mouse_pos: None,
-            metrics: PerformanceMetrics::new(),
+            paused: false,
+            modifiers: winit::keyboard::ModifiersState::default(),
             palette_library,
-            current_palette_index: initial_config.palette_index,
             preset_library,
             current_preset_index: 0,
-            color_mode: initial_config.color_mode,
-            paused: false,
-            max_iterations: Some(initial_config.max_iterations),
-            speed_factor: initial_config.speed_factor,
-            modifiers: winit::keyboard::ModifiersState::default(),
-            background_color: initial_config.background_color,
-            tonemap_mode: initial_config.tonemap_mode,
-            tonemap_curve: initial_config.tonemap_curve.clone(),
-            use_curve: initial_config.use_curve,
-            exposure: initial_config.exposure,
-            gamma: initial_config.gamma,
-            deterministic_rng: initial_config.deterministic_rng,
-            speed_multiplier: initial_config.speed_multiplier,
+            metrics: PerformanceMetrics::new(),
             last_frame_time: None,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
-            histogram_color_scale: initial_config.histogram_color_scale,
-            low_density_smoothing: initial_config.low_density_smoothing,
-            density_compression_strength: initial_config.density_compression_strength,
-            blend_factor: initial_config.blend_factor,
-            use_dynamic_blend: crate::config::DEFAULT_USE_DYNAMIC_BLEND,
-            target_iterations_per_pixel: initial_config.target_iterations_per_pixel,
         };
 
         #[allow(deprecated)]
@@ -182,12 +152,13 @@ impl App {
                                 app.gpu.resize(size);
                                 // Also resize renderer buffers to match
                                 if let Some(ref mut renderer) = app.flame_renderer {
+                                    let config = app.config_manager.active_config();
                                     let mut encoder = app.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                                         label: Some("Resize Encoder"),
                                     });
                                     renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, size.width, size.height,
-                                        &app.flame, app.iterations_per_thread, app.zoom, app.pan_x, app.pan_y, app.rotation,
-                                        app.camera_rotation_x, app.camera_rotation_y, app.speed_factor);
+                                        &app.flame, config.iterations_per_thread, config.zoom, config.pan_x, config.pan_y, config.rotation,
+                                        config.camera_rotation_x, config.camera_rotation_y, config.speed_factor);
                                     app.gpu.queue.submit(std::iter::once(encoder.finish()));
                                 }
                             }
@@ -198,12 +169,13 @@ impl App {
                             if new_size.width > 0 && new_size.height > 0 {
                                 app.gpu.resize(new_size);
                                 if let Some(ref mut renderer) = app.flame_renderer {
+                                    let config = app.config_manager.active_config();
                                     let mut encoder = app.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                                         label: Some("Scale Factor Resize Encoder"),
                                     });
                                     renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, new_size.width, new_size.height,
-                                        &app.flame, app.iterations_per_thread, app.zoom, app.pan_x, app.pan_y, app.rotation,
-                                        app.camera_rotation_x, app.camera_rotation_y, app.speed_factor);
+                                        &app.flame, config.iterations_per_thread, config.zoom, config.pan_x, config.pan_y, config.rotation,
+                                        config.camera_rotation_x, config.camera_rotation_y, config.speed_factor);
                                     app.gpu.queue.submit(std::iter::once(encoder.finish()));
                                 }
                                 window.request_redraw();
@@ -255,12 +227,14 @@ impl App {
                     use web_time::Instant;
 
                     // Check if actively rendering (not paused and under max_iterations)
+                    let config = app.config_manager.active_config();
+                    let max_iterations = Some(config.max_iterations);
                     let is_rendering = !app.paused && app.flame_renderer.as_ref().map_or(false, |r| {
-                        app.max_iterations.map_or(true, |max| r.total_iterations() < max)
+                        max_iterations.map_or(true, |max| r.total_iterations() < max)
                     });
 
                     // Use speed multiplier when actively rendering, otherwise default to 60 FPS
-                    let multiplier = if is_rendering { app.speed_multiplier } else { 1 };
+                    let multiplier = if is_rendering { config.speed_multiplier } else { 1 };
                     let target_fps = 60.0 * multiplier as f64;
                     let target_frame_time = Duration::from_secs_f64(1.0 / target_fps);
 
@@ -297,6 +271,9 @@ impl App {
         let render_start = Instant::now();
         self.last_frame_time = Some(render_start);
 
+        // Get config once at start of frame (avoids repeated active_config() calls)
+        let config = self.config_manager.active_config();
+
         let frame = self.gpu.surface.get_current_texture()?;
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -314,8 +291,10 @@ impl App {
             // No need to update every frame
 
             // Check if we should continue iterating
+            let max_iterations = Some(config.max_iterations);
             let should_iterate = !self.paused &&
-                self.max_iterations.map_or(true, |max| renderer.total_iterations() < max);
+                (max_iterations.map_or(true, |max| renderer.total_iterations() < max) ||
+                 self.config_manager.is_in_preview_mode());
 
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;
@@ -329,7 +308,9 @@ impl App {
                 // 1. Compute new samples with fresh random seed
                 // Clear histogram only when starting a new batch (frame 1 of batch)
                 let clear_histogram = self.frames_since_accumulation == 1;
-                let samples_this_frame = renderer.compute_pass(&mut encoder, &self.gpu.queue, NUM_WORKGROUPS, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor, clear_histogram);
+                let samples_this_frame = renderer.compute_pass(&mut encoder, &self.gpu.queue, NUM_WORKGROUPS,
+                    config.iterations_per_thread, config.zoom, config.pan_x, config.pan_y, config.rotation,
+                    config.camera_rotation_x, config.camera_rotation_y, config.speed_factor, clear_histogram);
                 self.metrics.record_compute_time(t0.elapsed().as_secs_f64() * 1000.0);
 
                 let t1 = Instant::now();
@@ -356,9 +337,9 @@ impl App {
 
             let t2 = Instant::now();
             // 3. Update tonemap parameters and render to screen
-            renderer.update_density_scale(&self.gpu.queue, self.density_scale);
-            renderer.update_background_color(&self.gpu.queue, self.background_color);
-            renderer.update_tonemap(&self.gpu.queue, self.tonemap_mode, self.use_curve, self.exposure, self.gamma);
+            renderer.update_density_scale(&self.gpu.queue, config.density_scale);
+            renderer.update_background_color(&self.gpu.queue, config.background_color);
+            renderer.update_tonemap(&self.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma);
             renderer.tonemap_pass(&mut encoder, &view);
             self.metrics.record_tonemap_time(t2.elapsed().as_secs_f64() * 1000.0);
 
@@ -383,38 +364,12 @@ impl App {
             &mut self.config_manager,
             self.flame_renderer.as_mut(),
             &mut self.flame,
-            &mut self.iterations_per_thread,
-            &mut self.zoom,
-            &mut self.pan_x,
-            &mut self.pan_y,
-            &mut self.rotation,
-            &mut self.camera_rotation_x,
-            &mut self.camera_rotation_y,
-            &mut self.density_scale,
             &self.palette_library,
-            &mut self.current_palette_index,
             &self.preset_library,
             &mut self.current_preset_index,
-            &mut self.color_mode,
             &mut self.paused,
-            &mut self.max_iterations,
-            &mut self.speed_factor,
             can_undo,
             can_redo,
-            &mut self.background_color,
-            &mut self.tonemap_mode,
-            &mut self.tonemap_curve,
-            &mut self.use_curve,
-            &mut self.exposure,
-            &mut self.gamma,
-            &mut self.deterministic_rng,
-            &mut self.speed_multiplier,
-            &mut self.histogram_color_scale,
-            &mut self.low_density_smoothing,
-            &mut self.density_compression_strength,
-            &mut self.blend_factor,
-            &mut self.use_dynamic_blend,
-            &mut self.target_iterations_per_pixel,
         );
         self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
 
@@ -539,8 +494,8 @@ impl App {
 
         // Handle custom palette from editor
         if let Some(custom_pal) = ui_response.custom_palette {
-            // TODO: Migrate to ConfigManager (custom palette modifies library, not config)
-            // For now, no undo support for palette editor changes
+            // Add custom palette to library for persistence
+            // Note: Don't set PaletteIndex - keep config.palette as working copy
 
             // Check if this palette already exists in library by name
             let palette_lib = &mut self.palette_library;
@@ -555,16 +510,18 @@ impl App {
             if let Some(idx) = found_index {
                 // Palette exists, update it in place
                 palette_lib.update(idx, custom_pal);
-                self.current_palette_index = idx;
             } else {
                 // New palette, add to library
                 palette_lib.add(custom_pal);
-                self.current_palette_index = palette_lib.palettes().len() - 1;
             }
 
+            // Don't set palette_index - that would clear config.palette
+            // The palette stays in config.palette as the working copy
+
             // Update renderer
+            let config = self.config_manager.active_config();
             if let Some(ref mut renderer) = self.flame_renderer {
-                if let Some(palette) = palette_lib.get(self.current_palette_index) {
+                if let Some(palette) = palette_lib.get(config.palette_index) {
                     renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
                 }
             }
@@ -745,7 +702,12 @@ impl App {
                     // Add to library
                     self.palette_library.add(palette.clone());
                     // Set to the newly added palette (last in list)
-                    self.current_palette_index = self.palette_library.palettes().len() - 1;
+                    let new_idx = self.palette_library.palettes().len() - 1;
+                    let _ = self.config_manager.update_param(
+                        crate::config::ConfigPath::PaletteIndex,
+                        (new_idx as u32).into(),
+                        false
+                    );
 
                     // Update renderer
                     if let Some(ref mut renderer) = self.flame_renderer {
@@ -777,7 +739,12 @@ impl App {
                                     // Add to library
                                     self.palette_library.add(palette.clone());
                                     // Set to the newly added palette (last in list)
-                                    self.current_palette_index = self.palette_library.palettes().len() - 1;
+                                    let new_idx = self.palette_library.palettes().len() - 1;
+                                    let _ = self.config_manager.update_param(
+                                        crate::config::ConfigPath::PaletteIndex,
+                                        (new_idx as u32).into(),
+                                        false
+                                    );
 
                                     // Update renderer
                                     if let Some(ref mut renderer) = self.flame_renderer {
@@ -834,7 +801,7 @@ impl App {
             {
                 // Desktop: use blocking task for both capture and save
                 // Build metadata before borrowing renderer
-                let config = self.export_config();
+                let export_config = self.export_config();
                 let render_time_ms = self.metrics.render_time_ms;
 
                 if let Some(ref mut renderer) = self.flame_renderer {
@@ -849,9 +816,9 @@ impl App {
                                 height,
                                 total_iterations,
                                 render_time_ms,
-                                self.iterations_per_thread,
-                                self.speed_factor,
-                                &config,
+                                export_config.iterations_per_thread,
+                                export_config.speed_factor,
+                                &export_config,
                             );
 
                             // Encode PNG with metadata
@@ -891,11 +858,11 @@ impl App {
 
                 if let Some(ref mut renderer) = self.flame_renderer {
                     // Build metadata before moving into async closure
-                    let config = self.export_config();
+                    let export_config = self.export_config();
                     let total_iterations = renderer.total_iterations();
                     let render_time_ms = self.metrics.render_time_ms;
-                    let iterations_per_thread = self.iterations_per_thread;
-                    let speed_factor = self.speed_factor;
+                    let iterations_per_thread = export_config.iterations_per_thread;
+                    let speed_factor = export_config.speed_factor;
 
                     let device: &'static wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
                     let queue: &'static wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
@@ -915,7 +882,7 @@ impl App {
                                     render_time_ms,
                                     iterations_per_thread,
                                     speed_factor,
-                                    &config,
+                                    &export_config,
                                 );
 
                                 // Encode PNG with metadata (owned data, no borrowing)
@@ -946,143 +913,85 @@ impl App {
         }
 
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
-        let view_changed = ui_response.view_changed || self.view_changed_by_keyboard || ui_response.camera_rotation_changed;
-        let needs_update = ui_response.reset_requested || ui_response.flame_changed || ui_response.iterations_changed
-            || view_changed || ui_response.palette_changed || ui_response.color_mode_changed || ui_response.pause_changed
-            || ui_response.tonemap_curve_changed || ui_response.histogram_color_scale_changed
-            || ui_response.low_density_smoothing_changed || ui_response.density_compression_changed || ui_response.blend_factor_changed
-            || ui_response.use_dynamic_blend_changed || ui_response.target_iterations_changed;
+        // Get pending actions from ConfigManager (replaces individual boolean flags)
+        let actions = self.config_manager.get_pending_actions();
 
-        // Note: density_changed and background_color_changed don't need encoder updates,
-        // they're handled every frame before tonemap pass
+        // View changes can also come from keyboard input
+        let view_changed_by_keyboard = self.view_changed_by_keyboard;
 
-        // Handle preset change: sync app state from ConfigManager
-        // Note: Preset loading happens via ConfigManager in UI layer (settings.rs)
-        // GPU upload and reset handled by normal update path below
-        if ui_response.preset_changed {
-            println!("Preset loaded via ConfigManager, syncing app state");
-            let config = self.config_manager.active_config();
-            self.flame = config.flame.clone();
-            self.zoom = config.zoom;
-            self.pan_x = config.pan_x;
-            self.pan_y = config.pan_y;
-            self.rotation = config.rotation;
-            self.camera_rotation_x = config.camera_rotation_x;
-            self.camera_rotation_y = config.camera_rotation_y;
-            // GPU upload handled below via flame_changed flag
-        }
 
-        // All controls now use ConfigManager for undo/redo! ✅
-        // Phase 11 (2025-10-31): Transform add/delete migrated to snapshot-based undo
-        // No more capture_state() calls needed here
+        // Determine if any GPU updates are needed
+        let needs_update = actions.reset_accumulation || actions.update_flame || actions.update_palette
+            || actions.update_tone_curve || actions.update_view || actions.rebuild_shader
+            || view_changed_by_keyboard;
 
         if needs_update {
             if let Some(ref mut renderer) = self.flame_renderer {
+                // Get current config for updates
+                let update_config = self.config_manager.active_config();
+
                 let mut update_encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Update Encoder"),
                 });
 
-                // Update flame if changed OR if in preview mode (live updates during drag)
-                let in_preview_mode = self.config_manager.is_in_preview_mode();
-                if ui_response.flame_changed || in_preview_mode {
-                    // Note: self.flame is synced from ConfigManager at the END of render_ui()
-                    // When in preview mode, this gives live updates every frame during drag
-                    renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                // Update flame if UpdateAction indicates (includes preview mode live updates)
+                if actions.update_flame {
+                    renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame,
+                        update_config.iterations_per_thread, update_config.zoom, update_config.pan_x, update_config.pan_y,
+                        update_config.rotation, update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
                 }
 
-                if ui_response.iterations_changed || view_changed {
-                    renderer.set_deterministic_rng(self.deterministic_rng);
-                    renderer.update_iterations(&self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
+                // Update view parameters (includes view changes and iteration changes)
+                if actions.update_view || view_changed_by_keyboard {
+                    renderer.set_deterministic_rng(update_config.deterministic_rng);
+                    renderer.update_iterations(&self.gpu.queue, update_config.iterations_per_thread,
+                        update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
+                        update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
                 }
 
-                if ui_response.histogram_color_scale_changed {
-                    // Update the renderer's histogram color scale and GPU params
-                    renderer.set_histogram_color_scale(&self.gpu.queue, self.histogram_color_scale, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
-                    // Reset will be triggered below in should_reset
-                }
-
-                if ui_response.low_density_smoothing_changed {
-                    // Update the renderer's low-density smoothing parameter
-                    renderer.set_low_density_smoothing(self.low_density_smoothing);
-                    // No reset needed - smoothing is applied during accumulation
-                }
-
-                if ui_response.density_compression_changed {
-                    // Update the renderer's density compression strength
-                    renderer.set_density_compression_strength(self.density_compression_strength);
-                    // No reset needed - compression is applied during accumulation
-                }
-
-                if ui_response.blend_factor_changed {
-                    // Update the renderer's blend factor
-                    renderer.set_blend_factor(self.blend_factor);
-                    // No reset needed - blend factor is applied during accumulation
-                }
-
-                if ui_response.use_dynamic_blend_changed {
-                    // Update the renderer's dynamic blend setting
-                    renderer.set_use_dynamic_blend(self.use_dynamic_blend);
-                    // Reset needed to see effect immediately
-                }
-
-                if ui_response.target_iterations_changed {
-                    // Update the renderer's per-pixel iteration limit
-                    renderer.set_target_iterations_per_pixel(self.target_iterations_per_pixel);
-                }
-
-                // Note: density_scale and background_color are updated every frame before tonemap pass
-                // so we don't need to update them here
-
-                if ui_response.color_mode_changed {
-                    renderer.set_color_mode(&self.gpu.queue, self.color_mode, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
-
-                    // When switching to Palette or Speed mode, ensure the correct palette is loaded
-                    if matches!(self.color_mode, ColorMode::Palette | ColorMode::Speed) {
-                        if let Some(palette) = self.palette_library.get(self.current_palette_index) {
-                            renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
-                        }
-                    }
-                }
-
-                if ui_response.palette_changed {
+                // Update palette if needed (also handles color mode changes)
+                if actions.update_palette {
                     // Get palette from ConfigManager (includes preview mode changes from palette editor)
-                    let active_config = self.config_manager.active_config();
-                    let palette = active_config.palette.as_ref()
-                        .or_else(|| self.palette_library.get(active_config.palette_index));
+                    let palette = update_config.palette.as_ref()
+                        .or_else(|| self.palette_library.get(update_config.palette_index));
 
                     if let Some(palette) = palette {
                         renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
                     }
+
+                    // Update color mode in GPU params (ColorMode changes trigger update_palette)
+                    renderer.set_color_mode(&self.gpu.queue, update_config.color_mode,
+                        update_config.iterations_per_thread, update_config.zoom, update_config.pan_x,
+                        update_config.pan_y, update_config.rotation, update_config.camera_rotation_x,
+                        update_config.camera_rotation_y, update_config.speed_factor);
                 }
 
-                // Update tone curve LUT if curve changed
-                if ui_response.tonemap_curve_changed {
-                    renderer.update_curve_lut(&self.gpu.queue, &self.tonemap_curve);
+                // Update tone curve LUT if changed
+                if actions.update_tone_curve {
+                    renderer.update_curve_lut(&self.gpu.queue, &update_config.tonemap_curve);
                 }
 
-                // Reset accumulation when view changes, palette changes, color mode changes, background color changes, flame changes, or user requests it
-                // Tone mapping: reset on mode change (log vs linear affects accumulation), but not curve/exposure/gamma (post-processing only)
-                let in_preview_mode = self.config_manager.is_in_preview_mode();
-                let should_reset = ui_response.reset_requested || view_changed || (ui_response.palette_changed && !in_preview_mode) || ui_response.color_mode_changed
-                    || ui_response.background_color_changed || ui_response.tonemap_mode_changed
-                    || ui_response.histogram_color_scale_changed  // New scale incompatible with old samples
-                    || ui_response.low_density_smoothing_changed  // New smoothing needs fresh samples to see effect
-                    || ui_response.density_compression_changed  // New compression needs fresh samples to see effect
-                    || ui_response.blend_factor_changed  // New blend rate needs fresh start to see effect
-                    || ui_response.use_dynamic_blend_changed  // Switching blend modes needs fresh start
-                    || ui_response.target_iterations_changed  // New iteration limit needs fresh iteration counts
-                    || ui_response.preset_changed  // Preset loading requires fresh start
-                    || (ui_response.flame_changed && !in_preview_mode);  // Reset on flame changes, EXCEPT during preview mode (overwrite mode handles it)
+                // Rebuild shader if variation set changed
+                if actions.rebuild_shader {
+                    // TODO: Implement shader rebuild logic when variation system supports it
+                    // For now, this would require recreating the compute pipeline
+                }
+
+                // Reset accumulation if UpdateAction indicates (or keyboard view change)
+                let should_reset = actions.reset_accumulation || view_changed_by_keyboard;
                 if should_reset {
-                    renderer.reset(&mut update_encoder, &self.gpu.queue, self.iterations_per_thread, self.zoom, self.pan_x, self.pan_y, self.rotation, self.camera_rotation_x, self.camera_rotation_y, self.speed_factor);
-                    if ui_response.histogram_color_scale_changed {
-                        self.frames_since_accumulation = 0;  // Reset batch counter
-                    }
+                    renderer.reset(&mut update_encoder, &self.gpu.queue, update_config.iterations_per_thread,
+                        update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
+                        update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
+                    self.frames_since_accumulation = 0;  // Reset batch counter
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
             }
         }
+
+        // Clear pending actions after executing them
+        self.config_manager.clear_pending_actions();
 
         // Clear keyboard flag for next frame
         self.view_changed_by_keyboard = false;

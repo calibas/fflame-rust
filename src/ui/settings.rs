@@ -3,7 +3,9 @@ use crate::config::{ConfigManager, ConfigPath, UpdateType};
 use super::formatting::format_iterations;
 
 /// Render the Settings window with all control panels
-#[allow(clippy::too_many_arguments)]
+///
+/// Note: Config change tracking is now handled by ConfigManager.get_pending_actions()
+/// This function no longer needs *_changed parameters for config updates
 pub fn render_settings_window(
     ctx: &egui::Context,
     show_settings: &mut bool,
@@ -19,36 +21,18 @@ pub fn render_settings_window(
     current_preset_index: &mut usize,
     preset_changed: &mut bool,
     flame: &mut Flame,
-    render_mode_changed: &mut bool,
-    projection_changed: &mut bool,
-    flame_changed: &mut bool,
     flame_renderer: Option<&crate::renderer::compute_kernel::FlameRenderer>,
     paused: &mut bool,
     pause_changed: &mut bool,
-    reset_requested: &mut bool,
-    max_iterations: &mut Option<u64>,
-    iterations_per_thread: &mut u32,
-    iterations_changed: &mut bool,
-    deterministic_rng: &mut bool,
-    speed_multiplier: &mut u32,
     config_manager: &mut ConfigManager,
-    histogram_color_scale: &mut f32,
-    histogram_color_scale_changed: &mut bool,
-    low_density_smoothing: &mut f32,
-    low_density_smoothing_changed: &mut bool,
-    density_compression_strength: &mut f32,
-    density_compression_changed: &mut bool,
-    blend_factor: &mut f32,
-    blend_factor_changed: &mut bool,
-    use_dynamic_blend: &mut bool,
-    use_dynamic_blend_changed: &mut bool,
-    target_iterations_per_pixel: &mut u32,
-    target_iterations_changed: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
+
     egui::Window::new("Settings")
         .open(show_settings)
         .show(ctx, |ui| {
+            // Clone config to avoid borrow conflicts (allows mutation of config_manager in closures)
+            let config = config_manager.active_config().clone();
             // Section 1: File & Project
             egui::CollapsingHeader::new("File & Project")
                 .default_open(true)
@@ -112,7 +96,6 @@ pub fn render_settings_window(
                                         // Update flame reference from config
                                         *flame = config_manager.active_config().flame.clone();
                                         *preset_changed = true;
-                                        *flame_changed = true;  // Triggers GPU upload
                                     }
                                 }
                             }
@@ -126,13 +109,9 @@ pub fn render_settings_window(
                         let was_2d = matches!(flame.render_mode, crate::scene::transforms::RenderMode::TwoD);
                         if ui.selectable_label(was_2d, "2D").clicked() {
                             flame.render_mode = crate::scene::transforms::RenderMode::TwoD;
-                            *render_mode_changed = true;
-                            *flame_changed = true;
                         }
                         if ui.selectable_label(!was_2d, "3D").clicked() {
                             flame.render_mode = crate::scene::transforms::RenderMode::ThreeD;
-                            *render_mode_changed = true;
-                            *flame_changed = true;
                         }
                     });
 
@@ -143,22 +122,15 @@ pub fn render_settings_window(
                             let is_ortho = matches!(flame.projection, crate::scene::transforms::ProjectionType::Orthographic);
                             if ui.selectable_label(is_ortho, "Orthographic").clicked() {
                                 flame.projection = crate::scene::transforms::ProjectionType::Orthographic;
-                                *projection_changed = true;
-                                *flame_changed = true;
                             }
                             if ui.selectable_label(!is_ortho, "Perspective").clicked() {
                                 flame.projection = crate::scene::transforms::ProjectionType::Perspective { strength: 2.0 };
-                                *projection_changed = true;
-                                *flame_changed = true;
                             }
                         });
 
                         // Perspective strength slider
                         if let crate::scene::transforms::ProjectionType::Perspective { strength } = &mut flame.projection {
-                            if ui.add(egui::Slider::new(strength, 0.5..=10.0).text("Perspective Strength")).changed() {
-                                *projection_changed = true;
-                                *flame_changed = true;
-                            }
+                            ui.add(egui::Slider::new(strength, 0.5..=10.0).text("Perspective Strength"));
                         }
                     }
 
@@ -173,7 +145,7 @@ pub fn render_settings_window(
                         }
 
                         if ui.button("🔄 Reset Accumulation").clicked() {
-                            *reset_requested = true;
+                            config_manager.request_reset();
                         }
                     }
 
@@ -183,35 +155,30 @@ pub fn render_settings_window(
                     if let Some(renderer) = &flame_renderer {
                         ui.label("Max Iterations");
 
-                        let mut max_enabled = max_iterations.is_some();
-                        if ui.checkbox(&mut max_enabled, "Enable max iterations").changed() {
-                            if max_enabled {
-                                *max_iterations = Some(1_000_000_000);
-                            } else {
-                                *max_iterations = None;
-                            }
+                        // Show progress
+                        let current = renderer.total_iterations();
+                        let max = config.max_iterations;
+                        if current >= max {
+                            ui.label("✅ Max iterations reached");
+                        } else {
+                            let progress = current as f64 / max as f64;
+                            ui.label(format!("Progress: {} / {} ({:.1}%)",
+                                format_iterations(current),
+                                format_iterations(max),
+                                progress * 100.0
+                            ));
                         }
 
-                        if let Some(max) = max_iterations {
-                            // Use a logarithmic slider for better control across large ranges
-                            let mut log_value = (*max as f64).log10();
-                            if ui.add(egui::Slider::new(&mut log_value, 3.0..=12.0)
-                                .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64)))
-                            ).changed() {
-                                *max = 10f64.powf(log_value) as u64;
-                            }
-
-                            // Show progress if enabled
-                            let current = renderer.total_iterations();
-                            if current >= *max {
-                                ui.label("✅ Max iterations reached");
-                            } else {
-                                let progress = current as f64 / *max as f64;
-                                ui.label(format!("Progress: {} / {} ({:.1}%)",
-                                    format_iterations(current),
-                                    format_iterations(*max),
-                                    progress * 100.0
-                                ));
+                        // Max iterations slider (30M to 1T with logarithmic scale)
+                        let mut log_value = (config.max_iterations as f64).log10();
+                        if ui.add(egui::Slider::new(&mut log_value, 7.47713..=12.0)
+                            .text("Max Iterations")
+                            .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64))))
+                            .changed()
+                        {
+                            let new_max_iterations = 10f64.powf(log_value) as u64;
+                            if let Ok(update) = config_manager.update_param(ConfigPath::MaxIterations, new_max_iterations.into(), false) {
+                                max_update = max_update.max(update);
                             }
                         }
                     }
@@ -219,7 +186,7 @@ pub fn render_settings_window(
                     ui.separator();
 
                     // Render settings - Iterations per thread
-                    let mut temp_iterations = *iterations_per_thread;
+                    let mut temp_iterations = config.iterations_per_thread;
                     let response = ui.add(egui::Slider::new(&mut temp_iterations, 64..=4096)
                         .text("Iterations per Thread"))
                         .on_hover_text(
@@ -232,10 +199,8 @@ pub fn render_settings_window(
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::IterationsPerThread,
                             temp_iterations.into(),
-                            true  // Lazy undo
+                            response.dragged()  // Lazy undo
                         ) {
-                            *iterations_per_thread = config_manager.active_config().iterations_per_thread;
-                            *iterations_changed = true;
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -245,7 +210,7 @@ pub fn render_settings_window(
                     }
 
                     // Histogram color scale
-                    let mut temp_histogram = *histogram_color_scale;
+                    let mut temp_histogram = config.histogram_color_scale;
                     let response = ui.add(egui::Slider::new(&mut temp_histogram, 1.0..=100.0)
                         .logarithmic(true)
                         .text("Histogram Color Scale"))
@@ -263,10 +228,8 @@ pub fn render_settings_window(
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::HistogramColorScale,
                             temp_histogram.into(),
-                            true  // Lazy undo
+                            response.dragged()  // Lazy undo
                         ) {
-                            *histogram_color_scale = config_manager.active_config().histogram_color_scale;
-                            *histogram_color_scale_changed = true;
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -276,7 +239,7 @@ pub fn render_settings_window(
                     }
 
                     // Low-density smoothing
-                    let mut temp_smoothing = *low_density_smoothing;
+                    let mut temp_smoothing = config.low_density_smoothing;
                     let response = ui.add(egui::Slider::new(&mut temp_smoothing, 0.0..=1.0)
                         .text("Low-Density Smoothing"))
                         .on_hover_text(
@@ -291,10 +254,8 @@ pub fn render_settings_window(
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::LowDensitySmoothing,
                             temp_smoothing.into(),
-                            true  // Lazy undo
+                            response.dragged()  // Lazy undo
                         ) {
-                            *low_density_smoothing = config_manager.active_config().low_density_smoothing;
-                            *low_density_smoothing_changed = true;
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -304,7 +265,8 @@ pub fn render_settings_window(
                     }
 
                     // Dynamic blend toggle
-                    if ui.checkbox(use_dynamic_blend, "Use Dynamic Blend (Exponential Convergence)")
+                    let mut temp_use_dynamic = config.use_dynamic_blend;
+                    if ui.checkbox(&mut temp_use_dynamic, "Use Dynamic Blend (Exponential Convergence)")
                         .on_hover_text(
                             "Enabled: Classic exponential convergence - blend rate decreases over time.\n\
                             Image converges to stable result, prevents overbrighten over time.\n\
@@ -315,12 +277,16 @@ pub fn render_settings_window(
                         )
                         .changed()
                     {
-                        *use_dynamic_blend_changed = true;
+                        let _ = config_manager.update_param(
+                            ConfigPath::UseDynamicBlend,
+                            temp_use_dynamic.into(),
+                            false  // Immediate
+                        );
                     }
 
                     // Blend factor (accumulation rate) - only when dynamic blend is OFF
-                    ui.add_enabled_ui(!*use_dynamic_blend, |ui| {
-                        let mut temp_blend = *blend_factor;
+                    ui.add_enabled_ui(!config.use_dynamic_blend, |ui| {
+                        let mut temp_blend = config.blend_factor;
                         let response = ui.add(egui::Slider::new(&mut temp_blend, 0.01..=1.0)
                             .logarithmic(true)
                             .text("Fixed Blend Rate"))
@@ -337,10 +303,8 @@ pub fn render_settings_window(
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::BlendFactor,
                                 temp_blend.into(),
-                                true  // Lazy undo
+                                response.dragged()  // Lazy undo
                             ) {
-                                *blend_factor = config_manager.active_config().blend_factor;
-                                *blend_factor_changed = true;
                                 max_update = max_update.max(update_type);
                             }
                         }
@@ -351,7 +315,7 @@ pub fn render_settings_window(
                     });
 
                     // Density compression strength
-                    let mut temp_compression = *density_compression_strength;
+                    let mut temp_compression = config.density_compression_strength;
                     let response = ui.add(egui::Slider::new(&mut temp_compression, 0.0..=100.0)
                         .text("Density Compression"))
                         .on_hover_text(
@@ -369,10 +333,8 @@ pub fn render_settings_window(
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::DensityCompressionStrength,
                             temp_compression.into(),
-                            true  // Lazy undo
+                            response.dragged()  // Lazy undo
                         ) {
-                            *density_compression_strength = config_manager.active_config().density_compression_strength;
-                            *density_compression_changed = true;
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -383,10 +345,10 @@ pub fn render_settings_window(
 
                     // Per-pixel iteration limit
                     // Use logarithmic slider for better control across large ranges
-                    let mut log_value = if *target_iterations_per_pixel == 0 {
+                    let mut log_value = if config.target_iterations_per_pixel == 0 {
                         0.0  // 0 maps to log(0) special case
                     } else {
-                        (*target_iterations_per_pixel as f64).log10()
+                        (config.target_iterations_per_pixel as f64).log10()
                     };
 
                     let response = ui.add(egui::Slider::new(&mut log_value, 0.0..=6.0)
@@ -418,10 +380,8 @@ pub fn render_settings_window(
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::TargetIterationsPerPixel,
                             new_value.into(),
-                            true  // Lazy undo
+                            response.dragged()  // Lazy undo
                         ) {
-                            *target_iterations_per_pixel = config_manager.active_config().target_iterations_per_pixel;
-                            *target_iterations_changed = true;
                             max_update = max_update.max(update_type);
                         }
                     }
@@ -433,58 +393,53 @@ pub fn render_settings_window(
                     // Speed multiplier for frame rate (1x = 60 FPS, 2x = 120 FPS, etc.)
                     ui.horizontal(|ui| {
                         ui.label("Speed:");
-                        if ui.selectable_label(*speed_multiplier == 1, "1x").clicked() {
+                        if ui.selectable_label(config.speed_multiplier == 1, "1x").clicked() {
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::SpeedMultiplier,
                                 1u32.into(),
                                 false  // Immediate capture
                             ) {
-                                *speed_multiplier = config_manager.active_config().speed_multiplier;
                                 max_update = max_update.max(update_type);
                             }
                         }
-                        if ui.selectable_label(*speed_multiplier == 2, "2x").clicked() {
+                        if ui.selectable_label(config.speed_multiplier == 2, "2x").clicked() {
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::SpeedMultiplier,
                                 2u32.into(),
                                 false
                             ) {
-                                *speed_multiplier = config_manager.active_config().speed_multiplier;
                                 max_update = max_update.max(update_type);
                             }
                         }
-                        if ui.selectable_label(*speed_multiplier == 4, "4x").clicked() {
+                        if ui.selectable_label(config.speed_multiplier == 4, "4x").clicked() {
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::SpeedMultiplier,
                                 4u32.into(),
                                 false
                             ) {
-                                *speed_multiplier = config_manager.active_config().speed_multiplier;
                                 max_update = max_update.max(update_type);
                             }
                         }
-                        if ui.selectable_label(*speed_multiplier == 8, "8x").clicked() {
+                        if ui.selectable_label(config.speed_multiplier == 8, "8x").clicked() {
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::SpeedMultiplier,
                                 8u32.into(),
                                 false
                             ) {
-                                *speed_multiplier = config_manager.active_config().speed_multiplier;
                                 max_update = max_update.max(update_type);
                             }
                         }
-                        if ui.selectable_label(*speed_multiplier == 16, "16x").clicked() {
+                        if ui.selectable_label(config.speed_multiplier == 16, "16x").clicked() {
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::SpeedMultiplier,
                                 16u32.into(),
                                 false
                             ) {
-                                *speed_multiplier = config_manager.active_config().speed_multiplier;
                                 max_update = max_update.max(update_type);
                             }
                         }
                     });
-                    ui.label(format!("Target FPS: {}", 60 * *speed_multiplier)).on_hover_text(
+                    ui.label(format!("Target FPS: {}", 60 * config.speed_multiplier)).on_hover_text(
                         "Speed multiplier increases frame rate for smoother progressive rendering.\n\
                         Higher speeds improve quality consistency across different iterations_per_thread settings.\n\
                         1x = 60 FPS (default, vsync)\n\
@@ -499,11 +454,16 @@ pub fn render_settings_window(
             egui::CollapsingHeader::new("Advanced")
                 .default_open(false)
                 .show(ui, |ui| {
-                    if ui.checkbox(deterministic_rng, "Deterministic RNG").on_hover_text(
+                    let mut temp_deterministic = config.deterministic_rng;
+                    if ui.checkbox(&mut temp_deterministic, "Deterministic RNG").on_hover_text(
                         "Use fixed random seed for reproducible rendering.\n\
                         Enable for testing/comparison, disable for varied output."
                     ).changed() {
-                        *iterations_changed = true; // Trigger renderer update
+                        let _ = config_manager.update_param(
+                            ConfigPath::DeterministicRng,
+                            temp_deterministic.into(),
+                            false  // Immediate
+                        );
                     }
                 });
         });

@@ -60,13 +60,13 @@ pub fn render_variation_category(
         let response = ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name));
 
         if response.changed() {
-            // Update via ConfigManager with lazy undo
+            // Update via ConfigManager with lazy undo only during drag
             let path = ConfigPath::TransformVariation {
                 index: transform_index,
                 variation: var_info.name.clone(),
             };
 
-            if let Ok(update_type) = config_manager.update_param(path, value.into(), true) {
+            if let Ok(update_type) = config_manager.update_param(path, value.into(), response.dragged()) {
                 max_update = max_update.max(update_type);
             }
         }
