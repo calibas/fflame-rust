@@ -509,24 +509,31 @@ pub fn render_triangle_editor_window(
                 ui.label(format!("Triangle Coordinates (Transform {}):", selected_transform + 1));
 
                 let mut coords_changed = false;
+                let mut dragging = false;
 
                 ui.columns(2, |columns| {
                     // Left column: Coordinates
                     columns[0].vertical(|ui| {
                         ui.horizontal(|ui| {
                             ui.label("X:");
-                            coords_changed |= ui.add(egui::DragValue::new(&mut x[0]).speed(0.01).prefix("x: ")).changed();
-                            coords_changed |= ui.add(egui::DragValue::new(&mut x[1]).speed(0.01).prefix("y: ")).changed();
+                            let x0_resp = ui.add(egui::DragValue::new(&mut x[0]).speed(0.01).prefix("x: "));
+                            let x1_resp = ui.add(egui::DragValue::new(&mut x[1]).speed(0.01).prefix("y: "));
+                            coords_changed |= x0_resp.changed() || x1_resp.changed();
+                            dragging |= x0_resp.dragged() || x1_resp.dragged();
                         });
                         ui.horizontal(|ui| {
                             ui.label("Y:");
-                            coords_changed |= ui.add(egui::DragValue::new(&mut y[0]).speed(0.01).prefix("x: ")).changed();
-                            coords_changed |= ui.add(egui::DragValue::new(&mut y[1]).speed(0.01).prefix("y: ")).changed();
+                            let y0_resp = ui.add(egui::DragValue::new(&mut y[0]).speed(0.01).prefix("x: "));
+                            let y1_resp = ui.add(egui::DragValue::new(&mut y[1]).speed(0.01).prefix("y: "));
+                            coords_changed |= y0_resp.changed() || y1_resp.changed();
+                            dragging |= y0_resp.dragged() || y1_resp.dragged();
                         });
                         ui.horizontal(|ui| {
                             ui.label("O:");
-                            coords_changed |= ui.add(egui::DragValue::new(&mut o[0]).speed(0.01).prefix("x: ")).changed();
-                            coords_changed |= ui.add(egui::DragValue::new(&mut o[1]).speed(0.01).prefix("y: ")).changed();
+                            let o0_resp = ui.add(egui::DragValue::new(&mut o[0]).speed(0.01).prefix("x: "));
+                            let o1_resp = ui.add(egui::DragValue::new(&mut o[1]).speed(0.01).prefix("y: "));
+                            coords_changed |= o0_resp.changed() || o1_resp.changed();
+                            dragging |= o0_resp.dragged() || o1_resp.dragged();
                         });
                     });
 
@@ -644,8 +651,27 @@ pub fn render_triangle_editor_window(
                 });
 
                 if coords_changed {
-                    transform.from_triangle(o, x, y);
-                    // TODO: Migrate affine parameter sliders to use update_param()
+                    // Convert triangle coords to affine parameters
+                    let mut temp_transform = transform.clone();
+                    temp_transform.from_triangle(o, x, y);
+
+                    // Batch update all affine parameters via ConfigManager
+                    let changes = vec![
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, temp_transform.a.into()),
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, temp_transform.b.into()),
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, temp_transform.c.into()),
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, temp_transform.d.into()),
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, temp_transform.e.into()),
+                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, temp_transform.f.into()),
+                    ];
+
+                    if let Ok(update) = config_manager.update_batch(
+                        changes,
+                        format!("Edit triangle coordinates (Transform {})", selected_transform + 1),
+                        dragging // lazy = true while dragging
+                    ) {
+                        max_update = max_update.max(update);
+                    }
                 }
 
                 ui.separator();
