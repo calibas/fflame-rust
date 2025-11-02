@@ -353,13 +353,13 @@ impl ShaderBuilder {
                 // Post-variations directly modify result (NOT weighted sum!)
                 match name.as_str() {
                     "flatten" => {
-                        // Flatten compresses Z toward zero
+                        // Flatten sets Z to zero (Apophysis: FPz := 0)
                         code.push_str(&format!(
                             "    // {}: {} (POST - Z-only)\n\
                              \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result.z *= (1.0 - xform.variations[{}] * 0.5);\n\
+                             \x20       result.z = 0.0;\n\
                              \x20   }}\n\n",
-                            idx, info.display_name, idx, idx
+                            idx, info.display_name, idx
                         ));
                     }
                     _ => {
