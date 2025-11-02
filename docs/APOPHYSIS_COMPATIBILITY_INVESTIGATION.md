@@ -82,29 +82,28 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 - ✅ Affine transforms working correctly
 - ✅ Linear and Spherical variations working correctly
 
-## New Discovery: Variation Implementation Issues (2025-11-01)
+## Variation Verification Against Apophysis Source (2025-11-02)
 
-**Working Fractals (verified identical to Apophysis):**
-```xml
-<xform weight="0.5" color="0" spherical="0.35" coefs="0.5 0 0.5 1 0.5 0" />
-<xform weight="0.5" color="0" linear="1.148" coefs="0.34284 0.564847 -0.564847 0.34284 0 0" />
-```
-- ✅ Linear variation works
-- ✅ Spherical variation works
-- ✅ Combinations work
+**Methodology:** Comparing our WGSL implementations line-by-line against Apophysis XForm.pas source code.
 
-**Broken Fractals:**
-```xml
-<xform weight="0.5" color="0" spherical="0.35" coefs="1 0 0 1 0 0" />
-<xform weight="0.5" color="0" diamond="1" coefs="0.34284 0.564847 -0.564847 0.34284 0 0" />
-```
-- ❌ Diamond variation likely broken
-- ❓ Other variations need testing
+**Verified Correct (matches Apophysis exactly):**
+- ✅ **Linear** (variation 0) - Simple pass-through with weighted sum
+- ✅ **Sinusoidal** (variation 1) - `sin(x), sin(y), z`
+- ✅ **Spherical** (variation 2) - Division by 2D distance squared: `p / (x² + y²)`
+- ✅ **Swirl** (variation 3) - Rotation by r²: `sin(r²), cos(r²)` applied to XY
+- ✅ **Horseshoe** (variation 4) - `(x² - y²) / r, 2xy / r, z`
+- ✅ **Polar** (variation 5) - `θ / π, r - 1, z` (uses atan2(x,y) convention)
 
-**Next Steps:**
-1. Compare Diamond variation implementation with Apophysis source
-2. Check all 26 variations systematically
-3. Look for common pattern in broken variations (atan2 usage? coordinate order?)
+**Fixed to Match Apophysis:**
+- ✅ **Flatten** (variation 17) - Changed from `result.z *= (1.0 - weight * 0.5)` to `result.z = 0.0`
+  - Apophysis simply does `FPz := 0` unconditionally
+
+**Still Need Verification:**
+- ❓ Handkerchief, Heart, Disc, Spiral, Hyperbolic, Diamond, Ex (variations 6-12)
+- ❓ Julia, Bent, Waves (variations 13-15)
+- ❓ ZCone, Hemisphere (variations 16, 18)
+- ❓ Pre/Post Rotate (variations 19-22)
+- ❓ ZScale, JuliaN, Blob (variations 23-25)
 
 ## Summary
 
