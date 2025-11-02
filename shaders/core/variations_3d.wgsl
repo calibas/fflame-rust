@@ -76,8 +76,8 @@ fn variation_spiral(p: vec3<f32>) -> vec3<f32> {
     let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
     let r_inv = 1.0 / r;
     return vec3<f32>(
-        r_inv * (cos(theta) + sin(theta)),
-        r_inv * (cos(theta) - sin(theta)),
+        r_inv * (cos(theta) + sin(r)),
+        r_inv * (sin(theta) - cos(r)),
         p.z
     );
 }
