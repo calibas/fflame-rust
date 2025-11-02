@@ -68,7 +68,20 @@ impl App {
             &flame,
         );
 
-        let palette_library = PaletteLibrary::new();
+        let mut palette_library = PaletteLibrary::new();
+
+        // Create initial custom palette and add to library
+        let initial_palette = {
+            let mut pal = palette_library.get(1).unwrap().clone();
+            // Rename if built-in to avoid confusion
+            if pal.built_in {
+                pal.name = format!("{} (Custom)", pal.name);
+                pal.built_in = false;
+            }
+            // Add to library so it appears in dropdown
+            palette_library.add(pal.clone());
+            pal
+        };
 
         // Create initial config for undo history
         let initial_config = FractalConfig {
@@ -84,15 +97,7 @@ impl App {
             max_iterations: crate::config::DEFAULT_MAX_ITERATIONS,
             color_mode: ColorMode::Transform,
             palette_index: 1,
-            palette: {
-                let mut pal = palette_library.get(1).unwrap().clone();
-                // Rename if built-in to avoid confusion
-                if pal.built_in {
-                    pal.name = format!("{} (Custom)", pal.name);
-                    pal.built_in = false;
-                }
-                Some(pal)
-            },
+            palette: Some(initial_palette),
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::Logarithmic,
             tonemap_curve: ToneCurve::linear(),
