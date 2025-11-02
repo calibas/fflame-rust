@@ -122,7 +122,9 @@ fn variation_julian(p: vec2<f32>, xform_id: u32, rng: ptr<function, RngState>) -
     let abs_power = abs(power);
     let cpower = dist / abs_power / 2.0;
 
-    let r = pow(length(p), cpower);
+    // Apophysis: r := Math.Power(sqr(FTx) + sqr(FTy), cN) = pow(x² + y², cN)
+    let r2 = dot(p, p);  // x² + y²
+    let r = pow(r2, cpower);
     let theta = atan2(p.y, p.x);  // JuliaN uses standard atan2(y,x) convention
 
     // Random selection of symmetry

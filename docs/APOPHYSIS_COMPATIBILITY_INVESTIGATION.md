@@ -107,16 +107,26 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
   - Was using atan2(x, y) core convention and had `cos(θ + r)` instead of `cos(θ - r)`
 - ✅ **Ex** (variation 12) - Fixed to use `sin(θ + r)³` and `cos(θ - r)³` with standard atan2(y, x)
   - Was using atan2(x, y) and cubing `sin(θ + r)` and `sin(θ - r)` instead of using cos for n1
+- ✅ **JuliaN** (variation 24) - Fixed radius calculation to use r² instead of r
+  - Was using `pow(length(p), cpower)` which is `r^cN`
+  - Apophysis uses `pow(x² + y², cN)` which is `r^(2×cN)`
+  - Changed to `pow(dot(p, p), cpower)` to match exactly
 
 **Not Used in Apophysis (different or unused variations):**
 - ⚠️ **Heart** (variation 7) - Our implementation `r × sin(r × θ), -r × cos(r × θ)` doesn't match any active Apophysis variation
   - Apophysis has "xheart" plugin with parameters, but simple "Heart" appears to be unused/deprecated
 
+**Complex Variations Needing More Work:**
+- ⚠️ **Julia** (variation 13) - Our simple 2D implementation needs comparison with Apophysis Julia3D
+  - Apophysis has julia3D, julia3Dz, and juliascope - all parameterized plugin variations with 3D support
+  - Our simple formula: `sqrt(r) × [cos/sin](θ/2 + ω)` where ω is randomly 0 or π
+  - May need to implement full Julia3D to match Apophysis exactly
+
 **Still Need Verification:**
-- ❓ Julia, Bent, Waves (variations 13-15)
+- ❓ Bent, Waves (variations 14-15)
 - ❓ ZCone, Hemisphere (variations 16, 18)
 - ❓ Pre/Post Rotate (variations 19-22)
-- ❓ ZScale, JuliaN, Blob (variations 23-25)
+- ❓ ZScale, Blob (variations 23, 25)
 
 ## Summary
 
