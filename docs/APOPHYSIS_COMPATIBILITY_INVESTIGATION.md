@@ -127,6 +127,9 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 **Not Used in Apophysis (different or unused variations):**
 - ⚠️ **Heart** (variation 7) - Our implementation `r × sin(r × θ), -r × cos(r × θ)` doesn't match any active Apophysis variation
   - Apophysis has "xheart" plugin with parameters, but simple "Heart" appears to be unused/deprecated
+- ⚠️ **Bent** (variation 14) - Not found in Apophysis source code
+  - Our implementation: `x' = (x >= 0) ? x : 2x`, `y' = (y >= 0) ? y : y/2`
+  - Likely from another fractal flame implementation or custom design
 - ⚠️ **Waves** (variation 15) - Our implementation doesn't match Apophysis
   - Our formula: `x + 0.5 × sin(y / 0.25), y + 0.5 × sin(x / 0.25)` (hardcoded constants)
   - Apophysis has old "waves" (deactivated) and active "waves2" (6 parameters: freqx/y/z, scalex/y/z)
@@ -142,8 +145,7 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
   - Our simple formula: `sqrt(r) × [cos/sin](θ/2 + ω)` where ω is randomly 0 or π
   - May need to implement full Julia3D to match Apophysis exactly
 
-**Still Need Verification:**
-- ❓ Bent (variation 14)
+**All Core Variations Verified!** ✅
 
 ## Summary
 
