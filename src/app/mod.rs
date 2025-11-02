@@ -84,7 +84,15 @@ impl App {
             max_iterations: crate::config::DEFAULT_MAX_ITERATIONS,
             color_mode: ColorMode::Transform,
             palette_index: 1,
-            palette: Some(palette_library.get(1).unwrap().clone()),
+            palette: {
+                let mut pal = palette_library.get(1).unwrap().clone();
+                // Rename if built-in to avoid confusion
+                if pal.built_in {
+                    pal.name = format!("{} (Custom)", pal.name);
+                    pal.built_in = false;
+                }
+                Some(pal)
+            },
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::Logarithmic,
             tonemap_curve: ToneCurve::linear(),
