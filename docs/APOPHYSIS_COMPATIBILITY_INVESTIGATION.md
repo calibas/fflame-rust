@@ -127,13 +127,20 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 - Need individual test cases for each variation
 
 **Known Differences from Apophysis:**
-1. **Variation execution order** - Apophysis has complex ordering:
-   - Pre-variations (pre_*) execute first
-   - Normal variations execute in index order
-   - Post-variations (post_*, flatten) execute last
-   - We currently blend all variations together
-2. **Precalculation** - Apophysis precalculates FAngle, FSinA, FCosA, FLength
-   - We recalculate these in each variation
+1. **❌ CRITICAL BUG: Variation execution order** - This is likely THE major cause of rendering differences!
+   - **Apophysis:** Three-phase execution (pre → normal → post)
+     - Phase 1: Pre-variations (pre_blur, pre_rotate_x/y) modify input point sequentially
+     - Phase 2: Normal variations (linear, spherical, etc.) accumulate weighted results from modified input
+     - Phase 3: Post-variations (post_rotate_x/y, flatten) modify accumulated result sequentially
+   - **Our Implementation:** All variations sorted by registry index (0-25)
+     - Pre-variations (indices 19-22) execute AFTER normal variations (indices 0-18) ❌
+     - This completely changes the mathematical result!
+   - **Status:** Identified 2025-11-02, fix in progress
+   - See [VARIATION_EXECUTION_ORDER_INVESTIGATION.md](VARIATION_EXECUTION_ORDER_INVESTIGATION.md) for detailed analysis
+2. **✅ RESOLVED: Precalculation** - Attempted Apophysis-style precalculation (2025-11-02)
+   - Reverted after benchmarks showed 0% improvement (~1% slower)
+   - Modern GPU shader compilers already perform CSE automatically
+   - Trust the compiler for micro-optimizations
 3. **Unknown differences** in individual variation implementations
 
 **ATAN2 CONVENTION IN APOPHYSIS (2025-11-01):**
