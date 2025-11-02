@@ -8,6 +8,8 @@ The ConfigManager implements delta-based undo/redo with a 50-state history. Howe
 
 UPDATE: This may have been related to preview mode issues.
 
+UPDATE #2: I believe this issue may be a problem with syncing between the UI, ConfigManager, and the fractal itself. We're missing some state capture in the undo history, so undo/redo doesn't create the same fractal visible on the screen. We need to diagnose which step has the wrong info.
+
 ## Observed Issues
 
 **Symptoms:**

@@ -168,7 +168,7 @@ impl VariationRegistry {
         registry.register_core("pre_rotate_y", "Pre-Rotate Y", VariationCategory::Rotation3D, VariationPhase::Pre, false);   // 20 - PRE!
         registry.register_core("post_rotate_x", "Post-Rotate X", VariationCategory::Rotation3D, VariationPhase::Post, false); // 21 - POST!
         registry.register_core("post_rotate_y", "Post-Rotate Y", VariationCategory::Rotation3D, VariationPhase::Post, false); // 22 - POST!
-        registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, VariationPhase::Post, false);         // 23 - POST! Scales Z depth
+        registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, VariationPhase::Normal, false);         // 23 - Scales Z depth
 
         // NEW VARIATIONS (added after original 24) - Indices 24-25
         // IMPORTANT: Always add new variations at the end to preserve index compatibility

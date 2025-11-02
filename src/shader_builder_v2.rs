@@ -309,6 +309,15 @@ impl ShaderBuilder {
                         idx, info.display_name, idx, idx
                     ));
                 }
+                "zscale" => {
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL - Z-only)\n\
+                         \x20   if (xform.variations[{}] != 0.0) {{\n\
+                         \x20       result.z += xform.variations[{}] * temp.z;\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, idx, idx
+                    ));
+                }
                 _ => {
                     // Standard variation with function call
                     let call = if !info.parameters.is_empty() {
@@ -349,16 +358,6 @@ impl ShaderBuilder {
                             "    // {}: {} (POST - Z-only)\n\
                              \x20   if (xform.variations[{}] != 0.0) {{\n\
                              \x20       result.z *= (1.0 - xform.variations[{}] * 0.5);\n\
-                             \x20   }}\n\n",
-                            idx, info.display_name, idx, idx
-                        ));
-                    }
-                    "zscale" => {
-                        // ZScale scales Z depth
-                        code.push_str(&format!(
-                            "    // {}: {} (POST - Z-only)\n\
-                             \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result.z *= (1.0 + xform.variations[{}]);\n\
                              \x20   }}\n\n",
                             idx, info.display_name, idx, idx
                         ));
