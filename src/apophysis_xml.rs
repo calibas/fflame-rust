@@ -227,15 +227,16 @@ fn parse_xform_element(
                 }
             }
             "coefs" => {
-                // Parse "a b c d e f" format
+                // Parse "a c b d e f" format (Apophysis order!)
+                // Apophysis stores matrix column-major, XML writes: c[0,0] c[0,1] c[1,0] c[1,1] c[2,0] c[2,1]
                 let parts: Vec<&str> = value.split_whitespace().collect();
                 if parts.len() >= 6 {
-                    transform.a = parts[0].parse().unwrap_or(1.0);
-                    transform.b = parts[1].parse().unwrap_or(0.0);
-                    transform.c = parts[2].parse().unwrap_or(0.0);
-                    transform.d = parts[3].parse().unwrap_or(1.0);
-                    transform.e = parts[4].parse().unwrap_or(0.0);
-                    transform.f = parts[5].parse().unwrap_or(0.0);
+                    transform.a = parts[0].parse().unwrap_or(1.0);  // c[0,0]
+                    transform.c = parts[1].parse().unwrap_or(0.0);  // c[0,1]
+                    transform.b = parts[2].parse().unwrap_or(0.0);  // c[1,0]
+                    transform.d = parts[3].parse().unwrap_or(1.0);  // c[1,1]
+                    transform.e = parts[4].parse().unwrap_or(0.0);  // c[2,0]
+                    transform.f = parts[5].parse().unwrap_or(0.0);  // c[2,1]
                 }
             }
             "opacity" => {
@@ -348,5 +349,33 @@ mod tests {
         assert_eq!(xform.d, 0.9);
         assert!(xform.variations.contains_key("spherical"));
         assert_eq!(xform.variations["spherical"], 1.0);
+    }
+
+    #[test]
+    fn test_coef_order_column_major() {
+        // Test that we're parsing column-major order correctly
+        // Apophysis XML: coefs="a c b d e f"
+        let xml = r#"
+<flames name="test">
+<flame name="Rotation Test" size="800 600" center="0 0" scale="200">
+   <xform weight="1" linear="1" coefs="0.34284 0.564847 -0.564847 0.34284 1.5 2.5" />
+</flame>
+</flames>
+        "#;
+
+        let result = parse_flame_xml(xml);
+        assert!(result.is_ok());
+
+        let config = &result.unwrap()[0];
+        let xform = &config.flame.transforms[0];
+
+        // coefs="0.34284 0.564847 -0.564847 0.34284 1.5 2.5"
+        // Should parse as: a c b d e f
+        assert_eq!(xform.a, 0.34284);      // parts[0]
+        assert_eq!(xform.c, 0.564847);     // parts[1]
+        assert_eq!(xform.b, -0.564847);    // parts[2]
+        assert_eq!(xform.d, 0.34284);      // parts[3]
+        assert_eq!(xform.e, 1.5);          // parts[4]
+        assert_eq!(xform.f, 2.5);          // parts[5]
     }
 }
