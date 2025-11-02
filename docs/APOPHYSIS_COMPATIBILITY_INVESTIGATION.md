@@ -122,15 +122,33 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 - Spherical variation
 - Asymmetrical test case matches Apophysis exactly
 
-**Known Issues:**
-- Some variations may have naming or implementation differences vs Apophysis
-- Further investigation needed for Diamond and other advanced variations
-- **CRITICAL DISCOVERY:** Apophysis uses `atan2(x, y)` instead of standard `atan2(y, x)`
-  - This affects all variations that calculate angles
-  - Apophysis: `sin(atan2(x,y)) = x/r`, `cos(atan2(x,y)) = y/r`
-  - Standard: `sin(atan2(y,x)) = y/r`, `cos(atan2(y,x)) = x/r`
-  - Variations without atan2 (Linear, Spherical) work correctly
-  - Variations with atan2 (Diamond, Polar, etc.) likely need argument swap
+**ATAN2 CONVENTION IN APOPHYSIS (2025-11-01):**
+- **Discovery:** Apophysis has MIXED conventions for atan2!
+  - **Core functions:** Use `atan2(x, y)` (angle from +Y axis)
+  - **Plugin variations:** Use standard `atan2(y, x)` (angle from +X axis)
+  - This inconsistency requires checking each variation individually
+
+**Fixed Variations (use atan2(x,y)):**
+- ✅ Diamond
+- ✅ Polar
+- ✅ Handkerchief
+- ✅ Heart
+- ✅ Disc
+- ✅ Spiral
+- ✅ Hyperbolic
+- ✅ Ex
+- ✅ Blob
+
+**Verified Working (use standard atan2(y,x)):**
+- ✅ Julia - uses standard convention
+- ✅ JuliaN - uses standard convention
+
+**Verified Test Case:**
+```xml
+<xform weight="0.5" color="0" spherical="0.35" coefs="1 0 0 1 0 0" />
+<xform weight="0.5" color="0" diamond="1" coefs="0.34284 0.564847 -0.564847 0.34284 0 0" />
+```
+Renders identically to Apophysis.
 
 ## What Remains to Check
 
