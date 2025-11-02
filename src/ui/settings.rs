@@ -199,7 +199,7 @@ pub fn render_settings_window(
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::IterationsPerThread,
                             temp_iterations.into(),
-                            true  // Lazy undo
+                            response.dragged()  // Lazy undo
                         ) {
                             max_update = max_update.max(update_type);
                         }
@@ -228,7 +228,7 @@ pub fn render_settings_window(
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::HistogramColorScale,
                             temp_histogram.into(),
-                            true  // Lazy undo
+                            response.dragged()  // Lazy undo
                         ) {
                             max_update = max_update.max(update_type);
                         }
@@ -254,7 +254,7 @@ pub fn render_settings_window(
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::LowDensitySmoothing,
                             temp_smoothing.into(),
-                            true  // Lazy undo
+                            response.dragged()  // Lazy undo
                         ) {
                             max_update = max_update.max(update_type);
                         }
@@ -303,7 +303,7 @@ pub fn render_settings_window(
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::BlendFactor,
                                 temp_blend.into(),
-                                true  // Lazy undo
+                                response.dragged()  // Lazy undo
                             ) {
                                 max_update = max_update.max(update_type);
                             }
@@ -333,7 +333,7 @@ pub fn render_settings_window(
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::DensityCompressionStrength,
                             temp_compression.into(),
-                            true  // Lazy undo
+                            response.dragged()  // Lazy undo
                         ) {
                             max_update = max_update.max(update_type);
                         }
@@ -380,7 +380,7 @@ pub fn render_settings_window(
                         if let Ok(update_type) = config_manager.update_param(
                             ConfigPath::TargetIterationsPerPixel,
                             new_value.into(),
-                            true  // Lazy undo
+                            response.dragged()  // Lazy undo
                         ) {
                             max_update = max_update.max(update_type);
                         }
