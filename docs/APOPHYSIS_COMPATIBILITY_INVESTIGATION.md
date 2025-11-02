@@ -119,6 +119,10 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
   - Apophysis RotateY: `x' = cos×x - sin×z, z' = sin×x + cos×z`
   - Pre/Post use identical rotation matrices, just applied at different phases
   - Updated to match Apophysis exactly
+- ✅ **Hemisphere** (variation 18) - Fixed to match Apophysis formula
+  - Was using `(x/r, y/r, sqrt(1 - r²))` with full 3D distance
+  - Apophysis uses `t = 1 / sqrt(x² + y² + 1)`, result = `(x×t, y×t, t)`
+  - Changed to match Apophysis exactly
 
 **Not Used in Apophysis (different or unused variations):**
 - ⚠️ **Heart** (variation 7) - Our implementation `r × sin(r × θ), -r × cos(r × θ)` doesn't match any active Apophysis variation
@@ -140,7 +144,6 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 
 **Still Need Verification:**
 - ❓ Bent (variation 14)
-- ❓ Hemisphere (variation 18)
 
 ## Summary
 
