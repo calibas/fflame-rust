@@ -31,27 +31,27 @@ fn variation_horseshoe(p: vec2<f32>) -> vec2<f32> {
 }
 
 fn variation_polar(p: vec2<f32>) -> vec2<f32> {
-    let theta = atan2(p.y, p.x);
+    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
     let r = length(p);
     return vec2<f32>(theta / 3.14159265359, r - 1.0);
 }
 
 fn variation_handkerchief(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
-    let theta = atan2(p.y, p.x);
+    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
     let theta_r = theta + r;
     return vec2<f32>(r * sin(theta_r), r * cos(theta_r));
 }
 
 fn variation_heart(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
-    let theta = atan2(p.y, p.x);
+    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
     let r_theta = r * theta;
     return vec2<f32>(r * sin(r_theta), -r * cos(r_theta));
 }
 
 fn variation_disc(p: vec2<f32>) -> vec2<f32> {
-    let theta = atan2(p.y, p.x);
+    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
     let r = length(p);
     let theta_pi = theta / 3.14159265359;
     let pi_r = 3.14159265359 * r;
@@ -60,7 +60,7 @@ fn variation_disc(p: vec2<f32>) -> vec2<f32> {
 
 fn variation_spiral(p: vec2<f32>) -> vec2<f32> {
     let r = length(p) + 1e-6;
-    let theta = atan2(p.y, p.x);
+    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
     let r_inv = 1.0 / r;
     return vec2<f32>(
         r_inv * (cos(theta) + sin(theta)),
@@ -70,7 +70,7 @@ fn variation_spiral(p: vec2<f32>) -> vec2<f32> {
 
 fn variation_hyperbolic(p: vec2<f32>) -> vec2<f32> {
     let r = length(p) + 1e-6;
-    let theta = atan2(p.y, p.x);
+    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
     return vec2<f32>(sin(theta) / r, r * cos(theta));
 }
 
@@ -82,7 +82,7 @@ fn variation_diamond(p: vec2<f32>) -> vec2<f32> {
 
 fn variation_ex(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
-    let theta = atan2(p.y, p.x);
+    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
     let p0 = theta + r;
     let p1 = theta - r;
     let p0_sin = sin(p0);
@@ -94,7 +94,7 @@ fn variation_ex(p: vec2<f32>) -> vec2<f32> {
 
 fn julia(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r = length(p);
-    let theta = atan2(p.y, p.x);
+    let theta = atan2(p.y, p.x);  // Julia uses standard atan2(y,x) convention
     let sqrt_r = sqrt(r);
     let omega = select(0.0, 3.14159265359, rng_nextf(rng) < 0.5);
     let half_theta = theta / 2.0 + omega;
@@ -127,7 +127,7 @@ fn variation_julian(p: vec2<f32>, xform_id: u32, rng: ptr<function, RngState>) -
     let cpower = dist / abs_power / 2.0;
 
     let r = pow(length(p), cpower);
-    let theta = atan2(p.y, p.x);
+    let theta = atan2(p.y, p.x);  // JuliaN uses standard atan2(y,x) convention
 
     // Random selection of symmetry
     let trunc_val = floor(abs_power * rng_nextf(rng));
@@ -143,7 +143,7 @@ fn variation_blob(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
     let p3 = get_param(xform_id, 17u, 2u);  // waves
 
     let r = length(p);
-    let theta = atan2(p.y, p.x);
+    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
 
     // r · (p2 + ((p1 − p2)/2)(sin(p3θ) + 1))
     let scale = r * (p2 + ((p1 - p2) / 2.0) * (sin(p3 * theta) + 1.0));
