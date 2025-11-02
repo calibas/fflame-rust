@@ -70,7 +70,7 @@ pub fn render_transforms_window(
                                     if let Ok(update_type) = config_manager.update_param(
                                         ConfigPath::TransformWeight { index: i },
                                         temp_weight.into(),
-                                        true  // Lazy undo
+                                        response.dragged()  // Lazy undo
                                     ) {
                                         transform.weight = config_manager.active_config().flame.transforms[i].weight;
                                                             max_update = max_update.max(update_type);
@@ -152,7 +152,7 @@ fn render_affine_controls(
                 max_update = max_update.max(update_type);
             }
         }
-        if response_a.lost_focus() {
+        if response_a.drag_stopped() {
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::A });
         }
 
@@ -169,7 +169,7 @@ fn render_affine_controls(
                 max_update = max_update.max(update_type);
             }
         }
-        if response_b.lost_focus() {
+        if response_b.drag_stopped() {
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::B });
         }
     });
@@ -188,7 +188,7 @@ fn render_affine_controls(
                 max_update = max_update.max(update_type);
             }
         }
-        if response_c.lost_focus() {
+        if response_c.drag_stopped() {
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::C });
         }
 
@@ -205,7 +205,7 @@ fn render_affine_controls(
                 max_update = max_update.max(update_type);
             }
         }
-        if response_d.lost_focus() {
+        if response_d.drag_stopped() {
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::D });
         }
     });
@@ -224,7 +224,7 @@ fn render_affine_controls(
                 max_update = max_update.max(update_type);
             }
         }
-        if response_e.lost_focus() {
+        if response_e.drag_stopped() {
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::E });
         }
 
@@ -241,7 +241,7 @@ fn render_affine_controls(
                 max_update = max_update.max(update_type);
             }
         }
-        if response_f.lost_focus() {
+        if response_f.drag_stopped() {
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::F });
         }
     });
