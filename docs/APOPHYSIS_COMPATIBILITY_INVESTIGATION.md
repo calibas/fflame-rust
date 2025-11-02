@@ -108,19 +108,33 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 
 ## Summary
 
-**Major Fix Applied:** XML coefficient parsing order corrected from row-major to column-major
+**Major Fixes Applied:**
+1. XML coefficient parsing order corrected from row-major to column-major
+2. Fixed atan2 convention in core variations to use atan2(x,y)
+3. Verified 2D and 3D variation consistency
 
-**Impact:**
-- Affine transforms now parse correctly from Apophysis XML files
-- Non-symmetrical fractals using Linear and Spherical variations render identically to Apophysis
-- Some variations (e.g., Diamond) may still have implementation differences
+**Verified Identical to Apophysis:**
+- ✅ Affine transform formula
+- ✅ XML import coefficient order
+- ✅ Linear variation
+- ✅ Spherical variation
+- ✅ Linear + Spherical combination (asymmetric test)
+- ✅ Diamond variation (asymmetric test)
 
-**Verified Working:**
-- Affine transform formula (always was correct)
-- XML import coefficient order (fixed)
-- Linear variation
-- Spherical variation
-- Asymmetrical test case matches Apophysis exactly
+**Fixed but NOT Fully Verified:**
+- ⚠️ Polar, Handkerchief, Heart, Disc, Spiral, Hyperbolic, Ex, Blob
+- ⚠️ Julia, JuliaN
+- Need individual test cases for each variation
+
+**Known Differences from Apophysis:**
+1. **Variation execution order** - Apophysis has complex ordering:
+   - Pre-variations (pre_*) execute first
+   - Normal variations execute in index order
+   - Post-variations (post_*, flatten) execute last
+   - We currently blend all variations together
+2. **Precalculation** - Apophysis precalculates FAngle, FSinA, FCosA, FLength
+   - We recalculate these in each variation
+3. **Unknown differences** in individual variation implementations
 
 **ATAN2 CONVENTION IN APOPHYSIS (2025-11-01):**
 - **Discovery:** Apophysis has MIXED conventions for atan2!
