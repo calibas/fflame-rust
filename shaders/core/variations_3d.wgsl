@@ -192,12 +192,9 @@ fn rotate_y(p: vec3<f32>, angle: f32) -> vec3<f32> {
 
 // Hemisphere - project onto hemisphere
 fn variation_hemisphere(p: vec3<f32>) -> vec3<f32> {
-    let r2 = dot(p, p);
-    let r = sqrt(r2);
-    if (r < 1e-6) {
-        return vec3<f32>(0.0, 0.0, 1.0);
-    }
-    let scale = 1.0 / r;
-    let z = max(0.0, sqrt(1.0 - min(1.0, r2)));
-    return vec3<f32>(p.x * scale, p.y * scale, z);
+    // Apophysis: t = 1 / sqrt(x² + y² + 1)
+    // result = (x*t, y*t, t)
+    let r2_xy = dot(p.xy, p.xy);  // x² + y²
+    let t = 1.0 / sqrt(r2_xy + 1.0);
+    return vec3<f32>(p.x * t, p.y * t, t);
 }
