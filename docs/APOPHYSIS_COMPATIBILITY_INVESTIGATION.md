@@ -112,6 +112,12 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
   - Was using `pow(length(p), cpower)` which is `r^cN`
   - Apophysis uses `pow(x² + y², cN)` which is `r^(2×cN)`
   - Changed to `pow(dot(p, p), cpower)` to match exactly
+- ✅ **PreRotateX/Y and PostRotateX/Y** (variations 19-22) - Fixed rotation matrices to match Apophysis
+  - Was using standard rotation matrices (different sign convention)
+  - Apophysis RotateX: `y' = sin×z + cos×y, z' = cos×z - sin×y`
+  - Apophysis RotateY: `x' = cos×x - sin×z, z' = sin×x + cos×z`
+  - Pre/Post use identical rotation matrices, just applied at different phases
+  - Updated to match Apophysis exactly
 
 **Not Used in Apophysis (different or unused variations):**
 - ⚠️ **Heart** (variation 7) - Our implementation `r × sin(r × θ), -r × cos(r × θ)` doesn't match any active Apophysis variation
@@ -134,7 +140,6 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 **Still Need Verification:**
 - ❓ Bent (variation 14)
 - ❓ ZCone, Hemisphere (variations 16, 18)
-- ❓ Pre/Post Rotate (variations 19-22)
 
 ## Summary
 

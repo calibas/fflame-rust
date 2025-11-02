@@ -170,10 +170,11 @@ fn variation_blob(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
 fn rotate_x(p: vec3<f32>, angle: f32) -> vec3<f32> {
     let c = cos(angle);
     let s = sin(angle);
+    // Apophysis: z' = c*z - s*y, y' = s*z + c*y
     return vec3<f32>(
         p.x,
-        p.y * c - p.z * s,
-        p.y * s + p.z * c
+        s * p.z + c * p.y,
+        c * p.z - s * p.y
     );
 }
 
@@ -181,10 +182,11 @@ fn rotate_x(p: vec3<f32>, angle: f32) -> vec3<f32> {
 fn rotate_y(p: vec3<f32>, angle: f32) -> vec3<f32> {
     let c = cos(angle);
     let s = sin(angle);
+    // Apophysis: x' = c*x - s*z, z' = s*x + c*z
     return vec3<f32>(
-        p.x * c + p.z * s,
+        c * p.x - s * p.z,
         p.y,
-        -p.x * s + p.z * c
+        s * p.x + c * p.z
     );
 }
 
