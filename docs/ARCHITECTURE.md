@@ -707,10 +707,12 @@ Result: Variable throughput based on motion, but constant visual quality.
 
 ---
 
-## 🔄 Delta-Based State Management System (Added 2025-10-31)
+## 🔄 Delta-Based State Management System (Completed 2025-11-01)
 
 ### Overview
-The application uses a **delta-based state management system** (ConfigManager) that replaces the previous flag-based approach. All configuration changes flow through a single centralized gateway that tracks deltas, manages undo/redo, and determines selective GPU updates.
+The application uses a **delta-based state management system** (ConfigManager) that has **completely replaced** the previous flag-based approach. All configuration changes flow through a single centralized gateway that tracks deltas, manages undo/redo, and determines selective GPU updates.
+
+**Status**: ✅ **COMPLETE** - All UI controls migrated, preview mode working, Triangle Editor integrated
 
 **See [CONFIG.md](main/CONFIG.md)** for complete ConfigManager documentation.
 
@@ -747,24 +749,33 @@ The application uses a **delta-based state management system** (ConfigManager) t
 
 ### UI Integration
 
-**Slider Helpers** ([src/config/slider.rs](../src/config/slider.rs)):
+**Standard Pattern** (preview mode for mouse drag, discrete for keyboard):
 ```rust
-// Basic slider with immediate undo
-config_slider(ui, config_manager, ConfigPath::Exposure, 0.1..=5.0)
-    .text("Exposure")
-    .show();
-
-// Lazy slider with throttled undo (500ms minimum between captures)
-lazy_slider(ui, config_manager, ConfigPath::PanX, -5.0..=5.0)
-    .text("Pan X")
-    .show();
+let response = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).text("Parameter"));
+if response.changed() {
+    // lazy=response.dragged() distinguishes mouse drag from keyboard input
+    config_manager.update_param(path, value.into(), response.dragged())?;
+}
+// Commit preview when drag ends
+if response.drag_stopped() && config_manager.is_in_preview_mode() {
+    config_manager.force_commit_preview(&path)?;
+}
 ```
 
-**LazyUndoHelper** - Smart undo throttling:
-- Prevents undo spam during continuous slider drags
-- Captures initial state on drag start
-- Captures final state 500ms after drag end
-- Used for view controls (pan, zoom, rotation) and affine transforms
+**Batch Updates** (multiple related parameters):
+```rust
+let changes = vec![
+    (ConfigPath::TransformAffine { index, param: A }, a.into()),
+    (ConfigPath::TransformAffine { index, param: B }, b.into()),
+    // ... more params
+];
+config_manager.update_batch(changes, "Description", response.dragged())?;
+```
+
+**Key Insight**: Using `lazy=response.dragged()` ensures:
+- Mouse drag → `dragged()=true` → preview mode → single undo point on release
+- Keyboard input → `dragged()=false` → discrete undo point immediately
+- No preview mode stuck issues
 
 ### Key Benefits
 
@@ -777,21 +788,28 @@ lazy_slider(ui, config_manager, ConfigPath::PanX, -5.0..=5.0)
 6. **Live Preview Mode** - Temporary changes (e.g., palette editor) with instant revert
 7. **Lazy Undo** - Intelligent throttling prevents undo stack bloat
 
-### Migration Status
+### Migration Status: ✅ COMPLETE
 
-**Fully Migrated (Phases 1-16):**
-- ✅ All slider controls (view, tone mapping, rendering settings)
-- ✅ All variation weights and parameters
-- ✅ All color controls (palette, background, color mode)
-- ✅ Affine transform editing (triangle editor + sliders)
-- ✅ Mouse panning (lazy undo for smooth dragging)
+**All UI Controls Migrated:**
+- ✅ View controls (zoom, pan, rotation, camera)
+- ✅ Settings sliders (iterations, blend, compression, etc.)
+- ✅ Tone mapping controls (exposure, gamma, curves)
+- ✅ Variation weights and parameters
+- ✅ Color controls (palette, background, color mode)
+- ✅ **Triangle Editor** (coordinates, quick actions, affine coefficients)
 - ✅ Palette editor (live preview mode)
-- ✅ Preset loading (snapshot-based undo)
-- ✅ Undo history window (visual delta browser)
+- ✅ All preview mode issues resolved
 
-**Legacy System (Being Phased Out):**
-- Transform add/delete (uses direct config modification + old undo)
-- Config import/export (uses old capture_state())
+**Preview Mode Fixes (2025-11-01):**
+- Changed all sliders from `lazy=true` to `lazy=response.dragged()`
+- Fixed keyboard input getting stuck in preview mode
+- All sliders now distinguish mouse drag from keyboard input
+- Added `drag_stopped()` commit logic to all sliders
+
+**Non-Config Actions** (intentionally separate):
+- Transform add/delete (structural changes)
+- Config import/export (file I/O)
+- Preset loading (bulk replacement)
 
 ### Project Documentation
 
@@ -806,7 +824,13 @@ lazy_slider(ui, config_manager, ConfigPath::PanX, -5.0..=5.0)
 - [live-mode-accumulation-problem.md](archive/delta-migration/live-mode-accumulation-problem.md) - Preview mode solution
 - [palette-editor-live-undo.md](archive/delta-migration/palette-editor-live-undo.md) - Palette editor integration
 
-**Current Work:**
+**Current Documentation:**
+- [CONFIG.md](main/CONFIG.md) - Complete ConfigManager reference
+- [dragvalue-keyboard-preview-mode.md](projects/dragvalue-keyboard-preview-mode.md) - Preview mode issue analysis
+- [palette-system-redesign.md](projects/palette-system-redesign.md) - Palette architecture
+- [undo-redo-issues.md](projects/undo-redo-issues.md) - Future improvements
+
+**Archived Work:**
 - [centralized-update-logic.md](projects/centralized-update-logic.md) - Future work: Centralize UpdateType handling
 
 ### Performance Characteristics

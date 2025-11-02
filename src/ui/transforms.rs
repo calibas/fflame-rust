@@ -146,7 +146,7 @@ fn render_affine_controls(
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::A },
                 temp_a.into(),
-                true  // Lazy undo
+                response_a.dragged()  // Lazy undo
             ) {
                 transform.a = config_manager.active_config().flame.transforms[index].a;
                 max_update = max_update.max(update_type);
@@ -163,7 +163,7 @@ fn render_affine_controls(
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::B },
                 temp_b.into(),
-                true  // Lazy undo
+                response_b.dragged()  // Lazy undo
             ) {
                 transform.b = config_manager.active_config().flame.transforms[index].b;
                 max_update = max_update.max(update_type);
@@ -182,7 +182,7 @@ fn render_affine_controls(
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::C },
                 temp_c.into(),
-                true  // Lazy undo
+                response_c.dragged()  // Lazy undo
             ) {
                 transform.c = config_manager.active_config().flame.transforms[index].c;
                 max_update = max_update.max(update_type);
@@ -199,7 +199,7 @@ fn render_affine_controls(
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::D },
                 temp_d.into(),
-                true  // Lazy undo
+                response_d.dragged()  // Lazy undo
             ) {
                 transform.d = config_manager.active_config().flame.transforms[index].d;
                 max_update = max_update.max(update_type);
@@ -218,7 +218,7 @@ fn render_affine_controls(
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::E },
                 temp_e.into(),
-                true  // Lazy undo
+                response_e.dragged()  // Lazy undo
             ) {
                 transform.e = config_manager.active_config().flame.transforms[index].e;
                 max_update = max_update.max(update_type);
@@ -235,7 +235,7 @@ fn render_affine_controls(
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::F },
                 temp_f.into(),
-                true  // Lazy undo
+                response_f.dragged()  // Lazy undo
             ) {
                 transform.f = config_manager.active_config().flame.transforms[index].f;
                 max_update = max_update.max(update_type);
@@ -268,7 +268,7 @@ fn render_color_controls(
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformColor { index, component: ColorComponent::R },
                 temp_r.into(),
-                true  // Lazy undo
+                response_r.dragged()  // Lazy undo
             ) {
                 transform.color[0] = config_manager.active_config().flame.transforms[index].color[0];
                 max_update = max_update.max(update_type);
@@ -285,7 +285,7 @@ fn render_color_controls(
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformColor { index, component: ColorComponent::G },
                 temp_g.into(),
-                true  // Lazy undo
+                response_g.dragged()  // Lazy undo
             ) {
                 transform.color[1] = config_manager.active_config().flame.transforms[index].color[1];
                 max_update = max_update.max(update_type);
@@ -302,7 +302,7 @@ fn render_color_controls(
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformColor { index, component: ColorComponent::B },
                 temp_b.into(),
-                true  // Lazy undo
+                response_b.dragged()  // Lazy undo
             ) {
                 transform.color[2] = config_manager.active_config().flame.transforms[index].color[2];
                 max_update = max_update.max(update_type);
@@ -319,7 +319,7 @@ fn render_color_controls(
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformColorSpeed { index },
             temp_speed.into(),
-            true  // Lazy undo
+            response_speed.dragged()  // Lazy undo
         ) {
             transform.color_speed = config_manager.active_config().flame.transforms[index].color_speed;
             max_update = max_update.max(update_type);

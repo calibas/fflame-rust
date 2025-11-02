@@ -2,21 +2,32 @@
 
 Complete guide to the delta-based configuration system, ConfigManager, undo/redo, and serialization.
 
+## ✅ Migration Status: COMPLETE (2025-11-01)
+
+**All UI controls now use ConfigManager with delta-based undo/redo:**
+- ✅ View controls (zoom, pan, rotation, camera)
+- ✅ Settings sliders (iterations, blend, compression)
+- ✅ Tone mapping (exposure, gamma, curves)
+- ✅ Variation weights and parameters
+- ✅ Color controls (palette, background)
+- ✅ **Triangle Editor** (coordinates, quick actions, affine coefficients, reset)
+- ✅ **Preview mode fixes** - All sliders use `lazy=response.dragged()` pattern
+- ✅ Palette editor with live preview mode
+
+**Key Achievement**: Preview mode now works correctly for both mouse drag (live preview) and keyboard input (discrete undo points).
+
 **See also:**
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Overview and module organization
 - [TRANSFORMS.md](TRANSFORMS.md) - Transform structure details
 - [UI.md](UI.md) - Config import/export UI controls and delta-based UI patterns
 - [EXPORT.md](EXPORT.md) - PNG metadata embedding
+- [dragvalue-keyboard-preview-mode.md](../projects/dragvalue-keyboard-preview-mode.md) - Preview mode issue analysis
 
-**Project Documentation (Delta System - COMPLETED):**
-
-All delta migration documentation has been archived to [archive/delta-migration/](../archive/delta-migration/):
-- [delta-based-state-management.md](../archive/delta-migration/delta-based-state-management.md) - Original 2,600-line plan (RETIRED)
+**Archived Migration Documentation:**
+All delta migration planning docs have been archived to [archive/delta-migration/](../archive/delta-migration/):
 - [delta-system-completed.md](../archive/delta-migration/delta-system-completed.md) - Summary of completed work (Phases 1-10)
 - [complete-delta-migration.md](../archive/delta-migration/complete-delta-migration.md) - Final migration phases (11-16)
 - [MIGRATION-STATUS.md](../archive/delta-migration/MIGRATION-STATUS.md) - Detailed migration tracking
-
-Current work: [projects/centralized-update-logic.md](../projects/centralized-update-logic.md) - Future centralization of UpdateType handling
 
 ---
 

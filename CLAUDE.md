@@ -275,47 +275,60 @@ println!("Rendered {} iterations in {:.2}ms",
 **All configuration changes now flow through ConfigManager** - see [docs/main/CONFIG.md](docs/main/CONFIG.md) for complete documentation.
 
 **Core Principles:**
-- Use `config_slider()` or `lazy_slider()` helpers from `src/config/slider.rs` for UI controls
 - ConfigManager automatically handles undo/redo with delta tracking
 - Type-safe `ConfigPath` enum identifies all parameters (100+ variants)
 - `UpdateType` return value determines selective GPU updates (View/Color/Flame/ToneMap/Rendering)
-- LazyUndoHelper throttles undo captures for continuous controls (500ms minimum)
-- Live preview mode for temporary changes (palette editor)
-- **UpdateAction pattern** centralizes GPU update decisions (replaces boolean flag propagation)
+- **Preview mode**: Use `lazy=response.dragged()` for live updates during mouse drag
+- **Discrete mode**: Use `lazy=false` for keyboard input and discrete actions
+- Batch updates group multiple parameter changes into single undo point
 
-**UI Pattern:**
+**UI Patterns:**
+
+**1. Slider with Preview Mode** (mouse drag = preview, keyboard = discrete):
 ```rust
-use crate::config::slider::lazy_slider;
-use crate::config::delta::{ConfigPath, UpdateType};
-
-// Lazy undo for continuous controls (view, affine)
-let update_type = lazy_slider(ui, config_manager, ConfigPath::Zoom, 0.1..=10.0)
-    .text("Zoom").show();
-
-// Immediate undo for discrete controls (exposure, gamma)
-let update_type = config_slider(ui, config_manager, ConfigPath::Exposure, 0.1..=5.0)
-    .text("Exposure").show();
-
-// GPU updates handled centrally via UpdateAction
-let actions = config_manager.get_pending_actions();
-if actions.update_view { renderer.update_view(...); renderer.reset(); }
-if actions.update_flame { renderer.update_flame(...); renderer.reset(); }
-if actions.update_tone_curve { renderer.update_tonemap(...); }
-config_manager.clear_pending_actions();
+let response = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).text("Parameter"));
+if response.changed() {
+    // Use response.dragged() to distinguish mouse drag from keyboard input
+    config_manager.update_param(path, value.into(), response.dragged())?;
+}
+// Commit preview when drag ends
+if response.drag_stopped() && config_manager.is_in_preview_mode() {
+    config_manager.force_commit_preview(&path)?;
+}
 ```
 
-**Architecture (Phases 1-5 Complete):**
+**2. Discrete Action** (button, checkbox):
+```rust
+if ui.button("Action").clicked() {
+    config_manager.update_param(path, value.into(), false)?; // lazy=false
+}
+```
+
+**3. Batch Update** (multiple related parameters):
+```rust
+let changes = vec![
+    (ConfigPath::TransformAffine { index, param: A }, a.into()),
+    (ConfigPath::TransformAffine { index, param: B }, b.into()),
+    // ... more params
+];
+config_manager.update_batch(changes, "Description", response.dragged())?;
+```
+
+**Architecture (Complete - 2025-11-01):**
 - **Phase 1-3**: Created ConfigManager with delta-based undo/redo
 - **Phase 4**: Migrated all UI modules to use ConfigManager (settings, view, tone_mapping, transforms)
-- **Phase 5**: Removed 21 obsolete UiResponse flags, replaced with UpdateAction pattern
-- **Result**: Single source of truth for state changes, automatic change tracking, simplified GPU update logic
+- **Phase 5**: Removed 21 obsolete UiResponse flags, replaced with UpdateType pattern
+- **Triangle Editor**: Complete migration with batch updates and preview mode
+- **Preview Mode Fixes**: Changed `lazy=true` to `lazy=response.dragged()` across all sliders
+- **Result**: Single source of truth, automatic tracking, preview mode works correctly for both drag and keyboard
 
 **Key Files:**
-- `src/config/manager.rs` - ConfigManager with UpdateAction tracking (1,237 lines)
-- `src/config/delta.rs` - ConfigPath, ConfigValue, ConfigDelta, UpdateAction (568 lines)
-- `src/config/slider.rs` - UI helpers (299 lines)
-- `src/ui/response.rs` - Non-config actions only (file I/O, transforms, presets)
-- See [docs/archive/delta-migration/](docs/archive/delta-migration/) for historical migration docs
+- `src/config/manager.rs` - ConfigManager with preview mode support (1,400+ lines)
+- `src/config/delta.rs` - ConfigPath, ConfigValue, ConfigDelta enums (568 lines)
+- `src/ui/triangle_editor.rs` - Full ConfigManager integration with batch updates
+- `src/ui/variation_params.rs` - Parameter sliders with preview mode
+- `src/ui/variation_controls.rs` - Variation weight sliders with preview mode
+- See [docs/projects/dragvalue-keyboard-preview-mode.md](docs/projects/dragvalue-keyboard-preview-mode.md) for preview mode analysis
 
 ### Variation Registry Architecture
 - **Global Singleton**: `global_registry()` returns `&'static VariationRegistry` (initialized once via `once_cell::Lazy`)
@@ -624,13 +637,22 @@ Thread-safe atomic color accumulation using u32 histogram buffer:
   - This is necessary because tonemap shader blends RGB with background before alpha is applied
   - Accumulation buffer stores raw fractal colors with separate density channel
 
-## Legacy Code (Remaining)
-The following still use older patterns and could be migrated to ConfigManager in the future:
-- Transform add/delete buttons (uses direct flame modification, not config_manager.update_param)
-- Config import/export handlers (uses direct config replacement)
-- Preset loading (uses direct config replacement via `load_config()`)
+## State Centralization Complete ✅
 
-**Note**: The delta-based state centralization migration (Phases 1-5) is **complete** as of 2025-11-01. All UI controls now use ConfigManager with automatic change tracking and centralized GPU updates via UpdateAction pattern. See [docs/archive/delta-migration/](docs/archive/delta-migration/) for migration history.
+The delta-based state centralization migration is **complete** as of 2025-11-01:
+- ✅ All UI controls now use ConfigManager
+- ✅ Preview mode works correctly for both mouse drag and keyboard input
+- ✅ Triangle Editor fully migrated with batch updates
+- ✅ All sliders use `lazy=response.dragged()` pattern
+- ✅ Automatic change tracking with 50-state undo/redo history
+- ✅ Selective GPU updates via UpdateType enum
+
+**Remaining Non-Config Actions** (by design):
+- Transform add/delete buttons (structural changes, not parameter edits)
+- Config import/export (file I/O operations)
+- Preset loading (bulk config replacement)
+
+These operations are intentionally separate from ConfigManager as they represent discrete actions, not incremental parameter changes. See [docs/archive/delta-migration/](docs/archive/delta-migration/) for migration history.
 
 ## Mobile Platform Support (Experimental)
 
