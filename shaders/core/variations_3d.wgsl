@@ -131,8 +131,8 @@ fn variation_waves(p: vec3<f32>) -> vec3<f32> {
 
 fn variation_julian(p: vec3<f32>, xform_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     // Get parameters
-    let power = get_param(xform_id, 14u, 0u);  // julian is variation index 14 (after julia at 13)
-    let dist = get_param(xform_id, 14u, 1u);
+    let power = get_param(xform_id, 24u, 0u);  // julian is variation index 24
+    let dist = get_param(xform_id, 24u, 1u);
 
     let abs_power = abs(power);
     let cpower = dist / abs_power / 2.0;
@@ -151,9 +151,9 @@ fn variation_julian(p: vec3<f32>, xform_id: u32, rng: ptr<function, RngState>) -
 
 fn variation_blob(p: vec3<f32>, xform_id: u32) -> vec3<f32> {
     // Get parameters: p1 = high, p2 = low, p3 = waves
-    let p1 = get_param(xform_id, 17u, 0u);  // high
-    let p2 = get_param(xform_id, 17u, 1u);  // low
-    let p3 = get_param(xform_id, 17u, 2u);  // waves
+    let p1 = get_param(xform_id, 25u, 0u);  // high - blob is variation index 25
+    let p2 = get_param(xform_id, 25u, 1u);  // low
+    let p3 = get_param(xform_id, 25u, 2u);  // waves
 
     let r = length(p.xy);
     let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
