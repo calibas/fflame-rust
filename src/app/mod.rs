@@ -489,8 +489,8 @@ impl App {
 
         // Handle custom palette from editor
         if let Some(custom_pal) = ui_response.custom_palette {
-            // TODO: Migrate to ConfigManager (custom palette modifies library, not config)
-            // For now, no undo support for palette editor changes
+            // Add custom palette to library for persistence
+            // Note: Don't set PaletteIndex - keep config.palette as working copy
 
             // Check if this palette already exists in library by name
             let palette_lib = &mut self.palette_library;
@@ -505,21 +505,13 @@ impl App {
             if let Some(idx) = found_index {
                 // Palette exists, update it in place
                 palette_lib.update(idx, custom_pal);
-                let _ = self.config_manager.update_param(
-                    crate::config::ConfigPath::PaletteIndex,
-                    (idx as u32).into(),
-                    false
-                );
             } else {
                 // New palette, add to library
                 palette_lib.add(custom_pal);
-                let new_idx = palette_lib.palettes().len() - 1;
-                let _ = self.config_manager.update_param(
-                    crate::config::ConfigPath::PaletteIndex,
-                    (new_idx as u32).into(),
-                    false
-                );
             }
+
+            // Don't set palette_index - that would clear config.palette
+            // The palette stays in config.palette as the working copy
 
             // Update renderer
             let config = self.config_manager.active_config();
