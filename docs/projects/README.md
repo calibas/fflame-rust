@@ -25,7 +25,22 @@ When a project is **completed** or **abandoned**, move the documentation to:
 
 ## Current Projects
 
-(List current projects here as they are added)
+### Active
+
+- **palette-system-redesign.md** - Design document for palette management improvements
+  - Status: Planning phase
+  - Focus: Better palette library management, custom palettes, built-in vs user palettes
+
+- **undo-redo-issues.md** - Documentation of known undo/redo system issues and future improvements
+  - Status: Documentation only
+  - Focus: Multi-level undo, batch operations, state compression
+
+### Recently Completed (2025-11-01)
+
+- ~~**centralized-update-logic.md**~~ → Archived to `archive/state-centralization/`
+  - All UI controls now use ConfigManager
+  - UpdateType pattern fully implemented
+  - Preview mode issues resolved
 
 ---
 

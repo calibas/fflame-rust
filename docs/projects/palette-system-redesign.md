@@ -7,6 +7,7 @@
 1. **Selection Gets "Stuck"**
    - Sometimes can't switch between palettes in dropdown
    - Possible race condition in UI state
+   - Possibly related to previous issues with preview mode getting "stuck"
    - Complex interaction between config.palette and palette_library
 
 2. **Confusing UX**
