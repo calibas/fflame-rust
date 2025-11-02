@@ -105,9 +105,14 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
   - Was incorrectly using polar formula `sin(θ) / r, r × cos(θ)` instead of simple division
 - ✅ **Handkerchief** (variation 6) - Fixed to use `sin(θ + r), cos(θ - r)` with standard atan2(y, x)
   - Was using atan2(x, y) core convention and had `cos(θ + r)` instead of `cos(θ - r)`
+- ✅ **Ex** (variation 12) - Fixed to use `sin(θ + r)³` and `cos(θ - r)³` with standard atan2(y, x)
+  - Was using atan2(x, y) and cubing `sin(θ + r)` and `sin(θ - r)` instead of using cos for n1
+
+**Not Used in Apophysis (different or unused variations):**
+- ⚠️ **Heart** (variation 7) - Our implementation `r × sin(r × θ), -r × cos(r × θ)` doesn't match any active Apophysis variation
+  - Apophysis has "xheart" plugin with parameters, but simple "Heart" appears to be unused/deprecated
 
 **Still Need Verification:**
-- ❓ Heart, Ex (variations 6-12)
 - ❓ Julia, Bent, Waves (variations 13-15)
 - ❓ ZCone, Hemisphere (variations 16, 18)
 - ❓ Pre/Post Rotate (variations 19-22)

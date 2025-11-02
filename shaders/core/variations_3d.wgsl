@@ -94,14 +94,12 @@ fn variation_diamond(p: vec3<f32>) -> vec3<f32> {
 
 fn variation_ex(p: vec3<f32>) -> vec3<f32> {
     let r = length(p.xy);
-    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
-    let p0 = theta + r;
-    let p1 = theta - r;
-    let p0_sin = sin(p0);
-    let p1_sin = sin(p1);
-    let p0_cubed = p0_sin * p0_sin * p0_sin;
-    let p1_cubed = p1_sin * p1_sin * p1_sin;
-    return vec3<f32>(r * (p0_cubed + p1_cubed), r * (p0_cubed - p1_cubed), p.z);
+    let theta = atan2(p.y, p.x);  // Standard atan2(y,x) for plugin variations
+    let n0 = sin(theta + r);
+    let n1 = cos(theta - r);
+    let m0 = n0 * n0 * n0;  // n0³
+    let m1 = n1 * n1 * n1;  // n1³
+    return vec3<f32>(r * (m0 + m1), r * (m0 - m1), p.z);
 }
 
 fn julia(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
