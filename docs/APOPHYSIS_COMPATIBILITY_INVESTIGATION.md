@@ -125,6 +125,12 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 **Known Issues:**
 - Some variations may have naming or implementation differences vs Apophysis
 - Further investigation needed for Diamond and other advanced variations
+- **CRITICAL DISCOVERY:** Apophysis uses `atan2(x, y)` instead of standard `atan2(y, x)`
+  - This affects all variations that calculate angles
+  - Apophysis: `sin(atan2(x,y)) = x/r`, `cos(atan2(x,y)) = y/r`
+  - Standard: `sin(atan2(y,x)) = y/r`, `cos(atan2(y,x)) = x/r`
+  - Variations without atan2 (Linear, Spherical) work correctly
+  - Variations with atan2 (Diamond, Polar, etc.) likely need argument swap
 
 ## What Remains to Check
 
