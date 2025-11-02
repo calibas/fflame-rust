@@ -265,6 +265,18 @@ let pan_y = center.1;
 - Our pan Y convention: unknown
 - Need to test with non-zero center values
 
+## Performance Optimization Note (2025-11-02)
+
+**Attempted:** Manual precalculation of common trig values (r, theta, sin, cos) following Apophysis approach
+**Result:** ❌ Reverted - Made performance ~1% **slower**
+**Root Cause:** Modern GPU shader compilers already perform Common Subexpression Elimination (CSE) automatically
+
+**Key Learning:** What worked for Apophysis CPU rendering in 2005 doesn't apply to modern GPU shader compilers in 2025. Trust the compiler for micro-optimizations.
+
+See [docs/archive/optimization-attempt-2025-11-02/](archive/optimization-attempt-2025-11-02/) for full documentation of the failed optimization attempt.
+
+---
+
 ## Files to Review Next
 
 1. `src/scene/presets.rs` - Check if affine coefficients are correct in preset definitions

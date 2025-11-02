@@ -1,18 +1,33 @@
 # Variation Performance Optimization Analysis
 
-## ✅ OPTIMIZATION IMPLEMENTED (2025-11-02)
+## ❌ OPTIMIZATION REVERTED (2025-11-02)
 
-The Apophysis-style precalculation optimization has been successfully implemented following Option 1 (Eager Precalculation).
+The Apophysis-style precalculation optimization was implemented, tested, and **REVERTED** due to zero performance improvement.
 
-**Changes Made:**
-1. ✅ Added precalculation block in `apply_variations()` for both 2D and 3D shaders
+**What Happened:**
+1. ✅ Implemented precalculation block in `apply_variations()` for both 2D and 3D shaders
 2. ✅ Updated variation function signatures to accept precalculated values
-3. ✅ Updated shader builder to generate correct function calls with optimized parameters
-4. ✅ All core variations (0-17) now use precalculated values where beneficial
+3. ✅ Updated shader builder to generate correct function calls
+4. ❌ **Benchmark showed 0% improvement, actually ~1% slower**
+5. ✅ Reverted changes after discovering root cause
 
-**Result:** Reduced from ~77 expensive trig operations per iteration to ~5 operations per iteration (95% reduction in typical cases).
+**Benchmark Results:**
+- Before optimization: 1701.80ms ± 14.50ms (commit 711c947)
+- After optimization:  1718.09ms ± 12.52ms (commit b9a3f35)
+- **Difference: +16.29ms slower (+0.96%)**
 
-See implementation details in [src/shader_builder_v2.rs](../src/shader_builder_v2.rs), [shaders/core/variations_2d.wgsl](../shaders/core/variations_2d.wgsl), and [shaders/core/variations_3d.wgsl](../shaders/core/variations_3d.wgsl).
+**Root Cause:**
+Modern GPU shader compilers (SPIR-V, DXC, Metal) already perform **Common Subexpression Elimination (CSE)** automatically. The compiler was already deduplicating redundant `atan2()` and `length()` calls without our manual intervention.
+
+**Why It Made Things Worse:**
+1. Forced calculations even when unused → register pressure
+2. Added function call overhead instead of inline code
+3. Prevented compiler from doing platform-specific optimizations
+
+**Conclusion:**
+What worked for Apophysis CPU rendering in 2005 doesn't apply to modern GPU shader compilers in 2025. **Trust the compiler.**
+
+See full analysis in [SHADER_COMPILER_CSE_ANALYSIS.md](SHADER_COMPILER_CSE_ANALYSIS.md)
 
 ---
 

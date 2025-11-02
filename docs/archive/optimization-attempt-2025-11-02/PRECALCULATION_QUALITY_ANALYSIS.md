@@ -1,12 +1,20 @@
 # Precalculation Quality Analysis
 
-## Question
+## ⚠️ NOTE: This optimization was REVERTED due to zero performance benefit
+
+This document is kept for historical/educational purposes. The optimization was implemented, tested, and reverted after benchmarks showed it made performance **worse** (~1% slower). Modern shader compilers already perform Common Subexpression Elimination automatically.
+
+See [SHADER_COMPILER_CSE_ANALYSIS.md](SHADER_COMPILER_CSE_ANALYSIS.md) for full details.
+
+---
+
+## Original Question (Historical)
 
 > Isn't atan2(p.x, p.y) going to vary at least slightly each iteration, and optimizations can potentially affect image quality?
 
-## Answer: No Quality Impact
+## Original Answer: No Quality Impact (Moot Point)
 
-The precalculation optimization does **NOT** affect image quality for the following reasons:
+The precalculation optimization would **NOT** have affected image quality (had it been kept) for the following reasons:
 
 ### 1. Precalculation Scope
 
