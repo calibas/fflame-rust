@@ -95,6 +95,7 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 - ✅ **Polar** (variation 5) - `θ / π, r - 1, z` (uses atan2(x,y) convention)
 - ✅ **Disc** (variation 8) - `(θ / π) × sin(π × r), (θ / π) × cos(π × r), z`
 - ✅ **Diamond** (variation 11) - `sin(θ) × cos(r), cos(θ) × sin(r), z`
+- ✅ **ZCone** (variation 16) - `x, y, z + weight × r` where r = sqrt(x² + y²)
 - ✅ **ZScale** (variation 23) - `x, y, weight × z` (scales Z depth)
 
 **Fixed to Match Apophysis:**
@@ -139,7 +140,7 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 
 **Still Need Verification:**
 - ❓ Bent (variation 14)
-- ❓ ZCone, Hemisphere (variations 16, 18)
+- ❓ Hemisphere (variation 18)
 
 ## Summary
 
