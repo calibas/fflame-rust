@@ -164,7 +164,7 @@ pub fn render_view_window(
                     if let Ok(update_type) = config_manager.update_param(
                         ConfigPath::Rotation,
                         new_rotation.into(),
-                        true  // Lazy undo for slider drag
+                        response.dragged()  // Lazy undo for slider drag
                     ) {
                         max_update = max_update.max(update_type);
                     }

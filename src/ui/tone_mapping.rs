@@ -278,8 +278,9 @@ pub fn render_tone_mapping_window(
                     if matches!(current_color_mode_2, ColorMode::Speed) {
                         let current_speed_factor = config_manager.active_config().speed_factor;
                         let mut temp_speed_factor = current_speed_factor;
-                        if ui.add(egui::Slider::new(&mut temp_speed_factor, 0.0..=1.0).text("Speed Blend Factor")).changed() {
-                            if let Ok(update) = config_manager.update_param(ConfigPath::SpeedFactor, temp_speed_factor.into(), true) {
+                        let response = ui.add(egui::Slider::new(&mut temp_speed_factor, 0.0..=1.0).text("Speed Blend Factor"));
+                        if response.changed() {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::SpeedFactor, temp_speed_factor.into(), response.dragged()) {
                                 max_update = max_update.max(update);
                             }
                         }
