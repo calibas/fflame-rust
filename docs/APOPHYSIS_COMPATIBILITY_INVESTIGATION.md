@@ -1,0 +1,235 @@
+# Apophysis Compatibility Investigation
+
+## Problem Statement
+Non-symmetrical fractals render differently in our implementation compared to Apophysis 7X, even though symmetrical fractals match correctly.
+
+## What We've Verified as CORRECT ✅
+
+### 1. Affine Transform Formula
+**Apophysis (XForm.pas:1070-1071):**
+```pascal
+FTx := c00 * CPpoint.x + c10 * CPpoint.y + c20;
+FTy := c01 * CPpoint.x + c11 * CPpoint.y + c21;
+```
+
+**Our Implementation (affine.wgsl:5-10):**
+```wgsl
+fn apply_affine(xform: Transform, p: vec2<f32>) -> vec2<f32> {
+    return vec2<f32>(
+        xform.a * p.x + xform.b * p.y + xform.e,  // ✅ MATCHES
+        xform.c * p.x + xform.d * p.y + xform.f   // ✅ MATCHES
+    );
+}
+```
+**Mapping:** c00=a, c10=b, c20=e, c01=c, c11=d, c21=f
+
+**Status:** ✅ Formula is identical to Apophysis
+
+## What We've Tried (Coordinate System Adjustments)
+
+### Attempt 1: Fixed Triangle Editor Conversion (2025-11-01)
+**File:** `src/scene/transforms.rs:157-175`
+
+**Changed:**
+- `to_triangle()`: Removed Y-negations, now uses `O=(e,f), X=(e+a,f+c), Y=(e-b,f-d)`
+- `from_triangle()`: Simplified to `e=O.x, f=O.y, a=X.x-O.x, c=X.y-O.y, b=O.x-Y.x, d=O.y-Y.y`
+
+**Result:** ❌ Only affected Triangle Editor UI display, not actual fractal rendering
+
+**Reason:** These methods are only called by the Triangle Editor UI for visualization. The actual rendering uses affine coefficients directly.
+
+### Attempt 2: Flipped Y in Screen Mapping (2025-11-01)
+**File:** `shaders/core/utilities.wgsl:111,134`
+
+**Changed:**
+```wgsl
+// Before:
+let pixel = center + transformed * scale;
+
+// After:
+let pixel = center + vec2<f32>(transformed.x * scale, -transformed.y * scale);
+```
+
+**Result:** ❌ Vertically flipped the fractal display, but didn't fix the mismatch with Apophysis
+
+**Reason:** This was a coordinate system flip, not the root cause of the difference.
+
+## SOLUTION FOUND (2025-11-01)
+
+**Root Cause:** XML coefficient parsing was in wrong order!
+
+**The Bug:**
+- Apophysis XML format: `coefs="a c b d e f"` (column-major matrix storage)
+- We were parsing as: `coefs="a b c d e f"` (row-major)
+- **This swapped b and c coefficients!**
+
+**Evidence from Apophysis source (XForm.pas:1405):**
+```pascal
+Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[2,1]])
+```
+- XML order: c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[2,1]
+- Meaning: a, c, b, d, e, f
+
+**Fixes Applied:**
+1. ✅ Fixed XML parsing in `apophysis_xml.rs` to read coefficients as a, c, b, d, e, f
+2. ✅ Reverted triangle editor changes (they were unnecessary and based on wrong understanding)
+3. ✅ Reverted world_to_pixel Y-flip (it was unnecessary and actually made things worse)
+
+**Current Status:**
+- ✅ XML import now correctly parses Apophysis coefficient order
+- ✅ Triangle editor uses standard reference triangle O=(0,0), X=(1,0), Y=(0,1)
+- ✅ Rendering pipeline unchanged (it was always correct)
+- ✅ Affine transforms working correctly
+- ✅ Linear and Spherical variations working correctly
+
+## New Discovery: Variation Implementation Issues (2025-11-01)
+
+**Working Fractals (verified identical to Apophysis):**
+```xml
+<xform weight="0.5" color="0" spherical="0.35" coefs="0.5 0 0.5 1 0.5 0" />
+<xform weight="0.5" color="0" linear="1.148" coefs="0.34284 0.564847 -0.564847 0.34284 0 0" />
+```
+- ✅ Linear variation works
+- ✅ Spherical variation works
+- ✅ Combinations work
+
+**Broken Fractals:**
+```xml
+<xform weight="0.5" color="0" spherical="0.35" coefs="1 0 0 1 0 0" />
+<xform weight="0.5" color="0" diamond="1" coefs="0.34284 0.564847 -0.564847 0.34284 0 0" />
+```
+- ❌ Diamond variation likely broken
+- ❓ Other variations need testing
+
+**Next Steps:**
+1. Compare Diamond variation implementation with Apophysis source
+2. Check all 26 variations systematically
+3. Look for common pattern in broken variations (atan2 usage? coordinate order?)
+
+## Summary
+
+**Major Fix Applied:** XML coefficient parsing order corrected from row-major to column-major
+
+**Impact:**
+- Affine transforms now parse correctly from Apophysis XML files
+- Non-symmetrical fractals using Linear and Spherical variations render identically to Apophysis
+- Some variations (e.g., Diamond) may still have implementation differences
+
+**Verified Working:**
+- Affine transform formula (always was correct)
+- XML import coefficient order (fixed)
+- Linear variation
+- Spherical variation
+- Asymmetrical test case matches Apophysis exactly
+
+**Known Issues:**
+- Some variations may have naming or implementation differences vs Apophysis
+- Further investigation needed for Diamond and other advanced variations
+
+## What Remains to Check
+
+### High Priority
+1. **Sign of affine coefficients** - Are b or c negated during import/export?
+2. **Variation implementations** - Do individual variations have Y-coordinate handling differences?
+3. **Transform selection** - Is the random transform selection algorithm identical?
+4. **Initial conditions** - Are random starting points generated the same way?
+5. **Coordinate space of variations** - Do variations expect Y-up or Y-down?
+
+### Medium Priority
+6. **Rotation convention** - Clockwise vs counter-clockwise
+7. **Pan direction** - Sign of pan_x and pan_y
+8. **Color blending** - Color_speed interpolation formula
+9. **Palette sampling** - How color_index maps to palette position
+
+### Low Priority
+10. **Floating point precision** - Differences in f32 vs double calculations
+11. **RNG sequence** - Different random number generators
+12. **Burn-in iterations** - Number of initial iterations skipped
+
+## Next Steps
+
+1. Create a minimal test case:
+   - Single transform
+   - Linear variation only (weight = 1.0)
+   - Identity affine (a=1, b=0, c=0, d=1, e=0, f=0)
+   - Compare output point-by-point
+
+2. Test with simple non-identity affine:
+   - Single transform
+   - Linear variation only
+   - Non-symmetrical affine (e.g., a=0.8, b=0.2, c=-0.2, d=0.8, e=0, f=0)
+   - Check if rotation/scale behavior matches
+
+3. Import actual Apophysis .flame file:
+   - Use XML import to get exact coefficients
+   - Compare rendering side-by-side
+   - Check if any transforms have unexpected coefficient signs
+
+## Reference: Apophysis Triangle Convention
+
+**Reference Triangle (ControlPoint.pas:2621-2706):**
+```pascal
+Triangles[-1].x[0] := 1; Triangles[-1].y[0] := 0;   // X point (1,0)
+Triangles[-1].x[1] := 0; Triangles[-1].y[1] := 0;   // O point (0,0)
+Triangles[-1].x[2] := 0; Triangles[-1].y[2] := -1;  // Y point (0,-1)
+```
+
+**After Affine Transform:**
+- O' = (e, f)
+- X' = (a + e, c + f)
+- Y' = (-b + e, -d + f)  ← Note: Input is (0,-1), so b and d are negated
+
+**Our Implementation (now matches Apophysis):**
+- O = (e, f)
+- X = (e + a, f + c)
+- Y = (e - b, f - d)
+
+## Files Modified
+
+1. `src/scene/transforms.rs` - Triangle conversion methods (to_triangle, from_triangle)
+2. `shaders/core/utilities.wgsl` - Y-flip in world_to_pixel functions
+
+## XML Import Analysis (2025-11-01)
+
+**File:** `src/apophysis_xml.rs:229-239`
+
+**Affine Coefficient Import:**
+```rust
+"coefs" => {
+    // Parse "a b c d e f" format
+    transform.a = parts[0].parse().unwrap_or(1.0);
+    transform.b = parts[1].parse().unwrap_or(0.0);
+    transform.c = parts[2].parse().unwrap_or(0.0);
+    transform.d = parts[3].parse().unwrap_or(1.0);
+    transform.e = parts[4].parse().unwrap_or(0.0);
+    transform.f = parts[5].parse().unwrap_or(0.0);
+}
+```
+
+**Status:** ❌ **BUG FOUND!** Coefficients b and c were swapped!
+
+**Root Cause:** Apophysis XML uses column-major order: "a c b d e f" (not "a b c d e f")
+- Apophysis writes: `Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[2,1]])`
+- This is: `c[0,0]=a, c[0,1]=c, c[1,0]=b, c[1,1]=d, c[2,0]=e, c[2,1]=f`
+- We were parsing as: "a b c d e f" (row-major) - **WRONG!**
+
+**Fix Applied:** Changed parsing order to match Apophysis column-major format
+
+**Coordinate Conversion (lines 167-172):**
+```rust
+let zoom = scale / 200.0; // Apophysis scale 200.0 = our zoom 1.0
+let pan_x = center.0;
+let pan_y = center.1;
+```
+
+**Potential Issue:** ❓ `pan_y` is copied directly. With our Y-flip in `world_to_pixel`, should this be negated?
+- Apophysis center Y convention: unknown
+- Our pan Y convention: unknown
+- Need to test with non-zero center values
+
+## Files to Review Next
+
+1. `src/scene/presets.rs` - Check if affine coefficients are correct in preset definitions
+2. `shaders/core/variations_2d.wgsl` - Check if any variations have Y-coordinate assumptions
+3. `shaders/core/variations_3d.wgsl` - Same as above for 3D mode
+4. **Test with Apophysis XML import** - Import a non-symmetrical flame and compare
