@@ -108,7 +108,7 @@ fn variation_ex(p: vec3<f32>) -> vec3<f32> {
 
 fn julia(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
     let r = length(p.xy);
-   let theta = atan2(p.y, p.x);  // Julia uses standard atan2(y,x) convention
+    let theta = atan2(p.y, p.x);  // Julia uses standard atan2(y,x) convention
     let sqrt_r = sqrt(r);
     let omega = select(0.0, 3.14159265359, rng_nextf(rng) < 0.5);
     let half_theta = theta / 2.0 + omega;
