@@ -510,6 +510,7 @@ pub fn render_triangle_editor_window(
 
                 let mut coords_changed = false;
                 let mut dragging = false;
+                let mut drag_stopped = false;
 
                 ui.columns(2, |columns| {
                     // Left column: Coordinates
@@ -520,6 +521,7 @@ pub fn render_triangle_editor_window(
                             let x1_resp = ui.add(egui::DragValue::new(&mut x[1]).speed(0.01).prefix("y: "));
                             coords_changed |= x0_resp.changed() || x1_resp.changed();
                             dragging |= x0_resp.dragged() || x1_resp.dragged();
+                            drag_stopped |= x0_resp.drag_stopped() || x1_resp.drag_stopped();
                         });
                         ui.horizontal(|ui| {
                             ui.label("Y:");
@@ -527,6 +529,7 @@ pub fn render_triangle_editor_window(
                             let y1_resp = ui.add(egui::DragValue::new(&mut y[1]).speed(0.01).prefix("y: "));
                             coords_changed |= y0_resp.changed() || y1_resp.changed();
                             dragging |= y0_resp.dragged() || y1_resp.dragged();
+                            drag_stopped |= y0_resp.drag_stopped() || y1_resp.drag_stopped();
                         });
                         ui.horizontal(|ui| {
                             ui.label("O:");
@@ -534,12 +537,30 @@ pub fn render_triangle_editor_window(
                             let o1_resp = ui.add(egui::DragValue::new(&mut o[1]).speed(0.01).prefix("y: "));
                             coords_changed |= o0_resp.changed() || o1_resp.changed();
                             dragging |= o0_resp.dragged() || o1_resp.dragged();
+                            drag_stopped |= o0_resp.drag_stopped() || o1_resp.drag_stopped();
                         });
                     });
 
                     // Right column: Quick action buttons
                     columns[1].vertical(|ui| {
                         ui.label("Quick Actions:");
+
+                        // Helper closure to apply triangle changes via ConfigManager
+                        let mut apply_triangle_change = |transform_ref: &crate::scene::transforms::Transform,
+                                                           o: [f32; 2], x: [f32; 2], y: [f32; 2],
+                                                           description: &str| {
+                            let mut temp = transform_ref.clone();
+                            temp.from_triangle(o, x, y);
+                            let changes = vec![
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, temp.a.into()),
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, temp.b.into()),
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, temp.c.into()),
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, temp.d.into()),
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, temp.e.into()),
+                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, temp.f.into()),
+                            ];
+                            config_manager.update_batch(changes, description.to_string(), false)
+                        };
 
                         // Translate arrow keys layout (matching View panel)
                         ui.horizontal(|ui| {
@@ -549,8 +570,10 @@ pub fn render_triangle_editor_window(
                                 o_new[1] += 0.1;
                                 x_new[1] += 0.1;
                                 y_new[1] += 0.1;
-                                transform.from_triangle(o_new, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                    &format!("Translate up (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                         });
                         ui.horizontal(|ui| {
@@ -559,24 +582,30 @@ pub fn render_triangle_editor_window(
                                 o_new[0] -= 0.1;
                                 x_new[0] -= 0.1;
                                 y_new[0] -= 0.1;
-                                transform.from_triangle(o_new, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                    &format!("Translate left (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                             if ui.button("  v  ").clicked() {
                                 let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
                                 o_new[1] -= 0.1;
                                 x_new[1] -= 0.1;
                                 y_new[1] -= 0.1;
-                                transform.from_triangle(o_new, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                    &format!("Translate down (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                             if ui.button("  >  ").clicked() {
                                 let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
                                 o_new[0] += 0.1;
                                 x_new[0] += 0.1;
                                 y_new[0] += 0.1;
-                                transform.from_triangle(o_new, x_new, y_new);
-                                // TODO: Migrate affine parameter sliders to use update_param()
+                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                    &format!("Translate right (Transform {})", selected_transform + 1)) {
+                                    max_update = max_update.max(update);
+                                }
                             }
                         });
 
@@ -665,13 +694,24 @@ pub fn render_triangle_editor_window(
                         (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, temp_transform.f.into()),
                     ];
 
+                    // Use lazy=true while dragging
                     if let Ok(update) = config_manager.update_batch(
                         changes,
                         format!("Edit triangle coordinates (Transform {})", selected_transform + 1),
-                        dragging // lazy = true while dragging
+                        dragging && !drag_stopped // lazy while dragging
                     ) {
                         max_update = max_update.max(update);
                     }
+                }
+
+                // Force commit preview when drag stops
+                if drag_stopped && config_manager.is_in_preview_mode() {
+                    // Use first affine parameter as representative for batch
+                    let path = ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A };
+                    if let Ok(update) = config_manager.force_commit_preview(&path) {
+                        max_update = max_update.max(update);
+                    }
+                    config_manager.reset_lazy_undo();
                 }
 
                 ui.separator();
