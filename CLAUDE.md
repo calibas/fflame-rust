@@ -261,6 +261,11 @@ println!("Rendered {} iterations in {:.2}ms",
 - Use `@group(0) @binding(N)` for bind groups
 - Follow std140/std430 layout rules for buffers
 - Use `texture_storage_2d<rgba32float, write>` for output textures
+- **IMPORTANT**: Trust the shader compiler for optimization
+  - Modern GPU compilers (SPIR-V, DXC, Metal) perform aggressive CSE (Common Subexpression Elimination)
+  - Write clear, straightforward code - compiler will optimize redundant calculations
+  - Manual "optimizations" often hurt performance (register pressure, function call overhead)
+  - See [docs/SHADER_COMPILER_CSE_ANALYSIS.md](docs/SHADER_COMPILER_CSE_ANALYSIS.md) for detailed analysis
 
 ### Rust Code
 - Use `bytemuck::Pod` and `bytemuck::Zeroable` for GPU data structures
