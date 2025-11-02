@@ -38,9 +38,8 @@ fn variation_polar(p: vec2<f32>) -> vec2<f32> {
 
 fn variation_handkerchief(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
-    let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
-    let theta_r = theta + r;
-    return vec2<f32>(r * sin(theta_r), r * cos(theta_r));
+    let theta = atan2(p.y, p.x);  // Standard atan2(y,x) for plugin variations
+    return vec2<f32>(r * sin(theta + r), r * cos(theta - r));
 }
 
 fn variation_heart(p: vec2<f32>) -> vec2<f32> {

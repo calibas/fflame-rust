@@ -94,6 +94,7 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 - ✅ **Horseshoe** (variation 4) - `(x² - y²) / r, 2xy / r, z`
 - ✅ **Polar** (variation 5) - `θ / π, r - 1, z` (uses atan2(x,y) convention)
 - ✅ **Disc** (variation 8) - `(θ / π) × sin(π × r), (θ / π) × cos(π × r), z`
+- ✅ **Diamond** (variation 11) - `sin(θ) × cos(r), cos(θ) × sin(r), z`
 
 **Fixed to Match Apophysis:**
 - ✅ **Flatten** (variation 17) - Changed from `result.z *= (1.0 - weight * 0.5)` to `result.z = 0.0`
@@ -102,9 +103,11 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
   - Was incorrectly using `cos(θ) + sin(θ), cos(θ) - sin(θ)` (using theta for both)
 - ✅ **Hyperbolic** (variation 10) - Fixed to use `x / r², y, z`
   - Was incorrectly using polar formula `sin(θ) / r, r × cos(θ)` instead of simple division
+- ✅ **Handkerchief** (variation 6) - Fixed to use `sin(θ + r), cos(θ - r)` with standard atan2(y, x)
+  - Was using atan2(x, y) core convention and had `cos(θ + r)` instead of `cos(θ - r)`
 
 **Still Need Verification:**
-- ❓ Handkerchief, Heart, Disc, Spiral, Hyperbolic, Diamond, Ex (variations 6-12)
+- ❓ Heart, Ex (variations 6-12)
 - ❓ Julia, Bent, Waves (variations 13-15)
 - ❓ ZCone, Hemisphere (variations 16, 18)
 - ❓ Pre/Post Rotate (variations 19-22)
