@@ -726,21 +726,98 @@ pub fn render_triangle_editor_window(
 
                 ui.label("Affine Coefficients:");
 
-                let mut affine_changed = false;
+                // Track drag state for preview mode
+                let mut dragging = false;
+                let mut drag_stopped = false;
 
                 ui.horizontal(|ui| {
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.a).speed(0.01).prefix("a: ")).changed();
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.b).speed(0.01).prefix("b: ")).changed();
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.e).speed(0.01).prefix("e: ")).changed();
+                    let a_resp = ui.add(egui::DragValue::new(&mut transform.a).speed(0.01).prefix("a: "));
+                    if a_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A },
+                            transform.a.into(),
+                            a_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= a_resp.dragged();
+                    drag_stopped |= a_resp.drag_stopped();
+
+                    let b_resp = ui.add(egui::DragValue::new(&mut transform.b).speed(0.01).prefix("b: "));
+                    if b_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B },
+                            transform.b.into(),
+                            b_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= b_resp.dragged();
+                    drag_stopped |= b_resp.drag_stopped();
+
+                    let e_resp = ui.add(egui::DragValue::new(&mut transform.e).speed(0.01).prefix("e: "));
+                    if e_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E },
+                            transform.e.into(),
+                            e_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= e_resp.dragged();
+                    drag_stopped |= e_resp.drag_stopped();
                 });
                 ui.horizontal(|ui| {
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.c).speed(0.01).prefix("c: ")).changed();
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.d).speed(0.01).prefix("d: ")).changed();
-                    affine_changed |= ui.add(egui::DragValue::new(&mut transform.f).speed(0.01).prefix("f: ")).changed();
+                    let c_resp = ui.add(egui::DragValue::new(&mut transform.c).speed(0.01).prefix("c: "));
+                    if c_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C },
+                            transform.c.into(),
+                            c_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= c_resp.dragged();
+                    drag_stopped |= c_resp.drag_stopped();
+
+                    let d_resp = ui.add(egui::DragValue::new(&mut transform.d).speed(0.01).prefix("d: "));
+                    if d_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D },
+                            transform.d.into(),
+                            d_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= d_resp.dragged();
+                    drag_stopped |= d_resp.drag_stopped();
+
+                    let f_resp = ui.add(egui::DragValue::new(&mut transform.f).speed(0.01).prefix("f: "));
+                    if f_resp.changed() {
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F },
+                            transform.f.into(),
+                            f_resp.dragged()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    dragging |= f_resp.dragged();
+                    drag_stopped |= f_resp.drag_stopped();
                 });
 
-                if affine_changed {
-                    // TODO: Migrate affine parameter sliders to use update_param()
+                // Force commit preview when drag stops
+                if drag_stopped && config_manager.is_in_preview_mode() {
+                    let path = ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A };
+                    if let Ok(update) = config_manager.force_commit_preview(&path) {
+                        max_update = max_update.max(update);
+                    }
+                    config_manager.reset_lazy_undo();
                 }
 
                 ui.separator();
@@ -748,8 +825,21 @@ pub fn render_triangle_editor_window(
                 // Control buttons
                 {
                     if ui.button("Reset to Identity").clicked() {
-                        transform.reset_to_identity();
-                        // TODO: Migrate affine parameter sliders to use update_param()
+                        let changes = vec![
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, 1.0f32.into()),
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, 0.0f32.into()),
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, 0.0f32.into()),
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, 1.0f32.into()),
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, 0.0f32.into()),
+                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, 0.0f32.into()),
+                        ];
+                        if let Ok(update) = config_manager.update_batch(
+                            changes,
+                            format!("Reset to identity (Transform {})", selected_transform + 1),
+                            false
+                        ) {
+                            max_update = max_update.max(update);
+                        }
                     }
                 }
             }
