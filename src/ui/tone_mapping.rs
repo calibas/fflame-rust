@@ -206,6 +206,9 @@ pub fn render_tone_mapping_window(
                                         ) {
                                             max_update = max_update.max(update);
                                         }
+
+                                        // Add to library for persistence (doesn't change palette_index)
+                                        *custom_palette = Some(palette_copy);
                                     }
                                 }
                             });
@@ -274,6 +277,9 @@ pub fn render_tone_mapping_window(
                                     ) {
                                         max_update = max_update.max(update);
                                         *show_palette_editor = true;
+
+                                        // Add to library for persistence
+                                        *custom_palette = Some(cloned_palette);
                                     }
                                 }
                             }
