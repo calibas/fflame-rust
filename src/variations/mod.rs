@@ -209,6 +209,7 @@ impl VariationRegistry {
         registry.register_core("bwraps", "BWraps", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 58 - Apophysis 7X extended (5 parameters)
         registry.register_core("pdj", "PDJ", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 59 - Apophysis 7X extended (4 parameters)
         registry.register_core("juliascope", "JuliaScope", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 60 - Apophysis 7X extended (2 parameters, needs RNG)
+        registry.register_core("julia3dz", "Julia3Dz", VariationCategory::Full3D, VariationPhase::Normal, true);  // 61 - Apophysis 7X extended (1 parameter: power, needs RNG)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -672,6 +673,17 @@ impl VariationRegistry {
                 default_value: 1.0,
                 min_value: Some(0.1),
                 max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("julia3dz", vec![
+            VariationParameter {
+                name: "power".to_string(),
+                display_name: "Power".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 2.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
             },
         ]);
 
