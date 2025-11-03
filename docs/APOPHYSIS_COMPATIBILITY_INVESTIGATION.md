@@ -170,8 +170,10 @@ Core variations that exist in Apophysis but not in our implementation:
    - Formula: `r = 2 / (sqrt(x² + y²) + 1)`, result = `(r×x, r×y, z)`
 4. ✅ **Bubble** (variation 27) - Bubble-like inversion - IMPLEMENTED
    - Formula: `r = (x² + y²)/4 + 1`, result = `(x/r, y/r, 2/r - 1)`
-5. **Cylinder** - Cylindrical projection
-6. **Noise** - Random displacement
+5. ✅ **Cylinder** (variation 28) - Cylindrical projection - IMPLEMENTED
+   - Formula: `(sin(x), y, cos(x))`
+6. ✅ **Noise** (variation 29) - Random displacement - IMPLEMENTED
+   - Formula: Random polar `(x × r × cos(θ), y × r × sin(θ), z)`
 7. **Blur** - Random circular blur
 8. **Gaussian_Blur** - Gaussian distribution blur
 9. **ZBlur** - Z-axis blur

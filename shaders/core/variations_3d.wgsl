@@ -216,3 +216,17 @@ fn variation_bubble(p: vec3<f32>) -> vec3<f32> {
     let new_z = 2.0 / r - 1.0;
     return vec3<f32>(scale * p.x, scale * p.y, new_z);
 }
+
+fn variation_cylinder(p: vec3<f32>) -> vec3<f32> {
+    // Apophysis: result = (sin(x), y, cos(x))
+    return vec3<f32>(sin(p.x), p.y, cos(p.x));
+}
+
+fn variation_noise(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis: Random polar displacement
+    // θ = random × 2π, r = random
+    // result = (x × r × cos(θ), y × r × sin(θ), z)
+    let theta = rng_nextf(rng) * 6.28318530718;  // 2π
+    let r = rng_nextf(rng);
+    return vec3<f32>(p.x * r * cos(theta), p.y * r * sin(theta), p.z);
+}
