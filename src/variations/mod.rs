@@ -205,6 +205,8 @@ impl VariationRegistry {
         registry.register_core("rings2", "Rings2", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 54 - Apophysis 7X extended (1 parameter)
         registry.register_core("fan2", "Fan2", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 55 - Apophysis 7X extended (2 parameters)
         registry.register_core("wedge", "Wedge", VariationCategory::Advanced2D, VariationPhase::Normal, false);        // 56 - Apophysis 7X extended (4 parameters)
+        registry.register_core("epispiral", "Epispiral", VariationCategory::Advanced2D, VariationPhase::Normal, true);  // 57 - Apophysis 7X extended (3 parameters, needs RNG)
+        registry.register_core("bwraps", "BWraps", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 58 - Apophysis 7X extended (5 parameters)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -544,6 +546,76 @@ impl VariationRegistry {
                 default_value: 0.0,
                 min_value: Some(-2.0),
                 max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("epispiral", vec![
+            VariationParameter {
+                name: "n".to_string(),
+                display_name: "N".to_string(),
+                param_type: ParamType::Float,
+                default_value: 6.0,
+                min_value: Some(1.0),
+                max_value: Some(20.0),
+            },
+            VariationParameter {
+                name: "thickness".to_string(),
+                display_name: "Thickness".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "holes".to_string(),
+                display_name: "Holes".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("bwraps", vec![
+            VariationParameter {
+                name: "cellsize".to_string(),
+                display_name: "Cell Size".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.01),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "space".to_string(),
+                display_name: "Space".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "gain".to_string(),
+                display_name: "Gain".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.1),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "inner_twist".to_string(),
+                display_name: "Inner Twist".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "outer_twist".to_string(),
+                display_name: "Outer Twist".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
             },
         ]);
 
