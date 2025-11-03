@@ -81,32 +81,58 @@ Implement all remaining Apophysis 7X variations to reach parity with Version 15D
 
 ### 2.0 Precision Limitations (Important!)
 
-**Apophysis (Pascal double):**
-- Range: ±1E308 (64-bit double precision)
-- Smallest: ±1E-6 (hardcoded minimum in UI)
+**Apophysis Implementation (Pascal):**
+- **Variation weights:** `double` (64-bit, ±1E308 range, ~15-16 digit precision)
+- **Variation parameters:** `double` (64-bit, ±1E308 range, ~15-16 digit precision)
+  - "Integer" parameters (e.g., JuliaN power, Julia3D power) stored as `double` internally
+  - UI limits integer parameters to 32-bit signed int range (-2147483648 to 2147483647)
+  - Actual calculations use full double precision
+- **Smallest UI value:** ±1E-6 (hardcoded minimum in Apophysis UI)
 
 **Our Implementation (WGSL f32):**
-- Range: ±3.4E38 (32-bit single precision)
-- Smallest: ±1.18E-38 (normalized), ±1.4E-45 (denormalized)
-- Precision: ~7 decimal digits
+- **Variation weights:** `f32` (32-bit, ±3.4E38 range, ~7 digit precision)
+- **Variation parameters:** `f32` (32-bit, ±3.4E38 range, ~7 digit precision)
+  - "Integer" parameters stored as `f32`, converted to `i32` in shader where needed
+  - No separate integer storage - all parameters are f32
+- **Smallest value:** ±1.18E-38 (normalized), ±1.4E-45 (denormalized)
+
+**Why We Can't Use f64:**
+- ❌ **WGSL has NO f64 type** - WebGPU shading language only supports `f32` and `f16` (half precision)
+- ❌ **No extension available** - Feature request exists ([gpuweb/gpuweb#2805](https://github.com/gpuweb/gpuweb/issues/2805)) but not implemented as of 2024
+- ❌ **Not on roadmap** - No timeline for f64 support in WebGPU
+- ⚠️ **Fundamental platform limitation** - Not a design choice, but a WebGPU constraint
+- 🔍 **Investigated 2025-11-03** - Confirmed no workaround exists (no extension flags, no feature bits)
 
 **Implications:**
-- ✅ **We CAN support** Apophysis's smallest value (1E-6)
-- ⚠️ **We CANNOT support** Apophysis's full ±1E308 range (limited to ±3.4E38)
-- ✅ **Practical impact:** Minimal - 3.4E38 is astronomically large for fractal parameters
-- ⚠️ **Edge cases:** Extremely large parameter values from Apophysis may clamp to ±3.4E38
+- ✅ **We CAN support** Apophysis's smallest value (1E-6) - well within f32 range
+- ⚠️ **We CANNOT match** Apophysis's full ±1E308 range (limited to ±3.4E38)
+- ⚠️ **Precision loss:** f32's ~7 digits vs double's ~15-16 digits
+  - May cause slight differences in renders at extreme iteration counts
+  - Accumulated rounding errors over billions of iterations
+  - Very large/very small parameter values will be rounded
+- ✅ **Practical impact:** Minimal for vast majority of flames
+- ⚠️ **Edge cases:**
+  - Extremely large parameter values from Apophysis (>3.4E38) will clamp to ±3.4E38
+  - High-precision parameter values will round to 7 significant digits
 
-**Decision:** Accept f32 limitation. Converting to f64 would:
-- Double GPU memory usage
-- Reduce performance on many GPUs
-- Require WebGPU feature support (not widely available)
-- Provide negligible benefit for 99.9% of flames
+**Alternative Considered (Rejected):**
+Using native compute APIs (CUDA/Vulkan/Metal) instead of WebGPU would allow f64:
+- ❌ **Lose WASM/browser support** - major feature regression
+- ❌ **Require platform-specific builds** - more complex, less portable
+- ❌ **f64 GPU performance** - Many GPUs run f64 at 1/2 to 1/32 speed of f32
+- ❌ **Limited GPU support** - Not all GPUs have f64 (especially mobile)
+- ✅ **Only benefit:** Match Apophysis precision exactly (not worth trade-offs)
+
+**Decision:** Accept f32 limitation as unavoidable WebGPU platform constraint.
 
 **UI Implementation:**
-- Slider range: -10.0 to 10.0 (usable range)
-- Actual limits: -3.4E38 to 3.4E38 (f32 max)
-- Direct input: Allow typing any value, clamp to f32 range if exceeded
-- Display warning if value exceeds ±1E10 (unusual but valid)
+- **Slider range:** -10.0 to 10.0 (practical range for common values)
+- **Actual limits:** -3.4E38 to 3.4E38 (f32 max, enforced)
+- **Direct input:** Allow typing any value, clamp to f32 range if exceeded
+- **Validation:** Warn if |value| > 1E10 (unusual but valid)
+- **Import handling:** Values imported from Apophysis may be slightly rounded due to f32 precision
+  - No data loss for typical values (most parameters < 1000)
+  - Precision loss only affects extreme edge cases
 
 ### 2.1 Variation Weight Ranges
 **Current:** Variation weights limited to 0.0-2.0 range
