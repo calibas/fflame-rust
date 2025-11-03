@@ -17,8 +17,8 @@ struct Transform {
     // Probability weight
     weight: f32,
 
-    // Variation weights (50 slots: 26 current + 24 reserved for plugins)
-    variations: array<f32, 50>,
+    // Variation weights (100 slots: supports all Apophysis 7X + future expansion)
+    variations: array<f32, 100>,
 
     // Color (RGB)
     color: vec3<f32>,
@@ -54,7 +54,7 @@ struct Params {
 // Variation parameters for one transform
 // Indexed as: params[variation_id * 8 + param_slot]
 struct VariationParams {
-    params: array<f32, 400>,  // 50 variations × 8 params
+    params: array<f32, 800>,  // 100 variations × 8 params
 }
 
 // Bindings
