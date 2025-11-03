@@ -840,3 +840,54 @@ fn variation_juliascope(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr
         return vec3<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign, p.z);
     }
 }
+
+fn variation_julia3dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Julia3Dz - Full 3D Julia set with Z modification
+    // Special cases for power = 1, -1, 2, -2, general case otherwise
+    const PI: f32 = 3.14159265359;
+
+    let power = i32(get_param(xform_id, variation_id, 0u));
+    let abs_power = abs(power);
+    let power_f = f32(power);
+
+    let r2d = p.x * p.x + p.y * p.y;
+
+    // Special case: power = 1 (linear passthrough)
+    if (power == 1) {
+        return p;  // FPx = FTx, FPy = FTy, FPz = FTz
+    }
+
+    // Special case: power = -1 (inverse)
+    if (power == -1) {
+        let r = 1.0 / r2d;
+        return vec3<f32>(r * p.x, -r * p.y, r * p.z);
+    }
+
+    // Random angle selection: (atan2(y,x) + 2π*random(absN)) / N
+    let rnd_int = i32(rng_nextf(rng) * f32(abs_power));
+    let angle = (atan2(p.y, p.x) + 2.0 * PI * f32(rnd_int)) / power_f;
+
+    // Special case: power = 2
+    if (power == 2) {
+        let r2d_sqrt = sqrt(r2d);
+        let r = sqrt(r2d_sqrt);
+        let z_out = r * p.z / r2d_sqrt / 2.0;
+        return vec3<f32>(r * cos(angle), r * sin(angle), z_out);
+    }
+
+    // Special case: power = -2
+    if (power == -2) {
+        let r2d_sqrt = sqrt(r2d);
+        let r = 1.0 / sqrt(r2d_sqrt);
+        let z_out = r * p.z / r2d_sqrt / 2.0;
+        return vec3<f32>(r * cos(angle), -r * sin(angle), z_out);
+    }
+
+    // General case: r = vvar * (r²)^(cN) where cN = 1/(2*N)
+    let cN = 1.0 / power_f / 2.0;
+    let r = pow(r2d, cN);
+    let r2d_sqrt = sqrt(r2d);
+    let z_out = r * p.z / (r2d_sqrt * f32(abs_power));
+
+    return vec3<f32>(r * cos(angle), r * sin(angle), z_out);
+}
