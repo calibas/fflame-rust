@@ -224,15 +224,15 @@ impl ShaderBuilder {
         for (name, idx, info) in &normal_variations {
             let call = if !info.parameters.is_empty() {
                 if info.needs_rng {
-                    format!("variation_{}(temp, xform_id, rng)", name)
+                    format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
                 } else {
-                    format!("variation_{}(temp, xform_id)", name)
+                    format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
                 }
             } else {
                 if info.needs_rng {
-                    format!("variation_{}(temp, rng)", name)
+                    format!("{}(temp, rng)", info.wgsl_function)
                 } else {
-                    format!("variation_{}(temp)", name)
+                    format!("{}(temp)", info.wgsl_function)
                 }
             };
 
@@ -386,15 +386,15 @@ impl ShaderBuilder {
                     // Standard variation with function call
                     let call = if !info.parameters.is_empty() {
                         if info.needs_rng {
-                            format!("variation_{}(temp, xform_id, rng)", name)
+                            format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
                         } else {
-                            format!("variation_{}(temp, xform_id)", name)
+                            format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
                         }
                     } else {
                         if info.needs_rng {
-                            format!("variation_{}(temp, rng)", name)
+                            format!("{}(temp, rng)", info.wgsl_function)
                         } else {
-                            format!("variation_{}(temp)", name)
+                            format!("{}(temp)", info.wgsl_function)
                         }
                     };
 
