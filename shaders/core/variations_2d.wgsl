@@ -509,19 +509,16 @@ fn variation_lazysusan(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f
 }
 
 fn variation_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    // Apophysis Falloff2: Distance-based blur effect
-    // This implements the cartesian mode (type=0)
+    // Apophysis Falloff2: Distance-based blur effect with 3 modes
+    const PI: f32 = 3.14159265359;
     let scatter = get_param(xform_id, variation_id, 0u);
     let mindist = get_param(xform_id, variation_id, 1u);
     let mul_x = get_param(xform_id, variation_id, 2u);
     let mul_y = get_param(xform_id, variation_id, 3u);
-    // mul_z (param 4) not used in 2D
-    // mul_c (param 5) affects color, not implemented here
     let x0 = get_param(xform_id, variation_id, 6u);
     let y0 = get_param(xform_id, variation_id, 7u);
-    // z0 (param 8) not used in 2D
     let invert = get_param(xform_id, variation_id, 9u);
-    // type (param 10) not used, this is cartesian version
+    let blur_type = get_param(xform_id, variation_id, 10u);
 
     let rmax = 0.04 * scatter;
     var d = sqrt((p.x - x0) * (p.x - x0) + (p.y - y0) * (p.y - y0));
@@ -538,11 +535,29 @@ fn variation_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
         d = 0.0;
     }
 
-    let rand_x = rng_next_f32(rng);
-    let rand_y = rng_next_f32(rng);
-
-    return vec2<f32>(
-        p.x + mul_x * rand_x * d,
-        p.y + mul_y * rand_y * d
-    );
+    // Mode 0: Cartesian (original input space)
+    if (blur_type < 0.5) {
+        let rand_x = rng_next_f32(rng);
+        let rand_y = rng_next_f32(rng);
+        return vec2<f32>(
+            p.x + mul_x * rand_x * d,
+            p.y + mul_y * rand_y * d
+        );
+    }
+    // Mode 1: Radial (polar coordinate space)
+    else if (blur_type < 1.5) {
+        let r_in = sqrt(p.x * p.x + p.y * p.y) + 1e-6;
+        let phi = atan2(p.y, p.x) + mul_y * rng_next_f32(rng) * d;
+        let r = r_in + mul_x * rng_next_f32(rng) * d;
+        return vec2<f32>(r * cos(phi), r * sin(phi));
+    }
+    // Mode 2: Gaussian (spherical distribution)
+    else {
+        let phi = d * rng_next_f32(rng) * PI;
+        let r = d * rng_next_f32(rng);
+        return vec2<f32>(
+            p.x + mul_x * r * cos(phi),
+            p.y + mul_y * r * sin(phi)
+        );
+    }
 }
