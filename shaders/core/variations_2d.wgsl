@@ -360,3 +360,62 @@ fn variation_loonie(p: vec2<f32>) -> vec2<f32> {
         return p;
     }
 }
+
+fn variation_escher(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Escher: Escher-style tessellation
+    // beta = parameter
+    // c = 0.5 * (1.0 + cos(beta))
+    // d = 0.5 * sin(beta)
+    // a = atan2(y, x)
+    // lnr = 0.5 * ln(x² + y²)
+    // m = vvar * exp(c * lnr - d * a)
+    // x' = m * cos(c * a + d * lnr)
+    // y' = m * sin(c * a + d * lnr)
+    const PI: f32 = 3.14159265359;
+    let beta = get_param(xform_id, variation_id, 0u) * PI / 180.0; // Convert degrees to radians
+    let c = 0.5 * (1.0 + cos(beta));
+    let d = 0.5 * sin(beta);
+
+    let a = atan2(p.y, p.x);
+    let lnr = 0.5 * log(dot(p, p));
+    let m = exp(c * lnr - d * a);
+
+    let angle = c * a + d * lnr;
+    return vec2<f32>(m * cos(angle), m * sin(angle));
+}
+
+fn variation_scry(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis Scry: Crystal ball effect
+    // t = x² + y²
+    // r = 1 / (sqrt(t) * (t + 1/vvar))
+    // Since we normalize by vvar: r = 1 / (sqrt(t) * (t + 1))
+    // x' = x * r
+    // y' = y * r
+    let t = dot(p, p);
+    var r = 1.0 / (sqrt(t) * (t + 1.0));
+
+    return p * r;
+}
+
+fn variation_foci(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis Foci: Focal point distortion
+    // expx = exp(x) * 0.5
+    // expnx = 0.25 / expx = 0.5 * exp(-x)
+    // tmp = vvar / (expx + expnx - cos(y))
+    // Since we normalize: tmp = 1 / (expx + expnx - cos(y))
+    // x' = (expx - expnx) * tmp
+    // y' = sin(y) * tmp
+    let expx = exp(p.x) * 0.5;
+    let expnx = 0.5 * exp(-p.x);
+    var tmp = expx + expnx - cos(p.y);
+
+    if (tmp == 0.0) {
+        tmp = 1e-6;
+    }
+    tmp = 1.0 / tmp;
+
+    let new_x = (expx - expnx) * tmp;
+    let new_y = sin(p.y) * tmp;
+
+    return vec2<f32>(new_x, new_y);
+}
