@@ -202,6 +202,8 @@ impl VariationRegistry {
         registry.register_core("pre_spherical", "Pre-Spherical", VariationCategory::Advanced2D, VariationPhase::Pre, false); // 51 - Apophysis 7X extended (Pre-phase)
         registry.register_core("pre_sinusoidal", "Pre-Sinusoidal", VariationCategory::Advanced2D, VariationPhase::Pre, false); // 52 - Apophysis 7X extended (Pre-phase)
         registry.register_core("pre_disc", "Pre-Disc", VariationCategory::Advanced2D, VariationPhase::Pre, false);     // 53 - Apophysis 7X extended (Pre-phase)
+        registry.register_core("rings2", "Rings2", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 54 - Apophysis 7X extended (1 parameter)
+        registry.register_core("fan2", "Fan2", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 55 - Apophysis 7X extended (2 parameters)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -475,6 +477,36 @@ impl VariationRegistry {
                 param_type: ParamType::Integer,
                 default_value: 0.0,
                 min_value: Some(0.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("rings2", vec![
+            VariationParameter {
+                name: "val".to_string(),
+                display_name: "Value".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("fan2", vec![
+            VariationParameter {
+                name: "x".to_string(),
+                display_name: "X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "y".to_string(),
+                display_name: "Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
                 max_value: Some(2.0),
             },
         ]);

@@ -585,3 +585,36 @@ fn variation_pre_disc(p: vec2<f32>, weight: f32) -> vec2<f32> {
     let r = (weight / PI) * atan2(p.x, p.y);
     return vec2<f32>(sin(PI * rad) * r, cos(PI * rad) * r);
 }
+
+fn variation_rings2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Rings2: Ring pattern with adjustable spacing
+    // dx = val² + EPS
+    // r = vvar * (2 - dx * (floor((length/dx + 1)/2) * 2 / length + 1))
+    // Since we normalize: r = 2 - dx * (floor((length/dx + 1)/2) * 2 / length + 1)
+    let val = get_param(xform_id, variation_id, 0u);
+    let dx = val * val + 1e-10;
+    let length = sqrt(dot(p, p));
+    let r = 2.0 - dx * (floor((length / dx + 1.0) / 2.0) * 2.0 / length + 1.0);
+    return p * r;
+}
+
+fn variation_fan2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Fan2: Fan effect with offset
+    const PI: f32 = 3.14159265359;
+    let x_param = get_param(xform_id, variation_id, 0u);
+    let y_param = get_param(xform_id, variation_id, 1u);
+    
+    let dx = PI * (x_param * x_param + 1e-10);
+    let dx2 = dx / 2.0;
+    let angle = atan2(p.x, p.y);
+    
+    var a: f32;
+    if (fract((angle + y_param) / dx) > 0.5) {
+        a = angle - dx2;
+    } else {
+        a = angle + dx2;
+    }
+    
+    let r = sqrt(dot(p, p));
+    return vec2<f32>(r * cos(a), r * sin(a));
+}
