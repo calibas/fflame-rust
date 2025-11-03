@@ -79,48 +79,89 @@ Implement all remaining Apophysis 7X variations to reach parity with Version 15D
 
 **Problem:** Current UI enforces arbitrary limits on variation weights and parameters that don't match Apophysis behavior.
 
+### 2.0 Precision Limitations (Important!)
+
+**Apophysis (Pascal double):**
+- Range: ±1E308 (64-bit double precision)
+- Smallest: ±1E-6 (hardcoded minimum in UI)
+
+**Our Implementation (WGSL f32):**
+- Range: ±3.4E38 (32-bit single precision)
+- Smallest: ±1.18E-38 (normalized), ±1.4E-45 (denormalized)
+- Precision: ~7 decimal digits
+
+**Implications:**
+- ✅ **We CAN support** Apophysis's smallest value (1E-6)
+- ⚠️ **We CANNOT support** Apophysis's full ±1E308 range (limited to ±3.4E38)
+- ✅ **Practical impact:** Minimal - 3.4E38 is astronomically large for fractal parameters
+- ⚠️ **Edge cases:** Extremely large parameter values from Apophysis may clamp to ±3.4E38
+
+**Decision:** Accept f32 limitation. Converting to f64 would:
+- Double GPU memory usage
+- Reduce performance on many GPUs
+- Require WebGPU feature support (not widely available)
+- Provide negligible benefit for 99.9% of flames
+
+**UI Implementation:**
+- Slider range: -10.0 to 10.0 (usable range)
+- Actual limits: -3.4E38 to 3.4E38 (f32 max)
+- Direct input: Allow typing any value, clamp to f32 range if exceeded
+- Display warning if value exceeds ±1E10 (unusual but valid)
+
 ### 2.1 Variation Weight Ranges
 **Current:** Variation weights limited to 0.0-2.0 range
-**Apophysis:** Variation weights can be any value including negative
+**Apophysis:** Variation weights can be any double value including negative
 
 **Changes needed:**
 - Remove min/max constraints on variation weight sliders
 - Allow negative weights (important for artistic effects)
-- Default range suggestion: -5.0 to 5.0 (but allow typing any value)
+- **Slider range:** -10.0 to 10.0 (covers 99% of use cases)
+- **Actual limits:** -3.4E38 to 3.4E38 (f32 max)
 - Update ConfigPath::TransformVariation to handle negative weights
 - Test that negative weights work correctly in shader (should already work)
 
 ### 2.2 Variation Parameter Ranges
 **Current:** Each parameter has hardcoded min/max values
-**Apophysis:** Most parameters allow wider or unlimited ranges
+**Apophysis:** Most parameters use double precision with ±1E308 theoretical range
 
-**Review needed for each parameter:**
-- **JuliaN power**: Currently -10 to 10, check if Apophysis allows more
-- **JuliaN dist**: Currently 0 to 5, **should allow negative values**
-- **Blob high/low**: Currently 0 to 3, check if negative allowed
-- **Blob waves**: Currently 1 to 20, check wider range
-- **Waves2 freq**: Currently 0 to 10, check wider range
-- **Waves2 scale**: Currently -2 to 2, **likely needs wider range**
-- **Julia3D power**: Currently -10 to 10, verify sufficient
+**Standard approach for all parameters:**
+- **Slider range:** Practical range for common use (e.g., -10 to 10)
+- **Actual limits:** f32 range (±3.4E38)
+- **Direct input:** Always available via DragValue widget
+
+**Current parameters to fix:**
+- **JuliaN power**: -10 to 10 slider (OK), but allow beyond via input
+- **JuliaN dist**: 0 to 5 slider → **Change to -10 to 10** (negative values valid)
+- **Blob high/low**: 0 to 3 slider → **Verify if negative needed**, widen range
+- **Blob waves**: 1 to 20 slider → **Widen to -100 to 100** for flexibility
+- **Waves2 freq**: 0 to 10 slider → **Widen to -100 to 100**
+- **Waves2 scale**: -2 to 2 slider → **Widen to -10 to 10**
+- **Julia3D power**: -10 to 10 slider (OK)
+
+**New parameters from Phase 1 variations:**
+- Use practical slider ranges based on typical usage
+- All parameters allow f32 full range via direct input
+- Document recommended ranges in variation registry
 
 **Action items:**
-1. Review Apophysis source for actual parameter limits
-2. Identify parameters that should be unbounded
-3. Update VariationParameter min/max values
-4. Consider adding "extended range" mode for UI sliders
-5. Add direct numeric input for unbounded parameters
+1. Update all `VariationParameter` definitions to use wide min/max
+2. Keep slider UI ranges practical (user can always type extreme values)
+3. Add validation: clamp to f32 limits, warn if unusual
+4. Test parameter edge cases (0, negative, very large, very small)
 
 ### 2.3 Slider UX Improvements
 **Goals:**
 - Maintain usable slider ranges for common values
-- Allow unlimited typed input for extreme values
-- Show when value is outside "normal" range
+- Allow f32 full range via typed input
+- Clear feedback for unusual values
 
 **Implementation:**
-- Keep reasonable slider ranges (e.g., -10 to 10)
-- Add DragValue widget alongside slider for direct numeric input
-- Visual indicator when value exceeds slider range
-- "Reset to default" button for each parameter
+- **Slider:** Practical range (-10 to 10 or similar)
+- **DragValue:** Always available, accepts f32 range
+- **Validation:** Clamp to ±3.4E38, show warning if |value| > 1000
+- **Visual indicator:** Different color if value outside slider range
+- **Reset button:** Restore default value for each parameter
+- **Tooltip:** Show actual value + (slider range) info
 
 ---
 
