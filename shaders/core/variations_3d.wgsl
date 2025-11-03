@@ -283,3 +283,38 @@ fn variation_pre_zscale(p: vec3<f32>, weight: f32) -> vec3<f32> {
     // In Pre-phase, we directly modify the point, so scale Z by weight
     return vec3<f32>(p.x, p.y, p.z * weight);
 }
+
+fn variation_pre_ztranslate(p: vec3<f32>, weight: f32) -> vec3<f32> {
+    // Apophysis: Pre-phase Z translation
+    // FTz += vars[variation_id] (weight is the translation amount)
+    // In Pre-phase, we directly modify the point, so add weight to Z
+    return vec3<f32>(p.x, p.y, p.z + weight);
+}
+
+fn variation_ztranslate(p: vec3<f32>) -> vec3<f32> {
+    // Apophysis: Normal-phase Z translation
+    // FPz += vars[variation_id] (added during weighted sum)
+    // Return (0, 0, 1) so weighted sum adds weight to Z: result.z += weight * 1
+    return vec3<f32>(0.0, 0.0, 1.0);
+}
+
+fn variation_waves2(p: vec3<f32>, xform_id: u32) -> vec3<f32> {
+    // Apophysis Waves2: Sine wave distortion with 6 parameters (3D version)
+    // FPx += VVAR * (FTx + scalex * sin(FTy * freqx))
+    // FPy += VVAR * (FTy + scaley * sin(FTx * freqy))
+    // FPz += VVAR * (FTz + scalez * sin(sqrt(FTx² + FTy²) * freqz))
+    let freqx = get_param(xform_id, 38u, 0u);
+    let scalex = get_param(xform_id, 38u, 1u);
+    let freqy = get_param(xform_id, 38u, 2u);
+    let scaley = get_param(xform_id, 38u, 3u);
+    let freqz = get_param(xform_id, 38u, 4u);
+    let scalez = get_param(xform_id, 38u, 5u);
+
+    let r_xy = length(p.xy);
+
+    let new_x = p.x + scalex * sin(p.y * freqx);
+    let new_y = p.y + scaley * sin(p.x * freqy);
+    let new_z = p.z + scalez * sin(r_xy * freqz);
+
+    return vec3<f32>(new_x, new_y, new_z);
+}

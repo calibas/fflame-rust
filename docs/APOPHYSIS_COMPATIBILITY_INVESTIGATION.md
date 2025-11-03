@@ -153,12 +153,13 @@ Format('coefs="%g %g %g %g %g %g" ', [c[0,0], c[0,1], c[1,0], c[1,1], c[2,0], c[
 
 To achieve full Apophysis compatibility, we'll add proper implementations for variations that don't currently match:
 
-1. **Waves2** (variation 26) - Add as new variation
-   - 6 parameters: freqx, freqy, freqz, scalex, scaley, scalez
+1. ✅ **Waves2** (variation 38) - Parameterized sine wave distortion - IMPLEMENTED
+   - 6 parameters: freqx, scalex, freqy, scaley, freqz, scalez
    - Formula: `x + scalex × sin(y × freqx), y + scaley × sin(x × freqy), z + scalez × sin(r × freqz)`
-   - Replaces functionality of current "Waves" variation
+   - Defaults: freqx=2, scalex=1, freqy=2, scaley=1, freqz=0, scalez=0
+   - Supersedes legacy "Waves" variation (variation 15)
 
-2. **Julia3D** (variation 27) - Add as new variation
+2. **Julia3D** (variation 39) - Add as new variation
    - Full 3D Julia set implementation from Apophysis
    - Replaces functionality of current simple "Julia" variation
 
@@ -190,8 +191,15 @@ Core variations that exist in Apophysis but not in our implementation:
 12. ✅ **Pre_ZScale** (variation 35) - Pre-phase Z scaling - IMPLEMENTED
    - Formula: `(x, y, z × weight)` - scales Z by variation weight
    - Applied before variations (Pre-phase)
-13. **Pre_ZTranslate** - Pre-phase Z translation
-14. **ZTranslate** - Normal-phase Z translation
+13. ✅ **Pre_ZTranslate** (variation 36) - Pre-phase Z translation - IMPLEMENTED
+   - Formula: `(x, y, z + weight)` - translates Z by variation weight
+   - Applied before variations (Pre-phase)
+14. ✅ **ZTranslate** (variation 37) - Normal-phase Z translation - IMPLEMENTED
+   - Formula: Adds weight to result.z during weighted sum
+   - Applied during Normal-phase (weighted accumulation)
+   - Inline optimization: `result.z += xform.variations[37]`
+
+**Phase 2 COMPLETE!** All 14 Apophysis core variations implemented (variations 26-37).
 
 **Phase 3: Legacy Variation Handling**
 
