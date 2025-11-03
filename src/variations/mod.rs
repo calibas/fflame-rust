@@ -207,6 +207,8 @@ impl VariationRegistry {
         registry.register_core("wedge", "Wedge", VariationCategory::Advanced2D, VariationPhase::Normal, false);        // 56 - Apophysis 7X extended (4 parameters)
         registry.register_core("epispiral", "Epispiral", VariationCategory::Advanced2D, VariationPhase::Normal, true);  // 57 - Apophysis 7X extended (3 parameters, needs RNG)
         registry.register_core("bwraps", "BWraps", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 58 - Apophysis 7X extended (5 parameters)
+        registry.register_core("pdj", "PDJ", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 59 - Apophysis 7X extended (4 parameters)
+        registry.register_core("juliascope", "JuliaScope", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 60 - Apophysis 7X extended (2 parameters, needs RNG)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -616,6 +618,60 @@ impl VariationRegistry {
                 default_value: 0.0,
                 min_value: Some(-10.0),
                 max_value: Some(10.0),
+            },
+        ]);
+
+        registry.add_parameters("pdj", vec![
+            VariationParameter {
+                name: "a".to_string(),
+                display_name: "A".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,  // Apophysis uses 6*Random-3, we'll use 0 as default
+                min_value: Some(-3.0),
+                max_value: Some(3.0),
+            },
+            VariationParameter {
+                name: "b".to_string(),
+                display_name: "B".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-3.0),
+                max_value: Some(3.0),
+            },
+            VariationParameter {
+                name: "c".to_string(),
+                display_name: "C".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-3.0),
+                max_value: Some(3.0),
+            },
+            VariationParameter {
+                name: "d".to_string(),
+                display_name: "D".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-3.0),
+                max_value: Some(3.0),
+            },
+        ]);
+
+        registry.add_parameters("juliascope", vec![
+            VariationParameter {
+                name: "power".to_string(),
+                display_name: "Power".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 2.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "dist".to_string(),
+                display_name: "Distance".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.1),
+                max_value: Some(5.0),
             },
         ]);
 

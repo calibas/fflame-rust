@@ -704,6 +704,61 @@ fn variation_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
     
     let vx = cx + cos(theta) * lx + sin(theta) * ly;
     let vy = cy - sin(theta) * lx + cos(theta) * ly;
-    
+
     return vec2<f32>(vx, vy);
+}
+
+fn variation_pdj(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis PDJ (Peter de Jong attractor)
+    // FPx := sin(a*y) - cos(b*x)
+    // FPy := sin(c*x) - cos(d*y)
+    let a = get_param(xform_id, variation_id, 0u);
+    let b = get_param(xform_id, variation_id, 1u);
+    let c = get_param(xform_id, variation_id, 2u);
+    let d = get_param(xform_id, variation_id, 3u);
+
+    return vec2<f32>(
+        sin(a * p.y) - cos(b * p.x),
+        sin(c * p.x) - cos(d * p.y)
+    );
+}
+
+fn variation_juliascope(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis JuliaScope variation
+    // Has special cases for power = ±1, ±2 and general case
+    const PI: f32 = 3.14159265359;
+
+    let power = i32(get_param(xform_id, variation_id, 0u));
+    let dist = get_param(xform_id, variation_id, 1u);
+
+    let r2 = dot(p, p);
+
+    // Random angle selection with alternating sign
+    // In Apophysis: trunc(Abs(N)*random) * (π/N) * sign
+    let rnd = random_f32(rng);
+    let t = (atan2(p.y, p.x) + 2.0 * PI * f32(i32(abs(f32(power)) * rnd))) / f32(power);
+
+    // Sign alternation: random even/odd determines sign
+    let sign = select(-1.0, 1.0, (i32(abs(f32(power)) * random_f32(rng)) & 1) == 0);
+
+    // Optimized special cases for common power values
+    if (power == 1) {
+        // r = vvar * r^dist
+        let r_out = pow(r2, dist * 0.5);
+        return vec2<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign);
+    } else if (power == -1) {
+        let r_out = pow(r2, dist * 0.5);
+        return vec2<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign);
+    } else if (power == 2) {
+        let r_out = pow(r2, dist * 0.25);
+        return vec2<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign);
+    } else if (power == -2) {
+        let r_out = pow(r2, dist * 0.25);
+        return vec2<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign);
+    } else {
+        // General case: r = vvar * (r²)^(dist/(2*power))
+        let cn = dist / f32(power) * 0.5;
+        let r_out = pow(r2, cn);
+        return vec2<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign);
+    }
 }
