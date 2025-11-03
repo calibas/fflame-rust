@@ -191,8 +191,9 @@ impl ShaderBuilder {
                     // Build parameter list based on variation needs
                     let mut params = String::new();
 
-                    // Pre_ZScale and Pre_ZTranslate need weight parameter
-                    if name.contains("zscale") || name.contains("ztranslate") {
+                    // Pre-phase variations that need weight parameter
+                    if name.contains("zscale") || name.contains("ztranslate")
+                        || name.contains("sinusoidal") || name.contains("disc") {
                         params.push_str(&format!(", xform.variations[{}]", idx));
                     }
 
@@ -321,8 +322,9 @@ impl ShaderBuilder {
                     // Build parameter list based on variation needs
                     let mut params = String::new();
 
-                    // Pre_ZScale and Pre_ZTranslate need weight parameter
-                    if name.contains("zscale") || name.contains("ztranslate") {
+                    // Pre-phase variations that need weight parameter
+                    if name.contains("zscale") || name.contains("ztranslate")
+                        || name.contains("sinusoidal") || name.contains("disc") {
                         params.push_str(&format!(", xform.variations[{}]", idx));
                     }
 
