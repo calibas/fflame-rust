@@ -782,3 +782,79 @@ fn variation_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
         (p.y * re - p.x * im) * r
     );
 }
+
+fn variation_radial_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis Radial Blur - combines radial spin and zoom blur
+    const PI: f32 = 3.14159265359;
+
+    let angle_deg = get_param(xform_id, variation_id, 0u);
+    let angle_rad = angle_deg * PI / 180.0;
+
+    // Precomputed: spin_var = vvar * sin(angle * π/2), zoom_var = vvar * cos(angle * π/2)
+    let spin_var = sin(angle_rad * 0.5);
+    let zoom_var = cos(angle_rad * 0.5);
+
+    // Gaussian blur approximation: sum of 4 random values - 2
+    let rnd_g = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
+
+    let ra = sqrt(p.x * p.x + p.y * p.y);
+    let angle_out = atan2(p.y, p.x) + spin_var * rnd_g;
+    let rz = zoom_var * rnd_g - 1.0;
+
+    return vec2<f32>(
+        ra * cos(angle_out) + rz * p.x,
+        ra * sin(angle_out) + rz * p.y
+    );
+}
+
+fn variation_blur_circle(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis Blur Circle - uniform blur in a circle using square-to-circle mapping
+    const PI: f32 = 3.14159265359;
+    const PI_4: f32 = 0.78539816339;  // π/4
+
+    // Random point in square [-1, 1]
+    let x = 2.0 * rng_nextf(rng) - 1.0;
+    let y = 2.0 * rng_nextf(rng) - 1.0;
+
+    let absx = abs(x);
+    let absy = abs(y);
+
+    var perimeter: f32;
+    var side: f32;
+
+    // Map square to circle using perimeter-based mapping
+    if (absx >= absy) {
+        if (x >= absy) {
+            perimeter = absx + y;
+        } else {
+            perimeter = 5.0 * absx - y;
+        }
+        side = absx;
+    } else {
+        if (y >= absx) {
+            perimeter = 3.0 * absy - x;
+        } else {
+            perimeter = 7.0 * absy + x;
+        }
+        side = absy;
+    }
+
+    let r = side;
+    let angle = PI_4 * perimeter / side - PI_4;
+
+    return vec2<f32>(r * cos(angle), r * sin(angle));
+}
+
+fn variation_blur_zoom(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis Blur Zoom - zoom blur from a center point
+    let length = get_param(xform_id, variation_id, 0u);
+    let zoom_x = get_param(xform_id, variation_id, 1u);
+    let zoom_y = get_param(xform_id, variation_id, 2u);
+
+    let z = 1.0 + length * rng_nextf(rng);
+
+    return vec2<f32>(
+        (p.x - zoom_x) * z + zoom_x,
+        (p.y - zoom_y) * z + zoom_y
+    );
+}
