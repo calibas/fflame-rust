@@ -454,3 +454,95 @@ fn variation_bipolar(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32
 
     return vec2<f32>(new_x, new_y);
 }
+
+fn variation_elliptic(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis Elliptic: Elliptic coordinates
+    // v = vvar / (PI/2) = vvar * 2/PI
+    // Since we normalize: v = 2/PI
+    // tmp = y² + x² + 1
+    // x2 = 2*x
+    // xmax = 0.5 * (sqrt(tmp+x2) + sqrt(tmp-x2))
+    // a = x/xmax
+    // b = sqrt(max(0, 1 - a²))
+    // x' = v * atan2(a, b)
+    // y' = v * ln(xmax + sqrt(max(0, xmax-1))) if y > 0, else -v * ln(...)
+    const PI: f32 = 3.14159265359;
+    let v = 2.0 / PI;
+
+    let tmp = dot(p, p) + 1.0;
+    let x2 = 2.0 * p.x;
+    let xmax = 0.5 * (sqrt(tmp + x2) + sqrt(tmp - x2));
+
+    let a = p.x / xmax;
+    let b = sqrt(max(0.0, 1.0 - a * a));
+
+    let new_x = v * atan2(a, b);
+    var new_y = v * log(xmax + sqrt(max(0.0, xmax - 1.0)));
+    if (p.y < 0.0) {
+        new_y = -new_y;
+    }
+
+    return vec2<f32>(new_x, new_y);
+}
+
+fn variation_lazysusan(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis LazySusan: Rotating lazy susan effect
+    const PI: f32 = 3.14159265359;
+    let spin = get_param(xform_id, variation_id, 0u) * PI / 180.0;
+    let space = get_param(xform_id, variation_id, 1u);
+    let twist = get_param(xform_id, variation_id, 2u);
+    let x_offset = get_param(xform_id, variation_id, 3u);
+    let y_offset = get_param(xform_id, variation_id, 4u);
+
+    let x = p.x - x_offset;
+    let y = p.y + y_offset;
+    let r = sqrt(x * x + y * y);
+
+    // Since we normalize by vvar, comparison becomes r < 1.0
+    if (r < 1.0) {
+        let a = atan2(y, x) + spin + twist * (1.0 - r);
+        return vec2<f32>(r * cos(a) + x_offset, r * sin(a) - y_offset);
+    } else {
+        let r_scale = 1.0 + space / (r + 1e-6);
+        return vec2<f32>(r_scale * x + x_offset, r_scale * y - y_offset);
+    }
+}
+
+fn variation_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis Falloff2: Distance-based blur effect
+    // This implements the cartesian mode (type=0)
+    let scatter = get_param(xform_id, variation_id, 0u);
+    let mindist = get_param(xform_id, variation_id, 1u);
+    let mul_x = get_param(xform_id, variation_id, 2u);
+    let mul_y = get_param(xform_id, variation_id, 3u);
+    // mul_z (param 4) not used in 2D
+    // mul_c (param 5) affects color, not implemented here
+    let x0 = get_param(xform_id, variation_id, 6u);
+    let y0 = get_param(xform_id, variation_id, 7u);
+    // z0 (param 8) not used in 2D
+    let invert = get_param(xform_id, variation_id, 9u);
+    // type (param 10) not used, this is cartesian version
+
+    let rmax = 0.04 * scatter;
+    var d = sqrt((p.x - x0) * (p.x - x0) + (p.y - y0) * (p.y - y0));
+
+    if (invert > 0.5) {
+        d = 1.0 - d;
+    }
+    if (d < 0.0) {
+        d = 0.0;
+    }
+
+    d = (d - mindist) * rmax;
+    if (d < 0.0) {
+        d = 0.0;
+    }
+
+    let rand_x = rng_next_f32(rng);
+    let rand_y = rng_next_f32(rng);
+
+    return vec2<f32>(
+        p.x + mul_x * rand_x * d,
+        p.y + mul_y * rand_y * d
+    );
+}

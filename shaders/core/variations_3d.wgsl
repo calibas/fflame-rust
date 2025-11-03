@@ -544,3 +544,58 @@ fn variation_bipolar(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32
 
     return vec3<f32>(new_x, new_y, p.z);
 }
+
+fn variation_elliptic(p: vec3<f32>) -> vec3<f32> {
+    const PI: f32 = 3.14159265359;
+    let v = 2.0 / PI;
+    let tmp = dot(p.xy, p.xy) + 1.0;
+    let x2 = 2.0 * p.x;
+    let xmax = 0.5 * (sqrt(tmp + x2) + sqrt(tmp - x2));
+    let a = p.x / xmax;
+    let b = sqrt(max(0.0, 1.0 - a * a));
+    let new_x = v * atan2(a, b);
+    var new_y = v * log(xmax + sqrt(max(0.0, xmax - 1.0)));
+    if (p.y < 0.0) { new_y = -new_y; }
+    return vec3<f32>(new_x, new_y, p.z);
+}
+
+fn variation_lazysusan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    const PI: f32 = 3.14159265359;
+    let spin = get_param(xform_id, variation_id, 0u) * PI / 180.0;
+    let space = get_param(xform_id, variation_id, 1u);
+    let twist = get_param(xform_id, variation_id, 2u);
+    let x_offset = get_param(xform_id, variation_id, 3u);
+    let y_offset = get_param(xform_id, variation_id, 4u);
+    let x = p.x - x_offset;
+    let y = p.y + y_offset;
+    let r = sqrt(x * x + y * y);
+    if (r < 1.0) {
+        let a = atan2(y, x) + spin + twist * (1.0 - r);
+        return vec3<f32>(r * cos(a) + x_offset, r * sin(a) - y_offset, p.z);
+    } else {
+        let r_scale = 1.0 + space / (r + 1e-6);
+        return vec3<f32>(r_scale * x + x_offset, r_scale * y - y_offset, p.z);
+    }
+}
+
+fn variation_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    let scatter = get_param(xform_id, variation_id, 0u);
+    let mindist = get_param(xform_id, variation_id, 1u);
+    let mul_x = get_param(xform_id, variation_id, 2u);
+    let mul_y = get_param(xform_id, variation_id, 3u);
+    let mul_z = get_param(xform_id, variation_id, 4u);
+    let x0 = get_param(xform_id, variation_id, 6u);
+    let y0 = get_param(xform_id, variation_id, 7u);
+    let z0 = get_param(xform_id, variation_id, 8u);
+    let invert = get_param(xform_id, variation_id, 9u);
+    let rmax = 0.04 * scatter;
+    var d = sqrt((p.x - x0)*(p.x - x0) + (p.y - y0)*(p.y - y0) + (p.z - z0)*(p.z - z0));
+    if (invert > 0.5) { d = 1.0 - d; }
+    if (d < 0.0) { d = 0.0; }
+    d = (d - mindist) * rmax;
+    if (d < 0.0) { d = 0.0; }
+    let rand_x = rng_next_f32(rng);
+    let rand_y = rng_next_f32(rng);
+    let rand_z = rng_next_f32(rng);
+    return vec3<f32>(p.x + mul_x * rand_x * d, p.y + mul_y * rand_y * d, p.z + mul_z * rand_z * d);
+}
