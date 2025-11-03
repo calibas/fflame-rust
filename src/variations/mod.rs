@@ -223,6 +223,8 @@ impl VariationRegistry {
         registry.register_core("mobius", "Mobius", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 72 - Apophysis 7X extended (8 parameters: complex Möbius transformation)
         registry.register_core("crop", "Crop", VariationCategory::Advanced2D, VariationPhase::Normal, true);        // 73 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
         registry.register_core("auger", "Auger", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 74 - Apophysis 7X extended (4 parameters: freq, weight, scale, sym)
+        registry.register_core("pre_bwraps", "Pre Bwraps", VariationCategory::Advanced2D, VariationPhase::Pre, false);  // 75 - Apophysis 7X extended (5 parameters: cellsize, space, gain, inner_twist, outer_twist)
+        registry.register_core("post_bwraps", "Post Bwraps", VariationCategory::Advanced2D, VariationPhase::Post, false); // 76 - Apophysis 7X extended (5 parameters: cellsize, space, gain, inner_twist, outer_twist)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -1061,6 +1063,92 @@ impl VariationRegistry {
                 default_value: 0.0,
                 min_value: Some(-2.0),
                 max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("pre_bwraps", vec![
+            VariationParameter {
+                name: "cellsize".to_string(),
+                display_name: "Cell Size".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.1),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "space".to_string(),
+                display_name: "Space".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "gain".to_string(),
+                display_name: "Gain".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "inner_twist".to_string(),
+                display_name: "Inner Twist".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(-360.0),
+                max_value: Some(360.0),
+            },
+            VariationParameter {
+                name: "outer_twist".to_string(),
+                display_name: "Outer Twist".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(-360.0),
+                max_value: Some(360.0),
+            },
+        ]);
+
+        registry.add_parameters("post_bwraps", vec![
+            VariationParameter {
+                name: "cellsize".to_string(),
+                display_name: "Cell Size".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.1),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "space".to_string(),
+                display_name: "Space".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "gain".to_string(),
+                display_name: "Gain".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "inner_twist".to_string(),
+                display_name: "Inner Twist".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(-360.0),
+                max_value: Some(360.0),
+            },
+            VariationParameter {
+                name: "outer_twist".to_string(),
+                display_name: "Outer Twist".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(-360.0),
+                max_value: Some(360.0),
             },
         ]);
 
