@@ -311,3 +311,52 @@ fn variation_log(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
 
     return vec2<f32>(new_x, new_y);
 }
+
+fn variation_polar2(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis Polar2: Improved polar coordinates
+    // FPx += vvar * atan2(x, y) / PI
+    // FPy += vvar * 0.5 * ln(x² + y²) / PI
+    const PI: f32 = 3.14159265359;
+    let r2 = dot(p, p);
+    let new_x = atan2(p.x, p.y) / PI;
+    let new_y = 0.5 * log(r2) / PI;
+
+    return vec2<f32>(new_x, new_y);
+}
+
+fn variation_cross(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis Cross: Cross/plus shape
+    // r = abs((x - y) * (x + y) + 1e-6)
+    // if r < 0: r *= -1
+    // r = vvar / r
+    // FPx += x * r
+    // FPy += y * r
+    var r = abs((p.x - p.y) * (p.x + p.y) + 1e-6);
+    if (r < 0.0) {
+        r = r * -1.0;
+    }
+    r = 1.0 / r;
+
+    return p * r;
+}
+
+fn variation_loonie(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis Loonie: Lune/crescent shape
+    // r2 = x² + y²
+    // if r2 < vvar² and r2 != 0:
+    //   r = vvar * sqrt(vvar² / r2 - 1)
+    //   FPx += r * x
+    //   FPy += r * y
+    // else:
+    //   FPx += vvar * x
+    //   FPy += vvar * y
+    let r2 = dot(p, p);
+
+    // Since we normalize by weight, sqrvar becomes 1.0
+    if (r2 < 1.0 && r2 != 0.0) {
+        let r = sqrt(1.0 / r2 - 1.0);
+        return p * r;
+    } else {
+        return p;
+    }
+}
