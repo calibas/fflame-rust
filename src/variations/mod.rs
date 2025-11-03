@@ -196,6 +196,9 @@ impl VariationRegistry {
         registry.register_core("scry", "Scry", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 45 - Apophysis 7X extended (no parameters)
         registry.register_core("foci", "Foci", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 46 - Apophysis 7X extended (no parameters)
         registry.register_core("bipolar", "Bipolar", VariationCategory::Advanced2D, VariationPhase::Normal, false);     // 47 - Apophysis 7X extended (1 parameter)
+        registry.register_core("elliptic", "Elliptic", VariationCategory::Advanced2D, VariationPhase::Normal, false);   // 48 - Apophysis 7X extended (no parameters)
+        registry.register_core("lazysusan", "LazySusan", VariationCategory::Advanced2D, VariationPhase::Normal, false); // 49 - Apophysis 7X extended (5 parameters)
+        registry.register_core("falloff2", "Falloff2", VariationCategory::Advanced2D, VariationPhase::Normal, true);    // 50 - Apophysis 7X extended (11 parameters, needs RNG)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -336,6 +339,140 @@ impl VariationRegistry {
                 default_value: 0.0,
                 min_value: Some(-1.0),
                 max_value: Some(1.0),
+            },
+        ]);
+
+        registry.add_parameters("lazysusan", vec![
+            VariationParameter {
+                name: "spin".to_string(),
+                display_name: "Spin".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 180.0, // PI radians = 180 degrees
+                min_value: Some(0.0),
+                max_value: Some(360.0),
+            },
+            VariationParameter {
+                name: "space".to_string(),
+                display_name: "Space".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "twist".to_string(),
+                display_name: "Twist".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "x".to_string(),
+                display_name: "X Offset".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "y".to_string(),
+                display_name: "Y Offset".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("falloff2", vec![
+            VariationParameter {
+                name: "scatter".to_string(),
+                display_name: "Scatter".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.000001),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "mindist".to_string(),
+                display_name: "Min Distance".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(0.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "mul_x".to_string(),
+                display_name: "Multiply X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "mul_y".to_string(),
+                display_name: "Multiply Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "mul_z".to_string(),
+                display_name: "Multiply Z".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "mul_c".to_string(),
+                display_name: "Multiply Color".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "x0".to_string(),
+                display_name: "X Center".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "y0".to_string(),
+                display_name: "Y Center".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "z0".to_string(),
+                display_name: "Z Center".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "invert".to_string(),
+                display_name: "Invert".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "type".to_string(),
+                display_name: "Blur Type".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(2.0),
             },
         ]);
 
