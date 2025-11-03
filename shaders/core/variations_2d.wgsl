@@ -537,8 +537,8 @@ fn variation_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 
     // Mode 0: Cartesian (original input space)
     if (blur_type < 0.5) {
-        let rand_x = rng_next_f32(rng);
-        let rand_y = rng_next_f32(rng);
+        let rand_x = rng_nextf(rng);
+        let rand_y = rng_nextf(rng);
         return vec2<f32>(
             p.x + mul_x * rand_x * d,
             p.y + mul_y * rand_y * d
@@ -547,14 +547,14 @@ fn variation_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     // Mode 1: Radial (polar coordinate space)
     else if (blur_type < 1.5) {
         let r_in = sqrt(p.x * p.x + p.y * p.y) + 1e-6;
-        let phi = atan2(p.y, p.x) + mul_y * rng_next_f32(rng) * d;
-        let r = r_in + mul_x * rng_next_f32(rng) * d;
+        let phi = atan2(p.y, p.x) + mul_y * rng_nextf(rng) * d;
+        let r = r_in + mul_x * rng_nextf(rng) * d;
         return vec2<f32>(r * cos(phi), r * sin(phi));
     }
     // Mode 2: Gaussian (spherical distribution)
     else {
-        let phi = d * rng_next_f32(rng) * PI;
-        let r = d * rng_next_f32(rng);
+        let phi = d * rng_nextf(rng) * PI;
+        let r = d * rng_nextf(rng);
         return vec2<f32>(
             p.x + mul_x * r * cos(phi),
             p.y + mul_y * r * sin(phi)
@@ -648,7 +648,7 @@ fn variation_epispiral(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
     let holes = get_param(xform_id, variation_id, 2u);
     
     let theta = atan2(p.y, p.x);
-    let t = rng_next_f32(rng) * thickness / cos(n * theta) - holes;
+    let t = rng_nextf(rng) * thickness / cos(n * theta) - holes;
     
     if (abs(t) < 1e-6) {
         return vec2<f32>(0.0, 0.0);
@@ -735,11 +735,11 @@ fn variation_juliascope(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
 
     // Random angle selection with alternating sign
     // In Apophysis: trunc(Abs(N)*random) * (π/N) * sign
-    let rnd = random_f32(rng);
+    let rnd = rng_nextf(rng);
     let t = (atan2(p.y, p.x) + 2.0 * PI * f32(i32(abs(f32(power)) * rnd))) / f32(power);
 
     // Sign alternation: random even/odd determines sign
-    let sign = select(-1.0, 1.0, (i32(abs(f32(power)) * random_f32(rng)) & 1) == 0);
+    let sign = select(-1.0, 1.0, (i32(abs(f32(power)) * rng_nextf(rng)) & 1) == 0);
 
     // Optimized special cases for common power values
     if (power == 1) {
