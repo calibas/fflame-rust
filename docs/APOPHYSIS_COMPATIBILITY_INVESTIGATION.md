@@ -178,10 +178,18 @@ Core variations that exist in Apophysis but not in our implementation:
    - Formula: `(r × cos(θ), r × sin(θ), z)` with random θ and r
 8. ✅ **Gaussian_Blur** (variation 31) - Gaussian distribution blur - IMPLEMENTED
    - Formula: Same as Blur but r uses Gaussian approximation (sum of 4 randoms - 2)
-9. **ZBlur** - Z-axis blur
-10. **Blur3D** - 3D spherical blur
-11. **Pre_Blur** - Pre-phase blur (applied before variations)
-12. **Pre_ZScale** - Pre-phase Z scaling
+9. ✅ **ZBlur** (variation 32) - Z-axis blur - IMPLEMENTED
+   - Formula: `(x, y, z')` where z' = Gaussian random (sum of 4 randoms - 2)
+   - 2D: Pass-through (Z-only in 3D mode)
+10. ✅ **Blur3D** (variation 33) - 3D spherical Gaussian blur - IMPLEMENTED
+   - Formula: `(r × sin(φ) × cos(θ), r × sin(φ) × sin(θ), r × cos(φ))`
+   - θ = azimuth (0-2π), φ = polar angle (0-π), r = Gaussian random
+11. ✅ **Pre_Blur** (variation 34) - Pre-phase blur - IMPLEMENTED
+   - Formula: `(x + r × cos(θ), y + r × sin(θ), z)` where r = Gaussian random
+   - Applied before variations (Pre-phase), directly modifies input point
+12. ✅ **Pre_ZScale** (variation 35) - Pre-phase Z scaling - IMPLEMENTED
+   - Formula: `(x, y, z × weight)` - scales Z by variation weight
+   - Applied before variations (Pre-phase)
 13. **Pre_ZTranslate** - Pre-phase Z translation
 14. **ZTranslate** - Normal-phase Z translation
 
