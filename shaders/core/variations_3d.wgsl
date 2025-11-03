@@ -198,3 +198,21 @@ fn variation_hemisphere(p: vec3<f32>) -> vec3<f32> {
     let t = 1.0 / sqrt(r2_xy + 1.0);
     return vec3<f32>(p.x * t, p.y * t, t);
 }
+
+fn variation_eyefish(p: vec3<f32>) -> vec3<f32> {
+    // Apophysis: r = 2 / (sqrt(x² + y²) + 1)
+    // result = (r×x, r×y, z)
+    let r_xy = length(p.xy) + 1.0;
+    let scale = 2.0 / r_xy;
+    return vec3<f32>(scale * p.x, scale * p.y, p.z);
+}
+
+fn variation_bubble(p: vec3<f32>) -> vec3<f32> {
+    // Apophysis: r = (x² + y²)/4 + 1
+    // z' = 2/r - 1, scale = 1/r
+    let r2_xy = dot(p.xy, p.xy);
+    let r = r2_xy / 4.0 + 1.0;
+    let scale = 1.0 / r;
+    let new_z = 2.0 / r - 1.0;
+    return vec3<f32>(scale * p.x, scale * p.y, new_z);
+}

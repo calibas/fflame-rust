@@ -148,3 +148,19 @@ fn variation_blob(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
 
     return vec2<f32>(scale * cos(theta), scale * sin(theta));
 }
+
+fn variation_eyefish(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis: r = 2 / (sqrt(x² + y²) + 1)
+    let r_xy = length(p) + 1.0;
+    let scale = 2.0 / r_xy;
+    return vec2<f32>(scale * p.x, scale * p.y);
+}
+
+fn variation_bubble(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis: r = (x² + y²)/4 + 1
+    // scale = 1 / r
+    let r2 = dot(p, p);
+    let r = r2 / 4.0 + 1.0;
+    let scale = 1.0 / r;
+    return vec2<f32>(scale * p.x, scale * p.y);
+}

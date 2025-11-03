@@ -170,10 +170,12 @@ impl VariationRegistry {
         registry.register_core("post_rotate_y", "Post-Rotate Y", VariationCategory::Rotation3D, VariationPhase::Post, false); // 22 - POST!
         registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, VariationPhase::Normal, false);         // 23 - Scales Z depth
 
-        // NEW VARIATIONS (added after original 24) - Indices 24-25
+        // NEW VARIATIONS (added after original 24) - Indices 24-27
         // IMPORTANT: Always add new variations at the end to preserve index compatibility
         registry.register_core("julian", "JuliaN", VariationCategory::Advanced2D, VariationPhase::Normal, true);        // 24 (Needs RNG)
         registry.register_core("blob", "Blob", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 25
+        registry.register_core("eyefish", "Eyefish", VariationCategory::Advanced2D, VariationPhase::Normal, false);     // 26 - Apophysis core
+        registry.register_core("bubble", "Bubble", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 27 - Apophysis core
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![

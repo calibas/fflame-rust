@@ -166,8 +166,10 @@ To achieve full Apophysis compatibility, we'll add proper implementations for va
 
 Core variations that exist in Apophysis but not in our implementation:
 
-3. **Eyefish** - Fisheye lens distortion
-4. **Bubble** - Bubble-like inversion
+3. ✅ **Eyefish** (variation 26) - Fisheye lens distortion - IMPLEMENTED
+   - Formula: `r = 2 / (sqrt(x² + y²) + 1)`, result = `(r×x, r×y, z)`
+4. ✅ **Bubble** (variation 27) - Bubble-like inversion - IMPLEMENTED
+   - Formula: `r = (x² + y²)/4 + 1`, result = `(x/r, y/r, 2/r - 1)`
 5. **Cylinder** - Cylindrical projection
 6. **Noise** - Random displacement
 7. **Blur** - Random circular blur
