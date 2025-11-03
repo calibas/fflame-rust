@@ -579,6 +579,8 @@ fn variation_lazysusan(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f
 }
 
 fn variation_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Falloff2: Distance-based blur effect with 3 modes (3D)
+    const PI: f32 = 3.14159265359;
     let scatter = get_param(xform_id, variation_id, 0u);
     let mindist = get_param(xform_id, variation_id, 1u);
     let mul_x = get_param(xform_id, variation_id, 2u);
@@ -588,14 +590,55 @@ fn variation_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
     let y0 = get_param(xform_id, variation_id, 7u);
     let z0 = get_param(xform_id, variation_id, 8u);
     let invert = get_param(xform_id, variation_id, 9u);
+    let blur_type = get_param(xform_id, variation_id, 10u);
+
     let rmax = 0.04 * scatter;
-    var d = sqrt((p.x - x0)*(p.x - x0) + (p.y - y0)*(p.y - y0) + (p.z - z0)*(p.z - z0));
-    if (invert > 0.5) { d = 1.0 - d; }
-    if (d < 0.0) { d = 0.0; }
+    var d = sqrt((p.x - x0) * (p.x - x0) + (p.y - y0) * (p.y - y0) + (p.z - z0) * (p.z - z0));
+
+    if (invert > 0.5) {
+        d = 1.0 - d;
+    }
+    if (d < 0.0) {
+        d = 0.0;
+    }
+
     d = (d - mindist) * rmax;
-    if (d < 0.0) { d = 0.0; }
-    let rand_x = rng_next_f32(rng);
-    let rand_y = rng_next_f32(rng);
-    let rand_z = rng_next_f32(rng);
-    return vec3<f32>(p.x + mul_x * rand_x * d, p.y + mul_y * rand_y * d, p.z + mul_z * rand_z * d);
+    if (d < 0.0) {
+        d = 0.0;
+    }
+
+    // Mode 0: Cartesian (original input space)
+    if (blur_type < 0.5) {
+        let rand_x = rng_next_f32(rng);
+        let rand_y = rng_next_f32(rng);
+        let rand_z = rng_next_f32(rng);
+        return vec3<f32>(
+            p.x + mul_x * rand_x * d,
+            p.y + mul_y * rand_y * d,
+            p.z + mul_z * rand_z * d
+        );
+    }
+    // Mode 1: Radial (spherical coordinate space)
+    else if (blur_type < 1.5) {
+        let r_in = sqrt(p.x * p.x + p.y * p.y + p.z * p.z) + 1e-6;
+        let sigma = asin(p.z / r_in) + mul_z * rng_next_f32(rng) * d;
+        let phi = atan2(p.y, p.x) + mul_y * rng_next_f32(rng) * d;
+        let r = r_in + mul_x * rng_next_f32(rng) * d;
+        return vec3<f32>(
+            r * cos(sigma) * cos(phi),
+            r * cos(sigma) * sin(phi),
+            r * sin(sigma)
+        );
+    }
+    // Mode 2: Gaussian (spherical distribution)
+    else {
+        let sigma = d * rng_next_f32(rng) * 2.0 * PI;
+        let phi = d * rng_next_f32(rng) * PI;
+        let r = d * rng_next_f32(rng);
+        return vec3<f32>(
+            p.x + mul_x * r * cos(sigma) * cos(phi),
+            p.y + mul_y * r * cos(sigma) * sin(phi),
+            p.z + mul_z * r * sin(sigma)
+        );
+    }
 }
