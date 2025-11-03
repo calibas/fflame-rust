@@ -762,3 +762,23 @@ fn variation_juliascope(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr
         return vec2<f32>(r_out * cos(t) * sign, r_out * sin(t) * sign);
     }
 }
+
+fn variation_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Curl variation
+    // Formula: f(z) = z / (c2*z² + c1*z + 1), where z = x + iy (complex)
+    let c1 = get_param(xform_id, variation_id, 0u);
+    let c2 = get_param(xform_id, variation_id, 1u);
+
+    // Complex arithmetic: z² = (x² - y²) + 2xyi
+    let re = 1.0 + c1 * p.x + c2 * (p.x * p.x - p.y * p.y);
+    let im = c1 * p.y + 2.0 * c2 * p.x * p.y;
+
+    // r = vvar / |denominator|² = 1 / (re² + im²)
+    let r = 1.0 / (re * re + im * im);
+
+    // Complex division: (x + iy) / (re + i*im) = ((x*re + y*im) + i(y*re - x*im)) / (re² + im²)
+    return vec2<f32>(
+        (p.x * re + p.y * im) * r,
+        (p.y * re - p.x * im) * r
+    );
+}
