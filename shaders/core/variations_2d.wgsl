@@ -926,3 +926,56 @@ fn variation_separation(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
 
     return vec2<f32>(x_out, y_out);
 }
+
+fn variation_ngon(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Ngon - creates N-sided polygonal shapes
+    let sides = get_param(xform_id, variation_id, 0u);
+    let power = get_param(xform_id, variation_id, 1u);
+    let circle = get_param(xform_id, variation_id, 2u);
+    let corners = get_param(xform_id, variation_id, 3u);
+
+    let theta = atan2(p.y, p.x);
+    let phi = theta - (PI * 2.0 / sides) * floor(sides * theta / (PI * 2.0));
+
+    // Conditional: if phi > PI/sides then phi = phi - 2*PI/sides
+    let phi_adj = select(phi, phi - 2.0 * PI / sides, phi > PI / sides);
+
+    let amp = cos(phi_adj) * pow(1.0 / (cos(phi_adj * sides / 2.0) + 1e-10), circle);
+    let r = pow(p.x * p.x + p.y * p.y, power * 0.5);
+
+    return vec2<f32>(
+        amp * r * cos(theta) + corners,
+        amp * r * sin(theta)
+    );
+}
+
+fn variation_mobius(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Mobius - Möbius transformation f(z) = (Az + B)/(Cz + D)
+    let re_a = get_param(xform_id, variation_id, 0u);
+    let im_a = get_param(xform_id, variation_id, 1u);
+    let re_b = get_param(xform_id, variation_id, 2u);
+    let im_b = get_param(xform_id, variation_id, 3u);
+    let re_c = get_param(xform_id, variation_id, 4u);
+    let im_c = get_param(xform_id, variation_id, 5u);
+    let re_d = get_param(xform_id, variation_id, 6u);
+    let im_d = get_param(xform_id, variation_id, 7u);
+
+    // Numerator: Az + B
+    // z = p.x + i*p.y, A = re_a + i*im_a
+    // Az = (re_a*p.x - im_a*p.y) + i*(im_a*p.x + re_a*p.y)
+    let re_u = re_a * p.x - im_a * p.y + re_b;
+    let im_u = re_a * p.y + im_a * p.x + im_b;
+
+    // Denominator: Cz + D
+    let re_v = re_c * p.x - im_c * p.y + re_d;
+    let im_v = re_c * p.y + im_c * p.x + im_d;
+
+    // Division: (re_u + i*im_u) / (re_v + i*im_v)
+    // = ((re_u*re_v + im_u*im_v) + i*(im_u*re_v - re_u*im_v)) / (re_v² + im_v²)
+    let v_denom = re_v * re_v + im_v * im_v + 1e-10;
+
+    return vec2<f32>(
+        (re_u * re_v + im_u * im_v) / v_denom,
+        (im_u * re_v - re_u * im_v) / v_denom
+    );
+}

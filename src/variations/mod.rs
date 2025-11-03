@@ -219,6 +219,8 @@ impl VariationRegistry {
         registry.register_core("rectangles", "Rectangles", VariationCategory::Advanced2D, VariationPhase::Normal, false);  // 68 - Apophysis 7X extended (2 parameters: x, y)
         registry.register_core("splits", "Splits", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 69 - Apophysis 7X extended (2 parameters: x, y)
         registry.register_core("separation", "Separation", VariationCategory::Advanced2D, VariationPhase::Normal, false);  // 70 - Apophysis 7X extended (4 parameters: x, y, xinside, yinside)
+        registry.register_core("ngon", "Ngon", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 71 - Apophysis 7X extended (4 parameters: sides, power, circle, corners)
+        registry.register_core("mobius", "Mobius", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 72 - Apophysis 7X extended (8 parameters: complex Möbius transformation)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -869,6 +871,108 @@ impl VariationRegistry {
                 default_value: 0.0,
                 min_value: Some(-2.0),
                 max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("ngon", vec![
+            VariationParameter {
+                name: "sides".to_string(),
+                display_name: "Sides".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 5.0,
+                min_value: Some(3.0),
+                max_value: Some(20.0),
+            },
+            VariationParameter {
+                name: "power".to_string(),
+                display_name: "Power".to_string(),
+                param_type: ParamType::Float,
+                default_value: 3.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "circle".to_string(),
+                display_name: "Circle".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "corners".to_string(),
+                display_name: "Corners".to_string(),
+                param_type: ParamType::Float,
+                default_value: 2.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
+            },
+        ]);
+
+        registry.add_parameters("mobius", vec![
+            VariationParameter {
+                name: "re_a".to_string(),
+                display_name: "Re A".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "im_a".to_string(),
+                display_name: "Im A".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "re_b".to_string(),
+                display_name: "Re B".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "im_b".to_string(),
+                display_name: "Im B".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "re_c".to_string(),
+                display_name: "Re C".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "im_c".to_string(),
+                display_name: "Im C".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "re_d".to_string(),
+                display_name: "Re D".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "im_d".to_string(),
+                display_name: "Im D".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
             },
         ]);
 
