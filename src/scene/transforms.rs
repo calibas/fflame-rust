@@ -202,17 +202,17 @@ impl Transform {
         }
     }
 
-    /// COMPATIBILITY: Convert to fixed 50-element array for GPU
-    pub fn to_fixed_array(&self, registry: &VariationRegistry) -> [f32; 50] {
-        let mut array = [0.0; 50];
-        for (i, name) in registry.names().iter().enumerate().take(50) {
+    /// COMPATIBILITY: Convert to fixed 100-element array for GPU
+    pub fn to_fixed_array(&self, registry: &VariationRegistry) -> [f32; 100] {
+        let mut array = [0.0; 100];
+        for (i, name) in registry.names().iter().enumerate().take(100) {
             array[i] = self.get_variation(name);
         }
         array
     }
 
     /// COMPATIBILITY: Set from fixed array
-    pub fn from_fixed_array(&mut self, array: [f32; 50], registry: &VariationRegistry) {
+    pub fn from_fixed_array(&mut self, array: [f32; 100], registry: &VariationRegistry) {
         self.variations.clear();
         for (i, &weight) in array.iter().enumerate() {
             if weight.abs() > 1e-6 {
