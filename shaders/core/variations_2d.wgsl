@@ -164,3 +164,17 @@ fn variation_bubble(p: vec2<f32>) -> vec2<f32> {
     let scale = 1.0 / r;
     return vec2<f32>(scale * p.x, scale * p.y);
 }
+
+fn variation_cylinder(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis: result = (sin(x), y)
+    return vec2<f32>(sin(p.x), p.y);
+}
+
+fn variation_noise(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis: Random polar displacement
+    // θ = random × 2π, r = random
+    // result = (x × r × cos(θ), y × r × sin(θ))
+    let theta = rng_nextf(rng) * 6.28318530718;  // 2π
+    let r = rng_nextf(rng);
+    return vec2<f32>(p.x * r * cos(theta), p.y * r * sin(theta));
+}
