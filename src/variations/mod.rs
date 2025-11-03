@@ -210,6 +210,8 @@ impl VariationRegistry {
         registry.register_core("pdj", "PDJ", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 59 - Apophysis 7X extended (4 parameters)
         registry.register_core("juliascope", "JuliaScope", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 60 - Apophysis 7X extended (2 parameters, needs RNG)
         registry.register_core("julia3dz", "Julia3Dz", VariationCategory::Full3D, VariationPhase::Normal, true);  // 61 - Apophysis 7X extended (1 parameter: power, needs RNG)
+        registry.register_core("curl", "Curl", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 62 - Apophysis 7X extended (2 parameters: c1, c2)
+        registry.register_core("curl3d", "Curl3D", VariationCategory::Full3D, VariationPhase::Normal, false);      // 63 - Apophysis 7X extended (3 parameters: cx, cy, cz)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -684,6 +686,52 @@ impl VariationRegistry {
                 default_value: 2.0,
                 min_value: Some(-10.0),
                 max_value: Some(10.0),
+            },
+        ]);
+
+        registry.add_parameters("curl", vec![
+            VariationParameter {
+                name: "c1".to_string(),
+                display_name: "C1".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "c2".to_string(),
+                display_name: "C2".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("curl3d", vec![
+            VariationParameter {
+                name: "cx".to_string(),
+                display_name: "CX".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "cy".to_string(),
+                display_name: "CY".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "cz".to_string(),
+                display_name: "CZ".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
             },
         ]);
 

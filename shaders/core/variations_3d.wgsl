@@ -891,3 +891,49 @@ fn variation_julia3dz(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 
     return vec3<f32>(r * cos(angle), r * sin(angle), z_out);
 }
+
+fn variation_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis Curl variation - 3D (Z passes through scaled)
+    // Formula: f(z) = z / (c2*z² + c1*z + 1), where z = x + iy (complex)
+    let c1 = get_param(xform_id, variation_id, 0u);
+    let c2 = get_param(xform_id, variation_id, 1u);
+
+    // Complex arithmetic: z² = (x² - y²) + 2xyi
+    let re = 1.0 + c1 * p.x + c2 * (p.x * p.x - p.y * p.y);
+    let im = c1 * p.y + 2.0 * c2 * p.x * p.y;
+
+    // r = vvar / |denominator|² = 1 / (re² + im²)
+    let r = 1.0 / (re * re + im * im);
+
+    // Complex division: (x + iy) / (re + i*im) = ((x*re + y*im) + i(y*re - x*im)) / (re² + im²)
+    // In Apophysis: FPz = FPz + vvar * FTz (Z passes through with weight)
+    return vec3<f32>(
+        (p.x * re + p.y * im) * r,
+        (p.y * re - p.x * im) * r,
+        p.z  // Z passes through
+    );
+}
+
+fn variation_curl3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis Curl3D - Full 3D curl transformation
+    // Formula: r = vvar / (r²*c² + 2cx*x - 2cy*y + 2cz*z + 1)
+    // Result: ((x + cx*r²), (y - cy*r²), (z + cz*r²)) * r
+    let cx = get_param(xform_id, variation_id, 0u);
+    let cy = get_param(xform_id, variation_id, 1u);
+    let cz = get_param(xform_id, variation_id, 2u);
+
+    let r2 = p.x * p.x + p.y * p.y + p.z * p.z;
+
+    // c² = cx² + cy² + cz²
+    let c2 = cx * cx + cy * cy + cz * cz;
+
+    // Denominator: r²*c² + 2cx*x - 2cy*y + 2cz*z + 1
+    let denom = r2 * c2 + 2.0 * cx * p.x - 2.0 * cy * p.y + 2.0 * cz * p.z + 1.0;
+    let r = 1.0 / denom;
+
+    return vec3<f32>(
+        r * (p.x + cx * r2),
+        r * (p.y - cy * r2),
+        r * (p.z + cz * r2)
+    );
+}
