@@ -509,3 +509,38 @@ fn variation_foci(p: vec3<f32>) -> vec3<f32> {
 
     return vec3<f32>(new_x, new_y, p.z);
 }
+
+fn variation_bipolar(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis Bipolar: Bipolar coordinates (3D)
+    // shift parameter controls vertical offset
+    const PI: f32 = 3.14159265359;
+    const HALF_PI: f32 = 1.57079632679489661923;
+    let shift = get_param(xform_id, variation_id, 0u);
+
+    let x2y2 = dot(p.xy, p.xy);
+    var y = 0.5 * atan2(2.0 * p.y, x2y2 - 1.0) + (-HALF_PI * shift);
+
+    // Wrap y to [-π/2, π/2]
+    if (y > HALF_PI) {
+        y = -HALF_PI + (y + HALF_PI) % PI;
+    } else if (y < -HALF_PI) {
+        y = HALF_PI - (HALF_PI - y) % PI;
+    }
+
+    let t = x2y2 + 1.0;
+    let x2 = 2.0 * p.x;
+    let f = t + x2;
+    let g = t - x2;
+
+    // Check for division by zero or log of negative
+    if (g == 0.0 || f / g <= 0.0) {
+        return vec3<f32>(0.0, 0.0, p.z);
+    }
+
+    // v_4 = vvar * 1/(2π), v = vvar * 2/π
+    // Since we normalize by vvar: v_4 = 1/(2π), v = 2/π
+    let new_x = (1.0 / (2.0 * PI)) * log(f / g);
+    let new_y = (2.0 / PI) * y;
+
+    return vec3<f32>(new_x, new_y, p.z);
+}

@@ -195,6 +195,7 @@ impl VariationRegistry {
         registry.register_core("escher", "Escher", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 44 - Apophysis 7X extended (1 parameter)
         registry.register_core("scry", "Scry", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 45 - Apophysis 7X extended (no parameters)
         registry.register_core("foci", "Foci", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 46 - Apophysis 7X extended (no parameters)
+        registry.register_core("bipolar", "Bipolar", VariationCategory::Advanced2D, VariationPhase::Normal, false);     // 47 - Apophysis 7X extended (1 parameter)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -324,6 +325,17 @@ impl VariationRegistry {
                 default_value: 2.71828182845905, // e (Euler's number)
                 min_value: Some(0.000001), // 1E-6 minimum from Apophysis
                 max_value: Some(100.0),
+            },
+        ]);
+
+        registry.add_parameters("bipolar", vec![
+            VariationParameter {
+                name: "shift".to_string(),
+                display_name: "Shift".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-1.0),
+                max_value: Some(1.0),
             },
         ]);
 
