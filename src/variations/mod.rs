@@ -204,6 +204,7 @@ impl VariationRegistry {
         registry.register_core("pre_disc", "Pre-Disc", VariationCategory::Advanced2D, VariationPhase::Pre, false);     // 53 - Apophysis 7X extended (Pre-phase)
         registry.register_core("rings2", "Rings2", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 54 - Apophysis 7X extended (1 parameter)
         registry.register_core("fan2", "Fan2", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 55 - Apophysis 7X extended (2 parameters)
+        registry.register_core("wedge", "Wedge", VariationCategory::Advanced2D, VariationPhase::Normal, false);        // 56 - Apophysis 7X extended (4 parameters)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -504,6 +505,41 @@ impl VariationRegistry {
             VariationParameter {
                 name: "y".to_string(),
                 display_name: "Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("wedge", vec![
+            VariationParameter {
+                name: "angle".to_string(),
+                display_name: "Angle".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 90.0, // π/2 radians = 90 degrees
+                min_value: Some(0.0),
+                max_value: Some(360.0),
+            },
+            VariationParameter {
+                name: "hole".to_string(),
+                display_name: "Hole".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "count".to_string(),
+                display_name: "Count".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 2.0,
+                min_value: Some(1.0),
+                max_value: Some(20.0),
+            },
+            VariationParameter {
+                name: "swirl".to_string(),
+                display_name: "Swirl".to_string(),
                 param_type: ParamType::Float,
                 default_value: 0.0,
                 min_value: Some(-2.0),
