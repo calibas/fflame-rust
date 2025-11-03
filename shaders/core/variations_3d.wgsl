@@ -298,17 +298,17 @@ fn variation_ztranslate(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(0.0, 0.0, 1.0);
 }
 
-fn variation_waves2(p: vec3<f32>, xform_id: u32) -> vec3<f32> {
+fn variation_waves2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Waves2: Sine wave distortion with 6 parameters (3D version)
     // FPx += VVAR * (FTx + scalex * sin(FTy * freqx))
     // FPy += VVAR * (FTy + scaley * sin(FTx * freqy))
     // FPz += VVAR * (FTz + scalez * sin(sqrt(FTx² + FTy²) * freqz))
-    let freqx = get_param(xform_id, 38u, 0u);
-    let scalex = get_param(xform_id, 38u, 1u);
-    let freqy = get_param(xform_id, 38u, 2u);
-    let scaley = get_param(xform_id, 38u, 3u);
-    let freqz = get_param(xform_id, 38u, 4u);
-    let scalez = get_param(xform_id, 38u, 5u);
+    let freqx = get_param(xform_id, variation_id, 0u);
+    let scalex = get_param(xform_id, variation_id, 1u);
+    let freqy = get_param(xform_id, variation_id, 2u);
+    let scaley = get_param(xform_id, variation_id, 3u);
+    let freqz = get_param(xform_id, variation_id, 4u);
+    let scalez = get_param(xform_id, variation_id, 5u);
 
     let r_xy = length(p.xy);
 
