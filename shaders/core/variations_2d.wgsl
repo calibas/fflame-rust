@@ -858,3 +858,34 @@ fn variation_blur_zoom(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
         (p.y - zoom_y) * z + zoom_y
     );
 }
+
+fn variation_blur_pixelize(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis Blur Pixelize - pixelated/mosaic blur effect
+    let size = get_param(xform_id, variation_id, 0u);
+    let scale = get_param(xform_id, variation_id, 1u);
+
+    let inv_size = 1.0 / size;
+
+    // Quantize to pixel grid
+    let x = floor(p.x * inv_size);
+    let y = floor(p.y * inv_size);
+
+    // Add random offset within pixel
+    return vec2<f32>(
+        size * (x + scale * (rng_nextf(rng) - 0.5) + 0.5),
+        size * (y + scale * (rng_nextf(rng) - 0.5) + 0.5)
+    );
+}
+
+fn variation_rectangles(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Rectangles - creates rectangular tiling pattern
+    let rect_x = get_param(xform_id, variation_id, 0u);
+    let rect_y = get_param(xform_id, variation_id, 1u);
+
+    // Formula: (2*floor(p/rect) + 1)*rect - p
+    // This creates a mirrored tiling effect
+    return vec2<f32>(
+        (2.0 * floor(p.x / rect_x) + 1.0) * rect_x - p.x,
+        (2.0 * floor(p.y / rect_y) + 1.0) * rect_y - p.y
+    );
+}
