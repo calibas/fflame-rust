@@ -184,6 +184,9 @@ impl VariationRegistry {
         registry.register_core("blur3d", "Blur 3D", VariationCategory::Full3D, VariationPhase::Normal, true);           // 33 - Apophysis core (Needs RNG)
         registry.register_core("pre_blur", "Pre-Blur", VariationCategory::Advanced2D, VariationPhase::Pre, true);       // 34 - Apophysis core (Needs RNG, Pre-phase)
         registry.register_core("pre_zscale", "Pre-ZScale", VariationCategory::Depth3D, VariationPhase::Pre, false);     // 35 - Apophysis core (Pre-phase)
+        registry.register_core("pre_ztranslate", "Pre-ZTranslate", VariationCategory::Depth3D, VariationPhase::Pre, false); // 36 - Apophysis core (Pre-phase)
+        registry.register_core("ztranslate", "ZTranslate", VariationCategory::Depth3D, VariationPhase::Normal, false); // 37 - Apophysis core
+        registry.register_core("waves2", "Waves2", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 38 - Apophysis core (6 parameters)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -229,6 +232,57 @@ impl VariationRegistry {
                 default_value: 6.0,
                 min_value: Some(1.0),
                 max_value: Some(20.0),
+            },
+        ]);
+
+        registry.add_parameters("waves2", vec![
+            VariationParameter {
+                name: "freqx".to_string(),
+                display_name: "Freq X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 2.0,
+                min_value: Some(0.0),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "scalex".to_string(),
+                display_name: "Scale X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "freqy".to_string(),
+                display_name: "Freq Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 2.0,
+                min_value: Some(0.0),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "scaley".to_string(),
+                display_name: "Scale Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "freqz".to_string(),
+                display_name: "Freq Z".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "scalez".to_string(),
+                display_name: "Scale Z".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
             },
         ]);
 

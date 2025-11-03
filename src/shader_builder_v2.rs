@@ -191,8 +191,8 @@ impl ShaderBuilder {
                     // Build parameter list based on variation needs
                     let mut params = String::new();
 
-                    // Pre_ZScale needs weight parameter
-                    if name.contains("zscale") {
+                    // Pre_ZScale and Pre_ZTranslate need weight parameter
+                    if name.contains("zscale") || name.contains("ztranslate") {
                         params.push_str(&format!(", xform.variations[{}]", idx));
                     }
 
@@ -224,15 +224,15 @@ impl ShaderBuilder {
         for (name, idx, info) in &normal_variations {
             let call = if !info.parameters.is_empty() {
                 if info.needs_rng {
-                    format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
+                    format!("variation_{}(temp, xform_id, rng)", name)
                 } else {
-                    format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
+                    format!("variation_{}(temp, xform_id)", name)
                 }
             } else {
                 if info.needs_rng {
-                    format!("{}(temp, rng)", info.wgsl_function)
+                    format!("variation_{}(temp, rng)", name)
                 } else {
-                    format!("{}(temp)", info.wgsl_function)
+                    format!("variation_{}(temp)", name)
                 }
             };
 
@@ -321,8 +321,8 @@ impl ShaderBuilder {
                     // Build parameter list based on variation needs
                     let mut params = String::new();
 
-                    // Pre_ZScale needs weight parameter
-                    if name.contains("zscale") {
+                    // Pre_ZScale and Pre_ZTranslate need weight parameter
+                    if name.contains("zscale") || name.contains("ztranslate") {
                         params.push_str(&format!(", xform.variations[{}]", idx));
                     }
 
@@ -373,19 +373,28 @@ impl ShaderBuilder {
                         idx, info.display_name, idx, idx
                     ));
                 }
+                "ztranslate" => {
+                    code.push_str(&format!(
+                        "    // {}: {} (NORMAL - Z-only)\n\
+                         \x20   if (xform.variations[{}] != 0.0) {{\n\
+                         \x20       result.z += xform.variations[{}];\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, idx, idx
+                    ));
+                }
                 _ => {
                     // Standard variation with function call
                     let call = if !info.parameters.is_empty() {
                         if info.needs_rng {
-                            format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
+                            format!("variation_{}(temp, xform_id, rng)", name)
                         } else {
-                            format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
+                            format!("variation_{}(temp, xform_id)", name)
                         }
                     } else {
                         if info.needs_rng {
-                            format!("{}(temp, rng)", info.wgsl_function)
+                            format!("variation_{}(temp, rng)", name)
                         } else {
-                            format!("{}(temp)", info.wgsl_function)
+                            format!("variation_{}(temp)", name)
                         }
                     };
 
