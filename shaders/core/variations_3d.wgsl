@@ -649,16 +649,19 @@ fn variation_pre_spherical(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(p.x * r, p.y * r, p.z);
 }
 
-fn variation_pre_sinusoidal(p: vec3<f32>) -> vec3<f32> {
+fn variation_pre_sinusoidal(p: vec3<f32>, weight: f32) -> vec3<f32> {
     // Apophysis Pre-Sinusoidal: Pre-phase sinusoidal wave (3D)
-    return vec3<f32>(sin(p.x), sin(p.y), p.z);
+    // FTx := vvar * sin(FTx); FTy := vvar * sin(FTy); FTz := vvar * FTz;
+    return vec3<f32>(weight * sin(p.x), weight * sin(p.y), weight * p.z);
 }
 
-fn variation_pre_disc(p: vec3<f32>) -> vec3<f32> {
+fn variation_pre_disc(p: vec3<f32>, weight: f32) -> vec3<f32> {
     // Apophysis Pre-Disc: Pre-phase disc transformation (3D)
+    // r := vvar/π * atan2(x, y)
+    // sincos(π * sqrt(x²+y²), sinr, cosr)
+    // FTx := sinr * r; FTy := cosr * r; FTz := vvar * FTz;
     const PI: f32 = 3.14159265359;
-    let r = sqrt(dot(p.xy, p.xy));
-    let theta = atan2(p.y, p.x) / PI;
-    let factor = theta * sin(PI * r);
-    return vec3<f32>(factor * sin(PI * r), factor * cos(PI * r), p.z);
+    let rad = sqrt(dot(p.xy, p.xy));
+    let r = (weight / PI) * atan2(p.x, p.y);
+    return vec3<f32>(sin(PI * rad) * r, cos(PI * rad) * r, weight * p.z);
 }
