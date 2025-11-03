@@ -187,6 +187,7 @@ impl ShaderBuilder {
                 } else {
                     // Generic Pre-phase variation handling
                     let needs_rng = info.needs_rng;
+                    let has_params = !info.parameters.is_empty();
 
                     // Build parameter list based on variation needs
                     let mut params = String::new();
@@ -195,6 +196,11 @@ impl ShaderBuilder {
                     if name.contains("zscale") || name.contains("ztranslate")
                         || name.contains("sinusoidal") || name.contains("disc") {
                         params.push_str(&format!(", xform.variations[{}]", idx));
+                    }
+
+                    // Add xform_id and variation_id if variation has parameters
+                    if has_params {
+                        params.push_str(&format!(", xform_id, {}u", idx));
                     }
 
                     // Add RNG if needed
@@ -252,14 +258,31 @@ impl ShaderBuilder {
 
             for (name, idx, info) in &post_variations {
                 // Post-variations directly modify result (NOT weighted sum!)
-                // Note: 2D mode shouldn't have post-variations (they're 3D rotation/flatten only)
-                // But support the model for consistency
+                let needs_rng = info.needs_rng;
+                let has_params = !info.parameters.is_empty();
+
+                // Build parameter list
+                let mut params = String::from("result");
+
+                // Post-variations with parameters (like post_bwraps)
+                if has_params {
+                    params.push_str(&format!(", xform_id, {}u", idx));
+                } else {
+                    // Traditional post-variations (rotate_x, rotate_y, flatten) use weight
+                    params.push_str(&format!(", xform.variations[{}]", idx));
+                }
+
+                // Add RNG if needed
+                if needs_rng {
+                    params.push_str(", rng");
+                }
+
                 code.push_str(&format!(
                     "    // {}: {} (POST)\n\
                      \x20   if (xform.variations[{}] != 0.0) {{\n\
-                     \x20       result = {}(result, xform.variations[{}]);\n\
+                     \x20       result = {}({});\n\
                      \x20   }}\n\n",
-                    idx, info.display_name, idx, info.wgsl_function, idx
+                    idx, info.display_name, idx, info.wgsl_function, params
                 ));
             }
         }
@@ -318,6 +341,7 @@ impl ShaderBuilder {
                 } else {
                     // Generic Pre-phase variation handling
                     let needs_rng = info.needs_rng;
+                    let has_params = !info.parameters.is_empty();
 
                     // Build parameter list based on variation needs
                     let mut params = String::new();
@@ -326,6 +350,11 @@ impl ShaderBuilder {
                     if name.contains("zscale") || name.contains("ztranslate")
                         || name.contains("sinusoidal") || name.contains("disc") {
                         params.push_str(&format!(", xform.variations[{}]", idx));
+                    }
+
+                    // Add xform_id and variation_id if variation has parameters
+                    if has_params {
+                        params.push_str(&format!(", xform_id, {}u", idx));
                     }
 
                     // Add RNG if needed
@@ -429,14 +458,43 @@ impl ShaderBuilder {
                         ));
                     }
                     _ => {
-                        // Post-rotate variations
-                        let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
+                        // Generic post-variations (rotation, post_bwraps, etc.)
+                        let needs_rng = info.needs_rng;
+                        let has_params = !info.parameters.is_empty();
+
+                        // Build parameter list
+                        let mut params = String::from("result");
+
+                        // Post-variations with parameters (like post_bwraps)
+                        if has_params {
+                            params.push_str(&format!(", xform_id, {}u", idx));
+                        } else if name.contains("rotate") {
+                            // Traditional rotate variations use weight
+                            let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
+                            code.push_str(&format!(
+                                "    // {}: {} (POST - Rotation)\n\
+                                 \x20   if (xform.variations[{}] != 0.0) {{\n\
+                                 \x20       result = {}(result, xform.variations[{}]);\n\
+                                 \x20   }}\n\n",
+                                idx, info.display_name, idx, rotate_fn, idx
+                            ));
+                            continue;  // Skip the generic code below
+                        } else {
+                            // Other traditional post-variations use weight
+                            params.push_str(&format!(", xform.variations[{}]", idx));
+                        }
+
+                        // Add RNG if needed
+                        if needs_rng {
+                            params.push_str(", rng");
+                        }
+
                         code.push_str(&format!(
                             "    // {}: {} (POST)\n\
                              \x20   if (xform.variations[{}] != 0.0) {{\n\
-                             \x20       result = {}(result, xform.variations[{}]);\n\
+                             \x20       result = {}({});\n\
                              \x20   }}\n\n",
-                            idx, info.display_name, idx, rotate_fn, idx
+                            idx, info.display_name, idx, info.wgsl_function, params
                         ));
                     }
                 }
