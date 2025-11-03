@@ -937,3 +937,78 @@ fn variation_curl3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
         r * (p.z + cz * r2)
     );
 }
+
+fn variation_radial_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Radial Blur - 3D (Z passes through)
+    const PI: f32 = 3.14159265359;
+
+    let angle_deg = get_param(xform_id, variation_id, 0u);
+    let angle_rad = angle_deg * PI / 180.0;
+
+    let spin_var = sin(angle_rad * 0.5);
+    let zoom_var = cos(angle_rad * 0.5);
+
+    // Gaussian blur approximation: sum of 4 random values - 2
+    let rnd_g = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
+
+    let ra = sqrt(p.x * p.x + p.y * p.y);
+    let angle_out = atan2(p.y, p.x) + spin_var * rnd_g;
+    let rz = zoom_var * rnd_g - 1.0;
+
+    return vec3<f32>(
+        ra * cos(angle_out) + rz * p.x,
+        ra * sin(angle_out) + rz * p.y,
+        p.z  // Z passes through
+    );
+}
+
+fn variation_blur_circle(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Blur Circle - 3D (Z passes through)
+    const PI: f32 = 3.14159265359;
+    const PI_4: f32 = 0.78539816339;
+
+    let x = 2.0 * rng_nextf(rng) - 1.0;
+    let y = 2.0 * rng_nextf(rng) - 1.0;
+
+    let absx = abs(x);
+    let absy = abs(y);
+
+    var perimeter: f32;
+    var side: f32;
+
+    if (absx >= absy) {
+        if (x >= absy) {
+            perimeter = absx + y;
+        } else {
+            perimeter = 5.0 * absx - y;
+        }
+        side = absx;
+    } else {
+        if (y >= absx) {
+            perimeter = 3.0 * absy - x;
+        } else {
+            perimeter = 7.0 * absy + x;
+        }
+        side = absy;
+    }
+
+    let r = side;
+    let angle = PI_4 * perimeter / side - PI_4;
+
+    return vec3<f32>(r * cos(angle), r * sin(angle), p.z);
+}
+
+fn variation_blur_zoom(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Blur Zoom - 3D (Z passes through)
+    let length = get_param(xform_id, variation_id, 0u);
+    let zoom_x = get_param(xform_id, variation_id, 1u);
+    let zoom_y = get_param(xform_id, variation_id, 2u);
+
+    let z = 1.0 + length * rng_nextf(rng);
+
+    return vec3<f32>(
+        (p.x - zoom_x) * z + zoom_x,
+        (p.y - zoom_y) * z + zoom_y,
+        p.z  // Z passes through
+    );
+}
