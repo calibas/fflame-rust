@@ -123,6 +123,11 @@
 ### Important Implementation Details
 - Using **ping-pong accumulation** (not atomic) for better performance
 - Using **JSON** for serialization (not RON as in outline)
+- **Precision Limitation (f32 vs Apophysis double):**
+  - Apophysis uses 64-bit `double` for variation weights and parameters (±1E308, ~15-16 digit precision)
+  - We use 32-bit `f32` (±3.4E38, ~7 digit precision) - **WGSL has no f64 support**
+  - Impact: Minimal for typical flames, may cause slight differences at extreme values
+  - See [docs/projects/apophysis-full-compatibility.md](docs/projects/apophysis-full-compatibility.md) Phase 2.0 for details
 - **Undo/redo** system with 50-state history
 - **Full WASM support** for web builds (100% complete including PNG export)
 - GPU buffers use **std430 layout** (storage buffers) and **std140 layout** (uniform buffers) for cross-platform compatibility
