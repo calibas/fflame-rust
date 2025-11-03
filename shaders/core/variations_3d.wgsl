@@ -1041,3 +1041,37 @@ fn variation_rectangles(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
         p.z
     );
 }
+
+fn variation_splits(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis Splits - 3D (Z passes through)
+    let splits_x = get_param(xform_id, variation_id, 0u);
+    let splits_y = get_param(xform_id, variation_id, 1u);
+
+    return vec3<f32>(
+        select(p.x - splits_x, p.x + splits_x, p.x >= 0.0),
+        select(p.y - splits_y, p.y + splits_y, p.y >= 0.0),
+        p.z
+    );
+}
+
+fn variation_separation(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis Separation - 3D (Z passes through)
+    let sep_x = get_param(xform_id, variation_id, 0u);
+    let sep_y = get_param(xform_id, variation_id, 1u);
+    let xinside = get_param(xform_id, variation_id, 2u);
+    let yinside = get_param(xform_id, variation_id, 3u);
+
+    let x_out = select(
+        -(sqrt(p.x * p.x + sep_x * sep_x) + p.x * xinside),
+        sqrt(p.x * p.x + sep_x * sep_x) - p.x * xinside,
+        p.x > 0.0
+    );
+
+    let y_out = select(
+        -(sqrt(p.y * p.y + sep_y * sep_y) + p.y * yinside),
+        sqrt(p.y * p.y + sep_y * sep_y) - p.y * yinside,
+        p.y > 0.0
+    );
+
+    return vec3<f32>(x_out, y_out, p.z);
+}

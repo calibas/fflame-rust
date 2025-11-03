@@ -217,6 +217,8 @@ impl VariationRegistry {
         registry.register_core("blur_zoom", "Blur Zoom", VariationCategory::Advanced2D, VariationPhase::Normal, true);     // 66 - Apophysis 7X extended (3 parameters: length, x, y, needs RNG)
         registry.register_core("blur_pixelize", "Blur Pixelize", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 67 - Apophysis 7X extended (2 parameters: size, scale, needs RNG)
         registry.register_core("rectangles", "Rectangles", VariationCategory::Advanced2D, VariationPhase::Normal, false);  // 68 - Apophysis 7X extended (2 parameters: x, y)
+        registry.register_core("splits", "Splits", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 69 - Apophysis 7X extended (2 parameters: x, y)
+        registry.register_core("separation", "Separation", VariationCategory::Advanced2D, VariationPhase::Normal, false);  // 70 - Apophysis 7X extended (4 parameters: x, y, xinside, yinside)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -813,6 +815,60 @@ impl VariationRegistry {
                 default_value: 1.0,
                 min_value: Some(0.001),
                 max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("splits", vec![
+            VariationParameter {
+                name: "x".to_string(),
+                display_name: "X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "y".to_string(),
+                display_name: "Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("separation", vec![
+            VariationParameter {
+                name: "x".to_string(),
+                display_name: "X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "y".to_string(),
+                display_name: "Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "xinside".to_string(),
+                display_name: "X Inside".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "yinside".to_string(),
+                display_name: "Y Inside".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
             },
         ]);
 
