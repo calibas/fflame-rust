@@ -561,3 +561,26 @@ fn variation_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
         );
     }
 }
+
+fn variation_pre_spherical(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis Pre-Spherical: Pre-phase spherical distortion
+    // Same as spherical but modifies input point before other variations
+    let r = 1.0 / (dot(p, p) + 1e-5);
+    return p * r;
+}
+
+fn variation_pre_sinusoidal(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis Pre-Sinusoidal: Pre-phase sinusoidal wave
+    // Same as sinusoidal but modifies input point before other variations
+    return vec2<f32>(sin(p.x), sin(p.y));
+}
+
+fn variation_pre_disc(p: vec2<f32>) -> vec2<f32> {
+    // Apophysis Pre-Disc: Pre-phase disc transformation
+    // Same as disc but modifies input point before other variations
+    const PI: f32 = 3.14159265359;
+    let r = sqrt(dot(p, p));
+    let theta = atan2(p.y, p.x) / PI;
+    let factor = theta * sin(PI * r);
+    return vec2<f32>(factor * sin(PI * r), factor * cos(PI * r));
+}
