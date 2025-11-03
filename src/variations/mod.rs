@@ -199,6 +199,9 @@ impl VariationRegistry {
         registry.register_core("elliptic", "Elliptic", VariationCategory::Advanced2D, VariationPhase::Normal, false);   // 48 - Apophysis 7X extended (no parameters)
         registry.register_core("lazysusan", "LazySusan", VariationCategory::Advanced2D, VariationPhase::Normal, false); // 49 - Apophysis 7X extended (5 parameters)
         registry.register_core("falloff2", "Falloff2", VariationCategory::Advanced2D, VariationPhase::Normal, true);    // 50 - Apophysis 7X extended (11 parameters, needs RNG)
+        registry.register_core("pre_spherical", "Pre-Spherical", VariationCategory::Advanced2D, VariationPhase::Pre, false); // 51 - Apophysis 7X extended (Pre-phase)
+        registry.register_core("pre_sinusoidal", "Pre-Sinusoidal", VariationCategory::Advanced2D, VariationPhase::Pre, false); // 52 - Apophysis 7X extended (Pre-phase)
+        registry.register_core("pre_disc", "Pre-Disc", VariationCategory::Advanced2D, VariationPhase::Pre, false);     // 53 - Apophysis 7X extended (Pre-phase)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
