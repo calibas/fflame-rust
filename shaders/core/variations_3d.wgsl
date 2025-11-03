@@ -380,3 +380,18 @@ fn variation_julia3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<fu
         }
     }
 }
+
+fn variation_log(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis Log: Logarithmic transformation (3D)
+    // FPx += vvar * ln(x² + y²) * (0.5 / ln(base))
+    // FPy += vvar * atan2(y, x)
+    // FPz += vvar * z
+    let base = get_param(xform_id, variation_id, 0u);
+    let denom = 0.5 / log(base);
+
+    let r2 = dot(p.xy, p.xy);
+    let new_x = log(r2) * denom;
+    let new_y = atan2(p.y, p.x);
+
+    return vec3<f32>(new_x, new_y, p.z);
+}

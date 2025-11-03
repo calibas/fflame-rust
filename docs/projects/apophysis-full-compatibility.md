@@ -337,8 +337,8 @@ Using native compute APIs (CUDA/Vulkan/Metal) instead of WebGPU would allow f64:
 
 ## Phase 1 Progress Tracker
 
-**Simple Variations (14):** 0/14 complete
-- [ ] log
+**Simple Variations (14):** 1/14 complete
+- [x] log
 - [ ] polar2
 - [ ] cross
 - [ ] loonie
@@ -384,4 +384,4 @@ Using native compute APIs (CUDA/Vulkan/Metal) instead of WebGPU would allow f64:
 - [ ] post_crop
 - [ ] post_falloff2
 
-**Total: 0/43 variations complete (0%)**
+**Total: 1/43 variations complete (2%)**
