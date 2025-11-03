@@ -1012,3 +1012,32 @@ fn variation_blur_zoom(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
         p.z  // Z passes through
     );
 }
+
+fn variation_blur_pixelize(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Blur Pixelize - 3D (Z passes through)
+    let size = get_param(xform_id, variation_id, 0u);
+    let scale = get_param(xform_id, variation_id, 1u);
+
+    let inv_size = 1.0 / size;
+
+    let x = floor(p.x * inv_size);
+    let y = floor(p.y * inv_size);
+
+    return vec3<f32>(
+        size * (x + scale * (rng_nextf(rng) - 0.5) + 0.5),
+        size * (y + scale * (rng_nextf(rng) - 0.5) + 0.5),
+        p.z
+    );
+}
+
+fn variation_rectangles(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis Rectangles - 3D (Z passes through)
+    let rect_x = get_param(xform_id, variation_id, 0u);
+    let rect_y = get_param(xform_id, variation_id, 1u);
+
+    return vec3<f32>(
+        (2.0 * floor(p.x / rect_x) + 1.0) * rect_x - p.x,
+        (2.0 * floor(p.y / rect_y) + 1.0) * rect_y - p.y,
+        p.z
+    );
+}

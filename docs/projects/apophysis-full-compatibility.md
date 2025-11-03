@@ -353,7 +353,7 @@ Using native compute APIs (CUDA/Vulkan/Metal) instead of WebGPU would allow f64:
 - [x] pre_disc
 - [x] falloff2
 
-**Parameterized Variations (26):** 13/26 complete
+**Parameterized Variations (26):** 15/26 complete
 - [x] rings2
 - [x] fan2
 - [x] wedge
@@ -367,8 +367,8 @@ Using native compute APIs (CUDA/Vulkan/Metal) instead of WebGPU would allow f64:
 - [x] radial_blur
 - [x] blur_circle
 - [x] blur_zoom
-- [ ] blur_pixelize
-- [ ] rectangles
+- [x] blur_pixelize
+- [x] rectangles
 - [ ] splits
 - [ ] separation
 - [ ] ngon
@@ -384,4 +384,4 @@ Using native compute APIs (CUDA/Vulkan/Metal) instead of WebGPU would allow f64:
 - [ ] post_crop
 - [ ] post_falloff2
 
-**Total: 27/43 variations complete (63%)**
+**Total: 29/43 variations complete (67%)**

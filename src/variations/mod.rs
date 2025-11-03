@@ -215,6 +215,8 @@ impl VariationRegistry {
         registry.register_core("radial_blur", "Radial Blur", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 64 - Apophysis 7X extended (1 parameter: angle, needs RNG)
         registry.register_core("blur_circle", "Blur Circle", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 65 - Apophysis 7X extended (no parameters, needs RNG)
         registry.register_core("blur_zoom", "Blur Zoom", VariationCategory::Advanced2D, VariationPhase::Normal, true);     // 66 - Apophysis 7X extended (3 parameters: length, x, y, needs RNG)
+        registry.register_core("blur_pixelize", "Blur Pixelize", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 67 - Apophysis 7X extended (2 parameters: size, scale, needs RNG)
+        registry.register_core("rectangles", "Rectangles", VariationCategory::Advanced2D, VariationPhase::Normal, false);  // 68 - Apophysis 7X extended (2 parameters: x, y)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -772,6 +774,44 @@ impl VariationRegistry {
                 param_type: ParamType::Float,
                 default_value: 0.0,
                 min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("blur_pixelize", vec![
+            VariationParameter {
+                name: "size".to_string(),
+                display_name: "Size".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.1,
+                min_value: Some(0.001),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "scale".to_string(),
+                display_name: "Scale".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("rectangles", vec![
+            VariationParameter {
+                name: "x".to_string(),
+                display_name: "X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.001),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "y".to_string(),
+                display_name: "Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.001),
                 max_value: Some(5.0),
             },
         ]);
