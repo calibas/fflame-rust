@@ -225,6 +225,8 @@ impl VariationRegistry {
         registry.register_core("auger", "Auger", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 74 - Apophysis 7X extended (4 parameters: freq, weight, scale, sym)
         registry.register_core("pre_bwraps", "Pre Bwraps", VariationCategory::Advanced2D, VariationPhase::Pre, false);  // 75 - Apophysis 7X extended (5 parameters: cellsize, space, gain, inner_twist, outer_twist)
         registry.register_core("post_bwraps", "Post Bwraps", VariationCategory::Advanced2D, VariationPhase::Post, false); // 76 - Apophysis 7X extended (5 parameters: cellsize, space, gain, inner_twist, outer_twist)
+        registry.register_core("pre_crop", "Pre Crop", VariationCategory::Advanced2D, VariationPhase::Pre, true);      // 77 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
+        registry.register_core("post_crop", "Post Crop", VariationCategory::Advanced2D, VariationPhase::Post, true);   // 78 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -1149,6 +1151,108 @@ impl VariationRegistry {
                 default_value: 0.0,
                 min_value: Some(-360.0),
                 max_value: Some(360.0),
+            },
+        ]);
+
+        registry.add_parameters("pre_crop", vec![
+            VariationParameter {
+                name: "left".to_string(),
+                display_name: "Left".to_string(),
+                param_type: ParamType::Float,
+                default_value: -1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "top".to_string(),
+                display_name: "Top".to_string(),
+                param_type: ParamType::Float,
+                default_value: -1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "right".to_string(),
+                display_name: "Right".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "bottom".to_string(),
+                display_name: "Bottom".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "scatter_area".to_string(),
+                display_name: "Scatter Area".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-1.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "zero".to_string(),
+                display_name: "Zero".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+        ]);
+
+        registry.add_parameters("post_crop", vec![
+            VariationParameter {
+                name: "left".to_string(),
+                display_name: "Left".to_string(),
+                param_type: ParamType::Float,
+                default_value: -1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "top".to_string(),
+                display_name: "Top".to_string(),
+                param_type: ParamType::Float,
+                default_value: -1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "right".to_string(),
+                display_name: "Right".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "bottom".to_string(),
+                display_name: "Bottom".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "scatter_area".to_string(),
+                display_name: "Scatter Area".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-1.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "zero".to_string(),
+                display_name: "Zero".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
             },
         ]);
 
