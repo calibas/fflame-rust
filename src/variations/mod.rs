@@ -192,6 +192,9 @@ impl VariationRegistry {
         registry.register_core("polar2", "Polar2", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 41 - Apophysis 7X extended (no parameters)
         registry.register_core("cross", "Cross", VariationCategory::Advanced2D, VariationPhase::Normal, false);         // 42 - Apophysis 7X extended (no parameters)
         registry.register_core("loonie", "Loonie", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 43 - Apophysis 7X extended (no parameters)
+        registry.register_core("escher", "Escher", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 44 - Apophysis 7X extended (1 parameter)
+        registry.register_core("scry", "Scry", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 45 - Apophysis 7X extended (no parameters)
+        registry.register_core("foci", "Foci", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 46 - Apophysis 7X extended (no parameters)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -299,6 +302,17 @@ impl VariationRegistry {
                 default_value: 2.0,
                 min_value: Some(-10.0),
                 max_value: Some(10.0),
+            },
+        ]);
+
+        registry.add_parameters("escher", vec![
+            VariationParameter {
+                name: "beta".to_string(),
+                display_name: "Beta".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(-180.0),
+                max_value: Some(180.0),
             },
         ]);
 
