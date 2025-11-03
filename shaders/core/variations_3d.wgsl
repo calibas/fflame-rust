@@ -695,3 +695,25 @@ fn variation_fan2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let r = sqrt(dot(p.xy, p.xy));
     return vec3<f32>(r * cos(a), r * sin(a), p.z);
 }
+
+fn variation_wedge(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis Wedge: Wedge shape with controllable angle and swirl (3D)
+    const PI: f32 = 3.14159265359;
+    const C1_2PI: f32 = 0.15915494309189533576888376337251; // 1/(2π)
+    
+    let angle_deg = get_param(xform_id, variation_id, 0u);
+    let hole = get_param(xform_id, variation_id, 1u);
+    let count = get_param(xform_id, variation_id, 2u);
+    let swirl = get_param(xform_id, variation_id, 3u);
+    
+    let angle_rad = angle_deg * PI / 180.0;
+    let comp_fac = 1.0 - angle_rad * count * C1_2PI;
+    
+    let r = sqrt(dot(p.xy, p.xy));
+    var a = atan2(p.y, p.x) + swirl * r;
+    let c = floor((count * a + PI) * C1_2PI);
+    a = a * comp_fac + c * angle_rad;
+    
+    let r_out = r + hole;
+    return vec3<f32>(r_out * cos(a), r_out * sin(a), p.z);
+}
