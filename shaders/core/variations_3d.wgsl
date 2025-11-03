@@ -249,3 +249,37 @@ fn variation_gaussian_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f
     let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
     return vec3<f32>(r * cos(theta), r * sin(theta), p.z);
 }
+
+fn variation_zblur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis: Gaussian blur on Z axis only
+    // result = (x, y, (rand₁ + rand₂ + rand₃ + rand₄ - 2))
+    let z_offset = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
+    return vec3<f32>(p.x, p.y, z_offset);
+}
+
+fn variation_blur3d(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis: 3D Gaussian spherical blur
+    // θ = random × 2π (azimuth)
+    // φ = random × π (polar angle)
+    // r = Gaussian (sum of 4 randoms - 2)
+    // result = (r × sin(φ) × cos(θ), r × sin(φ) × sin(θ), r × cos(φ))
+    let theta = rng_nextf(rng) * 6.28318530718;  // 2π
+    let phi = rng_nextf(rng) * 3.14159265359;    // π
+    let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
+    return vec3<f32>(r * sin(phi) * cos(theta), r * sin(phi) * sin(theta), r * cos(phi));
+}
+
+fn variation_pre_blur(p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis: Pre-phase Gaussian blur applied before variations
+    // FTx += r * cos(θ), FTy += r * sin(θ), FTz unchanged
+    let theta = rng_nextf(rng) * 6.28318530718;  // 2π
+    let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
+    return vec3<f32>(p.x + r * cos(theta), p.y + r * sin(theta), p.z);
+}
+
+fn variation_pre_zscale(p: vec3<f32>, weight: f32) -> vec3<f32> {
+    // Apophysis: Pre-phase Z scaling
+    // FTz *= vars[variation_id] (weight is the scale factor)
+    // In Pre-phase, we directly modify the point, so scale Z by weight
+    return vec3<f32>(p.x, p.y, p.z * weight);
+}

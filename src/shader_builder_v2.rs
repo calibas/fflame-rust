@@ -173,15 +173,42 @@ impl ShaderBuilder {
 
             for (name, idx, info) in &pre_variations {
                 // Pre-variations directly modify temp (NOT weighted sum!)
-                // Note: 2D mode shouldn't have pre-variations (they're 3D rotation only)
-                // But support the model for consistency
-                code.push_str(&format!(
-                    "    // {}: {} (PRE)\n\
-                     \x20   if (xform.variations[{}] != 0.0) {{\n\
-                     \x20       temp = {}(temp, xform.variations[{}]);\n\
-                     \x20   }}\n\n",
-                    idx, info.display_name, idx, info.wgsl_function, idx
-                ));
+
+                // Handle rotation variations (hardcoded function names)
+                if name.contains("rotate") {
+                    let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
+                    code.push_str(&format!(
+                        "    // {}: {} (PRE)\n\
+                         \x20   if (xform.variations[{}] != 0.0) {{\n\
+                         \x20       temp = {}(temp, xform.variations[{}]);\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, idx, rotate_fn, idx
+                    ));
+                } else {
+                    // Generic Pre-phase variation handling
+                    let needs_rng = info.needs_rng;
+
+                    // Build parameter list based on variation needs
+                    let mut params = String::new();
+
+                    // Pre_ZScale needs weight parameter
+                    if name.contains("zscale") {
+                        params.push_str(&format!(", xform.variations[{}]", idx));
+                    }
+
+                    // Add RNG if needed
+                    if needs_rng {
+                        params.push_str(", rng");
+                    }
+
+                    code.push_str(&format!(
+                        "    // {}: {} (PRE)\n\
+                         \x20   if (xform.variations[{}] != 0.0) {{\n\
+                         \x20       temp = variation_{}(temp{});\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, idx, name, params
+                    ));
+                }
             }
         } else {
             code.push_str("    var temp = p;\n\n");
@@ -276,14 +303,42 @@ impl ShaderBuilder {
 
             for (name, idx, info) in &pre_variations {
                 // Pre-variations directly modify temp (NOT weighted sum!)
-                let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
-                code.push_str(&format!(
-                    "    // {}: {} (PRE)\n\
-                     \x20   if (xform.variations[{}] != 0.0) {{\n\
-                     \x20       temp = {}(temp, xform.variations[{}]);\n\
-                     \x20   }}\n\n",
-                    idx, info.display_name, idx, rotate_fn, idx
-                ));
+
+                // Handle rotation variations (hardcoded function names)
+                if name.contains("rotate") {
+                    let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
+                    code.push_str(&format!(
+                        "    // {}: {} (PRE)\n\
+                         \x20   if (xform.variations[{}] != 0.0) {{\n\
+                         \x20       temp = {}(temp, xform.variations[{}]);\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, idx, rotate_fn, idx
+                    ));
+                } else {
+                    // Generic Pre-phase variation handling
+                    let needs_rng = info.needs_rng;
+
+                    // Build parameter list based on variation needs
+                    let mut params = String::new();
+
+                    // Pre_ZScale needs weight parameter
+                    if name.contains("zscale") {
+                        params.push_str(&format!(", xform.variations[{}]", idx));
+                    }
+
+                    // Add RNG if needed
+                    if needs_rng {
+                        params.push_str(", rng");
+                    }
+
+                    code.push_str(&format!(
+                        "    // {}: {} (PRE)\n\
+                         \x20   if (xform.variations[{}] != 0.0) {{\n\
+                         \x20       temp = variation_{}(temp{});\n\
+                         \x20   }}\n\n",
+                        idx, info.display_name, idx, name, params
+                    ));
+                }
             }
         } else {
             code.push_str("    var temp = p;\n\n");
