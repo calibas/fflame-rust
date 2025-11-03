@@ -249,3 +249,51 @@ fn variation_waves2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
 
     return vec2<f32>(new_x, new_y);
 }
+
+fn variation_julia3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis Julia3D in 2D mode (Z = 0)
+    let power_f = get_param(xform_id, variation_id, 0u);
+    let N = i32(power_f);
+
+    // Handle special case: power = 0 becomes power = 1
+    if (N == 0) {
+        return p;
+    }
+
+    let absN = abs(N);
+    let absN_f = f32(absN);
+
+    // Special optimized cases
+    if (N == 1) {
+        return p;  // Linear
+    } else if (N == -1) {
+        let r2 = dot(p, p);
+        return p / r2;  // Inversion
+    } else if (N == 2) {
+        let r2d = dot(p, p);
+        let r = 1.0 / sqrt(sqrt(r2d));
+        let angle = atan2(p.y, p.x) / 2.0 + 3.14159265359 * f32(i32(rng_nextf(rng) * 2.0));
+        return vec2<f32>(r * sqrt(r2d) * cos(angle), r * sqrt(r2d) * sin(angle));
+    } else if (N == -2) {
+        let r2d = dot(p, p);
+        let r3d = sqrt(r2d);
+        let r = 1.0 / (sqrt(r3d) * r3d);
+        let angle = atan2(p.y, p.x) / 2.0 + 3.14159265359 * f32(i32(rng_nextf(rng) * 2.0));
+        return vec2<f32>(r * sqrt(r2d) * cos(angle), -r * sqrt(r2d) * sin(angle));
+    } else {
+        // General case
+        let r2d = dot(p, p);
+        let cN = (1.0 / power_f - 1.0) / 2.0;
+        let r = pow(r2d, cN);
+
+        let random_idx = i32(rng_nextf(rng) * absN_f);
+        let angle = (atan2(p.y, p.x) + 6.28318530718 * f32(random_idx)) / power_f;
+        let tmp = r * sqrt(r2d);
+
+        if (N > 0) {
+            return vec2<f32>(tmp * cos(angle), tmp * sin(angle));
+        } else {
+            return vec2<f32>(tmp * cos(angle), -tmp * sin(angle));
+        }
+    }
+}

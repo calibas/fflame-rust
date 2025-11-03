@@ -318,3 +318,65 @@ fn variation_waves2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32>
 
     return vec3<f32>(new_x, new_y, new_z);
 }
+
+fn variation_julia3d(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Julia3D: Full 3D Julia set implementation by Joel Faber
+    let power_f = get_param(xform_id, variation_id, 0u);
+    let N = i32(power_f);
+
+    // Handle special case: power = 0 becomes power = 1
+    if (N == 0) {
+        return p;  // Linear fallback
+    }
+
+    let absN = abs(N);
+    let absN_f = f32(absN);
+
+    // Special optimized cases
+    if (N == 1) {
+        // Power 1: Linear (identity)
+        return p;
+    } else if (N == -1) {
+        // Power -1: Inversion
+        let r2 = dot(p, p);
+        return p / r2;
+    } else if (N == 2) {
+        // Power 2: Optimized sqrt version
+        let z = p.z / 2.0;
+        let r2d = dot(p.xy, p.xy);
+        let r3d = sqrt(r2d + z * z);
+        let r = 1.0 / sqrt(sqrt(r3d));  // vvar / sqrt(sqrt(r3d)), weight applied after
+
+        let angle = atan2(p.y, p.x) / 2.0 + 3.14159265359 * f32(i32(rng_nextf(rng) * 2.0));
+        let tmp = r * sqrt(r2d);
+
+        return vec3<f32>(tmp * cos(angle), tmp * sin(angle), r * z);
+    } else if (N == -2) {
+        // Power -2: Optimized inverse sqrt version
+        let z = p.z / 2.0;
+        let r2d = dot(p.xy, p.xy);
+        let r3d = sqrt(r2d + z * z);
+        let r = 1.0 / (sqrt(r3d) * r3d);
+
+        let angle = atan2(p.y, p.x) / 2.0 + 3.14159265359 * f32(i32(rng_nextf(rng) * 2.0));
+        let tmp = r * sqrt(r2d);
+
+        return vec3<f32>(tmp * cos(angle), -tmp * sin(angle), r * z);  // Note: negative Y for negative power
+    } else {
+        // General case: arbitrary power
+        let z = p.z / absN_f;
+        let r2d = dot(p.xy, p.xy);
+        let cN = (1.0 / power_f - 1.0) / 2.0;
+        let r = pow(r2d + z * z, cN);  // r^(n-0.5) / sqrt(r), weight applied after
+
+        let random_idx = i32(rng_nextf(rng) * absN_f);
+        let angle = (atan2(p.y, p.x) + 6.28318530718 * f32(random_idx)) / power_f;
+        let tmp = r * sqrt(r2d);
+
+        if (N > 0) {
+            return vec3<f32>(tmp * cos(angle), tmp * sin(angle), r * z);
+        } else {
+            return vec3<f32>(tmp * cos(angle), -tmp * sin(angle), r * z);  // Negative Y for negative power
+        }
+    }
+}
