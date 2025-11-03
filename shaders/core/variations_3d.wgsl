@@ -717,3 +717,70 @@ fn variation_wedge(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
     let r_out = r + hole;
     return vec3<f32>(r_out * cos(a), r_out * sin(a), p.z);
 }
+
+fn variation_epispiral(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Epispiral: Epicycloid spiral pattern (3D)
+    let n = get_param(xform_id, variation_id, 0u);
+    let thickness = get_param(xform_id, variation_id, 1u);
+    let holes = get_param(xform_id, variation_id, 2u);
+    
+    let theta = atan2(p.y, p.x);
+    let t = rng_next_f32(rng) * thickness / cos(n * theta) - holes;
+    
+    if (abs(t) < 1e-6) {
+        return vec3<f32>(0.0, 0.0, p.z);
+    }
+    
+    return vec3<f32>(t * cos(theta), t * sin(theta), p.z);
+}
+
+fn variation_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis BWraps: Bubble wraps (3D)
+    let cellsize = get_param(xform_id, variation_id, 0u);
+    let space = get_param(xform_id, variation_id, 1u);
+    let gain = get_param(xform_id, variation_id, 2u);
+    let inner_twist = get_param(xform_id, variation_id, 3u);
+    let outer_twist = get_param(xform_id, variation_id, 4u);
+    
+    if (cellsize == 0.0) {
+        return p;
+    }
+    
+    let radius = 0.5 * (cellsize / (1.0 + space * space));
+    let g2 = (gain * gain) / (radius + 1e-6) + 1e-6;
+    var max_bubble = g2 * radius;
+    
+    if (max_bubble > 2.0) {
+        max_bubble = 1.0;
+    } else {
+        max_bubble = max_bubble * (1.0 / ((max_bubble * max_bubble) / 4.0 + 1.0));
+    }
+    
+    let r2 = radius * radius;
+    let rfactor = radius / max_bubble;
+    
+    let cx = (floor(p.x / cellsize) + 0.5) * cellsize;
+    let cy = (floor(p.y / cellsize) + 0.5) * cellsize;
+    
+    var lx = p.x - cx;
+    var ly = p.y - cy;
+    
+    if ((lx * lx + ly * ly) > r2) {
+        return p;
+    }
+    
+    lx = lx * g2;
+    ly = ly * g2;
+    
+    let r_dist = rfactor / ((lx * lx + ly * ly) / 4.0 + 1.0);
+    lx = lx * r_dist;
+    ly = ly * r_dist;
+    
+    let r_ratio = (lx * lx + ly * ly) / r2;
+    let theta = inner_twist * (1.0 - r_ratio) + outer_twist * r_ratio;
+    
+    let vx = cx + cos(theta) * lx + sin(theta) * ly;
+    let vy = cy - sin(theta) * lx + cos(theta) * ly;
+    
+    return vec3<f32>(vx, vy, p.z);
+}
