@@ -178,3 +178,22 @@ fn variation_noise(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r = rng_nextf(rng);
     return vec2<f32>(p.x * r * cos(theta), p.y * r * sin(theta));
 }
+
+fn variation_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis: Random circular blur
+    // θ = random × 2π, r = random
+    // result = (r × cos(θ), r × sin(θ))
+    let theta = rng_nextf(rng) * 6.28318530718;  // 2π
+    let r = rng_nextf(rng);
+    return vec2<f32>(r * cos(theta), r * sin(theta));
+}
+
+fn variation_gaussian_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis: Gaussian distributed blur
+    // θ = random × 2π
+    // r = (rand₁ + rand₂ + rand₃ + rand₄ - 2) - Gaussian approximation via central limit theorem
+    // result = (r × cos(θ), r × sin(θ))
+    let theta = rng_nextf(rng) * 6.28318530718;  // 2π
+    let r = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
+    return vec2<f32>(r * cos(theta), r * sin(theta));
+}

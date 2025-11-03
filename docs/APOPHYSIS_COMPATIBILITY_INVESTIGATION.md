@@ -174,8 +174,10 @@ Core variations that exist in Apophysis but not in our implementation:
    - Formula: `(sin(x), y, cos(x))`
 6. ✅ **Noise** (variation 29) - Random displacement - IMPLEMENTED
    - Formula: Random polar `(x × r × cos(θ), y × r × sin(θ), z)`
-7. **Blur** - Random circular blur
-8. **Gaussian_Blur** - Gaussian distribution blur
+7. ✅ **Blur** (variation 30) - Random circular blur - IMPLEMENTED
+   - Formula: `(r × cos(θ), r × sin(θ), z)` with random θ and r
+8. ✅ **Gaussian_Blur** (variation 31) - Gaussian distribution blur - IMPLEMENTED
+   - Formula: Same as Blur but r uses Gaussian approximation (sum of 4 randoms - 2)
 9. **ZBlur** - Z-axis blur
 10. **Blur3D** - 3D spherical blur
 11. **Pre_Blur** - Pre-phase blur (applied before variations)

@@ -170,7 +170,7 @@ impl VariationRegistry {
         registry.register_core("post_rotate_y", "Post-Rotate Y", VariationCategory::Rotation3D, VariationPhase::Post, false); // 22 - POST!
         registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, VariationPhase::Normal, false);         // 23 - Scales Z depth
 
-        // NEW VARIATIONS (added after original 24) - Indices 24-29
+        // NEW VARIATIONS (added after original 24) - Indices 24-31
         // IMPORTANT: Always add new variations at the end to preserve index compatibility
         registry.register_core("julian", "JuliaN", VariationCategory::Advanced2D, VariationPhase::Normal, true);        // 24 (Needs RNG)
         registry.register_core("blob", "Blob", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 25
@@ -178,6 +178,8 @@ impl VariationRegistry {
         registry.register_core("bubble", "Bubble", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 27 - Apophysis core
         registry.register_core("cylinder", "Cylinder", VariationCategory::Advanced2D, VariationPhase::Normal, false);   // 28 - Apophysis core
         registry.register_core("noise", "Noise", VariationCategory::Advanced2D, VariationPhase::Normal, true);          // 29 - Apophysis core (Needs RNG)
+        registry.register_core("blur", "Blur", VariationCategory::Advanced2D, VariationPhase::Normal, true);            // 30 - Apophysis core (Needs RNG)
+        registry.register_core("gaussian_blur", "Gaussian Blur", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 31 - Apophysis core (Needs RNG)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
