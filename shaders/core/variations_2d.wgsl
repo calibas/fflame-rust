@@ -979,3 +979,65 @@ fn variation_mobius(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
         (im_u * re_v - re_u * im_v) / v_denom
     );
 }
+
+fn variation_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis Crop - crops to a rectangular region with optional scatter
+    let x0 = get_param(xform_id, variation_id, 0u);  // left
+    let y0 = get_param(xform_id, variation_id, 1u);  // top
+    let x1 = get_param(xform_id, variation_id, 2u);  // right
+    let y1 = get_param(xform_id, variation_id, 3u);  // bottom
+    let scatter = get_param(xform_id, variation_id, 4u);  // scatter_area
+    let zero = get_param(xform_id, variation_id, 5u);  // zero flag
+
+    // Sort bounds (ensure _x0 < _x1, _y0 < _y1)
+    let _x0 = select(x1, x0, x0 < x1);
+    let _x1 = select(x0, x1, x0 < x1);
+    let _y0 = select(y1, y0, y0 < y1);
+    let _y1 = select(y0, y1, y0 < y1);
+
+    // Calculate scatter dimensions
+    let w = (_x1 - _x0) * 0.5 * scatter;
+    let h = (_y1 - _y0) * 0.5 * scatter;
+
+    var x = p.x;
+    var y = p.y;
+
+    // If outside bounds and zero flag is set, return zero
+    if ((x < _x0) || (x > _x1) || (y < _y0) || (y > _y1)) && (zero > 0.5) {
+        return vec2<f32>(0.0, 0.0);
+    }
+
+    // Apply scatter if point is outside bounds
+    if x < _x0 {
+        x = _x0 + rng_nextf(rng) * w;
+    } else if x > _x1 {
+        x = _x1 - rng_nextf(rng) * w;
+    }
+
+    if y < _y0 {
+        y = _y0 + rng_nextf(rng) * h;
+    } else if y > _y1 {
+        y = _y1 - rng_nextf(rng) * h;
+    }
+
+    return vec2<f32>(x, y);
+}
+
+fn variation_auger(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Auger - wave distortion with symmetry control
+    let freq = get_param(xform_id, variation_id, 0u);
+    let weight = get_param(xform_id, variation_id, 1u);
+    let scale = get_param(xform_id, variation_id, 2u);
+    let sym = get_param(xform_id, variation_id, 3u);
+
+    let s = sin(freq * p.x);
+    let t = sin(freq * p.y);
+
+    let dx = p.x + weight * (0.5 * scale * t + abs(p.x) * t);
+    let dy = p.y + weight * (0.5 * scale * s + abs(p.y) * s);
+
+    return vec2<f32>(
+        p.x + sym * (dx - p.x),
+        dy
+    );
+}
