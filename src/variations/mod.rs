@@ -188,6 +188,7 @@ impl VariationRegistry {
         registry.register_core("ztranslate", "ZTranslate", VariationCategory::Depth3D, VariationPhase::Normal, false); // 37 - Apophysis core
         registry.register_core("waves2", "Waves2", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 38 - Apophysis core (6 parameters)
         registry.register_core("julia3d", "Julia3D", VariationCategory::Full3D, VariationPhase::Normal, true);          // 39 - Apophysis core (Needs RNG, 1 parameter)
+        registry.register_core("log", "Log", VariationCategory::Advanced2D, VariationPhase::Normal, false);             // 40 - Apophysis 7X extended (1 parameter)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -295,6 +296,17 @@ impl VariationRegistry {
                 default_value: 2.0,
                 min_value: Some(-10.0),
                 max_value: Some(10.0),
+            },
+        ]);
+
+        registry.add_parameters("log", vec![
+            VariationParameter {
+                name: "base".to_string(),
+                display_name: "Base".to_string(),
+                param_type: ParamType::Float,
+                default_value: 2.71828182845905, // e (Euler's number)
+                min_value: Some(0.000001), // 1E-6 minimum from Apophysis
+                max_value: Some(100.0),
             },
         ]);
 
