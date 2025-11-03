@@ -1303,3 +1303,81 @@ fn variation_post_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
 
     return p;
 }
+
+fn variation_pre_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Pre_Crop - 3D (Z passes through)
+    let x0 = get_param(xform_id, variation_id, 0u);  // left
+    let y0 = get_param(xform_id, variation_id, 1u);  // top
+    let x1 = get_param(xform_id, variation_id, 2u);  // right
+    let y1 = get_param(xform_id, variation_id, 3u);  // bottom
+    let scatter = get_param(xform_id, variation_id, 4u);  // scatter_area
+    let zero = get_param(xform_id, variation_id, 5u);  // zero flag
+
+    let _x0 = select(x1, x0, x0 < x1);
+    let _x1 = select(x0, x1, x0 < x1);
+    let _y0 = select(y1, y0, y0 < y1);
+    let _y1 = select(y0, y1, y0 < y1);
+
+    let w = (_x1 - _x0) * 0.5 * scatter;
+    let h = (_y1 - _y0) * 0.5 * scatter;
+
+    var x = p.x;
+    var y = p.y;
+
+    if ((x < _x0) || (x > _x1) || (y < _y0) || (y > _y1)) && (zero > 0.5) {
+        return vec3<f32>(0.0, 0.0, p.z);
+    }
+
+    if x < _x0 {
+        x = _x0 + rng_nextf(rng) * w;
+    } else if x > _x1 {
+        x = _x1 - rng_nextf(rng) * w;
+    }
+
+    if y < _y0 {
+        y = _y0 + rng_nextf(rng) * h;
+    } else if y > _y1 {
+        y = _y1 - rng_nextf(rng) * h;
+    }
+
+    return vec3<f32>(x, y, p.z);
+}
+
+fn variation_post_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Post_Crop - 3D (Z passes through)
+    let x0 = get_param(xform_id, variation_id, 0u);  // left
+    let y0 = get_param(xform_id, variation_id, 1u);  // top
+    let x1 = get_param(xform_id, variation_id, 2u);  // right
+    let y1 = get_param(xform_id, variation_id, 3u);  // bottom
+    let scatter = get_param(xform_id, variation_id, 4u);  // scatter_area
+    let zero = get_param(xform_id, variation_id, 5u);  // zero flag
+
+    let _x0 = select(x1, x0, x0 < x1);
+    let _x1 = select(x0, x1, x0 < x1);
+    let _y0 = select(y1, y0, y0 < y1);
+    let _y1 = select(y0, y1, y0 < y1);
+
+    let w = (_x1 - _x0) * 0.5 * scatter;
+    let h = (_y1 - _y0) * 0.5 * scatter;
+
+    var x = p.x;
+    var y = p.y;
+
+    if ((x < _x0) || (x > _x1) || (y < _y0) || (y > _y1)) && (zero > 0.5) {
+        return vec3<f32>(0.0, 0.0, p.z);
+    }
+
+    if x < _x0 {
+        x = _x0 + rng_nextf(rng) * w;
+    } else if x > _x1 {
+        x = _x1 - rng_nextf(rng) * w;
+    }
+
+    if y < _y0 {
+        y = _y0 + rng_nextf(rng) * h;
+    } else if y > _y1 {
+        y = _y1 - rng_nextf(rng) * h;
+    }
+
+    return vec3<f32>(x, y, p.z);
+}
