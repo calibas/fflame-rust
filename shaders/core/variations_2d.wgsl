@@ -929,6 +929,8 @@ fn variation_separation(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
 
 fn variation_ngon(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Ngon - creates N-sided polygonal shapes
+    const PI: f32 = 3.14159265359;
+    
     let sides = get_param(xform_id, variation_id, 0u);
     let power = get_param(xform_id, variation_id, 1u);
     let circle = get_param(xform_id, variation_id, 2u);
@@ -1040,4 +1042,126 @@ fn variation_auger(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
         p.x + sym * (dx - p.x),
         dy
     );
+}
+
+fn variation_pre_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Pre_Bwraps - bubble wrap effect applied before variations
+    const PI: f32 = 3.14159265359;
+
+    let cellsize = get_param(xform_id, variation_id, 0u);
+    let space = get_param(xform_id, variation_id, 1u);
+    let gain = get_param(xform_id, variation_id, 2u);
+    let inner_twist = get_param(xform_id, variation_id, 3u) * PI / 180.0;  // Convert to radians
+    let outer_twist = get_param(xform_id, variation_id, 4u) * PI / 180.0;
+
+    if cellsize == 0.0 {
+        return p;
+    }
+
+    // Calculate cell center
+    let cx = (floor(p.x / cellsize) + 0.5) * cellsize;
+    let cy = (floor(p.y / cellsize) + 0.5) * cellsize;
+
+    // Local coordinates within cell
+    var lx = p.x - cx;
+    var ly = p.y - cy;
+
+    // Prepare constants (same as Prepare() in Pascal)
+    let radius = 0.5 * (cellsize / (1.0 + space * space));
+    let g2 = gain * gain / (radius + 1e-6) + 1e-6;
+    var max_bubble = g2 * radius;
+
+    if max_bubble > 2.0 {
+        max_bubble = 1.0;
+    } else {
+        max_bubble = max_bubble * (1.0 / (max_bubble * max_bubble / 4.0 + 1.0));
+    }
+
+    let r2 = radius * radius;
+    let rfactor = radius / max_bubble;
+
+    // Only process if inside bubble radius
+    if (lx * lx + ly * ly) <= r2 {
+        // Scale by gain
+        lx = lx * g2;
+        ly = ly * g2;
+
+        // Calculate radial factor
+        var r = rfactor / ((lx * lx + ly * ly) / 4.0 + 1.0);
+
+        lx = lx * r;
+        ly = ly * r;
+
+        // Calculate twist angle based on radius
+        r = (lx * lx + ly * ly) / r2;
+        let theta = inner_twist * (1.0 - r) + outer_twist * r;
+
+        // Rotate
+        let s = sin(theta);
+        let c = cos(theta);
+
+        return vec2<f32>(
+            cx + c * lx + s * ly,
+            cy - s * lx + c * ly
+        );
+    }
+
+    return p;
+}
+
+fn variation_post_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Post_Bwraps - bubble wrap effect applied after variations
+    const PI: f32 = 3.14159265359;
+
+    let cellsize = get_param(xform_id, variation_id, 0u);
+    let space = get_param(xform_id, variation_id, 1u);
+    let gain = get_param(xform_id, variation_id, 2u);
+    let inner_twist = get_param(xform_id, variation_id, 3u) * PI / 180.0;
+    let outer_twist = get_param(xform_id, variation_id, 4u) * PI / 180.0;
+
+    if cellsize == 0.0 {
+        return p;
+    }
+
+    let cx = (floor(p.x / cellsize) + 0.5) * cellsize;
+    let cy = (floor(p.y / cellsize) + 0.5) * cellsize;
+
+    var lx = p.x - cx;
+    var ly = p.y - cy;
+
+    let radius = 0.5 * (cellsize / (1.0 + space * space));
+    let g2 = gain * gain / (radius + 1e-6) + 1e-6;
+    var max_bubble = g2 * radius;
+
+    if max_bubble > 2.0 {
+        max_bubble = 1.0;
+    } else {
+        max_bubble = max_bubble * (1.0 / (max_bubble * max_bubble / 4.0 + 1.0));
+    }
+
+    let r2 = radius * radius;
+    let rfactor = radius / max_bubble;
+
+    if (lx * lx + ly * ly) <= r2 {
+        lx = lx * g2;
+        ly = ly * g2;
+
+        var r = rfactor / ((lx * lx + ly * ly) / 4.0 + 1.0);
+
+        lx = lx * r;
+        ly = ly * r;
+
+        r = (lx * lx + ly * ly) / r2;
+        let theta = inner_twist * (1.0 - r) + outer_twist * r;
+
+        let s = sin(theta);
+        let c = cos(theta);
+
+        return vec2<f32>(
+            cx + c * lx + s * ly,
+            cy - s * lx + c * ly
+        );
+    }
+
+    return p;
 }
