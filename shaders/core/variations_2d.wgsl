@@ -889,3 +889,40 @@ fn variation_rectangles(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
         (2.0 * floor(p.y / rect_y) + 1.0) * rect_y - p.y
     );
 }
+
+fn variation_splits(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Splits - splits space at origin with offset
+    let splits_x = get_param(xform_id, variation_id, 0u);
+    let splits_y = get_param(xform_id, variation_id, 1u);
+
+    // If x >= 0: add offset, else subtract offset
+    // Same for y independently
+    return vec2<f32>(
+        select(p.x - splits_x, p.x + splits_x, p.x >= 0.0),
+        select(p.y - splits_y, p.y + splits_y, p.y >= 0.0)
+    );
+}
+
+fn variation_separation(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Separation - separates positive/negative quadrants with distance calculation
+    let sep_x = get_param(xform_id, variation_id, 0u);
+    let sep_y = get_param(xform_id, variation_id, 1u);
+    let xinside = get_param(xform_id, variation_id, 2u);
+    let yinside = get_param(xform_id, variation_id, 3u);
+
+    // For positive x: sqrt(x² + sep_x²) - x*xinside
+    // For negative x: -(sqrt(x² + sep_x²) + x*xinside)
+    let x_out = select(
+        -(sqrt(p.x * p.x + sep_x * sep_x) + p.x * xinside),
+        sqrt(p.x * p.x + sep_x * sep_x) - p.x * xinside,
+        p.x > 0.0
+    );
+
+    let y_out = select(
+        -(sqrt(p.y * p.y + sep_y * sep_y) + p.y * yinside),
+        sqrt(p.y * p.y + sep_y * sep_y) - p.y * yinside,
+        p.y > 0.0
+    );
+
+    return vec2<f32>(x_out, y_out);
+}
