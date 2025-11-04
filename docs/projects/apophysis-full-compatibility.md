@@ -130,7 +130,6 @@ Using native compute APIs (CUDA/Vulkan/Metal) instead of WebGPU would allow f64:
 - **Slider range:** -10.0 to 10.0 (practical range for common values)
 - **Actual limits:** -3.4E38 to 3.4E38 (f32 max, enforced)
 - **Direct input:** Allow typing any value, clamp to f32 range if exceeded
-- **Validation:** Warn if |value| > 1E10 (unusual but valid)
 - **Import handling:** Values imported from Apophysis may be slightly rounded due to f32 precision
   - No data loss for typical values (most parameters < 1000)
   - Precision loss only affects extreme edge cases
