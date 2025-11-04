@@ -1243,3 +1243,125 @@ fn variation_post_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 
     return vec2<f32>(x, y);
 }
+
+fn variation_pre_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis Pre_Falloff2 - Distance-based scatter with multiple blur modes
+    const PI: f32 = 3.14159265359;
+
+    let scatter = get_param(xform_id, variation_id, 0u);
+    let mindist = get_param(xform_id, variation_id, 1u);
+    let mul_x = get_param(xform_id, variation_id, 2u);
+    let mul_y = get_param(xform_id, variation_id, 3u);
+    // mul_z (param 4) ignored in 2D
+    // mul_c (param 5) affects color channel - not used in coordinate calculation
+    let x0 = get_param(xform_id, variation_id, 6u);
+    let y0 = get_param(xform_id, variation_id, 7u);
+    // z0 (param 8) ignored in 2D
+    let invert = get_param(xform_id, variation_id, 9u);
+    let blurtype = get_param(xform_id, variation_id, 10u);
+
+    // Calculate distance from center
+    let dx = p.x - x0;
+    let dy = p.y - y0;
+    let dist = sqrt(dx * dx + dy * dy);
+
+    // Calculate falloff based on distance
+    var factor: f32;
+    if invert > 0.5 {
+        factor = select(1.0, dist / mindist, dist < mindist);
+    } else {
+        factor = select(1.0, mindist / dist, dist > mindist);
+    }
+
+    // Apply scatter based on blur type
+    var sx: f32;
+    var sy: f32;
+
+    let blurtype_int = i32(blurtype + 0.5);
+
+    if blurtype_int == 0 {
+        // Linear blur
+        let r = scatter * factor;
+        let angle = rng_nextf(rng) * 2.0 * PI;
+        let d = rng_nextf(rng) * r;
+        sx = d * cos(angle);
+        sy = d * sin(angle);
+    } else if blurtype_int == 1 {
+        // Radial blur (gaussian-like)
+        let r = scatter * factor;
+        let angle = rng_nextf(rng) * 2.0 * PI;
+        let d = (rng_nextf(rng) + rng_nextf(rng)) * 0.5 * r;
+        sx = d * cos(angle);
+        sy = d * sin(angle);
+    } else {
+        // Gaussian blur (blurtype == 2)
+        let r = scatter * factor;
+        let angle = rng_nextf(rng) * 2.0 * PI;
+        let d = sqrt(-log(rng_nextf(rng) + 1e-10)) * r;
+        sx = d * cos(angle);
+        sy = d * sin(angle);
+    }
+
+    return vec2<f32>(p.x + sx * mul_x, p.y + sy * mul_y);
+}
+
+fn variation_post_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    // Apophysis Post_Falloff2 - Same as pre_falloff2 but applied after variations
+    const PI: f32 = 3.14159265359;
+
+    let scatter = get_param(xform_id, variation_id, 0u);
+    let mindist = get_param(xform_id, variation_id, 1u);
+    let mul_x = get_param(xform_id, variation_id, 2u);
+    let mul_y = get_param(xform_id, variation_id, 3u);
+    // mul_z (param 4) ignored in 2D
+    // mul_c (param 5) affects color channel - not used in coordinate calculation
+    let x0 = get_param(xform_id, variation_id, 6u);
+    let y0 = get_param(xform_id, variation_id, 7u);
+    // z0 (param 8) ignored in 2D
+    let invert = get_param(xform_id, variation_id, 9u);
+    let blurtype = get_param(xform_id, variation_id, 10u);
+
+    // Calculate distance from center
+    let dx = p.x - x0;
+    let dy = p.y - y0;
+    let dist = sqrt(dx * dx + dy * dy);
+
+    // Calculate falloff based on distance
+    var factor: f32;
+    if invert > 0.5 {
+        factor = select(1.0, dist / mindist, dist < mindist);
+    } else {
+        factor = select(1.0, mindist / dist, dist > mindist);
+    }
+
+    // Apply scatter based on blur type
+    var sx: f32;
+    var sy: f32;
+
+    let blurtype_int = i32(blurtype + 0.5);
+
+    if blurtype_int == 0 {
+        // Linear blur
+        let r = scatter * factor;
+        let angle = rng_nextf(rng) * 2.0 * PI;
+        let d = rng_nextf(rng) * r;
+        sx = d * cos(angle);
+        sy = d * sin(angle);
+    } else if blurtype_int == 1 {
+        // Radial blur (gaussian-like)
+        let r = scatter * factor;
+        let angle = rng_nextf(rng) * 2.0 * PI;
+        let d = (rng_nextf(rng) + rng_nextf(rng)) * 0.5 * r;
+        sx = d * cos(angle);
+        sy = d * sin(angle);
+    } else {
+        // Gaussian blur (blurtype == 2)
+        let r = scatter * factor;
+        let angle = rng_nextf(rng) * 2.0 * PI;
+        let d = sqrt(-log(rng_nextf(rng) + 1e-10)) * r;
+        sx = d * cos(angle);
+        sy = d * sin(angle);
+    }
+
+    return vec2<f32>(p.x + sx * mul_x, p.y + sy * mul_y);
+}

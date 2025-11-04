@@ -227,6 +227,8 @@ impl VariationRegistry {
         registry.register_core("post_bwraps", "Post Bwraps", VariationCategory::Advanced2D, VariationPhase::Post, false); // 76 - Apophysis 7X extended (5 parameters: cellsize, space, gain, inner_twist, outer_twist)
         registry.register_core("pre_crop", "Pre Crop", VariationCategory::Advanced2D, VariationPhase::Pre, true);      // 77 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
         registry.register_core("post_crop", "Post Crop", VariationCategory::Advanced2D, VariationPhase::Post, true);   // 78 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
+        registry.register_core("pre_falloff2", "Pre Falloff2", VariationCategory::Advanced2D, VariationPhase::Pre, true);  // 79 - Apophysis 7X extended (11 parameters: scatter, mindist, mul_x, mul_y, mul_z, mul_c, x0, y0, z0, invert, blurtype - needs RNG)
+        registry.register_core("post_falloff2", "Post Falloff2", VariationCategory::Advanced2D, VariationPhase::Post, true); // 80 - Apophysis 7X extended (11 parameters: scatter, mindist, mul_x, mul_y, mul_z, mul_c, x0, y0, z0, invert, blurtype - needs RNG)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -1253,6 +1255,188 @@ impl VariationRegistry {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+            },
+        ]);
+
+        registry.add_parameters("pre_falloff2", vec![
+            VariationParameter {
+                name: "scatter".to_string(),
+                display_name: "Scatter".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mindist".to_string(),
+                display_name: "Min Dist".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_x".to_string(),
+                display_name: "Mul X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_y".to_string(),
+                display_name: "Mul Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_z".to_string(),
+                display_name: "Mul Z".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_c".to_string(),
+                display_name: "Mul Color".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "x0".to_string(),
+                display_name: "X0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "y0".to_string(),
+                display_name: "Y0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "z0".to_string(),
+                display_name: "Z0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "invert".to_string(),
+                display_name: "Invert".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "blurtype".to_string(),
+                display_name: "Blur Type".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("post_falloff2", vec![
+            VariationParameter {
+                name: "scatter".to_string(),
+                display_name: "Scatter".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mindist".to_string(),
+                display_name: "Min Dist".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_x".to_string(),
+                display_name: "Mul X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_y".to_string(),
+                display_name: "Mul Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_z".to_string(),
+                display_name: "Mul Z".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_c".to_string(),
+                display_name: "Mul Color".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "x0".to_string(),
+                display_name: "X0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "y0".to_string(),
+                display_name: "Y0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "z0".to_string(),
+                display_name: "Z0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "invert".to_string(),
+                display_name: "Invert".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "blurtype".to_string(),
+                display_name: "Blur Type".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(2.0),
             },
         ]);
 

@@ -2,11 +2,12 @@
 
 **Goal:** Achieve 100% compatibility with Apophysis 7X Version 15D
 
-**Current Status:** 40/80+ variations implemented (50%)
+**Current Status:** 41/43 extended variations implemented (95%)
 - Phase 1 (Waves2, Julia3D): ✅ COMPLETE
 - Phase 2 (Core variations 26-37): ✅ COMPLETE
+- Extended Variations: 41/43 complete (only post_curl and post_curl3D remain)
 
-**Remaining Work:** 3 major phases
+**Remaining Work:** 2 variations + future phases
 
 ---
 
@@ -377,11 +378,11 @@ Using native compute APIs (CUDA/Vulkan/Metal) instead of WebGPU would allow f64:
 - [x] auger
 - [x] pre_bwraps
 - [x] pre_crop
-- [ ] pre_falloff2
+- [x] pre_falloff2
 - [x] post_bwraps
 - [ ] post_curl
 - [ ] post_curl3D
 - [x] post_crop
-- [ ] post_falloff2
+- [x] post_falloff2
 
-**Total: 39/43 variations complete (91%)**
+**Total: 41/43 variations complete (95%)**
