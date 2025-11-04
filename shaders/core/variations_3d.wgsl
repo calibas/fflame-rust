@@ -1381,3 +1381,141 @@ fn variation_post_crop(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<
 
     return vec3<f32>(x, y, p.z);
 }
+
+fn variation_pre_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Pre_Falloff2 - Distance-based scatter with multiple blur modes (3D)
+    const PI: f32 = 3.14159265359;
+
+    let scatter = get_param(xform_id, variation_id, 0u);
+    let mindist = get_param(xform_id, variation_id, 1u);
+    let mul_x = get_param(xform_id, variation_id, 2u);
+    let mul_y = get_param(xform_id, variation_id, 3u);
+    let mul_z = get_param(xform_id, variation_id, 4u);
+    // mul_c (param 5) affects color channel - not used in coordinate calculation
+    let x0 = get_param(xform_id, variation_id, 6u);
+    let y0 = get_param(xform_id, variation_id, 7u);
+    let z0 = get_param(xform_id, variation_id, 8u);
+    let invert = get_param(xform_id, variation_id, 9u);
+    let blurtype = get_param(xform_id, variation_id, 10u);
+
+    // Calculate 3D distance from center
+    let dx = p.x - x0;
+    let dy = p.y - y0;
+    let dz = p.z - z0;
+    let dist = sqrt(dx * dx + dy * dy + dz * dz);
+
+    // Calculate falloff based on distance
+    var factor: f32;
+    if invert > 0.5 {
+        factor = select(1.0, dist / mindist, dist < mindist);
+    } else {
+        factor = select(1.0, mindist / dist, dist > mindist);
+    }
+
+    // Apply scatter based on blur type
+    var sx: f32;
+    var sy: f32;
+    var sz: f32;
+
+    let blurtype_int = i32(blurtype + 0.5);
+
+    if blurtype_int == 0 {
+        // Linear blur (3D spherical)
+        let r = scatter * factor;
+        let theta = rng_nextf(rng) * 2.0 * PI;
+        let phi = acos(2.0 * rng_nextf(rng) - 1.0);
+        let d = rng_nextf(rng) * r;
+        sx = d * sin(phi) * cos(theta);
+        sy = d * sin(phi) * sin(theta);
+        sz = d * cos(phi);
+    } else if blurtype_int == 1 {
+        // Radial blur (gaussian-like, 3D)
+        let r = scatter * factor;
+        let theta = rng_nextf(rng) * 2.0 * PI;
+        let phi = acos(2.0 * rng_nextf(rng) - 1.0);
+        let d = (rng_nextf(rng) + rng_nextf(rng)) * 0.5 * r;
+        sx = d * sin(phi) * cos(theta);
+        sy = d * sin(phi) * sin(theta);
+        sz = d * cos(phi);
+    } else {
+        // Gaussian blur (blurtype == 2, 3D)
+        let r = scatter * factor;
+        let theta = rng_nextf(rng) * 2.0 * PI;
+        let phi = acos(2.0 * rng_nextf(rng) - 1.0);
+        let d = sqrt(-log(rng_nextf(rng) + 1e-10)) * r;
+        sx = d * sin(phi) * cos(theta);
+        sy = d * sin(phi) * sin(theta);
+        sz = d * cos(phi);
+    }
+
+    return vec3<f32>(p.x + sx * mul_x, p.y + sy * mul_y, p.z + sz * mul_z);
+}
+
+fn variation_post_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    // Apophysis Post_Falloff2 - Same as pre_falloff2 but applied after variations (3D)
+    const PI: f32 = 3.14159265359;
+
+    let scatter = get_param(xform_id, variation_id, 0u);
+    let mindist = get_param(xform_id, variation_id, 1u);
+    let mul_x = get_param(xform_id, variation_id, 2u);
+    let mul_y = get_param(xform_id, variation_id, 3u);
+    let mul_z = get_param(xform_id, variation_id, 4u);
+    // mul_c (param 5) affects color channel - not used in coordinate calculation
+    let x0 = get_param(xform_id, variation_id, 6u);
+    let y0 = get_param(xform_id, variation_id, 7u);
+    let z0 = get_param(xform_id, variation_id, 8u);
+    let invert = get_param(xform_id, variation_id, 9u);
+    let blurtype = get_param(xform_id, variation_id, 10u);
+
+    // Calculate 3D distance from center
+    let dx = p.x - x0;
+    let dy = p.y - y0;
+    let dz = p.z - z0;
+    let dist = sqrt(dx * dx + dy * dy + dz * dz);
+
+    // Calculate falloff based on distance
+    var factor: f32;
+    if invert > 0.5 {
+        factor = select(1.0, dist / mindist, dist < mindist);
+    } else {
+        factor = select(1.0, mindist / dist, dist > mindist);
+    }
+
+    // Apply scatter based on blur type
+    var sx: f32;
+    var sy: f32;
+    var sz: f32;
+
+    let blurtype_int = i32(blurtype + 0.5);
+
+    if blurtype_int == 0 {
+        // Linear blur (3D spherical)
+        let r = scatter * factor;
+        let theta = rng_nextf(rng) * 2.0 * PI;
+        let phi = acos(2.0 * rng_nextf(rng) - 1.0);
+        let d = rng_nextf(rng) * r;
+        sx = d * sin(phi) * cos(theta);
+        sy = d * sin(phi) * sin(theta);
+        sz = d * cos(phi);
+    } else if blurtype_int == 1 {
+        // Radial blur (gaussian-like, 3D)
+        let r = scatter * factor;
+        let theta = rng_nextf(rng) * 2.0 * PI;
+        let phi = acos(2.0 * rng_nextf(rng) - 1.0);
+        let d = (rng_nextf(rng) + rng_nextf(rng)) * 0.5 * r;
+        sx = d * sin(phi) * cos(theta);
+        sy = d * sin(phi) * sin(theta);
+        sz = d * cos(phi);
+    } else {
+        // Gaussian blur (blurtype == 2, 3D)
+        let r = scatter * factor;
+        let theta = rng_nextf(rng) * 2.0 * PI;
+        let phi = acos(2.0 * rng_nextf(rng) - 1.0);
+        let d = sqrt(-log(rng_nextf(rng) + 1e-10)) * r;
+        sx = d * sin(phi) * cos(theta);
+        sy = d * sin(phi) * sin(theta);
+        sz = d * cos(phi);
+    }
+
+    return vec3<f32>(p.x + sx * mul_x, p.y + sy * mul_y, p.z + sz * mul_z);
+}
