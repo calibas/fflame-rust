@@ -7,7 +7,7 @@ use crate::scene::palette::Palette;
 pub const MAX_TRANSFORMS: usize = 32;
 
 /// Maximum parameters per variation (expandable if needed)
-pub const MAX_PARAMS_PER_VARIATION: usize = 8;
+pub const MAX_PARAMS_PER_VARIATION: usize = 12;
 
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
@@ -23,14 +23,11 @@ pub struct GpuTransform {
     pub g: f32, // Z offset for 3D mode
     pub weight: f32,
 
-    // Variations (50 floats: future-proof for plugins)
-    pub variations: [f32; 50],
-
-    // Padding to align color to 16-byte boundary (WGSL std430 vec3 alignment)
-    _pad1: f32,
-    _pad2: f32,
+    // Variations (100 floats: supports all Apophysis 7X + future expansion)
+    pub variations: [f32; 100],
 
     // Color (vec3<f32> in WGSL requires 16-byte alignment)
+    // With 100 floats, we're already at 432 bytes (divisible by 16), so no padding needed
     pub color: [f32; 3],
     pub color_speed: f32,
 }
@@ -52,8 +49,6 @@ impl GpuTransform {
             g: xform.g,
             weight: xform.weight,
             variations: xform.to_fixed_array(registry),
-            _pad1: 0.0,
-            _pad2: 0.0,
             color: xform.color,
             color_speed: xform.color_speed,
         }
@@ -61,13 +56,13 @@ impl GpuTransform {
 }
 
 /// GPU representation of variation parameters for ONE transform
-/// Total size: 50 variations × 8 params = 400 floats = 1600 bytes per transform
+/// Total size: 100 variations × 12 params = 1200 floats = 4800 bytes per transform
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct GpuVariationParams {
     /// Flat array indexed by: variation_id * MAX_PARAMS_PER_VARIATION + param_slot
     /// Each variation gets MAX_PARAMS_PER_VARIATION consecutive slots
-    pub params: [f32; 400],  // 50 variations × 8 params
+    pub params: [f32; 1200],  // 100 variations × 12 params
 }
 
 // Manual implementation for bytemuck (arrays > 128 not auto-derived)
@@ -80,7 +75,7 @@ impl GpuVariationParams {
         xform: &Transform,
         registry: &crate::variations::VariationRegistry,
     ) -> Self {
-        let mut params = [0.0f32; 400];
+        let mut params = [0.0f32; 1200];
 
         // For each active variation, copy its parameters
         for (var_name, _weight) in &xform.variations {
