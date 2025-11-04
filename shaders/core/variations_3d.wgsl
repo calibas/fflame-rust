@@ -1547,9 +1547,10 @@ fn variation_post_curl3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3
     let cz = get_param(xform_id, variation_id, 2u);
 
     // Clamp input to prevent FP overflow (as in Apophysis)
-    let x = clamp(p.x, -1e100, 1e100);
-    let y = clamp(p.y, -1e100, 1e100);
-    let z = clamp(p.z, -1e100, 1e100);
+    // Using 1e30 instead of 1e100 to stay within f32 range
+    let x = clamp(p.x, -1e30, 1e30);
+    let y = clamp(p.y, -1e30, 1e30);
+    let z = clamp(p.z, -1e30, 1e30);
 
     let r2 = x * x + y * y + z * z;
 
