@@ -229,6 +229,8 @@ impl VariationRegistry {
         registry.register_core("post_crop", "Post Crop", VariationCategory::Advanced2D, VariationPhase::Post, true);   // 78 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
         registry.register_core("pre_falloff2", "Pre Falloff2", VariationCategory::Advanced2D, VariationPhase::Pre, true);  // 79 - Apophysis 7X extended (11 parameters: scatter, mindist, mul_x, mul_y, mul_z, mul_c, x0, y0, z0, invert, blurtype - needs RNG)
         registry.register_core("post_falloff2", "Post Falloff2", VariationCategory::Advanced2D, VariationPhase::Post, true); // 80 - Apophysis 7X extended (11 parameters: scatter, mindist, mul_x, mul_y, mul_z, mul_c, x0, y0, z0, invert, blurtype - needs RNG)
+        registry.register_core("post_curl", "Post Curl", VariationCategory::Advanced2D, VariationPhase::Post, false);  // 81 - Apophysis 7X extended (2 parameters: c1, c2)
+        registry.register_core("post_curl3d", "Post Curl 3D", VariationCategory::Full3D, VariationPhase::Post, false); // 82 - Apophysis 7X extended (3 parameters: cx, cy, cz)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -1436,6 +1438,52 @@ impl VariationRegistry {
                 param_type: ParamType::Integer,
                 default_value: 0.0,
                 min_value: Some(0.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("post_curl", vec![
+            VariationParameter {
+                name: "c1".to_string(),
+                display_name: "C1".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "c2".to_string(),
+                display_name: "C2".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("post_curl3d", vec![
+            VariationParameter {
+                name: "cx".to_string(),
+                display_name: "CX".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "cy".to_string(),
+                display_name: "CY".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "cz".to_string(),
+                display_name: "CZ".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
                 max_value: Some(2.0),
             },
         ]);

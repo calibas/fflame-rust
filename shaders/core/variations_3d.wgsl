@@ -1519,3 +1519,50 @@ fn variation_post_falloff2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: 
 
     return vec3<f32>(p.x + sx * mul_x, p.y + sy * mul_y, p.z + sz * mul_z);
 }
+
+fn variation_post_curl(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis Post_Curl - Same as curl but applied after variations (3D version - Z passes through)
+    let c1 = get_param(xform_id, variation_id, 0u);
+    let c2 = get_param(xform_id, variation_id, 1u);
+
+    // Complex arithmetic on XY plane: denominator = 1 + c1*z + c2*z²
+    let re = 1.0 + c1 * p.x + c2 * (p.x * p.x - p.y * p.y);
+    let im = c1 * p.y + 2.0 * c2 * p.x * p.y;
+
+    // r = 1 / |denominator|²
+    let r = 1.0 / (re * re + im * im);
+
+    // Complex division: z / denominator (Z passes through)
+    return vec3<f32>(
+        (p.x * re + p.y * im) * r,
+        (p.y * re - p.x * im) * r,
+        p.z
+    );
+}
+
+fn variation_post_curl3d(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis Post_Curl3D - Full 3D curl transformation applied after variations
+    let cx = get_param(xform_id, variation_id, 0u);
+    let cy = get_param(xform_id, variation_id, 1u);
+    let cz = get_param(xform_id, variation_id, 2u);
+
+    // Clamp input to prevent FP overflow (as in Apophysis)
+    let x = clamp(p.x, -1e100, 1e100);
+    let y = clamp(p.y, -1e100, 1e100);
+    let z = clamp(p.z, -1e100, 1e100);
+
+    let r2 = x * x + y * y + z * z;
+
+    // c² = cx² + cy² + cz²
+    let c2 = cx * cx + cy * cy + cz * cz;
+
+    // Denominator: r²*c² + 2cx*x - 2cy*y + 2cz*z + 1
+    let denom = r2 * c2 + 2.0 * cx * x - 2.0 * cy * y + 2.0 * cz * z + 1.0;
+    let r = 1.0 / denom;
+
+    return vec3<f32>(
+        r * (x + cx * r2),
+        r * (y - cy * r2),
+        r * (z + cz * r2)
+    );
+}
