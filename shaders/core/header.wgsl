@@ -52,9 +52,9 @@ struct Params {
 }
 
 // Variation parameters for one transform
-// Indexed as: params[variation_id * 8 + param_slot]
+// Indexed as: params[variation_id * 12 + param_slot]
 struct VariationParams {
-    params: array<f32, 800>,  // 100 variations × 8 params
+    params: array<f32, 1200>,  // 100 variations × 12 params
 }
 
 // Bindings

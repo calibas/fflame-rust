@@ -7,7 +7,7 @@ use crate::scene::palette::Palette;
 pub const MAX_TRANSFORMS: usize = 32;
 
 /// Maximum parameters per variation (expandable if needed)
-pub const MAX_PARAMS_PER_VARIATION: usize = 8;
+pub const MAX_PARAMS_PER_VARIATION: usize = 12;
 
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
@@ -56,13 +56,13 @@ impl GpuTransform {
 }
 
 /// GPU representation of variation parameters for ONE transform
-/// Total size: 100 variations × 8 params = 800 floats = 3200 bytes per transform
+/// Total size: 100 variations × 12 params = 1200 floats = 4800 bytes per transform
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct GpuVariationParams {
     /// Flat array indexed by: variation_id * MAX_PARAMS_PER_VARIATION + param_slot
     /// Each variation gets MAX_PARAMS_PER_VARIATION consecutive slots
-    pub params: [f32; 800],  // 100 variations × 8 params
+    pub params: [f32; 1200],  // 100 variations × 12 params
 }
 
 // Manual implementation for bytemuck (arrays > 128 not auto-derived)
@@ -75,7 +75,7 @@ impl GpuVariationParams {
         xform: &Transform,
         registry: &crate::variations::VariationRegistry,
     ) -> Self {
-        let mut params = [0.0f32; 800];
+        let mut params = [0.0f32; 1200];
 
         // For each active variation, copy its parameters
         for (var_name, _weight) in &xform.variations {
