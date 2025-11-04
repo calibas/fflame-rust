@@ -247,8 +247,8 @@ impl VariationRegistry {
                 display_name: "Distance".to_string(),
                 param_type: ParamType::Float,
                 default_value: 1.0,
-                min_value: Some(0.1),
-                max_value: Some(5.0),
+                min_value: Some(-100.0),
+                max_value: Some(100.0),
             },
         ]);
 
