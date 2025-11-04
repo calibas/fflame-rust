@@ -7,9 +7,13 @@ pub enum ParamType {
     /// Continuous floating-point value with min/max bounds
     Float,
     /// Unlimited floating-point value (full f32 range: -3.4E38 to +3.4E38)
+    /// Uses min/max as slider range (default -10.0 to 10.0), but allows typing any value
     UnlimitedFloat,
     /// Integer value (stored as f32, cast for UI)
     Integer,
+    /// Unlimited integer value (full i32 range: -2.1B to +2.1B)
+    /// Uses min/max as slider range (default -100 to 100), but allows typing any integer
+    UnlimitedInteger,
     /// Boolean value (0.0 = false, non-zero = true)
     Boolean,
     /// Angle in degrees (0-360, or custom range)
@@ -256,18 +260,18 @@ impl VariationRegistry {
             VariationParameter {
                 name: "power".to_string(),
                 display_name: "Power".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::UnlimitedInteger,
                 default_value: 2.0,
-                min_value: Some(-100.0),
-                max_value: Some(100.0),
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
             },
             VariationParameter {
                 name: "dist".to_string(),
                 display_name: "Distance".to_string(),
-                param_type: ParamType::Float,
+                param_type: ParamType::UnlimitedFloat,
                 default_value: 1.0,
-                min_value: Some(-1000.0),
-                max_value: Some(1000.0),
+                min_value: Some(-100.0),
+                max_value: Some(100.0),
             },
         ]);
 
