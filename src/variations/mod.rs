@@ -188,6 +188,49 @@ impl VariationRegistry {
         registry.register_core("ztranslate", "ZTranslate", VariationCategory::Depth3D, VariationPhase::Normal, false); // 37 - Apophysis core
         registry.register_core("waves2", "Waves2", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 38 - Apophysis core (6 parameters)
         registry.register_core("julia3d", "Julia3D", VariationCategory::Full3D, VariationPhase::Normal, true);          // 39 - Apophysis core (Needs RNG, 1 parameter)
+        registry.register_core("log", "Log", VariationCategory::Advanced2D, VariationPhase::Normal, false);             // 40 - Apophysis 7X extended (1 parameter)
+        registry.register_core("polar2", "Polar2", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 41 - Apophysis 7X extended (no parameters)
+        registry.register_core("cross", "Cross", VariationCategory::Advanced2D, VariationPhase::Normal, false);         // 42 - Apophysis 7X extended (no parameters)
+        registry.register_core("loonie", "Loonie", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 43 - Apophysis 7X extended (no parameters)
+        registry.register_core("escher", "Escher", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 44 - Apophysis 7X extended (1 parameter)
+        registry.register_core("scry", "Scry", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 45 - Apophysis 7X extended (no parameters)
+        registry.register_core("foci", "Foci", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 46 - Apophysis 7X extended (no parameters)
+        registry.register_core("bipolar", "Bipolar", VariationCategory::Advanced2D, VariationPhase::Normal, false);     // 47 - Apophysis 7X extended (1 parameter)
+        registry.register_core("elliptic", "Elliptic", VariationCategory::Advanced2D, VariationPhase::Normal, false);   // 48 - Apophysis 7X extended (no parameters)
+        registry.register_core("lazysusan", "LazySusan", VariationCategory::Advanced2D, VariationPhase::Normal, false); // 49 - Apophysis 7X extended (5 parameters)
+        registry.register_core("falloff2", "Falloff2", VariationCategory::Advanced2D, VariationPhase::Normal, true);    // 50 - Apophysis 7X extended (11 parameters, needs RNG)
+        registry.register_core("pre_spherical", "Pre-Spherical", VariationCategory::Advanced2D, VariationPhase::Pre, false); // 51 - Apophysis 7X extended (Pre-phase)
+        registry.register_core("pre_sinusoidal", "Pre-Sinusoidal", VariationCategory::Advanced2D, VariationPhase::Pre, false); // 52 - Apophysis 7X extended (Pre-phase)
+        registry.register_core("pre_disc", "Pre-Disc", VariationCategory::Advanced2D, VariationPhase::Pre, false);     // 53 - Apophysis 7X extended (Pre-phase)
+        registry.register_core("rings2", "Rings2", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 54 - Apophysis 7X extended (1 parameter)
+        registry.register_core("fan2", "Fan2", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 55 - Apophysis 7X extended (2 parameters)
+        registry.register_core("wedge", "Wedge", VariationCategory::Advanced2D, VariationPhase::Normal, false);        // 56 - Apophysis 7X extended (4 parameters)
+        registry.register_core("epispiral", "Epispiral", VariationCategory::Advanced2D, VariationPhase::Normal, true);  // 57 - Apophysis 7X extended (3 parameters, needs RNG)
+        registry.register_core("bwraps", "BWraps", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 58 - Apophysis 7X extended (5 parameters)
+        registry.register_core("pdj", "PDJ", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 59 - Apophysis 7X extended (4 parameters)
+        registry.register_core("juliascope", "JuliaScope", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 60 - Apophysis 7X extended (2 parameters, needs RNG)
+        registry.register_core("julia3dz", "Julia3Dz", VariationCategory::Full3D, VariationPhase::Normal, true);  // 61 - Apophysis 7X extended (1 parameter: power, needs RNG)
+        registry.register_core("curl", "Curl", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 62 - Apophysis 7X extended (2 parameters: c1, c2)
+        registry.register_core("curl3d", "Curl3D", VariationCategory::Full3D, VariationPhase::Normal, false);      // 63 - Apophysis 7X extended (3 parameters: cx, cy, cz)
+        registry.register_core("radial_blur", "Radial Blur", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 64 - Apophysis 7X extended (1 parameter: angle, needs RNG)
+        registry.register_core("blur_circle", "Blur Circle", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 65 - Apophysis 7X extended (no parameters, needs RNG)
+        registry.register_core("blur_zoom", "Blur Zoom", VariationCategory::Advanced2D, VariationPhase::Normal, true);     // 66 - Apophysis 7X extended (3 parameters: length, x, y, needs RNG)
+        registry.register_core("blur_pixelize", "Blur Pixelize", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 67 - Apophysis 7X extended (2 parameters: size, scale, needs RNG)
+        registry.register_core("rectangles", "Rectangles", VariationCategory::Advanced2D, VariationPhase::Normal, false);  // 68 - Apophysis 7X extended (2 parameters: x, y)
+        registry.register_core("splits", "Splits", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 69 - Apophysis 7X extended (2 parameters: x, y)
+        registry.register_core("separation", "Separation", VariationCategory::Advanced2D, VariationPhase::Normal, false);  // 70 - Apophysis 7X extended (4 parameters: x, y, xinside, yinside)
+        registry.register_core("ngon", "Ngon", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 71 - Apophysis 7X extended (4 parameters: sides, power, circle, corners)
+        registry.register_core("mobius", "Mobius", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 72 - Apophysis 7X extended (8 parameters: complex Möbius transformation)
+        registry.register_core("crop", "Crop", VariationCategory::Advanced2D, VariationPhase::Normal, true);        // 73 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
+        registry.register_core("auger", "Auger", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 74 - Apophysis 7X extended (4 parameters: freq, weight, scale, sym)
+        registry.register_core("pre_bwraps", "Pre Bwraps", VariationCategory::Advanced2D, VariationPhase::Pre, false);  // 75 - Apophysis 7X extended (5 parameters: cellsize, space, gain, inner_twist, outer_twist)
+        registry.register_core("post_bwraps", "Post Bwraps", VariationCategory::Advanced2D, VariationPhase::Post, false); // 76 - Apophysis 7X extended (5 parameters: cellsize, space, gain, inner_twist, outer_twist)
+        registry.register_core("pre_crop", "Pre Crop", VariationCategory::Advanced2D, VariationPhase::Pre, true);      // 77 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
+        registry.register_core("post_crop", "Post Crop", VariationCategory::Advanced2D, VariationPhase::Post, true);   // 78 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
+        registry.register_core("pre_falloff2", "Pre Falloff2", VariationCategory::Advanced2D, VariationPhase::Pre, true);  // 79 - Apophysis 7X extended (11 parameters: scatter, mindist, mul_x, mul_y, mul_z, mul_c, x0, y0, z0, invert, blurtype - needs RNG)
+        registry.register_core("post_falloff2", "Post Falloff2", VariationCategory::Advanced2D, VariationPhase::Post, true); // 80 - Apophysis 7X extended (11 parameters: scatter, mindist, mul_x, mul_y, mul_z, mul_c, x0, y0, z0, invert, blurtype - needs RNG)
+        registry.register_core("post_curl", "Post Curl", VariationCategory::Advanced2D, VariationPhase::Post, false);  // 81 - Apophysis 7X extended (2 parameters: c1, c2)
+        registry.register_core("post_curl3d", "Post Curl 3D", VariationCategory::Full3D, VariationPhase::Post, false); // 82 - Apophysis 7X extended (3 parameters: cx, cy, cz)
 
         // Add parameters to variations that need them
         registry.add_parameters("julian", vec![
@@ -295,6 +338,1153 @@ impl VariationRegistry {
                 default_value: 2.0,
                 min_value: Some(-10.0),
                 max_value: Some(10.0),
+            },
+        ]);
+
+        registry.add_parameters("escher", vec![
+            VariationParameter {
+                name: "beta".to_string(),
+                display_name: "Beta".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(-180.0),
+                max_value: Some(180.0),
+            },
+        ]);
+
+        registry.add_parameters("log", vec![
+            VariationParameter {
+                name: "base".to_string(),
+                display_name: "Base".to_string(),
+                param_type: ParamType::Float,
+                default_value: 2.71828182845905, // e (Euler's number)
+                min_value: Some(0.000001), // 1E-6 minimum from Apophysis
+                max_value: Some(100.0),
+            },
+        ]);
+
+        registry.add_parameters("bipolar", vec![
+            VariationParameter {
+                name: "shift".to_string(),
+                display_name: "Shift".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-1.0),
+                max_value: Some(1.0),
+            },
+        ]);
+
+        registry.add_parameters("lazysusan", vec![
+            VariationParameter {
+                name: "spin".to_string(),
+                display_name: "Spin".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 180.0, // PI radians = 180 degrees
+                min_value: Some(0.0),
+                max_value: Some(360.0),
+            },
+            VariationParameter {
+                name: "space".to_string(),
+                display_name: "Space".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "twist".to_string(),
+                display_name: "Twist".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "x".to_string(),
+                display_name: "X Offset".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "y".to_string(),
+                display_name: "Y Offset".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("falloff2", vec![
+            VariationParameter {
+                name: "scatter".to_string(),
+                display_name: "Scatter".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.000001),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "mindist".to_string(),
+                display_name: "Min Distance".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(0.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "mul_x".to_string(),
+                display_name: "Multiply X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "mul_y".to_string(),
+                display_name: "Multiply Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "mul_z".to_string(),
+                display_name: "Multiply Z".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "mul_c".to_string(),
+                display_name: "Multiply Color".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "x0".to_string(),
+                display_name: "X Center".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "y0".to_string(),
+                display_name: "Y Center".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "z0".to_string(),
+                display_name: "Z Center".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "invert".to_string(),
+                display_name: "Invert".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "type".to_string(),
+                display_name: "Blur Type".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("rings2", vec![
+            VariationParameter {
+                name: "val".to_string(),
+                display_name: "Value".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("fan2", vec![
+            VariationParameter {
+                name: "x".to_string(),
+                display_name: "X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "y".to_string(),
+                display_name: "Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("wedge", vec![
+            VariationParameter {
+                name: "angle".to_string(),
+                display_name: "Angle".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 90.0, // π/2 radians = 90 degrees
+                min_value: Some(0.0),
+                max_value: Some(360.0),
+            },
+            VariationParameter {
+                name: "hole".to_string(),
+                display_name: "Hole".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "count".to_string(),
+                display_name: "Count".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 2.0,
+                min_value: Some(1.0),
+                max_value: Some(20.0),
+            },
+            VariationParameter {
+                name: "swirl".to_string(),
+                display_name: "Swirl".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("epispiral", vec![
+            VariationParameter {
+                name: "n".to_string(),
+                display_name: "N".to_string(),
+                param_type: ParamType::Float,
+                default_value: 6.0,
+                min_value: Some(1.0),
+                max_value: Some(20.0),
+            },
+            VariationParameter {
+                name: "thickness".to_string(),
+                display_name: "Thickness".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "holes".to_string(),
+                display_name: "Holes".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("bwraps", vec![
+            VariationParameter {
+                name: "cellsize".to_string(),
+                display_name: "Cell Size".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.01),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "space".to_string(),
+                display_name: "Space".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "gain".to_string(),
+                display_name: "Gain".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.1),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "inner_twist".to_string(),
+                display_name: "Inner Twist".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "outer_twist".to_string(),
+                display_name: "Outer Twist".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
+            },
+        ]);
+
+        registry.add_parameters("pdj", vec![
+            VariationParameter {
+                name: "a".to_string(),
+                display_name: "A".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,  // Apophysis uses 6*Random-3, we'll use 0 as default
+                min_value: Some(-3.0),
+                max_value: Some(3.0),
+            },
+            VariationParameter {
+                name: "b".to_string(),
+                display_name: "B".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-3.0),
+                max_value: Some(3.0),
+            },
+            VariationParameter {
+                name: "c".to_string(),
+                display_name: "C".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-3.0),
+                max_value: Some(3.0),
+            },
+            VariationParameter {
+                name: "d".to_string(),
+                display_name: "D".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-3.0),
+                max_value: Some(3.0),
+            },
+        ]);
+
+        registry.add_parameters("juliascope", vec![
+            VariationParameter {
+                name: "power".to_string(),
+                display_name: "Power".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 2.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "dist".to_string(),
+                display_name: "Distance".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.1),
+                max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("julia3dz", vec![
+            VariationParameter {
+                name: "power".to_string(),
+                display_name: "Power".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 2.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
+            },
+        ]);
+
+        registry.add_parameters("curl", vec![
+            VariationParameter {
+                name: "c1".to_string(),
+                display_name: "C1".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "c2".to_string(),
+                display_name: "C2".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("curl3d", vec![
+            VariationParameter {
+                name: "cx".to_string(),
+                display_name: "CX".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "cy".to_string(),
+                display_name: "CY".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "cz".to_string(),
+                display_name: "CZ".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("radial_blur", vec![
+            VariationParameter {
+                name: "angle".to_string(),
+                display_name: "Angle".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(-180.0),
+                max_value: Some(180.0),
+            },
+        ]);
+
+        registry.add_parameters("blur_zoom", vec![
+            VariationParameter {
+                name: "length".to_string(),
+                display_name: "Length".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "x".to_string(),
+                display_name: "X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "y".to_string(),
+                display_name: "Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("blur_pixelize", vec![
+            VariationParameter {
+                name: "size".to_string(),
+                display_name: "Size".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.1,
+                min_value: Some(0.001),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "scale".to_string(),
+                display_name: "Scale".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("rectangles", vec![
+            VariationParameter {
+                name: "x".to_string(),
+                display_name: "X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.001),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "y".to_string(),
+                display_name: "Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.001),
+                max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("splits", vec![
+            VariationParameter {
+                name: "x".to_string(),
+                display_name: "X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "y".to_string(),
+                display_name: "Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("separation", vec![
+            VariationParameter {
+                name: "x".to_string(),
+                display_name: "X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "y".to_string(),
+                display_name: "Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "xinside".to_string(),
+                display_name: "X Inside".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "yinside".to_string(),
+                display_name: "Y Inside".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("ngon", vec![
+            VariationParameter {
+                name: "sides".to_string(),
+                display_name: "Sides".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 5.0,
+                min_value: Some(3.0),
+                max_value: Some(20.0),
+            },
+            VariationParameter {
+                name: "power".to_string(),
+                display_name: "Power".to_string(),
+                param_type: ParamType::Float,
+                default_value: 3.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
+            },
+            VariationParameter {
+                name: "circle".to_string(),
+                display_name: "Circle".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "corners".to_string(),
+                display_name: "Corners".to_string(),
+                param_type: ParamType::Float,
+                default_value: 2.0,
+                min_value: Some(-10.0),
+                max_value: Some(10.0),
+            },
+        ]);
+
+        registry.add_parameters("mobius", vec![
+            VariationParameter {
+                name: "re_a".to_string(),
+                display_name: "Re A".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "im_a".to_string(),
+                display_name: "Im A".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "re_b".to_string(),
+                display_name: "Re B".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "im_b".to_string(),
+                display_name: "Im B".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "re_c".to_string(),
+                display_name: "Re C".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "im_c".to_string(),
+                display_name: "Im C".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "re_d".to_string(),
+                display_name: "Re D".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "im_d".to_string(),
+                display_name: "Im D".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+        ]);
+
+        registry.add_parameters("crop", vec![
+            VariationParameter {
+                name: "left".to_string(),
+                display_name: "Left".to_string(),
+                param_type: ParamType::Float,
+                default_value: -1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "top".to_string(),
+                display_name: "Top".to_string(),
+                param_type: ParamType::Float,
+                default_value: -1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "right".to_string(),
+                display_name: "Right".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "bottom".to_string(),
+                display_name: "Bottom".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "scatter_area".to_string(),
+                display_name: "Scatter Area".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-1.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "zero".to_string(),
+                display_name: "Zero".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+        ]);
+
+        registry.add_parameters("auger", vec![
+            VariationParameter {
+                name: "freq".to_string(),
+                display_name: "Frequency".to_string(),
+                param_type: ParamType::Float,
+                default_value: 5.0,
+                min_value: Some(0.1),
+                max_value: Some(20.0),
+            },
+            VariationParameter {
+                name: "weight".to_string(),
+                display_name: "Weight".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "scale".to_string(),
+                display_name: "Scale".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.1,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "sym".to_string(),
+                display_name: "Symmetry".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("pre_bwraps", vec![
+            VariationParameter {
+                name: "cellsize".to_string(),
+                display_name: "Cell Size".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.1),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "space".to_string(),
+                display_name: "Space".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "gain".to_string(),
+                display_name: "Gain".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "inner_twist".to_string(),
+                display_name: "Inner Twist".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(-360.0),
+                max_value: Some(360.0),
+            },
+            VariationParameter {
+                name: "outer_twist".to_string(),
+                display_name: "Outer Twist".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(-360.0),
+                max_value: Some(360.0),
+            },
+        ]);
+
+        registry.add_parameters("post_bwraps", vec![
+            VariationParameter {
+                name: "cellsize".to_string(),
+                display_name: "Cell Size".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.1),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "space".to_string(),
+                display_name: "Space".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "gain".to_string(),
+                display_name: "Gain".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "inner_twist".to_string(),
+                display_name: "Inner Twist".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(-360.0),
+                max_value: Some(360.0),
+            },
+            VariationParameter {
+                name: "outer_twist".to_string(),
+                display_name: "Outer Twist".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(-360.0),
+                max_value: Some(360.0),
+            },
+        ]);
+
+        registry.add_parameters("pre_crop", vec![
+            VariationParameter {
+                name: "left".to_string(),
+                display_name: "Left".to_string(),
+                param_type: ParamType::Float,
+                default_value: -1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "top".to_string(),
+                display_name: "Top".to_string(),
+                param_type: ParamType::Float,
+                default_value: -1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "right".to_string(),
+                display_name: "Right".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "bottom".to_string(),
+                display_name: "Bottom".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "scatter_area".to_string(),
+                display_name: "Scatter Area".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-1.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "zero".to_string(),
+                display_name: "Zero".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+        ]);
+
+        registry.add_parameters("post_crop", vec![
+            VariationParameter {
+                name: "left".to_string(),
+                display_name: "Left".to_string(),
+                param_type: ParamType::Float,
+                default_value: -1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "top".to_string(),
+                display_name: "Top".to_string(),
+                param_type: ParamType::Float,
+                default_value: -1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "right".to_string(),
+                display_name: "Right".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "bottom".to_string(),
+                display_name: "Bottom".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "scatter_area".to_string(),
+                display_name: "Scatter Area".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-1.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "zero".to_string(),
+                display_name: "Zero".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+        ]);
+
+        registry.add_parameters("pre_falloff2", vec![
+            VariationParameter {
+                name: "scatter".to_string(),
+                display_name: "Scatter".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mindist".to_string(),
+                display_name: "Min Dist".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_x".to_string(),
+                display_name: "Mul X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_y".to_string(),
+                display_name: "Mul Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_z".to_string(),
+                display_name: "Mul Z".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_c".to_string(),
+                display_name: "Mul Color".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "x0".to_string(),
+                display_name: "X0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "y0".to_string(),
+                display_name: "Y0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "z0".to_string(),
+                display_name: "Z0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "invert".to_string(),
+                display_name: "Invert".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "blurtype".to_string(),
+                display_name: "Blur Type".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("post_falloff2", vec![
+            VariationParameter {
+                name: "scatter".to_string(),
+                display_name: "Scatter".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mindist".to_string(),
+                display_name: "Min Dist".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_x".to_string(),
+                display_name: "Mul X".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_y".to_string(),
+                display_name: "Mul Y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_z".to_string(),
+                display_name: "Mul Z".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "mul_c".to_string(),
+                display_name: "Mul Color".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "x0".to_string(),
+                display_name: "X0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "y0".to_string(),
+                display_name: "Y0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "z0".to_string(),
+                display_name: "Z0".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-5.0),
+                max_value: Some(5.0),
+            },
+            VariationParameter {
+                name: "invert".to_string(),
+                display_name: "Invert".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            VariationParameter {
+                name: "blurtype".to_string(),
+                display_name: "Blur Type".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("post_curl", vec![
+            VariationParameter {
+                name: "c1".to_string(),
+                display_name: "C1".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "c2".to_string(),
+                display_name: "C2".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+        ]);
+
+        registry.add_parameters("post_curl3d", vec![
+            VariationParameter {
+                name: "cx".to_string(),
+                display_name: "CX".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "cy".to_string(),
+                display_name: "CY".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            VariationParameter {
+                name: "cz".to_string(),
+                display_name: "CZ".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
             },
         ]);
 
