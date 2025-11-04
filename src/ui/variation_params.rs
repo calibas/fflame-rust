@@ -116,14 +116,23 @@ fn render_angle_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut
 }
 
 /// Render an unlimited float parameter (full f32 range)
+/// Uses min/max as slider range (default -10.0 to 10.0), but allows typing any f32 value
 /// Returns (changed, dragged, drag_stopped)
 fn render_unlimited_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool, bool) {
+    let min = param.min_value.unwrap_or(-10.0);
+    let max = param.max_value.unwrap_or(10.0);
+
     let response = ui.add(
-        egui::DragValue::new(value)
-            .speed(0.01)
-            .prefix(format!("{}: ", param.display_name))
-            .clamp_range(-3.4e38..=3.4e38)
+        egui::Slider::new(value, min..=max)
+            .text(&param.display_name)
+            .clamp_to_range(false)  // Allow typing values outside slider range
     );
+
+    if response.changed() {
+        // Clamp to f32 limits (actual limits: -3.4E38 to 3.4E38)
+        *value = value.clamp(f32::MIN, f32::MAX);
+    }
+
     (response.changed(), response.dragged(), response.drag_stopped())
 }
 
