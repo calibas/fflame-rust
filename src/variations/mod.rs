@@ -4,12 +4,31 @@ use serde::{Deserialize, Serialize};
 /// Parameter type for variation parameters
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ParamType {
-    /// Continuous floating-point value
+    /// Continuous floating-point value with min/max bounds
     Float,
+    /// Unlimited floating-point value (full f32 range: -3.4E38 to +3.4E38)
+    UnlimitedFloat,
     /// Integer value (stored as f32, cast for UI)
     Integer,
+    /// Boolean value (0.0 = false, non-zero = true)
+    Boolean,
     /// Angle in degrees (0-360, or custom range)
     Angle,
+    /// Enum/choice value with discrete options
+    /// Values stored as indices (0, 1, 2, ...)
+    Enum {
+        /// Display labels for each choice
+        choices: Vec<String>,
+    },
+}
+
+/// Helper function to simplify Enum creation
+impl ParamType {
+    pub fn enum_choices<S: AsRef<str>>(choices: &[S]) -> Self {
+        ParamType::Enum {
+            choices: choices.iter().map(|s| s.as_ref().to_string()).collect(),
+        }
+    }
 }
 
 /// Definition of a single variation parameter
@@ -239,16 +258,16 @@ impl VariationRegistry {
                 display_name: "Power".to_string(),
                 param_type: ParamType::Integer,
                 default_value: 2.0,
-                min_value: Some(-10.0),
-                max_value: Some(10.0),
+                min_value: Some(-100.0),
+                max_value: Some(100.0),
             },
             VariationParameter {
                 name: "dist".to_string(),
                 display_name: "Distance".to_string(),
                 param_type: ParamType::Float,
                 default_value: 1.0,
-                min_value: Some(-100.0),
-                max_value: Some(100.0),
+                min_value: Some(-1000.0),
+                max_value: Some(1000.0),
             },
         ]);
 
@@ -493,18 +512,18 @@ impl VariationRegistry {
             VariationParameter {
                 name: "invert".to_string(),
                 display_name: "Invert".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::Boolean,
                 default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(1.0),
+                min_value: None,
+                max_value: None,
             },
             VariationParameter {
                 name: "type".to_string(),
                 display_name: "Blur Type".to_string(),
-                param_type: ParamType::Integer,
+                param_type: ParamType::enum_choices(&["Linear", "Radial", "Gaussian"]),
                 default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(2.0),
+                min_value: None,
+                max_value: None,
             },
         ]);
 
