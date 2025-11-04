@@ -1365,3 +1365,33 @@ fn variation_post_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: 
 
     return vec2<f32>(p.x + sx * mul_x, p.y + sy * mul_y);
 }
+
+fn variation_post_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Post_Curl - Same as curl but applied after variations
+    // Note: In Apophysis, c1 and c2 are pre-multiplied by VVAR (weight) in Prepare()
+    // Since we don't have a separate prepare phase, we need to multiply by weight here
+    // However, for post-variations, we pass the full result vector, not weight
+    // So we use the parameters directly as in the normal curl variation
+    let c1 = get_param(xform_id, variation_id, 0u);
+    let c2 = get_param(xform_id, variation_id, 1u);
+
+    // Complex arithmetic: denominator = 1 + c1*z + c2*z²
+    let re = 1.0 + c1 * p.x + c2 * (p.x * p.x - p.y * p.y);
+    let im = c1 * p.y + 2.0 * c2 * p.x * p.y;
+
+    // r = 1 / |denominator|²
+    let r = 1.0 / (re * re + im * im);
+
+    // Complex division: z / denominator
+    return vec2<f32>(
+        (p.x * re + p.y * im) * r,
+        (p.y * re - p.x * im) * r
+    );
+}
+
+fn variation_post_curl3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // Apophysis Post_Curl3D - 2D version (Z passes through in 3D shader)
+    // This is a placeholder - the 3D version is the real implementation
+    // For 2D mode, just pass through unchanged
+    return p;
+}
