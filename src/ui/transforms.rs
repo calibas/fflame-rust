@@ -329,5 +329,22 @@ fn render_color_controls(
         let _ = config_manager.force_commit_preview(&ConfigPath::TransformColorSpeed { index });
     }
 
+    // Opacity slider
+    let mut temp_opacity = transform.opacity;
+    let response_opacity = ui.add(egui::Slider::new(&mut temp_opacity, 0.0..=1.0).text("Opacity"));
+    if response_opacity.changed() {
+        if let Ok(update_type) = config_manager.update_param(
+            ConfigPath::TransformOpacity { index },
+            temp_opacity.into(),
+            response_opacity.dragged()  // Lazy undo
+        ) {
+            transform.opacity = config_manager.active_config().flame.transforms[index].opacity;
+            max_update = max_update.max(update_type);
+        }
+    }
+    if response_opacity.drag_stopped() {
+        let _ = config_manager.force_commit_preview(&ConfigPath::TransformOpacity { index });
+    }
+
     max_update
 }
