@@ -44,92 +44,99 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return output;
 }
 
-// Fragment shader with tone mapping
+// Helper function: Calculate brightness scaling factor from logarithmic curve
+// This implements the Apophysis lsa[] lookup table inline
+fn brightness_scale(count: f32) -> f32 {
+    // Calculate k1 and k2 (simplified: contrast=1, oversample=1)
+    // k1 = (contrast * BRIGHT_ADJUST * brightness * 268 * PREFILTER_WHITE) / 256.0
+    let k1 = tonemap_params.bright_adjust * tonemap_params.brightness * 268.0 * tonemap_params.prefilter_white / 256.0;
+
+    // k2 = (oversample^2) / (contrast * area * white_level * sample_density)
+    // Simplified: oversample=1, contrast=1
+    let k2 = 1.0 / (tonemap_params.area * tonemap_params.white_level * tonemap_params.sample_density);
+
+    if (count < 0.001) {
+        return 0.0;
+    } else {
+        // lsa[i] = (k1 * log10(1 + white_level * i * k2)) / (white_level * i)
+        return (k1 * log10(1.0 + tonemap_params.white_level * count * k2)) / (tonemap_params.white_level * count);
+    }
+}
+
+// Fragment shader with Apophysis-compatible tone mapping
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Sample accumulation buffer
     let accum = textureSample(accumulation_texture, accumulation_sampler, input.uv);
 
-    // Extract RGB and alpha (density)
-    var color = accum.rgb;
-    let density = accum.a;
+    // Extract accumulated RGB and density (analogous to bucket.Red/Green/Blue/Count)
+    let bucket_red = accum.r;
+    let bucket_green = accum.g;
+    let bucket_blue = accum.b;
+    let bucket_count = accum.a * 100.0;  // Scale back from 0.01 per hit
 
-    // Normalize color by density, but cap density to prevent unbounded growth
-    // Density represents total samples * 0.01, so density=1.0 means 100 samples
-    // We use sqrt to compress high densities while preserving low-density detail
-    // Apply density_scale so user can control the brightness contribution
-    let normalized_density = sqrt(density * tonemap_params.density_scale);
-
-    if (density > 0.001) {
-        color = color * normalized_density;
+    // Early exit for empty pixels
+    if (bucket_count < 0.001) {
+        return vec4<f32>(tonemap_params.background_color, 1.0);
     }
 
-    // Apply exposure
-    color *= tonemap_params.exposure;
+    // ===== STAGE 3A: Apply Brightness to Palette Colors =====
+    // Calculate brightness scaling factor (ls) from logarithmic curve
+    var ls = brightness_scale(bucket_count) / tonemap_params.prefilter_white;
 
-    // Tone mapping (mode-based)
-    if (tonemap_params.tonemap_mode == 0u) {
-        // Linear tone mapping: simple clamping
-        color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-    } else if (tonemap_params.tonemap_mode == 1u) {
-        // Logarithmic tone mapping: compress bright areas
-        color = log(color + 1.0) / log(10.0);
-    } else if (tonemap_params.tonemap_mode == 2u) {
-        // Density visualization: show raw accumulated density as grayscale
-        // Scale by 0.01 so density=100 shows as white
-        color = vec3<f32>(density * 0.01);
+    // Apply brightness scaling to accumulated colors
+    var fp0 = ls * bucket_red;     // brightness-scaled red
+    var fp1 = ls * bucket_green;   // brightness-scaled green
+    var fp2 = ls * bucket_blue;    // brightness-scaled blue
+    let fp3 = ls * bucket_count * tonemap_params.white_level;  // weighted density
+
+    // ===== STAGE 3B: Apply Gamma to Density =====
+    // Invert gamma (Apophysis ImageMaker.pas:410)
+    let gamma = select(1.0 / tonemap_params.gamma, tonemap_params.gamma, tonemap_params.gamma == 0.0);
+
+    // Apply gamma to density to get alpha
+    var alpha = 0.0;
+    if (fp3 > 0.0) {
+        alpha = pow(fp3, gamma);
     }
 
-    // Vibrancy blend (Apophysis compatibility)
-    // Exact formula from ImageMaker.pas:599-621:
-    //   vib := round(fcp.vibrancy * 256.0);
-    //   notvib := 256 - vib;
-    //   if (notvib > 0) then begin
-    //     ri := Round(ls * fp[0] + notvib * power(fp[0], gamma));
-    //   end else begin
-    //     ri := Round(ls * fp[0]);
-    //   end;
-    //
-    // Where:
-    //   ls = vib * alpha / fp[3] (ImageMaker.pas:599)
-    //      = vibrancy * gamma_corrected_brightness / raw_density
-    //   fp[x] = accumulated color from palette lookups
-    //   notvib = 256 - vib (ImageMaker.pas:413)
-    //
-    // The formula blends:
-    //   new algorithm: ls * fp[x] (vibrancy-scaled brightness)
-    //   old algorithm: power(fp[x], gamma) (gamma-corrected color)
-    //
-    // When vibrancy = 1.0: notvib = 0, result = ls * fp[x] (pure new/vibrant)
-    // When vibrancy = 0.0: notvib = 256, result = ls * fp[x] + 256 * power(fp[x], gamma) (new + old)
-
-    // Convert vibrancy from UI range (0-30) to Apophysis range (0-256)
-    // Note: UI shows 0-30, but internally Apophysis uses vibrancy/100 to get 0.0-0.3, then * 256 = 0-76.8
-    // Actually: fcp.vibrancy is stored as 0-100 in Apophysis, so vibrancy=1.0 in UI -> 100 -> * 256 = 25600
-    // Wait, let me recalculate: vibrancy slider 0-30 -> divide by 100 -> 0.0-0.3 -> * 256 -> 0-76.8
-    let vib_normalized = tonemap_params.vibrancy / 100.0;  // Convert UI 0-30 to 0.0-0.3
-    let vib = vib_normalized * 256.0;  // Scale to Apophysis range
+    // ===== STAGE 3C: Calculate Vibrancy-Weighted Multiplier (REUSE ls!) =====
+    // Scale vibrancy to Apophysis range (ImageMaker.pas:412)
+    let vib = round(tonemap_params.vibrancy * 256.0);
     let notvib = 256.0 - vib;
 
-    // Calculate ls (vibrancy-scaled brightness)
-    // In Apophysis: ls = vib * alpha / fp[3]
-    // For us: alpha is gamma-corrected brightness from density, fp[3] is raw density
-    // Simplify: ls = vibrancy * brightness
-    let brightness = (color.r + color.g + color.b) / 3.0;
-    let ls = vib * brightness;
-
-    if (notvib > 0.0) {
-        // Blend: ls * color + (notvib/256) * pow(color, gamma)
-        let new_algo = ls * color;  // Vibrancy-scaled brightness
-        let old_algo = pow(color, vec3<f32>(tonemap_params.gamma));  // Gamma-corrected
-        color = new_algo + (notvib / 256.0) * old_algo;
+    // Calculate vibrancy-weighted brightness multiplier (ImageMaker.pas:599)
+    // IMPORTANT: ls is OVERWRITTEN here with a new meaning!
+    if (fp3 > 0.0) {
+        ls = vib * alpha / fp3;
     } else {
-        // Full new algorithm (vibrancy >= 1.0)
-        color = ls * color;
+        ls = 0.0;
     }
 
-    // Apply final gamma correction
-    color = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));
+    // ===== STAGE 3D: Vibrancy Blend =====
+    // Blend between new (gamma on brightness) and old (gamma on colors) algorithms
+    // ImageMaker.pas:612-621
+    var color: vec3<f32>;
+    if (notvib > 0.0) {
+        // NEW algorithm: ls * fp[x] (vibrancy-weighted brightness × brightness-scaled color)
+        let new_r = ls * fp0;
+        let new_g = ls * fp1;
+        let new_b = ls * fp2;
+
+        // OLD algorithm: notvib * power(fp[x], gamma) (gamma applied to colors)
+        let old_r = notvib * pow(fp0, gamma);
+        let old_g = notvib * pow(fp1, gamma);
+        let old_b = notvib * pow(fp2, gamma);
+
+        // Additive blend
+        color = vec3<f32>(new_r + old_r, new_g + old_g, new_b + old_b);
+    } else {
+        // Pure new algorithm (vibrancy >= 256)
+        color = vec3<f32>(ls * fp0, ls * fp1, ls * fp2);
+    }
+
+    // Apply exposure (our extension, not in Apophysis)
+    color *= tonemap_params.exposure;
 
     // Clamp to valid range
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -137,7 +144,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Apply tone curve to fractal color only (not background)
     // Only apply where there's significant fractal density to avoid affecting background
     var fractal_color = color;
-    if (tonemap_params.use_curve != 0u && density > 0.001) {
+    if (tonemap_params.use_curve != 0u && bucket_count > 0.001) {
         let r = textureSample(curve_lut_texture, curve_lut_sampler, color.r).r;
         let g = textureSample(curve_lut_texture, curve_lut_sampler, color.g).r;
         let b = textureSample(curve_lut_texture, curve_lut_sampler, color.b).r;
@@ -147,7 +154,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Map density to alpha using density_scale
     // The density represents how many samples hit this pixel
     // density_scale controls transparency: higher = more opaque
-    let alpha = clamp(density * tonemap_params.density_scale, 0.0, 1.0);
+    let output_alpha = clamp(bucket_count * 0.01 * tonemap_params.density_scale, 0.0, 1.0);
 
     // Check if background is black (transparent export mode)
     let bg_sum = tonemap_params.background_color.r + tonemap_params.background_color.g + tonemap_params.background_color.b;
@@ -156,11 +163,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Composite: background * (1 - alpha) + tone_curved_fractal * alpha
     // This ensures tone curve only affects the fractal layer, not the background
     let final_color = select(
-        tonemap_params.background_color * (1.0 - alpha) + fractal_color * alpha,  // Normal mode: manual blend
-        fractal_color,                                                              // Transparent mode: just fractal
+        tonemap_params.background_color * (1.0 - output_alpha) + fractal_color * output_alpha,  // Normal mode: manual blend
+        fractal_color,                                                                             // Transparent mode: just fractal
         is_transparent_mode
     );
-    let output_alpha = select(1.0, alpha, is_transparent_mode);
+    let final_alpha = select(1.0, output_alpha, is_transparent_mode);
 
-    return vec4<f32>(final_color, output_alpha);
+    return vec4<f32>(final_color, final_alpha);
 }
