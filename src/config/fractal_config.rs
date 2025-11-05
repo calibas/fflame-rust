@@ -85,6 +85,14 @@ pub struct FractalConfig {
     #[serde(default = "default_saturation")]
     pub saturation: f32,
 
+    /// Hue shift: rotate hue in degrees (-180.0 to 180.0, 0.0 = no shift)
+    #[serde(default = "default_hue_shift")]
+    pub hue_shift: f32,
+
+    /// Value scale: brightness multiplier (1.0 = no change, >1.0 = brighter)
+    #[serde(default = "default_value_scale")]
+    pub value_scale: f32,
+
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default)]
     pub deterministic_rng: bool,
@@ -108,6 +116,14 @@ fn default_vibrancy() -> f32 {
 
 fn default_saturation() -> f32 {
     super::defaults::DEFAULT_SATURATION
+}
+
+fn default_hue_shift() -> f32 {
+    super::defaults::DEFAULT_HUE_SHIFT
+}
+
+fn default_value_scale() -> f32 {
+    super::defaults::DEFAULT_VALUE_SCALE
 }
 
 fn default_true() -> bool {
@@ -178,6 +194,8 @@ impl Default for FractalConfig {
             brightness: default_brightness(),
             vibrancy: default_vibrancy(),
             saturation: default_saturation(),
+            hue_shift: default_hue_shift(),
+            value_scale: default_value_scale(),
             deterministic_rng: false,
         }
     }

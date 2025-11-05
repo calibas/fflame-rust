@@ -343,7 +343,7 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, config.saturation, self.width, self.height, self.total_iterations, config.max_iterations);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, self.width, self.height, self.total_iterations, config.max_iterations);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -417,6 +417,7 @@ impl FlameRenderer {
             density_scale: 1.0,
             tonemap_mode: 1,  // Logarithmic
             background_color: [0.0, 0.0, 0.0],
+            _pad_bg: 0.0,
             use_curve: 0,  // Disabled
             vibrancy: 1.0,  // Default
             brightness: DEFAULT_BRIGHTNESS,
@@ -426,6 +427,9 @@ impl FlameRenderer {
             area,
             sample_density,
             saturation: DEFAULT_SATURATION,
+            hue_shift: DEFAULT_HUE_SHIFT,
+            value_scale: DEFAULT_VALUE_SCALE,
+            _pad0: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -545,6 +549,7 @@ impl FlameRenderer {
             density_scale: self.density_scale,
             tonemap_mode: 1,  // Logarithmic
             background_color: self.background_color,
+            _pad_bg: 0.0,
             use_curve: 0,  // Disabled
             vibrancy: 1.0,  // Default
             brightness: DEFAULT_BRIGHTNESS,
@@ -554,6 +559,9 @@ impl FlameRenderer {
             area,
             sample_density,
             saturation: DEFAULT_SATURATION,
+            hue_shift: DEFAULT_HUE_SHIFT,
+            value_scale: DEFAULT_VALUE_SCALE,
+            _pad0: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -570,8 +578,8 @@ impl FlameRenderer {
         self.update_tonemap_state(queue);
     }
 
-    /// Update tone mapping mode, curve usage, exposure, gamma, brightness, vibrancy, and saturation
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, brightness: f32, vibrancy: f32, saturation: f32, width: u32, height: u32, total_iterations: u64, max_iterations: u64) {
+    /// Update tone mapping mode, curve usage, exposure, gamma, brightness, vibrancy, saturation, hue shift, and value scale
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, width: u32, height: u32, total_iterations: u64, max_iterations: u64) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match tonemap_mode {
@@ -598,6 +606,7 @@ impl FlameRenderer {
             density_scale: self.density_scale,
             tonemap_mode: tonemap_mode_u32,
             background_color: self.background_color,
+            _pad_bg: 0.0,
             use_curve: if use_curve { 1u32 } else { 0u32 },
             vibrancy,
             brightness,
@@ -607,6 +616,9 @@ impl FlameRenderer {
             area,
             sample_density,
             saturation,
+            hue_shift,
+            value_scale,
+            _pad0: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
