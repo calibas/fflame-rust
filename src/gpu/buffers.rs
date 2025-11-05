@@ -30,6 +30,8 @@ pub struct GpuTransform {
     // With 100 floats, we're already at 432 bytes (divisible by 16), so no padding needed
     pub color: [f32; 3],
     pub color_speed: f32,
+    pub opacity: f32,
+    pub _padding: [f32; 3], // Pad to 16-byte alignment (vec4 boundary)
 }
 
 // Manual implementation for bytemuck (arrays of size 50 not auto-derived)
@@ -51,6 +53,8 @@ impl GpuTransform {
             variations: xform.to_fixed_array(registry),
             color: xform.color,
             color_speed: xform.color_speed,
+            opacity: xform.opacity,
+            _padding: [0.0; 3],
         }
     }
 }
