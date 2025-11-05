@@ -73,6 +73,10 @@ pub struct FractalConfig {
     pub exposure: f32,
     #[serde(default = "default_gamma")]
     pub gamma: f32,
+    /// Brightness: logarithmic brightness scaling (Apophysis compatibility)
+    /// 1.0 = standard brightness (default), higher = brighter
+    #[serde(default = "default_brightness")]
+    pub brightness: f32,
     /// Vibrancy: blend between old (gamma-only) and new (vibrant) color algorithms
     /// 1.0 = modern vibrant colors (default), 0.0 = classic gamma-only colors
     #[serde(default = "default_vibrancy")]
@@ -89,6 +93,10 @@ fn default_exposure() -> f32 {
 
 fn default_gamma() -> f32 {
     2.2
+}
+
+fn default_brightness() -> f32 {
+    super::defaults::DEFAULT_BRIGHTNESS
 }
 
 fn default_vibrancy() -> f32 {
@@ -160,6 +168,7 @@ impl Default for FractalConfig {
             use_curve: default_true(),
             exposure: default_exposure(),
             gamma: default_gamma(),
+            brightness: default_brightness(),
             vibrancy: default_vibrancy(),
             deterministic_rng: false,
         }
