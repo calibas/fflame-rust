@@ -68,7 +68,7 @@ pub fn render_tone_mapping_window(
                         max_update = max_update.max(result.update_type);
                     }
 
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::HueShift, -180.0..=180.0, "Hue Shift") {
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::HueShift, -360.0..=360.0, "Hue Shift") {
                         max_update = max_update.max(result.update_type);
                     }
 
