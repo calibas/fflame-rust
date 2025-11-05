@@ -343,7 +343,7 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, self.width, self.height, self.total_iterations);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, self.width, self.height, self.total_iterations, config.max_iterations);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -571,7 +571,7 @@ impl FlameRenderer {
     }
 
     /// Update tone mapping mode, curve usage, exposure, gamma, and vibrancy
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, brightness: f32, vibrancy: f32, width: u32, height: u32, total_iterations: u64) {
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, brightness: f32, vibrancy: f32, width: u32, height: u32, total_iterations: u64, max_iterations: u64) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match tonemap_mode {
@@ -581,9 +581,11 @@ impl FlameRenderer {
         };
 
         // Calculate area and sample_density for brightness lookup table
+        // Use max_iterations (target) instead of total_iterations (current) to keep tone mapping stable
+        // This matches Apophysis behavior: brightness curve is based on planned density, not current
         let area = (width * height) as f32;
         let sample_density = if area > 0.0 {
-            total_iterations as f32 / area
+            max_iterations as f32 / area
         } else {
             1.0
         };
