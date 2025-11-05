@@ -581,11 +581,13 @@ impl FlameRenderer {
         };
 
         // Calculate area and sample_density for brightness lookup table
-        // Use max_iterations (target) instead of total_iterations (current) to keep tone mapping stable
-        // This matches Apophysis behavior: brightness curve is based on planned density, not current
+        // Use a fixed reference density to normalize brightness across different iteration counts
+        // Apophysis calculates this once based on planned iterations; we use a constant reference
+        // This keeps brightness stable during progressive rendering
         let area = (width * height) as f32;
+        let reference_iterations = 10_000_000.0; // 10M iterations as reference (typical quality render)
         let sample_density = if area > 0.0 {
-            max_iterations as f32 / area
+            reference_iterations / area
         } else {
             1.0
         };
