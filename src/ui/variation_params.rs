@@ -11,8 +11,9 @@ use crate::{
 
 /// Render parameter controls for an active variation
 ///
-/// This function handles all parameter types (Float, Integer, Angle) and
-/// automatically updates the config via ConfigManager with lazy undo support.
+/// This function handles all parameter types (Float, UnlimitedFloat, Integer,
+/// UnlimitedInteger, Boolean, Angle, Enum) and automatically updates the config
+/// via ConfigManager with lazy undo support.
 ///
 /// # Arguments
 /// * `ui` - The egui UI context
@@ -51,10 +52,14 @@ pub fn render_variation_params(
             &crate::variations::global_registry(),
         );
 
-        let (param_changed, dragged, drag_stopped) = match param.param_type {
+        let (param_changed, dragged, drag_stopped) = match &param.param_type {
             ParamType::Float => render_float_param(ui, param, &mut param_value),
+            ParamType::UnlimitedFloat => render_unlimited_float_param(ui, param, &mut param_value),
             ParamType::Integer => render_integer_param(ui, param, &mut param_value),
+            ParamType::UnlimitedInteger => render_unlimited_integer_param(ui, param, &mut param_value),
+            ParamType::Boolean => render_boolean_param(ui, param, &mut param_value),
             ParamType::Angle => render_angle_param(ui, param, &mut param_value),
+            ParamType::Enum { choices } => render_enum_param(ui, param, &mut param_value, choices),
         };
 
         let path = ConfigPath::TransformVariationParam {
@@ -102,6 +107,30 @@ fn render_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &m
     (response.changed(), response.dragged(), response.drag_stopped())
 }
 
+/// Render an unlimited integer parameter (full i32 range)
+/// Uses min/max as slider range (default -100 to 100), but allows typing any i32 value
+/// Returns (changed, dragged, drag_stopped)
+fn render_unlimited_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool, bool) {
+    let min = param.min_value.unwrap_or(-100.0) as i32;
+    let max = param.max_value.unwrap_or(100.0) as i32;
+    let mut int_val = *value as i32;
+
+    let response = ui.add(
+        egui::Slider::new(&mut int_val, min..=max)
+            .text(&param.display_name)
+            .clamp_to_range(false)  // Allow typing values outside slider range
+    );
+
+    if response.changed() {
+        // Clamp to i32 limits (actual limits: -2,147,483,648 to 2,147,483,647)
+        *value = (int_val.clamp(i32::MIN, i32::MAX)) as f32;
+    } else {
+        *value = int_val as f32;
+    }
+
+    (response.changed(), response.dragged(), response.drag_stopped())
+}
+
 /// Render an angle parameter slider (displays degrees, stores as value)
 /// Returns (changed, dragged, drag_stopped)
 fn render_angle_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool, bool) {
@@ -109,4 +138,64 @@ fn render_angle_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut
     let max = param.max_value.unwrap_or(360.0);
     let response = ui.add(egui::Slider::new(value, min..=max).text(&param.display_name).suffix("°"));
     (response.changed(), response.dragged(), response.drag_stopped())
+}
+
+/// Render an unlimited float parameter (full f32 range)
+/// Uses min/max as slider range (default -10.0 to 10.0), but allows typing any f32 value
+/// Returns (changed, dragged, drag_stopped)
+fn render_unlimited_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool, bool) {
+    let min = param.min_value.unwrap_or(-10.0);
+    let max = param.max_value.unwrap_or(10.0);
+
+    let response = ui.add(
+        egui::Slider::new(value, min..=max)
+            .text(&param.display_name)
+            .clamp_to_range(false)  // Allow typing values outside slider range
+    );
+
+    if response.changed() {
+        // Clamp to f32 limits (actual limits: -3.4E38 to 3.4E38)
+        *value = value.clamp(f32::MIN, f32::MAX);
+    }
+
+    (response.changed(), response.dragged(), response.drag_stopped())
+}
+
+/// Render a boolean parameter (checkbox)
+/// Returns (changed, dragged=false, drag_stopped=false)
+fn render_boolean_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool, bool) {
+    let mut checked = *value > 0.5;
+    let response = ui.checkbox(&mut checked, &param.display_name);
+    *value = if checked { 1.0 } else { 0.0 };
+    (response.changed(), false, false)  // Checkboxes don't have drag states
+}
+
+/// Render an enum parameter (dropdown/combobox)
+/// Returns (changed, dragged=false, drag_stopped=false)
+fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32, choices: &[String]) -> (bool, bool, bool) {
+    if choices.is_empty() {
+        // Fallback if no choices provided
+        ui.label(format!("{}: (no choices)", param.display_name));
+        return (false, false, false);
+    }
+
+    let current_idx = (*value as usize).min(choices.len().saturating_sub(1));
+    let mut selected = current_idx;
+
+    let mut changed = false;
+    egui::ComboBox::from_label(&param.display_name)
+        .selected_text(&choices[selected])
+        .show_ui(ui, |ui| {
+            for (idx, choice) in choices.iter().enumerate() {
+                if ui.selectable_value(&mut selected, idx, choice).clicked() {
+                    changed = true;
+                }
+            }
+        });
+
+    if changed {
+        *value = selected as f32;
+    }
+
+    (changed, false, false)  // Dropdowns don't have drag states
 }

@@ -14,7 +14,7 @@ use super::variation_params::render_variation_params;
 ///
 /// This function handles:
 /// - Section header with category label
-/// - Variation weight sliders (0.0-2.0 range) with lazy undo support
+/// - Variation weight sliders (-10.0 to 10.0 range) with lazy undo support
 /// - Automatic parameter display when variation is active (weight > 1e-6)
 /// - Indented parameter controls with lazy undo support
 ///
@@ -57,9 +57,19 @@ pub fn render_variation_category(
         let transform = &config_manager.active_config().flame.transforms[transform_index];
         let mut value = transform.get_variation(&var_info.name);
 
-        let response = ui.add(egui::Slider::new(&mut value, 0.0..=2.0).text(&var_info.display_name));
+        // Apophysis allows any float value including negative weights
+        // Slider range: -10.0 to 10.0 (covers 99% of use cases)
+        // Users can type values beyond this range (clamped to f32 limits)
+        let response = ui.add(
+            egui::Slider::new(&mut value, -10.0..=10.0)
+                .text(&var_info.display_name)
+                .clamp_to_range(false)  // Allow typing values outside slider range
+        );
 
         if response.changed() {
+            // Clamp to f32 limits (actual limits: -3.4E38 to 3.4E38)
+            value = value.clamp(f32::MIN, f32::MAX);
+
             // Update via ConfigManager with lazy undo only during drag
             let path = ConfigPath::TransformVariation {
                 index: transform_index,

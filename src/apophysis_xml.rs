@@ -15,10 +15,9 @@
 //! </flames>
 //! ```
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use quick_xml::events::Event;
 use quick_xml::Reader;
-use std::collections::HashMap;
 
 use crate::config::FractalConfig;
 use crate::scene::palette::{Palette, ColorMode};
@@ -213,6 +212,9 @@ fn parse_xform_element(
     let registry = global_registry();
     let mut color_index = None;
 
+    // Storage for variation parameters (applied after all attributes parsed)
+    let mut pending_params: Vec<(String, String, f32)> = Vec::new(); // (var_name, param_name, value)
+
     for attr in element.attributes() {
         let attr = attr?;
         let key = std::str::from_utf8(attr.key.as_ref())?;
@@ -243,12 +245,19 @@ fn parse_xform_element(
                 // Store for future use, currently not used in our renderer
             }
             _ => {
-                // Try to parse as variation
-                if let Ok(weight_value) = value.parse::<f32>() {
-                    if weight_value != 0.0 {
-                        // Look up variation by name
-                        if registry.get(key).is_some() {
-                            transform.variations.insert(key.to_string(), weight_value);
+                // Try to parse as variation or variation parameter
+                if let Ok(parsed_value) = value.parse::<f32>() {
+                    // First, try direct variation lookup (e.g., "julian", "spherical")
+                    if registry.get(key).is_some() {
+                        if parsed_value != 0.0 {
+                            transform.variations.insert(key.to_string(), parsed_value);
+                        }
+                    } else if key.contains('_') {
+                        // Try to parse as variation parameter (e.g., "julian_power", "blob_high")
+                        // Try progressively longer prefixes to find matching variation
+                        // This handles cases like "pre_blur_param" correctly
+                        if let Some((var_name, param_name)) = find_variation_and_param(key, registry) {
+                            pending_params.push((var_name, param_name, parsed_value));
                         }
                     }
                 }
@@ -256,7 +265,37 @@ fn parse_xform_element(
         }
     }
 
+    // Apply collected parameters after all variations are known
+    for (var_name, param_name, value) in pending_params {
+        transform.set_variation_param(&var_name, &param_name, value);
+    }
+
     Ok((transform, color_index))
+}
+
+/// Try to split an attribute key into variation name and parameter name
+/// Handles cases like "julian_power" → ("julian", "power")
+/// and "pre_blur_strength" → ("pre_blur", "strength")
+fn find_variation_and_param(key: &str, registry: &crate::variations::VariationRegistry) -> Option<(String, String)> {
+    // Try progressively longer prefixes until we find a matching variation
+    let parts: Vec<&str> = key.split('_').collect();
+
+    // Try from longest to shortest prefix (e.g., "pre_blur_strength" tries "pre_blur_strength", then "pre_blur")
+    for i in (1..parts.len()).rev() {
+        let potential_var = parts[..i].join("_");
+
+        if let Some(var_info) = registry.get(&potential_var) {
+            // Found matching variation, remaining part is parameter name
+            let param_name = parts[i..].join("_");
+
+            // Validate that this parameter exists for this variation
+            if var_info.parameters.iter().any(|p| p.name == param_name) {
+                return Some((potential_var, param_name));
+            }
+        }
+    }
+
+    None
 }
 
 /// Parse a <palette> element (256 RGB hex colors)
@@ -322,13 +361,11 @@ mod tests {
 
     #[test]
     fn test_parse_spherical_example() {
+        // Minimal test without palette (palette parsing is tested elsewhere)
         let xml = r#"
 <flames name="spherical-apo">
 <flame name="Spherical Test" version="Apophysis 7x Version 15D" size="1500 1000" center="0.12666568780208 0.0566529891945883" scale="208.227773031847" background="0 0 0" brightness="1" gamma="1">
    <xform weight="1" color="0" spherical="1" coefs="0.9 0 0 0.9 0 0" opacity="1" />
-   <palette count="256" format="RGB">
-      CC745ECB745ECA735EC8735DC7725DC6725DC5725DC3715C
-   </palette>
 </flame>
 </flames>
         "#;
@@ -377,5 +414,82 @@ mod tests {
         assert_eq!(xform.d, 0.34284);      // parts[3]
         assert_eq!(xform.e, 1.5);          // parts[4]
         assert_eq!(xform.f, 2.5);          // parts[5]
+    }
+
+    #[test]
+    fn test_variation_parameters() {
+        // Test parsing variation parameters like julian_power and julian_dist
+        let xml = r#"
+<flames name="test">
+<flame name="Julian Test" size="800 600" center="0 0" scale="200">
+   <xform weight="0.5" color="1" bubble="0.2" pre_blur="10" coefs="1 0 0 1 0 0" opacity="1" />
+   <xform weight="6" color="0" flatten="1" julian="1" coefs="0.707107 -0.707107 0.707107 0.707107 0 -0.3" julian_power="2" julian_dist="-1" opacity="1" />
+   <xform weight="1" color="0.5" blob="0.5" coefs="1 0 0 1 0 0" blob_high="1.5" blob_low="0.8" blob_waves="6" opacity="1" />
+</flame>
+</flames>
+        "#;
+
+        let result = parse_flame_xml(xml);
+        assert!(result.is_ok(), "Failed to parse XML: {:?}", result.err());
+
+        let config = &result.unwrap()[0];
+        assert_eq!(config.flame.transforms.len(), 3);
+
+        // First transform: bubble + pre_blur (no parameters on these)
+        let xform0 = &config.flame.transforms[0];
+        assert_eq!(xform0.weight, 0.5);
+        assert!(xform0.variations.contains_key("bubble"));
+        assert!(xform0.variations.contains_key("pre_blur"));
+        assert_eq!(xform0.variations["bubble"], 0.2);
+        assert_eq!(xform0.variations["pre_blur"], 10.0);
+
+        // Second transform: julian with power and dist parameters
+        let xform1 = &config.flame.transforms[1];
+        assert_eq!(xform1.weight, 6.0);
+        assert!(xform1.variations.contains_key("flatten"));
+        assert!(xform1.variations.contains_key("julian"));
+        assert_eq!(xform1.variations["julian"], 1.0);
+
+        // Check julian parameters
+        assert_eq!(xform1.get_variation_param_or_default("julian", "power", &global_registry()), 2.0);
+        assert_eq!(xform1.get_variation_param_or_default("julian", "dist", &global_registry()), -1.0);
+
+        // Third transform: blob with high, low, waves parameters
+        let xform2 = &config.flame.transforms[2];
+        assert_eq!(xform2.weight, 1.0);
+        assert!(xform2.variations.contains_key("blob"));
+        assert_eq!(xform2.variations["blob"], 0.5);
+
+        // Check blob parameters
+        assert_eq!(xform2.get_variation_param_or_default("blob", "high", &global_registry()), 1.5);
+        assert_eq!(xform2.get_variation_param_or_default("blob", "low", &global_registry()), 0.8);
+        assert_eq!(xform2.get_variation_param_or_default("blob", "waves", &global_registry()), 6.0);
+    }
+
+    #[test]
+    fn test_find_variation_and_param() {
+        let registry = global_registry();
+
+        // Simple case: julian_power
+        let result = find_variation_and_param("julian_power", registry);
+        assert_eq!(result, Some(("julian".to_string(), "power".to_string())));
+
+        // Simple case: blob_high
+        let result = find_variation_and_param("blob_high", registry);
+        assert_eq!(result, Some(("blob".to_string(), "high".to_string())));
+
+        // Case with underscores in variation name (if pre_blur had params)
+        // For now we don't have pre_blur params, but the logic should handle it
+        let result = find_variation_and_param("pre_blur_strength", registry);
+        // pre_blur has no "strength" param, so this should return None
+        assert_eq!(result, None);
+
+        // Invalid parameter name
+        let result = find_variation_and_param("julian_invalid", registry);
+        assert_eq!(result, None);
+
+        // Invalid variation name
+        let result = find_variation_and_param("invalid_param", registry);
+        assert_eq!(result, None);
     }
 }

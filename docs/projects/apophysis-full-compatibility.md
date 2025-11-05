@@ -130,22 +130,22 @@ Using native compute APIs (CUDA/Vulkan/Metal) instead of WebGPU would allow f64:
 - **Slider range:** -10.0 to 10.0 (practical range for common values)
 - **Actual limits:** -3.4E38 to 3.4E38 (f32 max, enforced)
 - **Direct input:** Allow typing any value, clamp to f32 range if exceeded
-- **Validation:** Warn if |value| > 1E10 (unusual but valid)
 - **Import handling:** Values imported from Apophysis may be slightly rounded due to f32 precision
   - No data loss for typical values (most parameters < 1000)
   - Precision loss only affects extreme edge cases
 
-### 2.1 Variation Weight Ranges
-**Current:** Variation weights limited to 0.0-2.0 range
+### 2.1 Variation Weight Ranges ✅ COMPLETE
+**Previous:** Variation weights limited to 0.0-2.0 range
 **Apophysis:** Variation weights can be any double value including negative
+**Now:** Full f32 range supported with extended UI slider
 
-**Changes needed:**
-- Remove min/max constraints on variation weight sliders
-- Allow negative weights (important for artistic effects)
-- **Slider range:** -10.0 to 10.0 (covers 99% of use cases)
-- **Actual limits:** -3.4E38 to 3.4E38 (f32 max)
-- Update ConfigPath::TransformVariation to handle negative weights
-- Test that negative weights work correctly in shader (should already work)
+**Changes made:**
+- ✅ Removed min/max constraints on variation weight sliders
+- ✅ Allow negative weights (important for artistic effects)
+- ✅ **Slider range:** -10.0 to 10.0 (covers 99% of use cases)
+- ✅ **Actual limits:** -3.4E38 to 3.4E38 (f32 max, enforced via clamp)
+- ✅ `clamp_to_range(false)` allows typing values outside slider range
+- ✅ Verified shader already handles negative weights correctly (simple multiplication)
 
 ### 2.2 Variation Parameter Ranges
 **Current:** Each parameter has hardcoded min/max values
