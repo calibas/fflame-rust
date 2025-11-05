@@ -30,7 +30,10 @@ pub struct Transform {
     /// Color contribution (RGB)
     pub color: [f32; 3],
 
-    /// Color speed (0.0 = parent color, 1.0 = transform color)
+    /// Color speed / symmetry (-1.0 to 1.0, Apophysis compatibility)
+    /// -1.0 = full transform color replacement
+    ///  0.0 = 50/50 blend
+    ///  1.0 = full inheritance (transform has no color influence)
     pub color_speed: f32,
 }
 
@@ -48,7 +51,7 @@ impl Default for Transform {
             variations: HashMap::new(),
             variation_params: HashMap::new(),
             color: [1.0, 1.0, 1.0],
-            color_speed: 0.5,
+            color_speed: 0.0,  // Apophysis default: 50/50 blend
         }
     }
 }

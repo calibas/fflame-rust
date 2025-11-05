@@ -314,7 +314,7 @@ fn render_color_controls(
     });
 
     let mut temp_speed = transform.color_speed;
-    let response_speed = ui.add(egui::Slider::new(&mut temp_speed, 0.0..=1.0).text("Color Speed"));
+    let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text("Color Speed (Symmetry)"));
     if response_speed.changed() {
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformColorSpeed { index },
