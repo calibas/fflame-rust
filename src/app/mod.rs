@@ -363,10 +363,7 @@ impl App {
             // 3. Update tonemap parameters and render to screen
             renderer.update_density_scale(&self.gpu.queue, config.density_scale);
             renderer.update_background_color(&self.gpu.queue, config.background_color);
-            // Calculate batch parameters for brightness normalization
-            let iterations_per_thread = (config.iterations_per_thread as f32 * config.speed_multiplier as f32) as u32;
-            let num_workgroups = 128; // Fixed in our implementation
-            renderer.update_tonemap(&self.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, renderer.width, renderer.height, renderer.total_iterations(), config.max_iterations, iterations_per_thread, num_workgroups);
+            renderer.update_tonemap(&self.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, renderer.width, renderer.height, renderer.total_iterations(), config.max_iterations);
             renderer.tonemap_pass(&mut encoder, &view);
             self.metrics.record_tonemap_time(t2.elapsed().as_secs_f64() * 1000.0);
 
