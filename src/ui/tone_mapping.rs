@@ -48,15 +48,15 @@ pub fn render_tone_mapping_window(
                     ui.separator();
 
                     // Convert sliders to use ConfigManager
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.1..=5.0, "Exposure") {
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.01..=10.0, "Exposure") {
                         max_update = max_update.max(result.update_type);
                     }
 
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, 1.0..=3.0, "Gamma") {
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, -1.0..=5.0, "Gamma") {
                         max_update = max_update.max(result.update_type);
                     }
 
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Vibrancy, 0.0..=1.0, "Vibrancy") {
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Vibrancy, 0.0..=30.0, "Vibrancy") {
                         max_update = max_update.max(result.update_type);
                     }
 
