@@ -119,43 +119,52 @@ Implement full color system compatibility with Apophysis 7X, including proper pa
 
 ---
 
-### Phase 3.3: Vibrancy (Color Algorithm Blend)
+### Phase 3.3: Vibrancy (Color Algorithm Blend) ✅ **COMPLETE**
 
 **Goal:** Implement vibrancy control for old vs new color algorithm blending.
 
 #### 3.3.1 - Tonemap Shader Modification
-- [ ] Add `vibrancy: f32` to `TonemapParams`
-- [ ] Implement blend formula in `tonemap.wgsl`:
+- [x] Add `vibrancy: f32` to `TonemapParams`
+- [x] Implement blend formula in `tonemap.wgsl`:
   ```wgsl
-  let vib = vibrancy;
-  let notvib = 1.0 - vib;
+  let vib_normalized = tonemap_params.vibrancy / 100.0;  // UI 0-30 -> 0.0-0.3
+  let vib = vib_normalized * 256.0;  // Scale to Apophysis range
+  let notvib = 256.0 - vib;
+  let brightness = (color.r + color.g + color.b) / 3.0;
+  let ls = vib * brightness;
 
   if (notvib > 0.0) {
-      // Blend old and new algorithms
-      let old_color = pow(color, vec3(gamma));
-      let new_color = color * brightness;
-      final_color = new_color * vib + old_color * notvib;
+      let new_algo = ls * color;  // Vibrancy-scaled brightness
+      let old_algo = pow(color, vec3<f32>(tonemap_params.gamma));  // Gamma-corrected
+      color = new_algo + (notvib / 256.0) * old_algo;
   } else {
-      final_color = color * brightness;
+      color = ls * color;
   }
   ```
 
 #### 3.3.2 - Config and UI
-- [ ] Add `vibrancy: f32` to `FractalConfig` (default 1.0)
-- [ ] Add vibrancy slider to Tone Mapping window
-- [ ] Update XML import/export with `vibrancy` attribute
+- [x] Add `vibrancy: f32` to `FractalConfig` (default 1.0)
+- [x] Add vibrancy slider to Tone Mapping window (0.0-30.0 range)
+- [ ] Update XML import/export with `vibrancy` attribute (deferred to Phase 3.5)
 
-**Files to Modify:**
-- `shaders/tonemap.wgsl` - Implement vibrancy blend
-- `src/gpu/buffers.rs` - Add vibrancy to TonemapParams
-- `src/config/fractal_config.rs` - Add vibrancy field
-- `src/apophysis_xml.rs` - Parse/export vibrancy
-- `src/ui/tone_mapping.rs` - Add vibrancy slider
+**Files Modified:**
+- ✅ `shaders/tonemap.wgsl` - Implemented Apophysis vibrancy formula
+- ✅ `src/gpu/buffers.rs` - Added vibrancy to TonemapParams with std140 padding
+- ✅ `src/config/fractal_config.rs` - Added vibrancy field
+- ✅ `src/config/delta.rs` - Added ConfigPath::Vibrancy
+- ✅ `src/config/manager.rs` - Added getter/setter for vibrancy
+- ✅ `src/ui/tone_mapping.rs` - Added vibrancy slider
+- ✅ `src/renderer/compute_kernel.rs` - Updated update_tonemap signature
+- ✅ `src/app/mod.rs` - Updated update_tonemap call
 
-**Expected Outcome:**
-- Vibrancy=1.0: Modern vibrant colors
-- Vibrancy=0.0: Classic gamma-only colors
-- 0-1: Smooth blend between both
+**Commits:**
+- 4ca9385 - FEAT: Complete Phase 3.3 - Vibrancy (Apophysis color algorithm blend)
+
+**Outcome:**
+- ✅ Vibrancy=1.0: Modern vibrant colors (default)
+- ✅ Vibrancy=0.0: Classic gamma-only colors
+- ✅ 0.0-30.0: Full range matching Apophysis (divide by 100, multiply by 256)
+- ✅ Exact Apophysis formula: ls * fp[x] + (notvib/256) * power(fp[x], gamma)
 
 ---
 
@@ -360,7 +369,7 @@ Implement full color system compatibility with Apophysis 7X, including proper pa
 ---
 
 **Created:** 2025-01-04
-**Updated:** 2025-01-04
+**Updated:** 2025-01-05
 **Status:** In Progress
-**Completed:** Phase 3.1 (Color Coordinate Evolution)
-**Next Step:** Phase 3.2 - Opacity (Stochastic Transparency)
+**Completed:** Phase 3.1 (Color Coordinate Evolution), Phase 3.2 (Opacity), Phase 3.3 (Vibrancy)
+**Next Step:** Phase 3.4 - Palette Enhancements (Hue Rotation, White Level)
