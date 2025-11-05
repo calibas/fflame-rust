@@ -13,10 +13,14 @@ struct TonemapParams {
     tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic, 2 = DensityVisualization
     background_color: vec3<f32>,
     use_curve: u32,  // 0 = disabled, 1 = enabled (completes vec4 with background_color)
-    vibrancy: f32,  // Blend between old and new color algorithms (0.0-1.0)
-    _pad0: f32,  // Padding for std140 alignment
-    _pad1: f32,
-    _pad2: f32,
+    vibrancy: f32,  // Blend between old and new color algorithms (0.0-30.0)
+    brightness: f32,  // Logarithmic brightness scaling (0.0-5.0, default 1.0)
+    white_level: f32,  // Apophysis white_level constant (default 200.0)
+    prefilter_white: f32,  // Apophysis PREFILTER_WHITE constant (67108864.0)
+    bright_adjust: f32,  // Apophysis BRIGHT_ADJUST constant (2.3)
+    area: f32,  // Render area (width * height)
+    sample_density: f32,  // Iterations per pixel
+    _pad0: f32,  // Padding for alignment
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;

@@ -343,7 +343,7 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.vibrancy);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, self.width, self.height, self.total_iterations);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -407,6 +407,10 @@ impl FlameRenderer {
 
     /// Update tonemap parameters (exposure, gamma)
     pub fn update_tonemap_params(&self, queue: &Queue, exposure: f32, gamma: f32) {
+        use crate::config::defaults::*;
+        let area = (self.width * self.height) as f32;
+        let sample_density = if area > 0.0 { self.total_iterations as f32 / area } else { 1.0 };
+
         let params = TonemapParams {
             exposure,
             gamma,
@@ -415,9 +419,13 @@ impl FlameRenderer {
             background_color: [0.0, 0.0, 0.0],
             use_curve: 0,  // Disabled
             vibrancy: 1.0,  // Default
+            brightness: DEFAULT_BRIGHTNESS,
+            white_level: DEFAULT_WHITE_LEVEL,
+            prefilter_white: PREFILTER_WHITE,
+            bright_adjust: BRIGHT_ADJUST,
+            area,
+            sample_density,
             _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -527,6 +535,10 @@ impl FlameRenderer {
 
     /// Helper method to update tonemap parameters with current state
     fn update_tonemap_state(&self, queue: &Queue) {
+        use crate::config::defaults::*;
+        let area = (self.width * self.height) as f32;
+        let sample_density = if area > 0.0 { self.total_iterations as f32 / area } else { 1.0 };
+
         let params = TonemapParams {
             exposure: 1.0,
             gamma: 2.2,
@@ -535,9 +547,13 @@ impl FlameRenderer {
             background_color: self.background_color,
             use_curve: 0,  // Disabled
             vibrancy: 1.0,  // Default
+            brightness: DEFAULT_BRIGHTNESS,
+            white_level: DEFAULT_WHITE_LEVEL,
+            prefilter_white: PREFILTER_WHITE,
+            bright_adjust: BRIGHT_ADJUST,
+            area,
+            sample_density,
             _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -555,11 +571,21 @@ impl FlameRenderer {
     }
 
     /// Update tone mapping mode, curve usage, exposure, gamma, and vibrancy
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, vibrancy: f32) {
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, brightness: f32, vibrancy: f32, width: u32, height: u32, total_iterations: u64) {
+        use crate::config::defaults::*;
+
         let tonemap_mode_u32 = match tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,
             crate::scene::tonemap::ToneMapMode::Logarithmic => 1u32,
             crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
+        };
+
+        // Calculate area and sample_density for brightness lookup table
+        let area = (width * height) as f32;
+        let sample_density = if area > 0.0 {
+            total_iterations as f32 / area
+        } else {
+            1.0
         };
 
         let params = TonemapParams {
@@ -570,9 +596,13 @@ impl FlameRenderer {
             background_color: self.background_color,
             use_curve: if use_curve { 1u32 } else { 0u32 },
             vibrancy,
+            brightness,
+            white_level: DEFAULT_WHITE_LEVEL,
+            prefilter_white: PREFILTER_WHITE,
+            bright_adjust: BRIGHT_ADJUST,
+            area,
+            sample_density,
             _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
