@@ -466,24 +466,12 @@ impl App {
             let mut new_config = self.config_manager.active_config().clone();
 
             // Create a new default transform
-            let new_transform = crate::scene::transforms::Transform {
-                a: 0.5,
-                b: 0.0,
-                c: 0.0,
-                d: 0.5,
-                e: 0.0,
-                f: 0.0,
-                g: 0.0, // Z offset
-                weight: 1.0,
-                variations: {
-                    let mut v = std::collections::HashMap::new();
-                    v.insert("linear".to_string(), 0.5);
-                    v
-                },
-                variation_params: std::collections::HashMap::new(),
-                color: [0.5, 0.5, 0.5],
-                color_speed: 0.5,
-            };
+            let mut new_transform = crate::scene::transforms::Transform::default();
+            new_transform.a = 0.5;
+            new_transform.d = 0.5;
+            new_transform.set_variation("linear", 0.5);
+            new_transform.color = [0.5, 0.5, 0.5];
+            new_transform.color_speed = 0.5;
 
             new_config.flame.transforms.push(new_transform);
 

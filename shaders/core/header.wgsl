@@ -25,6 +25,12 @@ struct Transform {
 
     // Color speed
     color_speed: f32,
+
+    // Opacity (0.0 to 1.0)
+    opacity: f32,
+
+    // Padding to vec4 boundary
+    _padding: vec3<f32>,
 }
 
 // Dispatch parameters
