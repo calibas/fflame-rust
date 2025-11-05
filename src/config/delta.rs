@@ -30,6 +30,7 @@ pub enum ConfigPath {
     Gamma,
     Brightness,
     Vibrancy,
+    Saturation,
     DensityScale,
     TonemapMode,
     TonemapCurve,
@@ -109,6 +110,7 @@ impl Display for ConfigPath {
             ConfigPath::Gamma => write!(f, "Gamma"),
             ConfigPath::Brightness => write!(f, "Brightness"),
             ConfigPath::Vibrancy => write!(f, "Vibrancy"),
+            ConfigPath::Saturation => write!(f, "Saturation"),
             ConfigPath::DensityScale => write!(f, "Density Scale"),
             ConfigPath::TonemapMode => write!(f, "Tonemap Mode"),
             ConfigPath::TonemapCurve => write!(f, "Tone Curve"),
@@ -469,6 +471,7 @@ impl ConfigPath {
             | ConfigPath::Gamma
             | ConfigPath::Brightness
             | ConfigPath::Vibrancy
+            | ConfigPath::Saturation
             | ConfigPath::DensityScale
             | ConfigPath::TonemapMode
             | ConfigPath::TonemapCurve

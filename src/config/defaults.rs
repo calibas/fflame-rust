@@ -8,6 +8,7 @@ pub const DEFAULT_HISTOGRAM_COLOR_SCALE: f32 = 100.0; // Max precision: 100 colo
 pub const DEFAULT_EXPOSURE: f32 = 1.0;
 pub const DEFAULT_GAMMA: f32 = 1.0;
 pub const DEFAULT_BRIGHTNESS: f32 = 1.0;
+pub const DEFAULT_SATURATION: f32 = 1.0; // 1.0 = no change, >1.0 = more saturated
 
 // Apophysis brightness constants (ControlPoint.pas:37-39)
 pub const BRIGHT_ADJUST: f32 = 2.3;

@@ -20,7 +20,7 @@ struct TonemapParams {
     bright_adjust: f32,  // Apophysis BRIGHT_ADJUST constant (2.3)
     area: f32,  // Render area (width * height)
     sample_density: f32,  // Iterations per pixel
-    _pad0: f32,  // Padding for alignment
+    saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -63,6 +63,72 @@ fn brightness_scale(count: f32) -> f32 {
         // WGSL doesn't have log10, so convert: log10(x) = log(x) / log(10)
         let log10_value = log(1.0 + tonemap_params.white_level * count * k2) / log(10.0);
         return (k1 * log10_value) / (tonemap_params.white_level * count);
+    }
+}
+
+// Helper function: Convert RGB to HSV
+fn rgb_to_hsv(rgb: vec3<f32>) -> vec3<f32> {
+    let r = rgb.r;
+    let g = rgb.g;
+    let b = rgb.b;
+
+    let max_val = max(max(r, g), b);
+    let min_val = min(min(r, g), b);
+    let delta = max_val - min_val;
+
+    var h = 0.0;
+    var s = 0.0;
+    let v = max_val;
+
+    if (delta > 0.00001) {
+        s = delta / max_val;
+
+        if (r >= max_val) {
+            h = (g - b) / delta;
+        } else if (g >= max_val) {
+            h = 2.0 + (b - r) / delta;
+        } else {
+            h = 4.0 + (r - g) / delta;
+        }
+
+        h = h * 60.0;
+        if (h < 0.0) {
+            h = h + 360.0;
+        }
+    }
+
+    return vec3<f32>(h, s, v);
+}
+
+// Helper function: Convert HSV to RGB
+fn hsv_to_rgb(hsv: vec3<f32>) -> vec3<f32> {
+    let h = hsv.x;
+    let s = hsv.y;
+    let v = hsv.z;
+
+    if (s <= 0.0) {
+        return vec3<f32>(v, v, v);
+    }
+
+    var hh = h;
+    if (hh >= 360.0) {
+        hh = 0.0;
+    }
+    hh = hh / 60.0;
+
+    let i = u32(hh);
+    let ff = hh - f32(i);
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - (s * ff));
+    let t = v * (1.0 - (s * (1.0 - ff)));
+
+    switch (i) {
+        case 0u: { return vec3<f32>(v, t, p); }
+        case 1u: { return vec3<f32>(q, v, p); }
+        case 2u: { return vec3<f32>(p, v, t); }
+        case 3u: { return vec3<f32>(p, q, v); }
+        case 4u: { return vec3<f32>(t, p, v); }
+        default: { return vec3<f32>(v, p, q); }
     }
 }
 
@@ -140,6 +206,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     } else {
         // Pure new algorithm (vibrancy >= 256)
         color = vec3<f32>(ls * fp0, ls * fp1, ls * fp2);
+    }
+
+    // ===== STAGE 3E: Saturation Boost =====
+    // Apply saturation adjustment to increase color intensity
+    // Only apply if saturation is not 1.0 and color is not grayscale
+    if (tonemap_params.saturation != 1.0) {
+        let hsv = rgb_to_hsv(color);
+        let boosted_hsv = vec3<f32>(hsv.x, clamp(hsv.y * tonemap_params.saturation, 0.0, 1.0), hsv.z);
+        color = hsv_to_rgb(boosted_hsv);
     }
 
     // Apply exposure (our extension, not in Apophysis)

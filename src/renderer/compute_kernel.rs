@@ -343,7 +343,7 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, self.width, self.height, self.total_iterations, config.max_iterations);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, config.saturation, self.width, self.height, self.total_iterations, config.max_iterations);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -425,7 +425,7 @@ impl FlameRenderer {
             bright_adjust: BRIGHT_ADJUST,
             area,
             sample_density,
-            _pad0: 0.0,
+            saturation: DEFAULT_SATURATION,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -553,7 +553,7 @@ impl FlameRenderer {
             bright_adjust: BRIGHT_ADJUST,
             area,
             sample_density,
-            _pad0: 0.0,
+            saturation: DEFAULT_SATURATION,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -570,8 +570,8 @@ impl FlameRenderer {
         self.update_tonemap_state(queue);
     }
 
-    /// Update tone mapping mode, curve usage, exposure, gamma, and vibrancy
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, brightness: f32, vibrancy: f32, width: u32, height: u32, total_iterations: u64, max_iterations: u64) {
+    /// Update tone mapping mode, curve usage, exposure, gamma, brightness, vibrancy, and saturation
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, brightness: f32, vibrancy: f32, saturation: f32, width: u32, height: u32, total_iterations: u64, max_iterations: u64) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match tonemap_mode {
@@ -606,7 +606,7 @@ impl FlameRenderer {
             bright_adjust: BRIGHT_ADJUST,
             area,
             sample_density,
-            _pad0: 0.0,
+            saturation,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
