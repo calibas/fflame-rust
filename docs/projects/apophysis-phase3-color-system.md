@@ -35,7 +35,7 @@ Implement full color system compatibility with Apophysis 7X, including proper pa
 
 ## Phase 3 Implementation Plan
 
-### Phase 3.1: Color Coordinate Evolution ✓ Core System
+### Phase 3.1: Color Coordinate Evolution ✅ **COMPLETE**
 
 **Goal:** Implement proper Apophysis color coordinate (`c`) evolution through transforms.
 
@@ -67,17 +67,23 @@ Implement full color system compatibility with Apophysis 7X, including proper pa
   - Store as 0-1 coordinate (not RGB)
   - Don't apply palette lookup during import
 
-**Files to Modify:**
-- `shaders/core/main_2d.wgsl` - Add color coordinate evolution
-- `shaders/core/main_3d.wgsl` - Same as 2D
-- `src/gpu/buffers.rs` - Verify GpuTransform.color_speed
-- `src/scene/transforms.rs` - Update Transform.color_speed range validation
-- `src/apophysis_xml.rs` - Fix color mode detection
+**Files Modified:**
+- ✅ `shaders/core/main_2d.wgsl` - Added color coordinate evolution
+- ✅ `shaders/core/main_3d.wgsl` - Added color coordinate evolution
+- ✅ `src/scene/transforms.rs` - Updated color_speed range to -1 to 1, default to 0.0
+- ✅ `src/ui/transforms.rs` - Updated slider range to -1 to 1
+- ✅ `src/apophysis_xml.rs` - Fixed color mode detection, color coordinate storage, color_speed parsing
 
-**Expected Outcome:**
-- Palette mode uses color coordinate evolution
-- Transform colors act as palette positions (0-1) not RGB
-- Color speed (symmetry) works correctly (-1 to 1 range)
+**Commits:**
+- 2950ac2 - FEAT: Implement Apophysis color coordinate evolution (Phase 3.1)
+- 93cfdd1 - FIX: Proper color mode detection and color_speed parsing in XML import
+
+**Outcome:**
+- ✅ Palette mode uses Apophysis color coordinate evolution formula
+- ✅ Transform colors stored as palette coordinates (0-1) in Palette mode
+- ✅ Color speed (symmetry) range expanded to -1 to 1
+- ✅ Color mode auto-detected based on palette presence
+- ✅ color_speed/symmetry parsed from XML (no longer hardcoded)
 
 ---
 
@@ -354,5 +360,7 @@ Implement full color system compatibility with Apophysis 7X, including proper pa
 ---
 
 **Created:** 2025-01-04
-**Status:** Planning
-**Next Step:** Begin Phase 3.1 - Color Coordinate Evolution
+**Updated:** 2025-01-04
+**Status:** In Progress
+**Completed:** Phase 3.1 (Color Coordinate Evolution)
+**Next Step:** Phase 3.2 - Opacity (Stochastic Transparency)
