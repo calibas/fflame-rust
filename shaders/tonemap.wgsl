@@ -48,12 +48,13 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 // This implements the Apophysis lsa[] lookup table inline
 fn brightness_scale(count: f32) -> f32 {
     // Calculate k1 and k2 (simplified: contrast=1, oversample=1)
+    let contrast = 1.0;
     // k1 = (contrast * BRIGHT_ADJUST * brightness * 268 * PREFILTER_WHITE) / 256.0
-    let k1 = tonemap_params.bright_adjust * tonemap_params.brightness * 268.0 * tonemap_params.prefilter_white / 256.0;
+    let k1 = contrast * tonemap_params.bright_adjust * tonemap_params.brightness * 268.0 * tonemap_params.prefilter_white / 256.0;
 
     // k2 = (oversample^2) / (contrast * area * white_level * sample_density)
     // Simplified: oversample=1, contrast=1
-    let k2 = 1.0 / (tonemap_params.area * tonemap_params.white_level * tonemap_params.sample_density);
+    let k2 = 1.0 / (contrast * tonemap_params.area * tonemap_params.white_level * tonemap_params.sample_density);
 
     if (count < 0.001) {
         return 0.0;
