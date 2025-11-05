@@ -343,10 +343,7 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        // Use rendering parameters from config for batch density calculation
-        let iterations_per_thread = (config.iterations_per_thread as f32 * config.speed_multiplier as f32) as u32;
-        let num_workgroups = 128; // Fixed in our implementation
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, self.width, self.height, self.total_iterations, config.max_iterations, iterations_per_thread, num_workgroups);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, self.width, self.height, self.total_iterations, config.max_iterations);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -574,7 +571,7 @@ impl FlameRenderer {
     }
 
     /// Update tone mapping mode, curve usage, exposure, gamma, and vibrancy
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, brightness: f32, vibrancy: f32, width: u32, height: u32, total_iterations: u64, max_iterations: u64, iterations_per_thread: u32, num_workgroups: u32) {
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, brightness: f32, vibrancy: f32, width: u32, height: u32, total_iterations: u64, max_iterations: u64) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match tonemap_mode {
@@ -584,14 +581,13 @@ impl FlameRenderer {
         };
 
         // Calculate area and sample_density for brightness lookup table
-        // Use per-frame batch density as reference (matches Apophysis batch iteration model)
-        // Each frame adds: num_workgroups × 64 threads × iterations_per_thread samples
-        // This gives stable brightness regardless of total accumulated iterations
+        // Apophysis uses sample_density = total_iterations / area (calculated once for full render)
+        // For progressive rendering, use Apophysis's SUB_BATCH_SIZE (10,000) as reference
+        // This gives consistent brightness independent of iterations_per_thread setting
         let area = (width * height) as f32;
-        let threads_per_workgroup = 64u64;
-        let batch_iterations = ((num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64) / 40) as f32;
+        let apophysis_batch_size = 10000.0; // SUB_BATCH_SIZE from ControlPoint.pas:35
         let sample_density = if area > 0.0 {
-            batch_iterations / area
+            apophysis_batch_size / area
         } else {
             1.0
         };
