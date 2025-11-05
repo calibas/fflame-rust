@@ -59,7 +59,9 @@ fn brightness_scale(count: f32) -> f32 {
         return 0.0;
     } else {
         // lsa[i] = (k1 * log10(1 + white_level * i * k2)) / (white_level * i)
-        return (k1 * log10(1.0 + tonemap_params.white_level * count * k2)) / (tonemap_params.white_level * count);
+        // WGSL doesn't have log10, so convert: log10(x) = log(x) / log(10)
+        let log10_value = log(1.0 + tonemap_params.white_level * count * k2) / log(10.0);
+        return (k1 * log10_value) / (tonemap_params.white_level * count);
     }
 }
 
