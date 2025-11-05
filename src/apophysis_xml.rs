@@ -189,7 +189,7 @@ fn parse_flame_element(
         rotation: 0.0,
         camera_rotation_x: 0.0,
         camera_rotation_y: 0.0,
-        density_scale: brightness,
+        density_scale: 1.0,  // Use default, brightness is handled by Apophysis brightness parameter
         speed_factor: 1.0,
         max_iterations: 1_000_000_000,
         color_mode,  // Detected based on palette presence
@@ -201,7 +201,7 @@ fn parse_flame_element(
         use_curve: true,
         exposure: 1.0,
         gamma,
-        brightness: 1.0,
+        brightness,  // Use parsed Apophysis brightness value
         vibrancy: 1.0,  // Default vibrancy
         saturation: 1.0,  // Default saturation
         hue_shift: 0.0,  // Default hue shift
