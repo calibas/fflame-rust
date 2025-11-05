@@ -26,6 +26,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let xform_idx = select_transform(rand_val);
         let xform = transforms[xform_idx];
 
+        // Opacity check (stochastic transparency)
+        if (rng_nextf(&rng) >= xform.opacity) {
+            continue;  // Skip this iteration (don't plot)
+        }
+
         // Apply affine + variations
         let affine_p = apply_affine(xform, current);
         current = apply_variations(xform, xform_idx, affine_p, &rng);
