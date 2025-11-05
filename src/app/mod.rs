@@ -104,6 +104,7 @@ impl App {
             use_curve: true,
             exposure: crate::config::DEFAULT_EXPOSURE,
             gamma: crate::config::DEFAULT_GAMMA,
+            brightness: 1.0,
             vibrancy: 1.0,
             deterministic_rng: false,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
