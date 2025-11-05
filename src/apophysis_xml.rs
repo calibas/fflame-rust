@@ -258,7 +258,8 @@ fn parse_xform_element(
                 }
             }
             "opacity" => {
-                // Store for future use, currently not used in our renderer
+                // Parse opacity (0.0 to 1.0, default 1.0)
+                transform.opacity = value.parse().unwrap_or(1.0);
             }
             _ => {
                 // Try to parse as variation or variation parameter
