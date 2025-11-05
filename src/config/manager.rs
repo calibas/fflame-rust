@@ -608,6 +608,7 @@ impl ConfigManager {
             // Tone mapping
             ConfigPath::Exposure => Ok(config.exposure.into()),
             ConfigPath::Gamma => Ok(config.gamma.into()),
+            ConfigPath::Brightness => Ok(config.brightness.into()),
             ConfigPath::Vibrancy => Ok(config.vibrancy.into()),
             ConfigPath::DensityScale => Ok(config.density_scale.into()),
             ConfigPath::TonemapMode => Ok(config.tonemap_mode.into()),
@@ -773,6 +774,9 @@ impl ConfigManager {
             }
             ConfigPath::Gamma => {
                 self.current.gamma = value.try_into()?;
+            }
+            ConfigPath::Brightness => {
+                self.current.brightness = value.try_into()?;
             }
             ConfigPath::Vibrancy => {
                 self.current.vibrancy = value.try_into()?;
@@ -990,6 +994,9 @@ impl ConfigManager {
             }
             ConfigPath::Gamma => {
                 preview.gamma = value.try_into()?;
+            }
+            ConfigPath::Brightness => {
+                preview.brightness = value.try_into()?;
             }
             ConfigPath::Vibrancy => {
                 preview.vibrancy = value.try_into()?;

@@ -56,6 +56,10 @@ pub fn render_tone_mapping_window(
                         max_update = max_update.max(result.update_type);
                     }
 
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Brightness, 0.0..=5.0, "Brightness") {
+                        max_update = max_update.max(result.update_type);
+                    }
+
                     if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Vibrancy, 0.0..=30.0, "Vibrancy") {
                         max_update = max_update.max(result.update_type);
                     }
