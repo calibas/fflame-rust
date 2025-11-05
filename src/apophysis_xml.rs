@@ -142,14 +142,25 @@ fn parse_flame_element(
         buf.clear();
     }
 
-    // Apply palette colors to transforms
+    // Determine color mode based on whether palette exists
+    let color_mode = if palette.is_some() {
+        ColorMode::Palette
+    } else {
+        ColorMode::Transform
+    };
+
+    // Apply palette color coordinates to transforms (Palette mode)
+    // Or keep RGB colors as-is (Transform mode)
     let mut transforms = Vec::new();
     for (mut transform, color_index) in transforms_with_indices {
-        if let (Some(ref pal), Some(idx)) = (&palette, color_index) {
-            if idx < pal.stops.len() {
-                transform.color = pal.stops[idx].color;
-                transform.color_speed = 0.5; // Default color speed
+        if let Some(idx) = color_index {
+            if palette.is_some() {
+                // Palette mode: Store color coordinate (0-1) as averaged RGB
+                // This will be used as palette index in shader
+                let color_coord = idx as f32 / 255.0;
+                transform.color = [color_coord, color_coord, color_coord];
             }
+            // Note: color_speed comes from XML parsing, don't override here
         }
         transforms.push(transform);
     }
@@ -181,7 +192,7 @@ fn parse_flame_element(
         density_scale: brightness,
         speed_factor: 1.0,
         max_iterations: 1_000_000_000,
-        color_mode: ColorMode::Transform,
+        color_mode,  // Detected based on palette presence
         palette_index: 0,
         palette,
         background_color: background,
@@ -227,6 +238,11 @@ fn parse_xform_element(
                 if let Ok(color_value) = value.parse::<f32>() {
                     color_index = Some((color_value * 255.0) as usize);
                 }
+            }
+            "color_speed" | "symmetry" => {
+                // Apophysis calls this "symmetry" in XML, we call it color_speed
+                // Range: -1.0 to 1.0 (Apophysis symmetry parameter)
+                transform.color_speed = value.parse().unwrap_or(0.0);
             }
             "coefs" => {
                 // Parse "a c b d e f" format (Apophysis order!)
