@@ -155,6 +155,8 @@ pub struct TonemapParams {
     pub tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic
     pub background_color: [f32; 3],
     pub use_curve: u32,  // 0 = disabled, 1 = enabled
+    pub vibrancy: f32,  // Blend between old and new color algorithms (0.0-1.0)
+    pub _pad: [f32; 3],  // Padding to vec4 boundary
 }
 
 impl Default for TonemapParams {
@@ -166,6 +168,8 @@ impl Default for TonemapParams {
             tonemap_mode: 1,  // Default to Logarithmic
             background_color: [0.0, 0.0, 0.0],
             use_curve: 0,  // Curves disabled by default
+            vibrancy: 1.0,  // Modern vibrant colors by default
+            _pad: [0.0; 3],
         }
     }
 }

@@ -13,6 +13,8 @@ struct TonemapParams {
     tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic, 2 = DensityVisualization
     background_color: vec3<f32>,
     use_curve: u32,  // 0 = disabled, 1 = enabled
+    vibrancy: f32,  // Blend between old and new color algorithms (0.0-1.0)
+    _pad: vec3<f32>,  // Padding to vec4 boundary
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -72,8 +74,24 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         color = vec3<f32>(density * 0.01);
     }
 
-    // Gamma correction
-    color = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));
+    // Gamma correction with vibrancy blend (Apophysis compatibility)
+    // Vibrancy blends between old (pre-gamma brightness) and new (post-gamma brightness)
+    // The "old" algorithm applies brightness before gamma, "new" applies after gamma
+    let vib = tonemap_params.vibrancy;
+
+    if (vib < 1.0) {
+        // Old algorithm: brightness * gamma (less vibrant, washed out)
+        let old_color = pow(color, vec3<f32>(tonemap_params.gamma));
+
+        // New algorithm: gamma correction only (modern, vibrant)
+        let new_color = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));
+
+        // Blend between algorithms
+        color = new_color * vib + old_color * (1.0 - vib);
+    } else {
+        // Full new algorithm (vib=1.0, default)
+        color = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));
+    }
 
     // Clamp to valid range
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
