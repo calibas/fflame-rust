@@ -415,7 +415,9 @@ impl FlameRenderer {
             background_color: [0.0, 0.0, 0.0],
             use_curve: 0,  // Disabled
             vibrancy: 1.0,  // Default
-            _pad: [0.0; 3],
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -533,7 +535,9 @@ impl FlameRenderer {
             background_color: self.background_color,
             use_curve: 0,  // Disabled
             vibrancy: 1.0,  // Default
-            _pad: [0.0; 3],
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -566,7 +570,9 @@ impl FlameRenderer {
             background_color: self.background_color,
             use_curve: if use_curve { 1u32 } else { 0u32 },
             vibrancy,
-            _pad: [0.0; 3],
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
