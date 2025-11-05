@@ -28,6 +28,7 @@ pub enum ConfigPath {
     // ===== Tone mapping (no iteration reset needed) =====
     Exposure,
     Gamma,
+    Vibrancy,
     DensityScale,
     TonemapMode,
     TonemapCurve,
@@ -105,6 +106,7 @@ impl Display for ConfigPath {
             // Tone mapping
             ConfigPath::Exposure => write!(f, "Exposure"),
             ConfigPath::Gamma => write!(f, "Gamma"),
+            ConfigPath::Vibrancy => write!(f, "Vibrancy"),
             ConfigPath::DensityScale => write!(f, "Density Scale"),
             ConfigPath::TonemapMode => write!(f, "Tonemap Mode"),
             ConfigPath::TonemapCurve => write!(f, "Tone Curve"),
@@ -463,6 +465,7 @@ impl ConfigPath {
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure
             | ConfigPath::Gamma
+            | ConfigPath::Vibrancy
             | ConfigPath::DensityScale
             | ConfigPath::TonemapMode
             | ConfigPath::TonemapCurve

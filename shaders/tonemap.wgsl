@@ -12,9 +12,11 @@ struct TonemapParams {
     density_scale: f32,
     tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic, 2 = DensityVisualization
     background_color: vec3<f32>,
-    use_curve: u32,  // 0 = disabled, 1 = enabled
+    use_curve: u32,  // 0 = disabled, 1 = enabled (completes vec4 with background_color)
     vibrancy: f32,  // Blend between old and new color algorithms (0.0-1.0)
-    _pad: vec3<f32>,  // Padding to vec4 boundary
+    _pad0: f32,  // Padding for std140 alignment
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;

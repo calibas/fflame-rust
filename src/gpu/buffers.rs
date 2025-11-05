@@ -154,9 +154,11 @@ pub struct TonemapParams {
     pub density_scale: f32, // Controls how density maps to alpha
     pub tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic
     pub background_color: [f32; 3],
-    pub use_curve: u32,  // 0 = disabled, 1 = enabled
+    pub use_curve: u32,  // 0 = disabled, 1 = enabled (completes vec4 with background_color)
     pub vibrancy: f32,  // Blend between old and new color algorithms (0.0-1.0)
-    pub _pad: [f32; 3],  // Padding to vec4 boundary
+    pub _pad0: f32,  // Padding to align next vec3
+    pub _pad1: f32,
+    pub _pad2: f32,
 }
 
 impl Default for TonemapParams {
@@ -169,7 +171,9 @@ impl Default for TonemapParams {
             background_color: [0.0, 0.0, 0.0],
             use_curve: 0,  // Curves disabled by default
             vibrancy: 1.0,  // Modern vibrant colors by default
-            _pad: [0.0; 3],
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         }
     }
 }
