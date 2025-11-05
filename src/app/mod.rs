@@ -160,6 +160,17 @@ impl App {
                                         &app.flame, config.iterations_per_thread, config.zoom, config.pan_x, config.pan_y, config.rotation,
                                         config.camera_rotation_x, config.camera_rotation_y, config.speed_factor);
                                     app.gpu.queue.submit(std::iter::once(encoder.finish()));
+
+                                    // Restore palette and color mode after buffer recreation
+                                    // (FlameBuffers::new() resets to defaults: fire palette and transform colors)
+                                    let palette = config.palette.as_ref()
+                                        .or_else(|| app.palette_library.get(config.palette_index));
+                                    if let Some(palette) = palette {
+                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette);
+                                    }
+                                    renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
+                                        config.zoom, config.pan_x, config.pan_y, config.rotation,
+                                        config.camera_rotation_x, config.camera_rotation_y, config.speed_factor);
                                 }
                             }
                         },
@@ -177,6 +188,17 @@ impl App {
                                         &app.flame, config.iterations_per_thread, config.zoom, config.pan_x, config.pan_y, config.rotation,
                                         config.camera_rotation_x, config.camera_rotation_y, config.speed_factor);
                                     app.gpu.queue.submit(std::iter::once(encoder.finish()));
+
+                                    // Restore palette and color mode after buffer recreation
+                                    // (FlameBuffers::new() resets to defaults: fire palette and transform colors)
+                                    let palette = config.palette.as_ref()
+                                        .or_else(|| app.palette_library.get(config.palette_index));
+                                    if let Some(palette) = palette {
+                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette);
+                                    }
+                                    renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
+                                        config.zoom, config.pan_x, config.pan_y, config.rotation,
+                                        config.camera_rotation_x, config.camera_rotation_y, config.speed_factor);
                                 }
                                 window.request_redraw();
                             }
