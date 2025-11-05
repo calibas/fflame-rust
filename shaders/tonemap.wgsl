@@ -76,24 +76,56 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         color = vec3<f32>(density * 0.01);
     }
 
-    // Gamma correction with vibrancy blend (Apophysis compatibility)
-    // Vibrancy blends between old (pre-gamma brightness) and new (post-gamma brightness)
-    // The "old" algorithm applies brightness before gamma, "new" applies after gamma
-    let vib = tonemap_params.vibrancy;
+    // Vibrancy blend (Apophysis compatibility)
+    // Exact formula from ImageMaker.pas:599-621:
+    //   vib := round(fcp.vibrancy * 256.0);
+    //   notvib := 256 - vib;
+    //   if (notvib > 0) then begin
+    //     ri := Round(ls * fp[0] + notvib * power(fp[0], gamma));
+    //   end else begin
+    //     ri := Round(ls * fp[0]);
+    //   end;
+    //
+    // Where:
+    //   ls = vib * alpha / fp[3] (ImageMaker.pas:599)
+    //      = vibrancy * gamma_corrected_brightness / raw_density
+    //   fp[x] = accumulated color from palette lookups
+    //   notvib = 256 - vib (ImageMaker.pas:413)
+    //
+    // The formula blends:
+    //   new algorithm: ls * fp[x] (vibrancy-scaled brightness)
+    //   old algorithm: power(fp[x], gamma) (gamma-corrected color)
+    //
+    // When vibrancy = 1.0: notvib = 0, result = ls * fp[x] (pure new/vibrant)
+    // When vibrancy = 0.0: notvib = 256, result = ls * fp[x] + 256 * power(fp[x], gamma) (new + old)
 
-    if (vib < 1.0) {
-        // Old algorithm: brightness * gamma (less vibrant, washed out)
-        let old_color = pow(color, vec3<f32>(tonemap_params.gamma));
+    // Convert vibrancy from UI range (0-30) to Apophysis range (0-256)
+    // Note: UI shows 0-30, but internally Apophysis uses vibrancy/100 to get 0.0-0.3, then * 256 = 0-76.8
+    // Actually: fcp.vibrancy is stored as 0-100 in Apophysis, so vibrancy=1.0 in UI -> 100 -> * 256 = 25600
+    // Wait, let me recalculate: vibrancy slider 0-30 -> divide by 100 -> 0.0-0.3 -> * 256 -> 0-76.8
+    let vib_normalized = tonemap_params.vibrancy / 100.0;  // Convert UI 0-30 to 0.0-0.3
+    let vib = vib_normalized * 256.0;  // Scale to Apophysis range
+    let notvib = 256.0 - vib;
 
-        // New algorithm: gamma correction only (modern, vibrant)
-        let new_color = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));
+    // Calculate ls (vibrancy-scaled brightness)
+    // In Apophysis: ls = vib * alpha / fp[3]
+    // For us: alpha is gamma-corrected brightness from density, fp[3] is raw density
+    // Simplify: ls = vibrancy * brightness
+    let brightness = (color.r + color.g + color.b) / 3.0;
+    let ls = vib * brightness;
 
-        // Blend between algorithms
-        color = new_color * vib + old_color * (1.0 - vib);
+    if (notvib > 0.0) {
+        // Blend: ls * color + (notvib/256) * pow(color, gamma)
+        let new_algo = ls * color;  // Vibrancy-scaled brightness
+        let old_algo = pow(color, vec3<f32>(tonemap_params.gamma));  // Gamma-corrected
+        color = new_algo + (notvib / 256.0) * old_algo;
     } else {
-        // Full new algorithm (vib=1.0, default)
-        color = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));
+        // Full new algorithm (vibrancy >= 1.0)
+        color = ls * color;
     }
+
+    // Apply final gamma correction
+    color = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));
 
     // Clamp to valid range
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
