@@ -57,6 +57,7 @@ pub enum ConfigPath {
     TransformWeight { index: usize },
     TransformColor { index: usize, component: ColorComponent },
     TransformColorSpeed { index: usize },
+    TransformOpacity { index: usize },
     TransformAffine { index: usize, param: AffineParam },
     TransformVariation { index: usize, variation: String },
     TransformVariationParam {
@@ -138,6 +139,9 @@ impl Display for ConfigPath {
             }
             ConfigPath::TransformColorSpeed { index } => {
                 write!(f, "Transform {} → Color Speed", index + 1)
+            }
+            ConfigPath::TransformOpacity { index } => {
+                write!(f, "Transform {} → Opacity", index + 1)
             }
             ConfigPath::TransformAffine { index, param } => {
                 write!(f, "Transform {} → Affine {:?}", index + 1, param)
@@ -486,6 +490,7 @@ impl ConfigPath {
             | ConfigPath::TransformWeight { .. }
             | ConfigPath::TransformColor { .. }
             | ConfigPath::TransformColorSpeed { .. }
+            | ConfigPath::TransformOpacity { .. }
             | ConfigPath::TransformAffine { .. }
             | ConfigPath::TransformVariation { .. }
             | ConfigPath::TransformVariationParam { .. }
