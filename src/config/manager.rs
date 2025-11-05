@@ -610,6 +610,7 @@ impl ConfigManager {
             ConfigPath::Gamma => Ok(config.gamma.into()),
             ConfigPath::Brightness => Ok(config.brightness.into()),
             ConfigPath::Vibrancy => Ok(config.vibrancy.into()),
+            ConfigPath::Saturation => Ok(config.saturation.into()),
             ConfigPath::DensityScale => Ok(config.density_scale.into()),
             ConfigPath::TonemapMode => Ok(config.tonemap_mode.into()),
             ConfigPath::TonemapCurve => Ok(config.tonemap_curve.clone().into()),
@@ -780,6 +781,9 @@ impl ConfigManager {
             }
             ConfigPath::Vibrancy => {
                 self.current.vibrancy = value.try_into()?;
+            }
+            ConfigPath::Saturation => {
+                self.current.saturation = value.try_into()?;
             }
             ConfigPath::DensityScale => {
                 self.current.density_scale = value.try_into()?;
@@ -1000,6 +1004,9 @@ impl ConfigManager {
             }
             ConfigPath::Vibrancy => {
                 preview.vibrancy = value.try_into()?;
+            }
+            ConfigPath::Saturation => {
+                preview.saturation = value.try_into()?;
             }
             ConfigPath::DensityScale => {
                 preview.density_scale = value.try_into()?;

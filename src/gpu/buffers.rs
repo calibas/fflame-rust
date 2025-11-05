@@ -162,7 +162,7 @@ pub struct TonemapParams {
     pub bright_adjust: f32,  // Apophysis BRIGHT_ADJUST constant (2.3)
     pub area: f32,  // Render area (width * height)
     pub sample_density: f32,  // Iterations per pixel
-    pub _pad0: f32,  // Padding for alignment
+    pub saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
 }
 
 impl Default for TonemapParams {
@@ -182,7 +182,7 @@ impl Default for TonemapParams {
             bright_adjust: BRIGHT_ADJUST,
             area: 800.0 * 600.0,  // Default resolution
             sample_density: 1.0,  // Will be updated per frame
-            _pad0: 0.0,
+            saturation: DEFAULT_SATURATION,
         }
     }
 }

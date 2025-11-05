@@ -81,6 +81,9 @@ pub struct FractalConfig {
     /// 1.0 = modern vibrant colors (default), 0.0 = classic gamma-only colors
     #[serde(default = "default_vibrancy")]
     pub vibrancy: f32,
+    /// Saturation: color saturation boost (1.0 = no change, >1.0 = more saturated)
+    #[serde(default = "default_saturation")]
+    pub saturation: f32,
 
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default)]
@@ -101,6 +104,10 @@ fn default_brightness() -> f32 {
 
 fn default_vibrancy() -> f32 {
     1.0  // Modern vibrant colors by default
+}
+
+fn default_saturation() -> f32 {
+    super::defaults::DEFAULT_SATURATION
 }
 
 fn default_true() -> bool {
@@ -170,6 +177,7 @@ impl Default for FractalConfig {
             gamma: default_gamma(),
             brightness: default_brightness(),
             vibrancy: default_vibrancy(),
+            saturation: default_saturation(),
             deterministic_rng: false,
         }
     }
