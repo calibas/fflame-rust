@@ -154,7 +154,8 @@ pub struct TonemapParams {
     pub density_scale: f32, // Controls how density maps to alpha
     pub tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic
     pub background_color: [f32; 3],
-    pub use_curve: u32,  // 0 = disabled, 1 = enabled (completes vec4 with background_color)
+    pub _pad_bg: f32,  // Padding to align vec3 to 16 bytes (std140 rule)
+    pub use_curve: u32,  // 0 = disabled, 1 = enabled
     pub vibrancy: f32,  // Blend between old and new color algorithms (0.0-30.0)
     pub brightness: f32,  // Logarithmic brightness scaling (0.0-5.0, default 1.0)
     pub white_level: f32,  // Apophysis white_level constant (default 200.0)
@@ -163,6 +164,9 @@ pub struct TonemapParams {
     pub area: f32,  // Render area (width * height)
     pub sample_density: f32,  // Iterations per pixel
     pub saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
+    pub hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
+    pub value_scale: f32,  // Value (brightness) multiplier (1.0 = no change)
+    pub _pad0: f32,  // Padding for alignment
 }
 
 impl Default for TonemapParams {
@@ -174,6 +178,7 @@ impl Default for TonemapParams {
             density_scale: DEFAULT_DENSITY_SCALE,
             tonemap_mode: 1,  // Default to Logarithmic
             background_color: [0.0, 0.0, 0.0],
+            _pad_bg: 0.0,
             use_curve: 0,  // Curves disabled by default
             vibrancy: 1.0,  // Modern vibrant colors by default
             brightness: DEFAULT_BRIGHTNESS,
@@ -183,6 +188,9 @@ impl Default for TonemapParams {
             area: 800.0 * 600.0,  // Default resolution
             sample_density: 1.0,  // Will be updated per frame
             saturation: DEFAULT_SATURATION,
+            hue_shift: DEFAULT_HUE_SHIFT,
+            value_scale: DEFAULT_VALUE_SCALE,
+            _pad0: 0.0,
         }
     }
 }

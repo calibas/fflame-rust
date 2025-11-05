@@ -204,6 +204,8 @@ fn parse_flame_element(
         brightness: 1.0,
         vibrancy: 1.0,  // Default vibrancy
         saturation: 1.0,  // Default saturation
+        hue_shift: 0.0,  // Default hue shift
+        value_scale: 1.0,  // Default value scale
         deterministic_rng: false,
         histogram_color_scale: 100.0,
         low_density_smoothing: 0.5,

@@ -12,7 +12,8 @@ struct TonemapParams {
     density_scale: f32,
     tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic, 2 = DensityVisualization
     background_color: vec3<f32>,
-    use_curve: u32,  // 0 = disabled, 1 = enabled (completes vec4 with background_color)
+    _pad_bg: f32,  // Padding to align vec3 to 16 bytes (std140 rule)
+    use_curve: u32,  // 0 = disabled, 1 = enabled
     vibrancy: f32,  // Blend between old and new color algorithms (0.0-30.0)
     brightness: f32,  // Logarithmic brightness scaling (0.0-5.0, default 1.0)
     white_level: f32,  // Apophysis white_level constant (default 200.0)
@@ -21,6 +22,9 @@ struct TonemapParams {
     area: f32,  // Render area (width * height)
     sample_density: f32,  // Iterations per pixel
     saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
+    hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
+    value_scale: f32,  // Value (brightness) multiplier (1.0 = no change)
+    _pad0: f32,  // Padding for alignment
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -208,13 +212,35 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         color = vec3<f32>(ls * fp0, ls * fp1, ls * fp2);
     }
 
-    // ===== STAGE 3E: Saturation Boost =====
-    // Apply saturation adjustment to increase color intensity
-    // Only apply if saturation is not 1.0 and color is not grayscale
-    if (tonemap_params.saturation != 1.0) {
-        let hsv = rgb_to_hsv(color);
-        let boosted_hsv = vec3<f32>(hsv.x, clamp(hsv.y * tonemap_params.saturation, 0.0, 1.0), hsv.z);
-        color = hsv_to_rgb(boosted_hsv);
+    // ===== STAGE 3E: HSV Adjustments =====
+    // Apply hue shift, saturation boost, and value scaling
+    // Only convert to HSV if at least one adjustment is active
+    let needs_hsv = tonemap_params.saturation != 1.0 || tonemap_params.hue_shift != 0.0 || tonemap_params.value_scale != 1.0;
+    if (needs_hsv) {
+        var hsv = rgb_to_hsv(color);
+
+        // Hue shift (rotate hue around color wheel)
+        if (tonemap_params.hue_shift != 0.0) {
+            hsv.x = hsv.x + tonemap_params.hue_shift;
+            // Wrap hue to 0-360 range
+            if (hsv.x < 0.0) {
+                hsv.x = hsv.x + 360.0;
+            } else if (hsv.x >= 360.0) {
+                hsv.x = hsv.x - 360.0;
+            }
+        }
+
+        // Saturation boost
+        if (tonemap_params.saturation != 1.0) {
+            hsv.y = clamp(hsv.y * tonemap_params.saturation, 0.0, 1.0);
+        }
+
+        // Value scaling (brightness multiplier)
+        if (tonemap_params.value_scale != 1.0) {
+            hsv.z = clamp(hsv.z * tonemap_params.value_scale, 0.0, 1.0);
+        }
+
+        color = hsv_to_rgb(hsv);
     }
 
     // Apply exposure (our extension, not in Apophysis)
