@@ -343,7 +343,7 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.vibrancy);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -414,6 +414,8 @@ impl FlameRenderer {
             tonemap_mode: 1,  // Logarithmic
             background_color: [0.0, 0.0, 0.0],
             use_curve: 0,  // Disabled
+            vibrancy: 1.0,  // Default
+            _pad: [0.0; 3],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -530,6 +532,8 @@ impl FlameRenderer {
             tonemap_mode: 1,  // Logarithmic
             background_color: self.background_color,
             use_curve: 0,  // Disabled
+            vibrancy: 1.0,  // Default
+            _pad: [0.0; 3],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -546,8 +550,8 @@ impl FlameRenderer {
         self.update_tonemap_state(queue);
     }
 
-    /// Update tone mapping mode, curve usage, exposure, and gamma
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32) {
+    /// Update tone mapping mode, curve usage, exposure, gamma, and vibrancy
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, vibrancy: f32) {
         let tonemap_mode_u32 = match tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,
             crate::scene::tonemap::ToneMapMode::Logarithmic => 1u32,
@@ -561,6 +565,8 @@ impl FlameRenderer {
             tonemap_mode: tonemap_mode_u32,
             background_color: self.background_color,
             use_curve: if use_curve { 1u32 } else { 0u32 },
+            vibrancy,
+            _pad: [0.0; 3],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }

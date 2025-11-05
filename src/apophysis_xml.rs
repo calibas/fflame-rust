@@ -201,6 +201,7 @@ fn parse_flame_element(
         use_curve: true,
         exposure: 1.0,
         gamma,
+        vibrancy: 1.0,  // Default vibrancy
         deterministic_rng: false,
         histogram_color_scale: 100.0,
         low_density_smoothing: 0.5,

@@ -73,6 +73,10 @@ pub struct FractalConfig {
     pub exposure: f32,
     #[serde(default = "default_gamma")]
     pub gamma: f32,
+    /// Vibrancy: blend between old (gamma-only) and new (vibrant) color algorithms
+    /// 1.0 = modern vibrant colors (default), 0.0 = classic gamma-only colors
+    #[serde(default = "default_vibrancy")]
+    pub vibrancy: f32,
 
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default)]
@@ -85,6 +89,10 @@ fn default_exposure() -> f32 {
 
 fn default_gamma() -> f32 {
     2.2
+}
+
+fn default_vibrancy() -> f32 {
+    1.0  // Modern vibrant colors by default
 }
 
 fn default_true() -> bool {
@@ -152,6 +160,7 @@ impl Default for FractalConfig {
             use_curve: default_true(),
             exposure: default_exposure(),
             gamma: default_gamma(),
+            vibrancy: default_vibrancy(),
             deterministic_rng: false,
         }
     }
