@@ -1,19 +1,82 @@
 # Gamma and Brightness Verification
 
 **Date:** 2025-01-05
-**Status:** Analysis for Phase 3.3 sub-task
+**Updated:** 2025-01-05 (Deep dive into Apophysis pipeline)
+**Status:** Complete analysis for Phase 3.3 vibrancy implementation
+
+## Executive Summary
+
+**CRITICAL DISCOVERY:** The variable `ls` is **reused for TWO different purposes** in Apophysis:
+1. **Stage 3A:** Brightness scaling factor from logarithmic lookup table
+2. **Stage 3C:** Vibrancy-weighted alpha multiplier (overwrites previous value!)
+
+All three UI sliders (Gamma, Brightness, Vibrancy) divide by 100 before storage.
 
 ## Apophysis Implementation
 
 ### UI Slider Conversion
-From Adjust.pas:1033 and Adjust.pas:1041:
+From Adjust.pas:1033, 1041, and vibrancy:
 ```pascal
-cp.Gamma := scrollGamma.Position / 100;
-cp.Brightness := ScrollBrightness.Position / 100;
+cp.Gamma := scrollGamma.Position / 100;       // Range: 0-500 → 0.0-5.0
+cp.Brightness := ScrollBrightness.Position / 100;  // Range: 0-500 → 0.0-5.0
+cp.Vibrancy := scrollVibrancy.Position / 100;      // Range: 0-3000 → 0.0-30.0
 ```
-Both sliders divide by 100 before storing in `fcp.gamma` and `fcp.brightness`.
+**All three sliders divide by 100 before storing.**
 
-### Gamma Application
+### The Complete Apophysis Pipeline (4 Stages)
+
+#### Stage 1: Iteration → Histogram (Accumulation Buffer)
+From RenderingImplementation.pas:319-336:
+```pascal
+Bucket := @buckets[Round(bhs * py)][Round(bws * px)];
+MapColor := @ColorMap[Round(p.c * 255)];
+
+Bucket.Red   := Bucket.Red   + MapColor.Red;
+Bucket.Green := Bucket.Green + MapColor.Green;
+Bucket.Blue  := Bucket.Blue  + MapColor.Blue;
+Bucket.Count := Bucket.Count + 1;
+```
+
+**Critical insight:** Buckets accumulate **COLORED values**, not just hit counts!
+- `Bucket.Red/Green/Blue`: Sum of all palette RGB values that hit this location
+- `Bucket.Count`: Hit count for spatial location
+
+Bucket structure (RenderingCommon.pas:31-43):
+```pascal
+TBucket = Record
+  Red, Green, Blue, Count: Double;  // 64-bit build (or Single for 32-bit)
+end;
+```
+
+#### Stage 2: Build Brightness Lookup Table
+From ImageMaker.pas:450:
+```pascal
+k1 := (fcp.Contrast * BRIGHT_ADJUST * fcp.brightness * 268 * PREFILTER_WHITE) / 256.0;
+```
+Where `BRIGHT_ADJUST = 2.3` (ControlPoint.pas:39)
+
+From ImageMaker.pas:457:
+```pascal
+lsa[i] := (k1 * log10(1 + fcp.White_level * i * k2)) / (fcp.White_level * i);
+```
+
+This creates a **logarithmic brightness curve**. The 2.3 multiplier means:
+- Brightness slider value of 1.0 actually gets scaled to 2.3 internally
+- Logarithmic curve is steeper/brighter than without this constant
+
+#### Stage 3A: Apply Brightness to Palette Colors
+From ImageMaker.pas:560-563:
+```pascal
+fp[0] := lsa[Round(bucket.Red)] * bucket.Red;       // brightness-scaled red
+fp[1] := lsa[Round(bucket.Green)] * bucket.Green;   // brightness-scaled green
+fp[2] := lsa[Round(bucket.Blue)] * bucket.Blue;     // brightness-scaled blue
+fp[3] := bucket.Count;                               // raw density
+```
+
+**First use of `ls`:** The `lsa[]` lookup table values are brightness scaling factors.
+**Critical:** `fp[0..2]` are now **brightness-scaled palette colors**. Both algorithms in Stage 3D operate on these brightness-scaled values!
+
+#### Stage 3B: Apply Gamma to Density
 From ImageMaker.pas:408-411:
 ```pascal
 if fcp.gamma = 0 then
@@ -21,228 +84,148 @@ if fcp.gamma = 0 then
 else
   gamma := 1 / fcp.gamma;
 ```
-**Gamma is inverted** (1/gamma) before use!
+**Gamma is inverted (1/gamma) before use!**
 
-Applied to brightness/alpha at ImageMaker.pas:597:
+From ImageMaker.pas:597:
 ```pascal
-alpha := power(fp[3], gamma);
-```
-
-Applied to color channels in "old algorithm" at ImageMaker.pas:613-615:
-```pascal
-ri := Round(ls * fp[0] + notvib * power(fp[0], gamma));
-gi := Round(ls * fp[1] + notvib * power(fp[1], gamma));
-bi := Round(ls * fp[2] + notvib * power(fp[2], gamma));
+alpha := power(fp[3], gamma);  // Gamma-corrected density
 ```
 
 **Effect:**
-- gamma < 1: Darkens (because inverted: 1/0.5 = 2.0)
+- gamma < 1: Results in high exponent (1/0.5 = 2.0), darkens
 - gamma = 1: No change (1/1 = 1.0)
-- gamma > 1: Brightens (because inverted: 1/2 = 0.5)
+- gamma > 1: Results in low exponent (1/2 = 0.5), brightens
 
-### Brightness Application
-From ControlPoint.pas:39:
+#### Stage 3C: Calculate Vibrancy-Weighted Brightness (ls REUSED!)
+From ImageMaker.pas:412-413:
 ```pascal
-BRIGHT_ADJUST = 2.3;
+vib := round(fcp.vibrancy * 256.0);
+notvib := 256 - vib;
 ```
 
-From ImageMaker.pas:450:
+From ImageMaker.pas:599:
 ```pascal
-k1 := (fcp.Contrast * BRIGHT_ADJUST * fcp.brightness * 268 * PREFILTER_WHITE) / 256.0;
+ls := vib * alpha / fp[3];  // OVERWRITES previous ls from Stage 3A!
 ```
 
-From ImageMaker.pas:457:
+**Second use of `ls`:** Vibrancy-weighted alpha multiplier
+- `ls = (vibrancy × 256) × power(density, 1/gamma) / density`
+- The ratio `power(density, 1/gamma) / density` creates the vibrancy effect
+- Boosts colors in dim areas more than the old algorithm would
+
+#### Stage 3D: Vibrancy Blend
+From ImageMaker.pas:613-615:
 ```pascal
-lsa[i] := (k1 * log10(1 + fcp.White_level * i * k2)) / (fcp.White_level * i);
+if (notvib > 0) then begin
+  ri := Round(ls * fp[0] + notvib * power(fp[0], gamma));
+  gi := Round(ls * fp[1] + notvib * power(fp[1], gamma));
+  bi := Round(ls * fp[2] + notvib * power(fp[2], gamma));
+end else begin
+  ri := Round(ls * fp[0]);
+  gi := Round(ls * fp[1]);
+  bi := Round(ls * fp[2]);
+end;
 ```
 
-Brightness is:
-1. Divided by 100 from UI
-2. Multiplied by 2.3 (BRIGHT_ADJUST)
-3. Used in logarithmic density-to-brightness mapping (k1 scaling factor)
+Breaking down the blend:
+- **New algorithm:** `ls * fp[0]` = `(vib × alpha/fp[3]) × brightness_scaled_color`
+- **Old algorithm:** `notvib * power(fp[0], gamma)` = `notvib × power(brightness_scaled_color, 1/gamma)`
 
-**Effect:**
-- Higher brightness values increase overall image brightness
-- UI value 1.0 → brightness = 1.0 → k1 scaling factor ~2.3x
+**Both algorithms work on brightness-scaled values from Stage 3A!**
 
 ---
 
-## Our Current Implementation
+## Our Accumulation Method vs Apophysis
 
-### FractalConfig
-```rust
-pub gamma: f32,  // Default: 1.0
-pub exposure: f32,  // Default: 1.0 (acts as brightness)
-```
+### Our Pipeline
+We use **direct accumulation** similar to Apophysis buckets:
 
-### UI Sliders (tone_mapping.rs:55-56)
-```rust
-ui.lazy_slider(config_manager, ConfigPath::Gamma, -1.0..=5.0, "Gamma")
-ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.01..=10.0, "Exposure")
-```
+1. **Iteration → Accumulation Buffer** (compute shader):
+   - Each hit adds palette RGB color to texture pixel: `color.rgb += palette_color`
+   - Density accumulated separately in alpha channel: `color.a += 0.01`
+   - **Same as Apophysis:** We accumulate colored values, not just hit counts!
 
-**NO DIVISION BY 100!** Values are used directly.
+2. **Accumulation → Display** (tonemap shader):
+   - Read accumulated texture (RGB + density)
+   - Apply tone mapping (brightness, gamma, vibrancy)
+   - Output final pixel color
 
-### Shader Application (tonemap.wgsl)
-
-**Gamma in vibrancy blend (line 120):**
-```wgsl
-let old_algo = pow(color, vec3<f32>(tonemap_params.gamma));  // NOT INVERTED!
-```
-
-**Final gamma correction (line 128):**
-```wgsl
-color = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));  // Inverted here
-```
-
-**Exposure/brightness (line 64):**
-```wgsl
-color *= tonemap_params.exposure;  // Simple multiplication
-```
-
----
-
-## Issues Found
-
-### Issue 1: Gamma Not Inverted in Vibrancy Blend
-**Current (line 120):**
-```wgsl
-let old_algo = pow(color, vec3<f32>(tonemap_params.gamma));
-```
-
-**Should be (matching Apophysis ImageMaker.pas:613):**
-```wgsl
-let old_algo = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));
-```
-
-Apophysis inverts gamma BEFORE using it in power(), not after.
-
-### Issue 2: UI Slider Ranges Don't Match Apophysis
-**Current:**
-- Gamma: -1.0 to 5.0 (used directly)
-- Exposure: 0.01 to 10.0 (used directly)
+### Key Difference: When Brightness is Applied
 
 **Apophysis:**
-- Gamma slider: 0 to 500 (divided by 100 → 0.0 to 5.0)
-- Brightness slider: 0 to 500 (divided by 100 → 0.0 to 5.0)
+- Stage 1: Accumulate bucket colors
+- Stage 3A: Apply brightness **during tone mapping** via `lsa[]` lookup table
 
-**Problem:** Our slider values are NOT divided by 100!
+**Our Implementation:**
+- Currently: Apply exposure **during tone mapping** as simple multiplication
+- No logarithmic brightness curve with BRIGHT_ADJUST = 2.3
+- No separate brightness parameter (we use exposure instead)
 
-**Proposed fix:**
+### Mapping to Our System
+
+Our accumulation texture structure:
 ```rust
-// Option 1: Divide by 100 in shader (like vibrancy)
-ui.lazy_slider(config_manager, ConfigPath::Gamma, 0.0..=500.0, "Gamma")
-// Then in shader: let gamma = tonemap_params.gamma / 100.0;
-
-// Option 2: Use 0-5 range but document it matches Apophysis/100
-ui.lazy_slider(config_manager, ConfigPath::Gamma, 0.0..=5.0, "Gamma (0-5 = Apo 0-500)")
+// Accumulation buffer (Rgba16Float)
+color.r = sum of red palette values       // Like bucket.Red
+color.g = sum of green palette values     // Like bucket.Green
+color.b = sum of blue palette values      // Like bucket.Blue
+color.a = hit count × 0.01                // Like bucket.Count (scaled)
 ```
 
-### Issue 3: Brightness Not Logarithmic
-**Current:**
-```wgsl
-color *= tonemap_params.exposure;  // Simple linear multiplication
-```
-
-**Apophysis:**
-```pascal
-lsa[i] := (k1 * log10(1 + fcp.White_level * i * k2)) / (fcp.White_level * i);
-```
-Brightness affects logarithmic density-to-brightness mapping.
-
-**However:** This may be acceptable for our implementation since we use a different rendering pipeline. Apophysis uses a histogram with bucket counts, while we use direct accumulation.
+Our tone mapping shader should replicate Stages 2-3D:
+- Stage 2: Build brightness lookup (or approximate with formula)
+- Stage 3A: Apply brightness to accumulated colors
+- Stage 3B: Apply gamma to density
+- Stage 3C: Calculate vibrancy-weighted multiplier
+- Stage 3D: Blend old/new algorithms
 
 ---
 
-## Recommended Fixes
+## Current Status & Next Steps
 
-### Priority 1: Fix Gamma Inversion in Vibrancy Blend
-Change line 120 in tonemap.wgsl:
-```wgsl
-let old_algo = pow(color, vec3<f32>(1.0 / tonemap_params.gamma));  // Invert gamma
-```
+### What We Have
+- ✅ Accumulation buffer stores colored values (like Apophysis buckets)
+- ✅ Density tracked separately in alpha channel
+- ✅ Basic tone mapping in place
 
-This matches Apophysis behavior where gamma is inverted before power().
+### What Needs Implementation
+To match Apophysis exactly, we need to replicate Stages 2-3D in our tonemap shader:
 
-### Priority 2: Document UI Range Difference
-If we keep the 0-5 range (NOT 0-500 divided by 100), document that:
-- Our gamma 1.0 = Apophysis gamma 100
-- Our gamma 4.0 = Apophysis gamma 400
+1. **Stage 2: Brightness Lookup** (currently missing)
+   - Add `brightness: f32` parameter to FractalConfig
+   - Calculate logarithmic brightness curve in shader
+   - Formula: `lsa[i] = (k1 * log10(1 + white_level * i * k2)) / (white_level * i)`
+   - Where: `k1 = (contrast * 2.3 * brightness * 268 * PREFILTER_WHITE) / 256.0`
 
-This is acceptable since the effect is identical, just different scaling.
+2. **Stage 3A: Apply Brightness to Colors** (currently using simple exposure)
+   - Replace: `color *= exposure`
+   - With: `color *= brightness_scale` (from logarithmic curve)
 
-### Priority 3 (Optional): Add Brightness Slider Separate from Exposure
-If we want exact Apophysis compatibility:
-- Keep `exposure` for our own brightness control (linear)
-- Add separate `brightness` parameter matching Apophysis (0-500 / 100)
-- Apply `brightness` to affect the density-to-color mapping differently
+3. **Stage 3B: Gamma to Density** (partially implemented)
+   - ✅ We invert gamma: `1.0 / gamma`
+   - ✅ Apply to alpha/density
+   - Need to verify formula matches exactly
 
-**However:** This may be overkill. Exposure works well for our purposes.
+4. **Stage 3C: Vibrancy-Weighted Multiplier** (currently incorrect)
+   - Calculate: `ls = vib * alpha / density`
+   - This is the key vibrancy magic!
 
----
-
-## Vibrancy Scaling Issue (CRITICAL)
-
-**Problem:** With vibrancy=1.0 in our UI:
-- vib = 1.0 / 100 * 256 = 2.56
-- notvib = 256 - 2.56 = 253.44
-- Result: Almost entirely OLD algorithm (notvib/256 = 99% old!)
-
-But based on user feedback, vibrancy=1.0 should give high contrast (new algorithm dominant).
-
-**Analysis of Apophysis Vibrancy Slider:**
-From user: "vibrancy slider 0-30 -> divide by 100"
-
-But what is the DEFAULT vibrancy value?
-- If default is 100 (not 1), then: vib = 100/100 * 256 = 256, notvib = 0 ✅
-- If default is 1, then: vib = 1/100 * 256 = 2.56, notvib = 253.44 ❌
-
-**Hypothesis:** Apophysis stores vibrancy as 0-100 BEFORE dividing by 100.
-- UI slider: 0-100 range (not 0-1!)
-- Storage: fcp.vibrancy = slider_value (0-100)
-- Usage: vib = fcp.vibrancy * 256 (NO division by 100 at this point!)
-
-Then the division by 100 happens elsewhere (probably in the UI display or in brightness calculations).
-
-**Revised Understanding:**
-```pascal
-// At render time (ImageMaker.pas:412):
-vib := round(fcp.vibrancy * 256.0);  // fcp.vibrancy is 0-1 (already divided by 100)
-```
-
-So if the UI slider is 0-100, it gets divided by 100 BEFORE storing in fcp.vibrancy.
-Then at render time, it's multiplied by 256.
-
-**For our implementation:**
-- UI slider: 0-30 range
-- If we want vibrancy=1.0 to mean "full new algorithm":
-  - vib = vibrancy * 256 = 256
-  - DON'T divide by 100!
-
-**Proposed fix:**
-```wgsl
-let vib = tonemap_params.vibrancy * 256.0;  // NO division by 100!
-let notvib = 256.0 - vib;
-```
-
-But this means our UI range of 0-30 would give vib = 0-7680, which is way too high.
-
-**Alternative: UI stores 0-1 range, not 0-30**
-- Change UI slider to 0.0-1.0 range
-- Then vib = vibrancy * 256 works correctly
-- vibrancy=1.0 → vib=256 (full new algorithm)
-- vibrancy=0.0 → vib=0 (full old algorithm)
+5. **Stage 3D: Vibrancy Blend** (currently incorrect)
+   - New algorithm: `ls * color` (where color is brightness-scaled)
+   - Old algorithm: `notvib * pow(color, 1/gamma)` (where color is brightness-scaled)
+   - Blend: `new + old`
 
 ---
 
-## Conclusion
+## Summary
 
-**Multiple issues found:**
+This document traces the complete Apophysis pipeline for brightness, gamma, and vibrancy application. Key discoveries:
 
-1. ✅ **FIXED:** Gamma inversion in vibrancy blend (line 120)
-2. ❌ **BROKEN:** Vibrancy scaling is wrong - dividing by 100 when we shouldn't
-3. ❌ **BROKEN:** UI slider range should be 0.0-1.0, not 0-30
+1. **`ls` variable is reused** for two different purposes (brightness lookup, then vibrancy multiplier)
+2. **All UI sliders divide by 100** before storage
+3. **Gamma is inverted** (1/gamma) before use in power functions
+4. **Brightness uses BRIGHT_ADJUST = 2.3** constant and logarithmic mapping
+5. **Buckets accumulate colored values**, not just hit counts
+6. **Both vibrancy algorithms** operate on brightness-scaled palette colors
 
-**User reported behavior confirms vibrancy scaling is broken:**
-- With vibrancy=1.0, gamma has huge effect (because we're using 99% old algorithm)
-- Should be using 100% new algorithm at vibrancy=1.0
+Next step: Wait for full Apophysis implementation report to guide our shader updates.
