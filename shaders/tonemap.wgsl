@@ -72,9 +72,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let accum = textureSample(accumulation_texture, accumulation_sampler, input.uv);
 
     // Extract accumulated RGB and density (analogous to bucket.Red/Green/Blue/Count)
-    let bucket_red = accum.r;
-    let bucket_green = accum.g;
-    let bucket_blue = accum.b;
+    // NOTE: Our accumulation buffer stores AVERAGED colors (sum/count), but Apophysis uses raw SUMS
+    // So we need to multiply back by count to get the raw accumulated values
     let bucket_count = accum.a * 100.0;  // Scale back from 0.01 per hit
 
     // Early exit for empty pixels
@@ -82,11 +81,16 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(tonemap_params.background_color, 1.0);
     }
 
+    // Convert averaged colors back to raw accumulated sums (Apophysis bucket format)
+    let bucket_red = accum.r * bucket_count;
+    let bucket_green = accum.g * bucket_count;
+    let bucket_blue = accum.b * bucket_count;
+
     // ===== STAGE 3A: Apply Brightness to Palette Colors =====
     // Calculate brightness scaling factor (ls) from logarithmic curve
     var ls = brightness_scale(bucket_count) / tonemap_params.prefilter_white;
 
-    // Apply brightness scaling to accumulated colors
+    // Apply brightness scaling to accumulated color sums
     var fp0 = ls * bucket_red;     // brightness-scaled red
     var fp1 = ls * bucket_green;   // brightness-scaled green
     var fp2 = ls * bucket_blue;    // brightness-scaled blue
