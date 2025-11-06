@@ -76,6 +76,10 @@ pub struct FractalConfig {
     pub exposure: f32,
     #[serde(default = "default_gamma")]
     pub gamma: f32,
+    /// Gamma threshold: smooths gamma curve at low densities (Apophysis compatibility)
+    /// Default 0.0025 prevents harsh darkening in sparse areas
+    #[serde(default = "default_gamma_threshold")]
+    pub gamma_threshold: f32,
     /// Brightness: logarithmic brightness scaling (Apophysis compatibility)
     /// 1.0 = standard brightness (default), higher = brighter
     #[serde(default = "default_brightness")]
@@ -107,6 +111,10 @@ fn default_exposure() -> f32 {
 
 fn default_gamma() -> f32 {
     2.2
+}
+
+fn default_gamma_threshold() -> f32 {
+    super::defaults::DEFAULT_GAMMA_THRESHOLD
 }
 
 fn default_brightness() -> f32 {
@@ -199,6 +207,7 @@ impl Default for FractalConfig {
             use_curve: default_true(),
             exposure: default_exposure(),
             gamma: default_gamma(),
+            gamma_threshold: default_gamma_threshold(),
             brightness: default_brightness(),
             vibrancy: default_vibrancy(),
             saturation: default_saturation(),

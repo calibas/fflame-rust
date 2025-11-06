@@ -110,6 +110,7 @@ impl App {
             saturation: crate::config::defaults::DEFAULT_SATURATION,
             hue_shift: crate::config::defaults::DEFAULT_HUE_SHIFT,
             value_scale: crate::config::defaults::DEFAULT_VALUE_SCALE,
+            gamma_threshold: crate::config::defaults::DEFAULT_GAMMA_THRESHOLD,
             deterministic_rng: false,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             low_density_smoothing: crate::config::DEFAULT_LOW_DENSITY_SMOOTHING,
@@ -368,7 +369,7 @@ impl App {
             // 3. Update tonemap parameters and render to screen
             renderer.update_density_scale(&self.gpu.queue, config.density_scale);
             renderer.update_background_color(&self.gpu.queue, config.background_color);
-            renderer.update_tonemap(&self.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, renderer.width, renderer.height, renderer.total_iterations(), config.max_iterations);
+            renderer.update_tonemap(&self.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, renderer.width, renderer.height, renderer.total_iterations(), config.max_iterations);
             renderer.tonemap_pass(&mut encoder, &view);
             self.metrics.record_tonemap_time(t2.elapsed().as_secs_f64() * 1000.0);
 

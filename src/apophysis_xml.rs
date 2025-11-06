@@ -207,6 +207,7 @@ fn parse_flame_element(
         saturation: 1.0,  // Default saturation
         hue_shift: 0.0,  // Default hue shift
         value_scale: 1.0,  // Default value scale
+        gamma_threshold: 0.0025,  // Default Apophysis gamma threshold
         deterministic_rng: false,
         histogram_color_scale: 100.0,
         low_density_smoothing: 0.5,
