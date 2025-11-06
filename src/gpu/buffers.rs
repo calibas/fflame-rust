@@ -166,7 +166,7 @@ pub struct TonemapParams {
     pub saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
     pub hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
     pub value_scale: f32,  // Value (brightness) multiplier (1.0 = no change)
-    pub _pad0: f32,  // Padding for alignment
+    pub gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
 }
 
 impl Default for TonemapParams {
@@ -190,7 +190,7 @@ impl Default for TonemapParams {
             saturation: DEFAULT_SATURATION,
             hue_shift: DEFAULT_HUE_SHIFT,
             value_scale: DEFAULT_VALUE_SCALE,
-            _pad0: 0.0,
+            gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
         }
     }
 }
