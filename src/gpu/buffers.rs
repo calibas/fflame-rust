@@ -737,15 +737,15 @@ impl FlameBuffers {
 
         // Apply palette rotation by shifting indices
         // Rotation range: -1.0 to 1.0 (Apophysis uses -128 to 128, we normalize)
-        // Negative rotation: index 0 → 1, 1 → 2, ..., 255 → 0
-        // Positive rotation: index 0 → 255, 1 → 0, 2 → 1, ...
+        // Negative rotation: colors shift left (color at 0 comes from 1, at 1 from 2, ..., at 255 from 0)
+        // Positive rotation: colors shift right (color at 0 comes from 255, at 1 from 0, ..., at 255 from 254)
         let rotated_data = if palette_rotation != 0.0 {
             let rotation_amount = (palette_rotation * 256.0).round() as i32;
             let mut rotated = vec![0.0f32; 256 * 4];
 
             for i in 0..256 {
                 // Calculate source index with wrapping
-                let src_idx = ((i as i32 - rotation_amount).rem_euclid(256)) as usize;
+                let src_idx = ((i as i32 + rotation_amount).rem_euclid(256)) as usize;
                 let dst_idx = i * 4;
                 let src_base = src_idx * 4;
 
