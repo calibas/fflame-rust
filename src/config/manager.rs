@@ -628,6 +628,7 @@ impl ConfigManager {
                     None => Err(ConfigError::TypeMismatch), // No embedded palette
                 }
             }
+            ConfigPath::PaletteRotation => Ok(config.palette_rotation.into()),
             ConfigPath::SpeedFactor => Ok(config.speed_factor.into()),
             ConfigPath::BackgroundColor => Ok(config.background_color.into()),
 
@@ -828,6 +829,9 @@ impl ConfigManager {
                     // Update embedded palette data
                     self.current.palette = Some(palette);
                 }
+            }
+            ConfigPath::PaletteRotation => {
+                self.current.palette_rotation = value.try_into()?;
             }
             ConfigPath::SpeedFactor => {
                 self.current.speed_factor = value.try_into()?;
@@ -1053,6 +1057,9 @@ impl ConfigManager {
                     }
                     preview.palette = Some(palette);
                 }
+            }
+            ConfigPath::PaletteRotation => {
+                preview.palette_rotation = value.try_into()?;
             }
             ConfigPath::SpeedFactor => {
                 preview.speed_factor = value.try_into()?;

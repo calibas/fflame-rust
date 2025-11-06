@@ -98,6 +98,7 @@ impl App {
             color_mode: ColorMode::Transform,
             palette_index: 1,
             palette: Some(initial_palette),
+            palette_rotation: 0.0,
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::Logarithmic,
             tonemap_curve: ToneCurve::linear(),
@@ -171,7 +172,7 @@ impl App {
                                     let palette = config.palette.as_ref()
                                         .or_else(|| app.palette_library.get(config.palette_index));
                                     if let Some(palette) = palette {
-                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette);
+                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette, config.palette_rotation);
                                     }
                                     renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
                                         config.zoom, config.pan_x, config.pan_y, config.rotation,
@@ -199,7 +200,7 @@ impl App {
                                     let palette = config.palette.as_ref()
                                         .or_else(|| app.palette_library.get(config.palette_index));
                                     if let Some(palette) = palette {
-                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette);
+                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette, config.palette_rotation);
                                     }
                                     renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
                                         config.zoom, config.pan_x, config.pan_y, config.rotation,
@@ -300,6 +301,7 @@ impl App {
 
         // Get config once at start of frame (avoids repeated active_config() calls)
         let config = self.config_manager.active_config();
+        let palette_rotation = config.palette_rotation;  // Copy to avoid borrow issues
 
         let frame = self.gpu.surface.get_current_texture()?;
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -537,7 +539,7 @@ impl App {
             let config = self.config_manager.active_config();
             if let Some(ref mut renderer) = self.flame_renderer {
                 if let Some(palette) = palette_lib.get(config.palette_index) {
-                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
+                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, palette_rotation);
                 }
             }
         }
@@ -726,7 +728,7 @@ impl App {
 
                     // Update renderer
                     if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette);
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, palette_rotation);
                     }
                 }
                 Err(e) => {
@@ -763,7 +765,7 @@ impl App {
 
                                     // Update renderer
                                     if let Some(ref mut renderer) = self.flame_renderer {
-                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette);
+                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, palette_rotation);
                                     }
 
                                     println!("Palette loaded from: {}", path.display());
@@ -971,7 +973,7 @@ impl App {
                         .or_else(|| self.palette_library.get(update_config.palette_index));
 
                     if let Some(palette) = palette {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, palette_rotation);
                     }
 
                     // Update color mode in GPU params (ColorMode changes trigger update_palette)

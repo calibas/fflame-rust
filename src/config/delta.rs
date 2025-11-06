@@ -42,6 +42,7 @@ pub enum ConfigPath {
     ColorMode,
     PaletteIndex,
     Palette, // Embedded palette data (custom palettes)
+    PaletteRotation,
     SpeedFactor,
     BackgroundColor,
 
@@ -124,6 +125,7 @@ impl Display for ConfigPath {
             ConfigPath::ColorMode => write!(f, "Color Mode"),
             ConfigPath::PaletteIndex => write!(f, "Palette"),
             ConfigPath::Palette => write!(f, "Palette Data"),
+            ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
             ConfigPath::SpeedFactor => write!(f, "Speed Blend Factor"),
             ConfigPath::BackgroundColor => write!(f, "Background Color"),
 
@@ -488,6 +490,7 @@ impl ConfigPath {
             ConfigPath::ColorMode
             | ConfigPath::PaletteIndex
             | ConfigPath::Palette
+            | ConfigPath::PaletteRotation
             | ConfigPath::SpeedFactor => UpdateType::ColorOnly,
 
             // Rendering settings - affect iteration behavior

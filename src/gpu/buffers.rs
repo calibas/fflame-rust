@@ -732,11 +732,35 @@ impl FlameBuffers {
     }
 
     /// Update palette texture
-    pub fn update_palette(&self, queue: &Queue, palette: &Palette) {
+    pub fn update_palette(&self, queue: &Queue, palette: &Palette, palette_rotation: f32) {
         let palette_data = palette.generate_texture_data(256);
 
+        // Apply palette rotation by shifting indices
+        // Rotation range: -1.0 to 1.0 (Apophysis uses -128 to 128, we normalize)
+        // Negative rotation: index 0 → 1, 1 → 2, ..., 255 → 0
+        // Positive rotation: index 0 → 255, 1 → 0, 2 → 1, ...
+        let rotated_data = if palette_rotation != 0.0 {
+            let rotation_amount = (palette_rotation * 256.0).round() as i32;
+            let mut rotated = vec![0.0f32; 256 * 4];
+
+            for i in 0..256 {
+                // Calculate source index with wrapping
+                let src_idx = ((i as i32 - rotation_amount).rem_euclid(256)) as usize;
+                let dst_idx = i * 4;
+                let src_base = src_idx * 4;
+
+                rotated[dst_idx] = palette_data[src_base];
+                rotated[dst_idx + 1] = palette_data[src_base + 1];
+                rotated[dst_idx + 2] = palette_data[src_base + 2];
+                rotated[dst_idx + 3] = palette_data[src_base + 3];
+            }
+            rotated
+        } else {
+            palette_data
+        };
+
         // Convert f32 [0.0, 1.0] to u8 [0, 255] for Rgba8Unorm
-        let palette_data_u8: Vec<u8> = palette_data
+        let palette_data_u8: Vec<u8> = rotated_data
             .iter()
             .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
             .collect();
