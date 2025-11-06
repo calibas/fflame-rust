@@ -59,6 +59,9 @@ pub struct FractalConfig {
     /// If None, will use palette_index from library
     #[serde(default)]
     pub palette: Option<Palette>,
+    /// Palette rotation: -1.0 to 1.0, shifts palette indices (Apophysis: -128 to 128)
+    #[serde(default = "default_palette_rotation")]
+    pub palette_rotation: f32,
     pub background_color: [f32; 3],
 
     /// Tone mapping settings
@@ -126,6 +129,10 @@ fn default_value_scale() -> f32 {
     super::defaults::DEFAULT_VALUE_SCALE
 }
 
+fn default_palette_rotation() -> f32 {
+    super::defaults::DEFAULT_PALETTE_ROTATION
+}
+
 fn default_true() -> bool {
     true
 }
@@ -185,6 +192,7 @@ impl Default for FractalConfig {
             color_mode: ColorMode::Transform,
             palette_index: 0,
             palette: None,
+            palette_rotation: default_palette_rotation(),
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::default(),
             tonemap_curve: ToneCurve::default(),

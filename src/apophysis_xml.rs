@@ -195,6 +195,7 @@ fn parse_flame_element(
         color_mode,  // Detected based on palette presence
         palette_index: 0,
         palette,
+        palette_rotation: 0.0,  // Default, could parse from XML if present
         background_color: background,
         tonemap_mode: ToneMapMode::Logarithmic,
         tonemap_curve: ToneCurve::linear(),

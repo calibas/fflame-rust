@@ -311,6 +311,24 @@ pub fn render_tone_mapping_window(
                         }
                     }
 
+                    // Palette Rotation slider (for Palette and Speed modes)
+                    let current_color_mode_3 = config_manager.active_config().color_mode;
+                    if matches!(current_color_mode_3, ColorMode::Palette | ColorMode::Speed) {
+                        let current_rotation = config_manager.active_config().palette_rotation;
+                        let mut temp_rotation = current_rotation;
+                        let response = ui.add(egui::Slider::new(&mut temp_rotation, -1.0..=1.0).text("Palette Rotation"));
+                        if response.changed() {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PaletteRotation, temp_rotation.into(), response.dragged()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if response.drag_stopped() && config_manager.is_in_preview_mode() {
+                            if let Ok(update) = config_manager.force_commit_preview(&ConfigPath::PaletteRotation) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                    }
+
                     ui.separator();
 
                     // Background color picker
