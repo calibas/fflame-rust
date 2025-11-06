@@ -429,7 +429,7 @@ impl FlameRenderer {
             saturation: DEFAULT_SATURATION,
             hue_shift: DEFAULT_HUE_SHIFT,
             value_scale: DEFAULT_VALUE_SCALE,
-            _pad0: 0.0,
+            gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -561,7 +561,7 @@ impl FlameRenderer {
             saturation: DEFAULT_SATURATION,
             hue_shift: DEFAULT_HUE_SHIFT,
             value_scale: DEFAULT_VALUE_SCALE,
-            _pad0: 0.0,
+            gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -618,7 +618,7 @@ impl FlameRenderer {
             saturation,
             hue_shift,
             value_scale,
-            _pad0: 0.0,
+            gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }

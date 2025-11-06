@@ -17,6 +17,7 @@ pub const DEFAULT_PALETTE_ROTATION: f32 = 0.0; // -1.0 to 1.0, shifts palette in
 pub const BRIGHT_ADJUST: f32 = 2.3;
 pub const PREFILTER_WHITE: f32 = 67108864.0; // (1 shl 26)
 pub const DEFAULT_WHITE_LEVEL: f32 = 200.0;
+pub const DEFAULT_GAMMA_THRESHOLD: f32 = 0.0025; // Smooths gamma curve at low densities
 
 // Accumulation
 pub const DEFAULT_LOW_DENSITY_SMOOTHING: f32 = 0.5; // Moderate smoothing

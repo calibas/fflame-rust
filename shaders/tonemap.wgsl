@@ -24,7 +24,7 @@ struct TonemapParams {
     saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
     hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
     value_scale: f32,  // Value (brightness) multiplier (1.0 = no change)
-    _pad0: f32,  // Padding for alignment
+    gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -171,10 +171,24 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Invert gamma (Apophysis ImageMaker.pas:410)
     let gamma = select(1.0 / tonemap_params.gamma, tonemap_params.gamma, tonemap_params.gamma == 0.0);
 
-    // Apply gamma to density to get alpha
+    // Pre-calculate funcval for gamma threshold (Apophysis setup phase)
+    // funcval = gamma_threshold ^ (gamma - 1)
+    var funcval = 0.0;
+    if (tonemap_params.gamma_threshold != 0.0) {
+        funcval = pow(tonemap_params.gamma_threshold, gamma - 1.0);
+    }
+
+    // Apply gamma to density with threshold smoothing
     var alpha = 0.0;
     if (fp3 > 0.0) {
-        alpha = pow(fp3, gamma);
+        if (fp3 <= tonemap_params.gamma_threshold) {
+            // Blend between linear and gamma curves at low densities
+            let frac = fp3 / tonemap_params.gamma_threshold;
+            alpha = (1.0 - frac) * fp3 * funcval + frac * pow(fp3, gamma);
+        } else {
+            // Standard gamma curve
+            alpha = pow(fp3, gamma);
+        }
     }
 
     // ===== STAGE 3C: Calculate Vibrancy-Weighted Multiplier (REUSE ls!) =====
