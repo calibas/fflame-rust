@@ -40,55 +40,87 @@ fn speed_to_color(speed: f32) -> vec3<f32> {
     return textureSampleLevel(palette_texture, palette_sampler, normalized_speed, 0.0).rgb;
 }
 
-// Projection functions for 3D → 2D (only used in 3D mode)
-fn project_orthographic(p: vec3<f32>) -> vec2<f32> {
-    // Simple: just drop Z coordinate
-    return p.xy;
+// Build Apophysis camera matrix (ZXY Euler rotation: yaw around Z, then pitch around X)
+// Source: Apophysis ControlPoint.pas:467-475
+fn build_camera_matrix(pitch: f32, yaw: f32) -> mat3x3<f32> {
+    let cy = cos(-yaw);  // Note: -yaw inversion as in Apophysis
+    let sy = sin(-yaw);
+    let cp = cos(pitch);
+    let sp = sin(pitch);
+
+    // Camera matrix from Apophysis formula
+    // Returns column-major matrix for WGSL
+    return mat3x3<f32>(
+        vec3<f32>(cy,           cp * sy,      sp * sy),      // Column 0
+        vec3<f32>(-sy,          cp * cy,      sp * cy),      // Column 1
+        vec3<f32>(0.0,          -sp,          cp)            // Column 2
+    );
 }
 
-fn project_perspective(p: vec3<f32>, strength: f32) -> vec2<f32> {
-    // Perspective projection: scale by (strength / (strength + z))
-    let scale = strength / (strength + p.z);
-    return p.xy * scale;
+// Apply Apophysis camera transformation: translate + rotate
+fn camera_transform(p: vec3<f32>, camera_matrix: mat3x3<f32>, camera_z: f32) -> vec3<f32> {
+    // Step 1: Translate Z coordinate (move origin to camera height)
+    let z_translated = p.z - camera_z;
+
+    // Step 2: Rotate using camera matrix (Apophysis formula)
+    // Matrix multiplication: camera_matrix * vec3(p.x, p.y, z_translated)
+    let x = camera_matrix[0][0] * p.x + camera_matrix[1][0] * p.y;
+    let y = camera_matrix[0][1] * p.x + camera_matrix[1][1] * p.y + camera_matrix[2][1] * z_translated;
+    let z = camera_matrix[0][2] * p.x + camera_matrix[1][2] * p.y + camera_matrix[2][2] * z_translated;
+
+    return vec3<f32>(x, y, z);
 }
 
-fn project_to_2d(p: vec3<f32>) -> vec2<f32> {
-    if (params.projection_type == 0u) {
-        return project_orthographic(p);
-    } else {
-        return project_perspective(p, params.perspective_strength);
+// Apply Apophysis perspective projection
+// Source: Apophysis ControlPoint.pas:606
+fn apply_perspective(p: vec3<f32>, persp_strength: f32) -> vec2<f32> {
+    if (abs(persp_strength) < 1e-6) {
+        // Orthographic: no perspective
+        return p.xy;
     }
+
+    // Apophysis formula: zr = 1 - cameraPersp * z
+    let zr = 1.0 - persp_strength * p.z;
+
+    // Avoid division by zero
+    if (abs(zr) < 1e-6) {
+        return p.xy;
+    }
+
+    // Perspective divide: x' = x / zr, y' = y / zr
+    return p.xy / zr;
 }
 
-// Convert 3D fractal coords to pixel coords (with camera rotation)
+// Complete Apophysis 3D → 2D projection pipeline
+fn project_3d_to_2d_apophysis(
+    p: vec3<f32>,
+    pitch: f32,
+    yaw: f32,
+    camera_z: f32,
+    persp_strength: f32
+) -> vec2<f32> {
+    // Build camera matrix
+    let camera_matrix = build_camera_matrix(pitch, yaw);
+
+    // Transform to camera space (translate + rotate)
+    let camera_space = camera_transform(p, camera_matrix, camera_z);
+
+    // Apply perspective projection
+    return apply_perspective(camera_space, persp_strength);
+}
+
+// Convert 3D fractal coords to pixel coords (with Apophysis camera system)
 fn world_to_pixel_3d(p: vec3<f32>) -> vec2<i32> {
-    // First, apply 3D camera rotation (rotate the 3D point in space)
-    var rotated = p;
-
-    // Rotate around Y axis (yaw - left/right orbit)
-    if (params.camera_rotation_y != 0.0) {
-        let cy = cos(params.camera_rotation_y);
-        let sy = sin(params.camera_rotation_y);
-        rotated = vec3<f32>(
-            rotated.x * cy + rotated.z * sy,
-            rotated.y,
-            -rotated.x * sy + rotated.z * cy
-        );
-    }
-
-    // Rotate around X axis (pitch - up/down orbit)
-    if (params.camera_rotation_x != 0.0) {
-        let cx = cos(params.camera_rotation_x);
-        let sx = sin(params.camera_rotation_x);
-        rotated = vec3<f32>(
-            rotated.x,
-            rotated.y * cx - rotated.z * sx,
-            rotated.y * sx + rotated.z * cx
-        );
-    }
-
-    // Then, project 3D → 2D
-    let p2d = project_to_2d(rotated);
+    // Apply Apophysis 3D → 2D projection (camera transform + perspective)
+    // TODO: Add camera_z parameter to params struct (currently hardcoded to 0.0)
+    let camera_z = 0.0;  // Placeholder until we add camera_z to config
+    let p2d = project_3d_to_2d_apophysis(
+        p,
+        params.camera_rotation_x,  // pitch
+        params.camera_rotation_y,  // yaw
+        camera_z,
+        params.perspective_strength
+    );
 
     // Apply view transform: pan, rotation, and zoom
     var transformed = p2d - vec2<f32>(params.pan_x, params.pan_y);
