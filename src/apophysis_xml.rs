@@ -66,9 +66,16 @@ fn parse_flame_element(
     let mut size = (1920, 1080);
     let mut center = (0.0, 0.0);
     let mut scale = 100.0;
+    let mut rotate = 0.0;  // View rotation in degrees
     let mut background = [0.0, 0.0, 0.0];
     let mut brightness = 1.0;
     let mut gamma = 2.2;
+    let mut vibrancy = 1.0;
+    let mut gamma_threshold = 0.0025;
+    let mut cam_pitch = 0.0;  // Camera rotation X (radians)
+    let mut cam_yaw = 0.0;    // Camera rotation Y (radians)
+    let mut cam_perspective = 0.0;  // Perspective strength
+    let mut curves: Option<Vec<f32>> = None;  // Tone curve data (48 floats)
 
     for attr in start_element.attributes() {
         let attr = attr?;
@@ -92,6 +99,7 @@ fn parse_flame_element(
                 }
             }
             "scale" => scale = value.parse().unwrap_or(100.0),
+            "rotate" => rotate = value.parse().unwrap_or(0.0),
             "background" => {
                 let parts: Vec<&str> = value.split_whitespace().collect();
                 if parts.len() == 3 {
@@ -106,6 +114,20 @@ fn parse_flame_element(
                 // Multiply by 2.2 to convert
                 let apo_gamma: f32 = value.parse().unwrap_or(1.0);
                 gamma = apo_gamma * 2.2;
+            }
+            "vibrancy" => vibrancy = value.parse().unwrap_or(1.0),
+            "gamma_threshold" => gamma_threshold = value.parse().unwrap_or(0.0025),
+            "cam_pitch" => cam_pitch = value.parse().unwrap_or(0.0),
+            "cam_yaw" => cam_yaw = value.parse().unwrap_or(0.0),
+            "cam_perspective" => cam_perspective = value.parse().unwrap_or(0.0),
+            "curves" => {
+                // Parse space-separated floats (48 values: 4 curves × 12 points)
+                let parsed: Vec<f32> = value.split_whitespace()
+                    .filter_map(|s| s.parse::<f32>().ok())
+                    .collect();
+                if parsed.len() == 48 {
+                    curves = Some(parsed);
+                }
             }
             _ => {} // Ignore unknown attributes for now
         }
@@ -165,13 +187,20 @@ fn parse_flame_element(
         transforms.push(transform);
     }
 
+    // Determine projection type from cam_perspective
+    let projection = if f32::abs(cam_perspective) > 0.0001 {
+        ProjectionType::Perspective { strength: f32::abs(cam_perspective) }
+    } else {
+        ProjectionType::Orthographic
+    };
+
     // Build FractalConfig
     let flame = Flame {
         name,
         transforms,
         final_transform: None,
         render_mode: RenderMode::TwoD,
-        projection: ProjectionType::Orthographic,
+        projection,
     };
 
     // Convert Apophysis scale/center to our zoom/pan
@@ -181,14 +210,27 @@ fn parse_flame_element(
     let pan_x = center.0;
     let pan_y = center.1;
 
+    // Convert rotation from degrees to radians
+    let rotation = rotate * std::f32::consts::PI / 180.0;
+
+    // Parse tone curve from Apophysis curves data
+    // Apophysis: 48 floats = 4 curves (X, R, G, B) × 12 points each
+    // Indices: 0-11=X, 12-23=R, 24-35=G, 36-47=B
+    // We use the average of R, G, B curves
+    let tonemap_curve = if let Some(curve_data) = curves {
+        parse_apophysis_curves(&curve_data)
+    } else {
+        ToneCurve::linear()
+    };
+
     Ok(FractalConfig {
         flame,
         zoom,
         pan_x,
         pan_y,
-        rotation: 0.0,
-        camera_rotation_x: 0.0,
-        camera_rotation_y: 0.0,
+        rotation,
+        camera_rotation_x: cam_pitch,
+        camera_rotation_y: cam_yaw,
         density_scale: 1.0,  // Use default, brightness is handled by Apophysis brightness parameter
         speed_factor: 1.0,
         max_iterations: 1_000_000_000,
@@ -198,16 +240,16 @@ fn parse_flame_element(
         palette_rotation: 0.0,  // Default, could parse from XML if present
         background_color: background,
         tonemap_mode: ToneMapMode::Logarithmic,
-        tonemap_curve: ToneCurve::linear(),
+        tonemap_curve,
         use_curve: true,
         exposure: 1.0,
         gamma,
         brightness,  // Use parsed Apophysis brightness value
-        vibrancy: 1.0,  // Default vibrancy
+        vibrancy,  // Use parsed Apophysis vibrancy
         saturation: 1.0,  // Default saturation
         hue_shift: 0.0,  // Default hue shift
         value_scale: 1.0,  // Default value scale
-        gamma_threshold: 0.0025,  // Default Apophysis gamma threshold
+        gamma_threshold,  // Use parsed Apophysis gamma_threshold
         deterministic_rng: false,
         histogram_color_scale: 100.0,
         low_density_smoothing: 0.5,
@@ -377,6 +419,42 @@ fn parse_palette_element(
     }
 
     Ok(Palette::new_locked("Imported from Apophysis", stops))
+}
+
+/// Parse Apophysis curves data into a ToneCurve
+///
+/// Apophysis stores 48 floats representing 4 curves × 12 points:
+/// - Indices 0-11: X curve (input positions)
+/// - Indices 12-23: R curve (red channel outputs)
+/// - Indices 24-35: G curve (green channel outputs)
+/// - Indices 36-47: B curve (blue channel outputs)
+///
+/// We average the R, G, B curves to create a single luminance curve.
+fn parse_apophysis_curves(data: &[f32]) -> ToneCurve {
+    if data.len() != 48 {
+        // Invalid data, return linear curve
+        return ToneCurve::linear();
+    }
+
+    // Extract X positions (indices 0-11) and average RGB values
+    let mut points = Vec::new();
+
+    for i in 0..12 {
+        let x = data[i];  // X position
+        let r = data[12 + i];  // R value
+        let g = data[24 + i];  // G value
+        let b = data[36 + i];  // B value
+
+        // Average RGB to get luminance
+        let y = (r + g + b) / 3.0;
+
+        points.push(crate::scene::tonemap::CurvePoint::new(x, y));
+    }
+
+    // Sort by x coordinate (should already be sorted, but ensure it)
+    points.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+
+    ToneCurve { points }
 }
 
 #[cfg(test)]
