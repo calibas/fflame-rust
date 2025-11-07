@@ -36,6 +36,11 @@ pub struct Transform {
     ///  1.0 = full inheritance (transform has no color influence)
     pub color_speed: f32,
 
+    /// Color blend factor (0.0 to 1.0)
+    /// Controls how much of the transform color is applied
+    /// 0.0 = no transform color influence, 1.0 = full influence
+    pub color_blend: f32,
+
     /// Opacity / visibility (0.0 to 1.0, Apophysis compatibility)
     /// Controls probability of plotting points from this transform
     /// 1.0 = always plot (default), 0.0 = never plot (invisible)
@@ -57,6 +62,7 @@ impl Default for Transform {
             variation_params: HashMap::new(),
             color: [1.0, 1.0, 1.0],
             color_speed: 0.0,  // Apophysis default: 50/50 blend
+            color_blend: 1.0,  // Default: full transform color influence
             opacity: 1.0,      // Apophysis default: always visible
         }
     }
@@ -241,7 +247,7 @@ impl Serialize for Transform {
     {
         use serde::ser::SerializeStruct;
 
-        let mut state = serializer.serialize_struct("Transform", 13)?;
+        let mut state = serializer.serialize_struct("Transform", 14)?;
         state.serialize_field("a", &self.a)?;
         state.serialize_field("b", &self.b)?;
         state.serialize_field("c", &self.c)?;
@@ -254,6 +260,7 @@ impl Serialize for Transform {
         state.serialize_field("variation_params", &self.variation_params)?;
         state.serialize_field("color", &self.color)?;
         state.serialize_field("color_speed", &self.color_speed)?;
+        state.serialize_field("color_blend", &self.color_blend)?;
         state.serialize_field("opacity", &self.opacity)?;
         state.end()
     }
@@ -268,7 +275,7 @@ impl<'de> Deserialize<'de> for Transform {
         #[derive(Deserialize)]
         #[serde(field_identifier, rename_all = "snake_case")]
         enum Field {
-            A, B, C, D, E, F, G, Weight, Variations, VariationParams, Color, ColorSpeed, Opacity,
+            A, B, C, D, E, F, G, Weight, Variations, VariationParams, Color, ColorSpeed, ColorBlend, Opacity,
         }
 
         struct TransformVisitor;
@@ -296,6 +303,7 @@ impl<'de> Deserialize<'de> for Transform {
                 let mut variation_params = None;
                 let mut color = None;
                 let mut color_speed = None;
+                let mut color_blend = None;
                 let mut opacity = None;
 
                 while let Some(key) = map.next_key()? {
@@ -359,6 +367,7 @@ impl<'de> Deserialize<'de> for Transform {
                         }
                         Field::Color => color = Some(map.next_value()?),
                         Field::ColorSpeed => color_speed = Some(map.next_value()?),
+                        Field::ColorBlend => color_blend = Some(map.next_value()?),
                         Field::Opacity => opacity = Some(map.next_value()?),
                     }
                 }
@@ -376,6 +385,7 @@ impl<'de> Deserialize<'de> for Transform {
                     variation_params: variation_params.unwrap_or_else(HashMap::new), // Default to empty if missing
                     color: color.ok_or_else(|| de::Error::missing_field("color"))?,
                     color_speed: color_speed.ok_or_else(|| de::Error::missing_field("color_speed"))?,
+                    color_blend: color_blend.unwrap_or(1.0), // Default to 1.0 for backward compatibility
                     opacity: opacity.unwrap_or(1.0), // Default to 1.0 for backward compatibility
                 })
             }
