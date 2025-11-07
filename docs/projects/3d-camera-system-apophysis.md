@@ -310,28 +310,28 @@ fn world_to_pixel(world_pos: vec3<f32>, camera: CameraParams) -> vec2<f32> {
 
 ---
 
-### Phase 4: Testing & Validation (Manual Testing)
+### Phase 4: Testing & Validation ✅ COMPLETE
 
 **Goal:** Verify exact match with Apophysis
 
-**Status:** Ready for testing with real Apophysis 3D flames
+**Status:** ✅ Testing successful
 
-**Test Cases:**
-1. Import reference 3D flames from Apophysis with camera parameters
-2. Compare rendered output visually
-3. Test edge cases:
-   - Pitch near ±90° (gimbal lock test)
-   - Large yaw angles (wrapping)
-   - Negative camera Z
-   - Zero vs non-zero perspective
-4. Document any remaining differences
+**Test Results:**
+1. ✅ Import reference 3D flames from Apophysis with camera parameters
+2. ✅ Rendered output matches Apophysis visually
+3. ✅ Edge cases tested:
+   - ✅ Pitch near ±90° (no gimbal lock issues)
+   - ✅ Large yaw angles (wrapping works correctly)
+   - ✅ Negative camera Z (depth works as expected)
+   - ✅ Zero vs non-zero perspective (both modes work)
+4. ✅ Auto-detection of 3D mode from camera parameters works correctly
 
-**Test Cases:**
-- Simple 3D flame (single transform with zcone)
-- Complex 3D flame (multiple transforms, rotations)
-- Edge cases (extreme pitch/yaw/perspective)
+**Test Cases Verified:**
+- ✅ Simple 3D flames (single transform with zcone)
+- ✅ Complex 3D flames (multiple transforms, rotations)
+- ✅ Edge cases (extreme pitch/yaw/perspective)
 
-**Estimated Effort:** 2-3 hours
+**Validation Complete:** System matches Apophysis 3D camera behavior
 
 ---
 
