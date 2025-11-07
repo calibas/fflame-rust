@@ -20,6 +20,8 @@ pub struct FractalConfig {
     pub camera_rotation_x: f32,  // Pitch (rotation around X axis)
     #[serde(default)]
     pub camera_rotation_y: f32,  // Yaw (rotation around Y axis)
+    #[serde(default)]
+    pub camera_z: f32,  // Camera Z position (height)
 
     /// Rendering settings
     pub density_scale: f32,
@@ -186,6 +188,7 @@ impl Default for FractalConfig {
             rotation: 0.0,
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
+            camera_z: 0.0,
             density_scale: 1.0,
             speed_factor: 0.5,
             max_iterations: default_max_iterations(),

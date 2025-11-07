@@ -225,6 +225,13 @@ pub fn render_view_window(
                         }
                     }
                 });
+
+                ui.horizontal(|ui| {
+                    ui.label("Z Position:");
+                    if let Ok(result) = ui.lazy_drag(config_manager, ConfigPath::CameraZ, 0.01, "") {
+                        max_update = max_update.max(result.update_type);
+                    }
+                });
             }
 
             ui.separator();
@@ -238,6 +245,7 @@ pub fn render_view_window(
                         (ConfigPath::Rotation, 0.0.into()),
                         (ConfigPath::CameraRotationX, 0.0.into()),
                         (ConfigPath::CameraRotationY, 0.0.into()),
+                        (ConfigPath::CameraZ, 0.0.into()),
                     ],
                     "Reset View".to_string(),
                     false
