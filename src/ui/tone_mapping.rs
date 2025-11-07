@@ -48,11 +48,35 @@ pub fn render_tone_mapping_window(
                     ui.separator();
 
                     // Convert sliders to use ConfigManager
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.1..=5.0, "Exposure") {
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.01..=10.0, "Exposure") {
                         max_update = max_update.max(result.update_type);
                     }
 
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, 1.0..=3.0, "Gamma") {
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, -1.0..=10.0, "Gamma") {
+                        max_update = max_update.max(result.update_type);
+                    }
+
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::GammaThreshold, 0.0..=1000.0, "Gamma Threshold") {
+                        max_update = max_update.max(result.update_type);
+                    }
+
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Brightness, 0.001..=100.0, "Brightness") {
+                        max_update = max_update.max(result.update_type);
+                    }
+
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Vibrancy, 0.0..=30.0, "Vibrancy") {
+                        max_update = max_update.max(result.update_type);
+                    }
+
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Saturation, 0.0..=3.0, "Saturation") {
+                        max_update = max_update.max(result.update_type);
+                    }
+
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::HueShift, -360.0..=360.0, "Hue Shift") {
+                        max_update = max_update.max(result.update_type);
+                    }
+
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::ValueScale, 0.0..=3.0, "Value Scale") {
                         max_update = max_update.max(result.update_type);
                     }
 
@@ -286,6 +310,24 @@ pub fn render_tone_mapping_window(
                         }
                         if response.drag_stopped() && config_manager.is_in_preview_mode() {
                             if let Ok(update) = config_manager.force_commit_preview(&ConfigPath::SpeedFactor) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                    }
+
+                    // Palette Rotation slider (for Palette and Speed modes)
+                    let current_color_mode_3 = config_manager.active_config().color_mode;
+                    if matches!(current_color_mode_3, ColorMode::Palette | ColorMode::Speed) {
+                        let current_rotation = config_manager.active_config().palette_rotation;
+                        let mut temp_rotation = current_rotation;
+                        let response = ui.add(egui::Slider::new(&mut temp_rotation, -1.0..=1.0).text("Palette Rotation"));
+                        if response.changed() {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PaletteRotation, temp_rotation.into(), response.dragged()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if response.drag_stopped() && config_manager.is_in_preview_mode() {
+                            if let Ok(update) = config_manager.force_commit_preview(&ConfigPath::PaletteRotation) {
                                 max_update = max_update.max(update);
                             }
                         }

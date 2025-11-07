@@ -301,8 +301,8 @@ impl FlameRenderer {
         self.histogram_color_scale = config.histogram_color_scale;
         self.low_density_smoothing = config.low_density_smoothing;
 
-        // 5. Update palette
-        self.buffers.update_palette(queue, palette);
+        // 5. Update palette with hue rotation
+        self.buffers.update_palette(queue, palette, config.palette_rotation);
 
         // Note: scale_buffer removed - scale is now in params.histogram_color_scale
 
@@ -343,7 +343,7 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, self.width, self.height, self.total_iterations, config.max_iterations);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -407,13 +407,29 @@ impl FlameRenderer {
 
     /// Update tonemap parameters (exposure, gamma)
     pub fn update_tonemap_params(&self, queue: &Queue, exposure: f32, gamma: f32) {
+        use crate::config::defaults::*;
+        let area = (self.width * self.height) as f32;
+        let sample_density = if area > 0.0 { self.total_iterations as f32 / area } else { 1.0 };
+
         let params = TonemapParams {
             exposure,
             gamma,
             density_scale: 1.0,
             tonemap_mode: 1,  // Logarithmic
             background_color: [0.0, 0.0, 0.0],
+            _pad_bg: 0.0,
             use_curve: 0,  // Disabled
+            vibrancy: 1.0,  // Default
+            brightness: DEFAULT_BRIGHTNESS,
+            white_level: DEFAULT_WHITE_LEVEL,
+            prefilter_white: PREFILTER_WHITE,
+            bright_adjust: BRIGHT_ADJUST,
+            area,
+            sample_density,
+            saturation: DEFAULT_SATURATION,
+            hue_shift: DEFAULT_HUE_SHIFT,
+            value_scale: DEFAULT_VALUE_SCALE,
+            gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -523,13 +539,29 @@ impl FlameRenderer {
 
     /// Helper method to update tonemap parameters with current state
     fn update_tonemap_state(&self, queue: &Queue) {
+        use crate::config::defaults::*;
+        let area = (self.width * self.height) as f32;
+        let sample_density = if area > 0.0 { self.total_iterations as f32 / area } else { 1.0 };
+
         let params = TonemapParams {
             exposure: 1.0,
             gamma: 2.2,
             density_scale: self.density_scale,
             tonemap_mode: 1,  // Logarithmic
             background_color: self.background_color,
+            _pad_bg: 0.0,
             use_curve: 0,  // Disabled
+            vibrancy: 1.0,  // Default
+            brightness: DEFAULT_BRIGHTNESS,
+            white_level: DEFAULT_WHITE_LEVEL,
+            prefilter_white: PREFILTER_WHITE,
+            bright_adjust: BRIGHT_ADJUST,
+            area,
+            sample_density,
+            saturation: DEFAULT_SATURATION,
+            hue_shift: DEFAULT_HUE_SHIFT,
+            value_scale: DEFAULT_VALUE_SCALE,
+            gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -546,12 +578,26 @@ impl FlameRenderer {
         self.update_tonemap_state(queue);
     }
 
-    /// Update tone mapping mode, curve usage, exposure, and gamma
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32) {
+    /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, and value scale
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, width: u32, height: u32, total_iterations: u64, max_iterations: u64) {
+        use crate::config::defaults::*;
+
         let tonemap_mode_u32 = match tonemap_mode {
             crate::scene::tonemap::ToneMapMode::Linear => 0u32,
             crate::scene::tonemap::ToneMapMode::Logarithmic => 1u32,
             crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
+        };
+
+        // Calculate area and sample_density for brightness lookup table
+        // Apophysis uses sample_density = total_iterations / area (calculated once for full render)
+        // For progressive rendering, use Apophysis's SUB_BATCH_SIZE (10,000) as reference
+        // This gives consistent brightness independent of iterations_per_thread setting
+        let area = (width * height) as f32;
+        let apophysis_batch_size = 10000.0; // SUB_BATCH_SIZE from ControlPoint.pas:35
+        let sample_density = if area > 0.0 {
+            apophysis_batch_size / area
+        } else {
+            1.0
         };
 
         let params = TonemapParams {
@@ -560,7 +606,19 @@ impl FlameRenderer {
             density_scale: self.density_scale,
             tonemap_mode: tonemap_mode_u32,
             background_color: self.background_color,
+            _pad_bg: 0.0,
             use_curve: if use_curve { 1u32 } else { 0u32 },
+            vibrancy,
+            brightness,
+            white_level: DEFAULT_WHITE_LEVEL,
+            prefilter_white: PREFILTER_WHITE,
+            bright_adjust: BRIGHT_ADJUST,
+            area,
+            sample_density,
+            saturation,
+            hue_shift,
+            value_scale,
+            gamma_threshold,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -571,8 +629,8 @@ impl FlameRenderer {
     }
 
     /// Update palette texture
-    pub fn update_palette(&mut self, device: &Device, queue: &Queue, palette: &Palette) {
-        self.buffers.update_palette(queue, palette);
+    pub fn update_palette(&mut self, device: &Device, queue: &Queue, palette: &Palette, hue_rotation: f32) {
+        self.buffers.update_palette(queue, palette, hue_rotation);
         // Recreate compute bind group to ensure palette texture is bound
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
     }

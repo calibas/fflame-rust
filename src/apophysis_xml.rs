@@ -66,9 +66,16 @@ fn parse_flame_element(
     let mut size = (1920, 1080);
     let mut center = (0.0, 0.0);
     let mut scale = 100.0;
+    let mut rotate = 0.0;  // View rotation in degrees
     let mut background = [0.0, 0.0, 0.0];
     let mut brightness = 1.0;
     let mut gamma = 2.2;
+    let mut vibrancy = 1.0;
+    let mut gamma_threshold = 0.0025;
+    let mut cam_pitch = 0.0;  // Camera rotation X (radians)
+    let mut cam_yaw = 0.0;    // Camera rotation Y (radians)
+    let mut cam_perspective = 0.0;  // Perspective strength
+    let mut curves: Option<Vec<f32>> = None;  // Tone curve data (48 floats)
 
     for attr in start_element.attributes() {
         let attr = attr?;
@@ -92,6 +99,7 @@ fn parse_flame_element(
                 }
             }
             "scale" => scale = value.parse().unwrap_or(100.0),
+            "rotate" => rotate = value.parse().unwrap_or(0.0),
             "background" => {
                 let parts: Vec<&str> = value.split_whitespace().collect();
                 if parts.len() == 3 {
@@ -100,12 +108,23 @@ fn parse_flame_element(
                     background[2] = parts[2].parse::<f32>().unwrap_or(0.0) / 255.0;
                 }
             }
-            "brightness" => brightness = value.parse().unwrap_or(1.0),
+            "brightness" => brightness = value.parse().unwrap_or(4.0),
             "gamma" => {
-                // Apophysis gamma 1.0 ≈ our gamma 2.2 (sRGB standard)
-                // Multiply by 2.2 to convert
-                let apo_gamma: f32 = value.parse().unwrap_or(1.0);
-                gamma = apo_gamma * 2.2;
+                gamma = value.parse().unwrap_or(4.0);
+            }
+            "vibrancy" => vibrancy = value.parse().unwrap_or(1.0),
+            "gamma_threshold" => gamma_threshold = value.parse().unwrap_or(0.0025) * 2000.0,
+            "cam_pitch" => cam_pitch = value.parse().unwrap_or(0.0),
+            "cam_yaw" => cam_yaw = value.parse().unwrap_or(0.0),
+            "cam_perspective" => cam_perspective = value.parse().unwrap_or(0.0),
+            "curves" => {
+                // Parse space-separated floats (48 values: 4 curves × 12 points)
+                let parsed: Vec<f32> = value.split_whitespace()
+                    .filter_map(|s| s.parse::<f32>().ok())
+                    .collect();
+                if parsed.len() == 48 {
+                    curves = Some(parsed);
+                }
             }
             _ => {} // Ignore unknown attributes for now
         }
@@ -142,17 +161,35 @@ fn parse_flame_element(
         buf.clear();
     }
 
-    // Apply palette colors to transforms
+    // Determine color mode based on whether palette exists
+    let color_mode = if palette.is_some() {
+        ColorMode::Palette
+    } else {
+        ColorMode::Transform
+    };
+
+    // Apply palette color coordinates to transforms (Palette mode)
+    // Or keep RGB colors as-is (Transform mode)
     let mut transforms = Vec::new();
     for (mut transform, color_index) in transforms_with_indices {
-        if let (Some(ref pal), Some(idx)) = (&palette, color_index) {
-            if idx < pal.stops.len() {
-                transform.color = pal.stops[idx].color;
-                transform.color_speed = 0.5; // Default color speed
+        if let Some(idx) = color_index {
+            if palette.is_some() {
+                // Palette mode: Store color coordinate (0-1) as averaged RGB
+                // This will be used as palette index in shader
+                let color_coord = idx as f32 / 255.0;
+                transform.color = [color_coord, color_coord, color_coord];
             }
+            // Note: color_speed comes from XML parsing, don't override here
         }
         transforms.push(transform);
     }
+
+    // Determine projection type from cam_perspective
+    let projection = if f32::abs(cam_perspective) > 0.0001 {
+        ProjectionType::Perspective { strength: f32::abs(cam_perspective) }
+    } else {
+        ProjectionType::Orthographic
+    };
 
     // Build FractalConfig
     let flame = Flame {
@@ -160,7 +197,7 @@ fn parse_flame_element(
         transforms,
         final_transform: None,
         render_mode: RenderMode::TwoD,
-        projection: ProjectionType::Orthographic,
+        projection,
     };
 
     // Convert Apophysis scale/center to our zoom/pan
@@ -170,26 +207,46 @@ fn parse_flame_element(
     let pan_x = center.0;
     let pan_y = center.1;
 
+    // Convert rotation from degrees to radians
+    let rotation = rotate * std::f32::consts::PI / 180.0;
+
+    // Parse tone curve from Apophysis curves data
+    // Apophysis: 48 floats = 4 curves (X, R, G, B) × 12 points each
+    // Indices: 0-11=X, 12-23=R, 24-35=G, 36-47=B
+    // We use the average of R, G, B curves
+    let tonemap_curve = if let Some(curve_data) = curves {
+        parse_apophysis_curves(&curve_data)
+    } else {
+        ToneCurve::linear()
+    };
+
     Ok(FractalConfig {
         flame,
         zoom,
         pan_x,
         pan_y,
-        rotation: 0.0,
-        camera_rotation_x: 0.0,
-        camera_rotation_y: 0.0,
-        density_scale: brightness,
+        rotation,
+        camera_rotation_x: cam_pitch,
+        camera_rotation_y: cam_yaw,
+        density_scale: 1.0,  // Use default, brightness is handled by Apophysis brightness parameter
         speed_factor: 1.0,
         max_iterations: 1_000_000_000,
-        color_mode: ColorMode::Transform,
+        color_mode,  // Detected based on palette presence
         palette_index: 0,
         palette,
+        palette_rotation: 0.0,  // Default, could parse from XML if present
         background_color: background,
         tonemap_mode: ToneMapMode::Logarithmic,
-        tonemap_curve: ToneCurve::linear(),
+        tonemap_curve,
         use_curve: true,
         exposure: 1.0,
         gamma,
+        brightness,  // Use parsed Apophysis brightness value
+        vibrancy,  // Use parsed Apophysis vibrancy
+        saturation: 1.5,  // Default saturation
+        hue_shift: 0.0,  // Default hue shift
+        value_scale: 1.0,  // Default value scale
+        gamma_threshold,  // Use parsed Apophysis gamma_threshold
         deterministic_rng: false,
         histogram_color_scale: 100.0,
         low_density_smoothing: 0.5,
@@ -228,6 +285,11 @@ fn parse_xform_element(
                     color_index = Some((color_value * 255.0) as usize);
                 }
             }
+            "color_speed" | "symmetry" => {
+                // Apophysis calls this "symmetry" in XML, we call it color_speed
+                // Range: -1.0 to 1.0 (Apophysis symmetry parameter)
+                transform.color_speed = value.parse().unwrap_or(0.0);
+            }
             "coefs" => {
                 // Parse "a c b d e f" format (Apophysis order!)
                 // Apophysis stores matrix column-major, XML writes: c[0,0] c[0,1] c[1,0] c[1,1] c[2,0] c[2,1]
@@ -242,7 +304,8 @@ fn parse_xform_element(
                 }
             }
             "opacity" => {
-                // Store for future use, currently not used in our renderer
+                // Parse opacity (0.0 to 1.0, default 1.0)
+                transform.opacity = value.parse().unwrap_or(1.0);
             }
             _ => {
                 // Try to parse as variation or variation parameter
@@ -353,6 +416,86 @@ fn parse_palette_element(
     }
 
     Ok(Palette::new_locked("Imported from Apophysis", stops))
+}
+
+/// Parse Apophysis curves data into a ToneCurve
+///
+/// Apophysis stores 48 floats representing 4 curves × 12 values:
+/// - Indices 0-11: Combined/luminance curve (the one we use)
+/// - Indices 12-23: Red channel curve
+/// - Indices 24-35: Green channel curve
+/// - Indices 36-47: Blue channel curve
+///
+/// Each curve is a Weighted Cubic Bezier (Rational Bezier) with 4 control points:
+/// - 12 values = 4 points × (x, y, weight)
+/// - Formula: B(t) = Σ[w[i] × B³ᵢ(t) × P[i]] / Σ[w[i] × B³ᵢ(t)]
+///
+/// We sample the Bezier curve at 3 intermediate points (t=0.25, 0.5, 0.75) and
+/// combine with the endpoints to create a 5-point linear approximation.
+fn parse_apophysis_curves(data: &[f32]) -> ToneCurve {
+    if data.len() != 48 {
+        // Invalid data, return linear curve
+        return ToneCurve::linear();
+    }
+
+    // Extract first 12 values (combined curve) as 4 control points × (x, y, w)
+    let control_points = [
+        (data[0], data[1], data[2]),   // Point 0
+        (data[3], data[4], data[5]),   // Point 1
+        (data[6], data[7], data[8]),   // Point 2
+        (data[9], data[10], data[11]), // Point 3
+    ];
+
+    // Sample the Bezier curve at fixed t values
+    let mut points = Vec::new();
+
+    // Start point (t=0)
+    points.push(crate::scene::tonemap::CurvePoint::new(0.0, 0.0));
+
+    // Sample at t=0.25, 0.5, 0.75
+    for &t in &[0.25, 0.5, 0.75] {
+        if let Some((x, y)) = eval_rational_bezier(t, &control_points) {
+            points.push(crate::scene::tonemap::CurvePoint::new(x, y));
+        }
+    }
+
+    // End point (t=1)
+    points.push(crate::scene::tonemap::CurvePoint::new(1.0, 1.0));
+
+    // Sort by x coordinate (should already be sorted, but ensure it)
+    points.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+
+    ToneCurve { points }
+}
+
+/// Evaluate a rational cubic Bezier curve at parameter t
+///
+/// control_points: 4 tuples of (x, y, weight)
+/// Returns: Some((x, y)) or None if denominator is zero
+fn eval_rational_bezier(t: f32, control_points: &[(f32, f32, f32); 4]) -> Option<(f32, f32)> {
+    let s = 1.0 - t;
+    let s2 = s * s;
+    let s3 = s2 * s;
+    let t2 = t * t;
+    let t3 = t2 * t;
+
+    // Cubic Bernstein polynomials with weights
+    let b0 = control_points[0].2 * s3;
+    let b1 = control_points[1].2 * 3.0 * s2 * t;
+    let b2 = control_points[2].2 * 3.0 * s * t2;
+    let b3 = control_points[3].2 * t3;
+
+    let nom_x = b0 * control_points[0].0 + b1 * control_points[1].0 +
+                b2 * control_points[2].0 + b3 * control_points[3].0;
+    let nom_y = b0 * control_points[0].1 + b1 * control_points[1].1 +
+                b2 * control_points[2].1 + b3 * control_points[3].1;
+    let denom = b0 + b1 + b2 + b3;
+
+    if denom.abs() < 1e-10 {
+        return None; // Avoid division by zero
+    }
+
+    Some((nom_x / denom, nom_y / denom))
 }
 
 #[cfg(test)]

@@ -28,6 +28,12 @@ pub enum ConfigPath {
     // ===== Tone mapping (no iteration reset needed) =====
     Exposure,
     Gamma,
+    GammaThreshold,
+    Brightness,
+    Vibrancy,
+    Saturation,
+    HueShift,
+    ValueScale,
     DensityScale,
     TonemapMode,
     TonemapCurve,
@@ -37,6 +43,7 @@ pub enum ConfigPath {
     ColorMode,
     PaletteIndex,
     Palette, // Embedded palette data (custom palettes)
+    PaletteRotation,
     SpeedFactor,
     BackgroundColor,
 
@@ -57,6 +64,7 @@ pub enum ConfigPath {
     TransformWeight { index: usize },
     TransformColor { index: usize, component: ColorComponent },
     TransformColorSpeed { index: usize },
+    TransformOpacity { index: usize },
     TransformAffine { index: usize, param: AffineParam },
     TransformVariation { index: usize, variation: String },
     TransformVariationParam {
@@ -104,6 +112,12 @@ impl Display for ConfigPath {
             // Tone mapping
             ConfigPath::Exposure => write!(f, "Exposure"),
             ConfigPath::Gamma => write!(f, "Gamma"),
+            ConfigPath::GammaThreshold => write!(f, "Gamma Threshold"),
+            ConfigPath::Brightness => write!(f, "Brightness"),
+            ConfigPath::Vibrancy => write!(f, "Vibrancy"),
+            ConfigPath::Saturation => write!(f, "Saturation"),
+            ConfigPath::HueShift => write!(f, "Hue Shift"),
+            ConfigPath::ValueScale => write!(f, "Value Scale"),
             ConfigPath::DensityScale => write!(f, "Density Scale"),
             ConfigPath::TonemapMode => write!(f, "Tonemap Mode"),
             ConfigPath::TonemapCurve => write!(f, "Tone Curve"),
@@ -113,6 +127,7 @@ impl Display for ConfigPath {
             ConfigPath::ColorMode => write!(f, "Color Mode"),
             ConfigPath::PaletteIndex => write!(f, "Palette"),
             ConfigPath::Palette => write!(f, "Palette Data"),
+            ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
             ConfigPath::SpeedFactor => write!(f, "Speed Blend Factor"),
             ConfigPath::BackgroundColor => write!(f, "Background Color"),
 
@@ -138,6 +153,9 @@ impl Display for ConfigPath {
             }
             ConfigPath::TransformColorSpeed { index } => {
                 write!(f, "Transform {} → Color Speed", index + 1)
+            }
+            ConfigPath::TransformOpacity { index } => {
+                write!(f, "Transform {} → Opacity", index + 1)
             }
             ConfigPath::TransformAffine { index, param } => {
                 write!(f, "Transform {} → Affine {:?}", index + 1, param)
@@ -459,6 +477,12 @@ impl ConfigPath {
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure
             | ConfigPath::Gamma
+            | ConfigPath::GammaThreshold
+            | ConfigPath::Brightness
+            | ConfigPath::Vibrancy
+            | ConfigPath::Saturation
+            | ConfigPath::HueShift
+            | ConfigPath::ValueScale
             | ConfigPath::DensityScale
             | ConfigPath::TonemapMode
             | ConfigPath::TonemapCurve
@@ -469,6 +493,7 @@ impl ConfigPath {
             ConfigPath::ColorMode
             | ConfigPath::PaletteIndex
             | ConfigPath::Palette
+            | ConfigPath::PaletteRotation
             | ConfigPath::SpeedFactor => UpdateType::ColorOnly,
 
             // Rendering settings - affect iteration behavior
@@ -486,6 +511,7 @@ impl ConfigPath {
             | ConfigPath::TransformWeight { .. }
             | ConfigPath::TransformColor { .. }
             | ConfigPath::TransformColorSpeed { .. }
+            | ConfigPath::TransformOpacity { .. }
             | ConfigPath::TransformAffine { .. }
             | ConfigPath::TransformVariation { .. }
             | ConfigPath::TransformVariationParam { .. }

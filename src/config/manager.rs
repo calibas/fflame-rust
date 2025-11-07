@@ -608,6 +608,12 @@ impl ConfigManager {
             // Tone mapping
             ConfigPath::Exposure => Ok(config.exposure.into()),
             ConfigPath::Gamma => Ok(config.gamma.into()),
+            ConfigPath::GammaThreshold => Ok(config.gamma_threshold.into()),
+            ConfigPath::Brightness => Ok(config.brightness.into()),
+            ConfigPath::Vibrancy => Ok(config.vibrancy.into()),
+            ConfigPath::Saturation => Ok(config.saturation.into()),
+            ConfigPath::HueShift => Ok(config.hue_shift.into()),
+            ConfigPath::ValueScale => Ok(config.value_scale.into()),
             ConfigPath::DensityScale => Ok(config.density_scale.into()),
             ConfigPath::TonemapMode => Ok(config.tonemap_mode.into()),
             ConfigPath::TonemapCurve => Ok(config.tonemap_curve.clone().into()),
@@ -623,6 +629,7 @@ impl ConfigManager {
                     None => Err(ConfigError::TypeMismatch), // No embedded palette
                 }
             }
+            ConfigPath::PaletteRotation => Ok(config.palette_rotation.into()),
             ConfigPath::SpeedFactor => Ok(config.speed_factor.into()),
             ConfigPath::BackgroundColor => Ok(config.background_color.into()),
 
@@ -674,6 +681,14 @@ impl ConfigManager {
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.color_speed.into())
+            }
+            ConfigPath::TransformOpacity { index } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.opacity.into())
             }
             ConfigPath::TransformAffine { index, param } => {
                 let xform = config
@@ -765,6 +780,24 @@ impl ConfigManager {
             ConfigPath::Gamma => {
                 self.current.gamma = value.try_into()?;
             }
+            ConfigPath::GammaThreshold => {
+                self.current.gamma_threshold = value.try_into()?;
+            }
+            ConfigPath::Brightness => {
+                self.current.brightness = value.try_into()?;
+            }
+            ConfigPath::Vibrancy => {
+                self.current.vibrancy = value.try_into()?;
+            }
+            ConfigPath::Saturation => {
+                self.current.saturation = value.try_into()?;
+            }
+            ConfigPath::HueShift => {
+                self.current.hue_shift = value.try_into()?;
+            }
+            ConfigPath::ValueScale => {
+                self.current.value_scale = value.try_into()?;
+            }
             ConfigPath::DensityScale => {
                 self.current.density_scale = value.try_into()?;
             }
@@ -800,6 +833,9 @@ impl ConfigManager {
                     // Update embedded palette data
                     self.current.palette = Some(palette);
                 }
+            }
+            ConfigPath::PaletteRotation => {
+                self.current.palette_rotation = value.try_into()?;
             }
             ConfigPath::SpeedFactor => {
                 self.current.speed_factor = value.try_into()?;
@@ -876,6 +912,15 @@ impl ConfigManager {
                     .get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 xform.color_speed = value.try_into()?;
+            }
+            ConfigPath::TransformOpacity { index } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                xform.opacity = value.try_into()?;
             }
             ConfigPath::TransformAffine { index, param } => {
                 let xform = self
@@ -970,6 +1015,24 @@ impl ConfigManager {
             ConfigPath::Gamma => {
                 preview.gamma = value.try_into()?;
             }
+            ConfigPath::GammaThreshold => {
+                preview.gamma_threshold = value.try_into()?;
+            }
+            ConfigPath::Brightness => {
+                preview.brightness = value.try_into()?;
+            }
+            ConfigPath::Vibrancy => {
+                preview.vibrancy = value.try_into()?;
+            }
+            ConfigPath::Saturation => {
+                preview.saturation = value.try_into()?;
+            }
+            ConfigPath::HueShift => {
+                preview.hue_shift = value.try_into()?;
+            }
+            ConfigPath::ValueScale => {
+                preview.value_scale = value.try_into()?;
+            }
             ConfigPath::DensityScale => {
                 preview.density_scale = value.try_into()?;
             }
@@ -1001,6 +1064,9 @@ impl ConfigManager {
                     }
                     preview.palette = Some(palette);
                 }
+            }
+            ConfigPath::PaletteRotation => {
+                preview.palette_rotation = value.try_into()?;
             }
             ConfigPath::SpeedFactor => {
                 preview.speed_factor = value.try_into()?;
@@ -1074,6 +1140,14 @@ impl ConfigManager {
                     .get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 xform.color_speed = value.try_into()?;
+            }
+            ConfigPath::TransformOpacity { index } => {
+                let xform = preview
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                xform.opacity = value.try_into()?;
             }
             ConfigPath::TransformAffine { index, param } => {
                 let xform = preview
