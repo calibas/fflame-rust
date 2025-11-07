@@ -287,6 +287,36 @@ impl Palette {
             built_in: false,
         }
     }
+
+    /// Find the closest palette position for a given RGB color
+    /// Returns position in range 0.0-1.0
+    ///
+    /// Uses brute force search by sampling the palette at regular intervals
+    /// and finding the position with minimum Euclidean distance in RGB space.
+    pub fn find_position(&self, target_rgb: [f32; 3]) -> f32 {
+        const SAMPLES: usize = 256;
+
+        let mut best_position = 0.5;
+        let mut best_distance = f32::MAX;
+
+        for i in 0..SAMPLES {
+            let position = i as f32 / (SAMPLES - 1) as f32;
+            let color = self.sample_color(position);
+
+            // Calculate Euclidean distance in RGB space
+            let dr = color[0] - target_rgb[0];
+            let dg = color[1] - target_rgb[1];
+            let db = color[2] - target_rgb[2];
+            let distance = (dr * dr + dg * dg + db * db).sqrt();
+
+            if distance < best_distance {
+                best_distance = distance;
+                best_position = position;
+            }
+        }
+
+        best_position
+    }
 }
 
 /// Collection of available palettes
@@ -388,5 +418,65 @@ mod tests {
         assert!(data[1] < 0.1); // G
         assert!(data[2] < 0.1); // B
         assert_eq!(data[3], 1.0); // A
+    }
+
+    #[test]
+    fn test_find_position_exact_stops() {
+        let palette = Palette::rainbow();
+
+        // Test exact stop colors - should find exact or very close position
+        let red_pos = palette.find_position([1.0, 0.0, 0.0]);
+        assert!((red_pos - 0.0).abs() < 0.01, "Red should be at 0.0, got {}", red_pos);
+
+        let yellow_pos = palette.find_position([1.0, 1.0, 0.0]);
+        assert!((yellow_pos - 0.33).abs() < 0.05, "Yellow should be near 0.33, got {}", yellow_pos);
+
+        let green_pos = palette.find_position([0.0, 1.0, 0.0]);
+        assert!((green_pos - 0.5).abs() < 0.01, "Green should be at 0.5, got {}", green_pos);
+    }
+
+    #[test]
+    fn test_find_position_interpolated() {
+        let palette = Palette::grayscale();
+
+        // Test interpolated colors
+        let gray = [0.5, 0.5, 0.5];
+        let pos = palette.find_position(gray);
+        assert!((pos - 0.5).abs() < 0.05, "Gray should be near 0.5, got {}", pos);
+
+        let dark_gray = [0.25, 0.25, 0.25];
+        let pos_dark = palette.find_position(dark_gray);
+        assert!(pos_dark < 0.5, "Dark gray should be < 0.5, got {}", pos_dark);
+
+        let light_gray = [0.75, 0.75, 0.75];
+        let pos_light = palette.find_position(light_gray);
+        assert!(pos_light > 0.5, "Light gray should be > 0.5, got {}", pos_light);
+    }
+
+    #[test]
+    fn test_find_position_boundaries() {
+        let palette = Palette::fire();
+
+        // Black (start)
+        let black_pos = palette.find_position([0.0, 0.0, 0.0]);
+        assert!((black_pos - 0.0).abs() < 0.01, "Black should be at 0.0, got {}", black_pos);
+
+        // Whitish (end)
+        let white_pos = palette.find_position([1.0, 1.0, 0.8]);
+        assert!(white_pos > 0.9, "Light color should be near 1.0, got {}", white_pos);
+    }
+
+    #[test]
+    fn test_find_position_roundtrip() {
+        let palette = Palette::cool();
+
+        // Test roundtrip: position -> color -> position
+        let original_pos = 0.42;
+        let color = palette.sample_color(original_pos);
+        let found_pos = palette.find_position(color);
+
+        // Should be close (within sampling resolution)
+        assert!((found_pos - original_pos).abs() < 0.01,
+            "Roundtrip failed: {} -> {:?} -> {}", original_pos, color, found_pos);
     }
 }
