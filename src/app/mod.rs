@@ -98,12 +98,19 @@ impl App {
             color_mode: ColorMode::Transform,
             palette_index: 1,
             palette: Some(initial_palette),
+            palette_rotation: 0.0,
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::Logarithmic,
             tonemap_curve: ToneCurve::linear(),
             use_curve: true,
             exposure: crate::config::DEFAULT_EXPOSURE,
             gamma: crate::config::DEFAULT_GAMMA,
+            brightness: 1.0,
+            vibrancy: 1.0,
+            saturation: crate::config::defaults::DEFAULT_SATURATION,
+            hue_shift: crate::config::defaults::DEFAULT_HUE_SHIFT,
+            value_scale: crate::config::defaults::DEFAULT_VALUE_SCALE,
+            gamma_threshold: crate::config::defaults::DEFAULT_GAMMA_THRESHOLD,
             deterministic_rng: false,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             low_density_smoothing: crate::config::DEFAULT_LOW_DENSITY_SMOOTHING,
@@ -166,7 +173,7 @@ impl App {
                                     let palette = config.palette.as_ref()
                                         .or_else(|| app.palette_library.get(config.palette_index));
                                     if let Some(palette) = palette {
-                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette);
+                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette, config.palette_rotation);
                                     }
                                     renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
                                         config.zoom, config.pan_x, config.pan_y, config.rotation,
@@ -194,7 +201,7 @@ impl App {
                                     let palette = config.palette.as_ref()
                                         .or_else(|| app.palette_library.get(config.palette_index));
                                     if let Some(palette) = palette {
-                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette);
+                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette, config.palette_rotation);
                                     }
                                     renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
                                         config.zoom, config.pan_x, config.pan_y, config.rotation,
@@ -295,6 +302,7 @@ impl App {
 
         // Get config once at start of frame (avoids repeated active_config() calls)
         let config = self.config_manager.active_config();
+        let palette_rotation = config.palette_rotation;  // Copy to avoid borrow issues
 
         let frame = self.gpu.surface.get_current_texture()?;
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -361,7 +369,7 @@ impl App {
             // 3. Update tonemap parameters and render to screen
             renderer.update_density_scale(&self.gpu.queue, config.density_scale);
             renderer.update_background_color(&self.gpu.queue, config.background_color);
-            renderer.update_tonemap(&self.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma);
+            renderer.update_tonemap(&self.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, renderer.width, renderer.height, renderer.total_iterations(), config.max_iterations);
             renderer.tonemap_pass(&mut encoder, &view);
             self.metrics.record_tonemap_time(t2.elapsed().as_secs_f64() * 1000.0);
 
@@ -466,24 +474,12 @@ impl App {
             let mut new_config = self.config_manager.active_config().clone();
 
             // Create a new default transform
-            let new_transform = crate::scene::transforms::Transform {
-                a: 0.5,
-                b: 0.0,
-                c: 0.0,
-                d: 0.5,
-                e: 0.0,
-                f: 0.0,
-                g: 0.0, // Z offset
-                weight: 1.0,
-                variations: {
-                    let mut v = std::collections::HashMap::new();
-                    v.insert("linear".to_string(), 0.5);
-                    v
-                },
-                variation_params: std::collections::HashMap::new(),
-                color: [0.5, 0.5, 0.5],
-                color_speed: 0.5,
-            };
+            let mut new_transform = crate::scene::transforms::Transform::default();
+            new_transform.a = 0.5;
+            new_transform.d = 0.5;
+            new_transform.set_variation("linear", 0.5);
+            new_transform.color = [0.5, 0.5, 0.5];
+            new_transform.color_speed = 0.5;
 
             new_config.flame.transforms.push(new_transform);
 
@@ -544,7 +540,7 @@ impl App {
             let config = self.config_manager.active_config();
             if let Some(ref mut renderer) = self.flame_renderer {
                 if let Some(palette) = palette_lib.get(config.palette_index) {
-                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
+                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, palette_rotation);
                 }
             }
         }
@@ -733,7 +729,7 @@ impl App {
 
                     // Update renderer
                     if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette);
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, palette_rotation);
                     }
                 }
                 Err(e) => {
@@ -770,7 +766,7 @@ impl App {
 
                                     // Update renderer
                                     if let Some(ref mut renderer) = self.flame_renderer {
-                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette);
+                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, palette_rotation);
                                     }
 
                                     println!("Palette loaded from: {}", path.display());
@@ -978,7 +974,7 @@ impl App {
                         .or_else(|| self.palette_library.get(update_config.palette_index));
 
                     if let Some(palette) = palette {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette);
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, palette_rotation);
                     }
 
                     // Update color mode in GPU params (ColorMode changes trigger update_palette)

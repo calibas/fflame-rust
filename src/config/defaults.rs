@@ -7,6 +7,17 @@
 pub const DEFAULT_HISTOGRAM_COLOR_SCALE: f32 = 100.0; // Max precision: 100 color levels
 pub const DEFAULT_EXPOSURE: f32 = 1.0;
 pub const DEFAULT_GAMMA: f32 = 1.0;
+pub const DEFAULT_BRIGHTNESS: f32 = 1.0;
+pub const DEFAULT_SATURATION: f32 = 1.0; // 1.0 = no change, >1.0 = more saturated
+pub const DEFAULT_HUE_SHIFT: f32 = 0.0; // 0.0 = no shift, range -180.0 to 180.0 degrees
+pub const DEFAULT_VALUE_SCALE: f32 = 1.0; // 1.0 = no change, >1.0 = brighter
+pub const DEFAULT_PALETTE_ROTATION: f32 = 0.0; // -1.0 to 1.0, shifts palette indices (Apophysis: -128 to 128)
+
+// Apophysis brightness constants (ControlPoint.pas:37-39)
+pub const BRIGHT_ADJUST: f32 = 2.3;
+pub const PREFILTER_WHITE: f32 = 67108864.0; // (1 shl 26)
+pub const DEFAULT_WHITE_LEVEL: f32 = 200.0;
+pub const DEFAULT_GAMMA_THRESHOLD: f32 = 0.0025; // Smooths gamma curve at low densities
 
 // Accumulation
 pub const DEFAULT_LOW_DENSITY_SMOOTHING: f32 = 0.5; // Moderate smoothing

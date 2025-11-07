@@ -26,10 +26,15 @@ pub struct GpuTransform {
     // Variations (100 floats: supports all Apophysis 7X + future expansion)
     pub variations: [f32; 100],
 
-    // Color (vec3<f32> in WGSL requires 16-byte alignment)
-    // With 100 floats, we're already at 432 bytes (divisible by 16), so no padding needed
+    // Color (vec3<f32> in WGSL) + color_speed (forms vec4 for alignment)
     pub color: [f32; 3],
     pub color_speed: f32,
+
+    // Opacity + explicit padding (forms vec4 for alignment)
+    pub opacity: f32,
+    pub _padding0: f32,
+    pub _padding1: f32,
+    pub _padding2: f32,
 }
 
 // Manual implementation for bytemuck (arrays of size 50 not auto-derived)
@@ -51,6 +56,10 @@ impl GpuTransform {
             variations: xform.to_fixed_array(registry),
             color: xform.color,
             color_speed: xform.color_speed,
+            opacity: xform.opacity,
+            _padding0: 0.0,
+            _padding1: 0.0,
+            _padding2: 0.0,
         }
     }
 }
@@ -145,18 +154,43 @@ pub struct TonemapParams {
     pub density_scale: f32, // Controls how density maps to alpha
     pub tonemap_mode: u32,  // 0 = Linear, 1 = Logarithmic
     pub background_color: [f32; 3],
+    pub _pad_bg: f32,  // Padding to align vec3 to 16 bytes (std140 rule)
     pub use_curve: u32,  // 0 = disabled, 1 = enabled
+    pub vibrancy: f32,  // Blend between old and new color algorithms (0.0-30.0)
+    pub brightness: f32,  // Logarithmic brightness scaling (0.0-5.0, default 1.0)
+    pub white_level: f32,  // Apophysis white_level constant (default 200.0)
+    pub prefilter_white: f32,  // Apophysis PREFILTER_WHITE constant (67108864.0)
+    pub bright_adjust: f32,  // Apophysis BRIGHT_ADJUST constant (2.3)
+    pub area: f32,  // Render area (width * height)
+    pub sample_density: f32,  // Iterations per pixel
+    pub saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
+    pub hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
+    pub value_scale: f32,  // Value (brightness) multiplier (1.0 = no change)
+    pub gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
 }
 
 impl Default for TonemapParams {
     fn default() -> Self {
+        use crate::config::defaults::*;
         Self {
-            exposure: 1.0,
-            gamma: 2.2,
-            density_scale: 1.0,
+            exposure: DEFAULT_EXPOSURE,
+            gamma: DEFAULT_GAMMA,
+            density_scale: DEFAULT_DENSITY_SCALE,
             tonemap_mode: 1,  // Default to Logarithmic
             background_color: [0.0, 0.0, 0.0],
+            _pad_bg: 0.0,
             use_curve: 0,  // Curves disabled by default
+            vibrancy: 1.0,  // Modern vibrant colors by default
+            brightness: DEFAULT_BRIGHTNESS,
+            white_level: DEFAULT_WHITE_LEVEL,
+            prefilter_white: PREFILTER_WHITE,
+            bright_adjust: BRIGHT_ADJUST,
+            area: 800.0 * 600.0,  // Default resolution
+            sample_density: 1.0,  // Will be updated per frame
+            saturation: DEFAULT_SATURATION,
+            hue_shift: DEFAULT_HUE_SHIFT,
+            value_scale: DEFAULT_VALUE_SCALE,
+            gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
         }
     }
 }
@@ -698,11 +732,35 @@ impl FlameBuffers {
     }
 
     /// Update palette texture
-    pub fn update_palette(&self, queue: &Queue, palette: &Palette) {
+    pub fn update_palette(&self, queue: &Queue, palette: &Palette, palette_rotation: f32) {
         let palette_data = palette.generate_texture_data(256);
 
+        // Apply palette rotation by shifting indices
+        // Rotation range: -1.0 to 1.0 (Apophysis uses -128 to 128, we normalize)
+        // Negative rotation: colors shift left (color at 0 comes from 1, at 1 from 2, ..., at 255 from 0)
+        // Positive rotation: colors shift right (color at 0 comes from 255, at 1 from 0, ..., at 255 from 254)
+        let rotated_data = if palette_rotation != 0.0 {
+            let rotation_amount = (palette_rotation * 256.0).round() as i32;
+            let mut rotated = vec![0.0f32; 256 * 4];
+
+            for i in 0..256 {
+                // Calculate source index with wrapping
+                let src_idx = ((i as i32 + rotation_amount).rem_euclid(256)) as usize;
+                let dst_idx = i * 4;
+                let src_base = src_idx * 4;
+
+                rotated[dst_idx] = palette_data[src_base];
+                rotated[dst_idx + 1] = palette_data[src_base + 1];
+                rotated[dst_idx + 2] = palette_data[src_base + 2];
+                rotated[dst_idx + 3] = palette_data[src_base + 3];
+            }
+            rotated
+        } else {
+            palette_data
+        };
+
         // Convert f32 [0.0, 1.0] to u8 [0, 255] for Rgba8Unorm
-        let palette_data_u8: Vec<u8> = palette_data
+        let palette_data_u8: Vec<u8> = rotated_data
             .iter()
             .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
             .collect();

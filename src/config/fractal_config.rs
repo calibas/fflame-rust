@@ -59,6 +59,9 @@ pub struct FractalConfig {
     /// If None, will use palette_index from library
     #[serde(default)]
     pub palette: Option<Palette>,
+    /// Palette rotation: -1.0 to 1.0, shifts palette indices (Apophysis: -128 to 128)
+    #[serde(default = "default_palette_rotation")]
+    pub palette_rotation: f32,
     pub background_color: [f32; 3],
 
     /// Tone mapping settings
@@ -73,6 +76,29 @@ pub struct FractalConfig {
     pub exposure: f32,
     #[serde(default = "default_gamma")]
     pub gamma: f32,
+    /// Gamma threshold: smooths gamma curve at low densities (Apophysis compatibility)
+    /// Default 0.0025 prevents harsh darkening in sparse areas
+    #[serde(default = "default_gamma_threshold")]
+    pub gamma_threshold: f32,
+    /// Brightness: logarithmic brightness scaling (Apophysis compatibility)
+    /// 1.0 = standard brightness (default), higher = brighter
+    #[serde(default = "default_brightness")]
+    pub brightness: f32,
+    /// Vibrancy: blend between old (gamma-only) and new (vibrant) color algorithms
+    /// 1.0 = modern vibrant colors (default), 0.0 = classic gamma-only colors
+    #[serde(default = "default_vibrancy")]
+    pub vibrancy: f32,
+    /// Saturation: color saturation boost (1.0 = no change, >1.0 = more saturated)
+    #[serde(default = "default_saturation")]
+    pub saturation: f32,
+
+    /// Hue shift: rotate hue in degrees (-180.0 to 180.0, 0.0 = no shift)
+    #[serde(default = "default_hue_shift")]
+    pub hue_shift: f32,
+
+    /// Value scale: brightness multiplier (1.0 = no change, >1.0 = brighter)
+    #[serde(default = "default_value_scale")]
+    pub value_scale: f32,
 
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default)]
@@ -85,6 +111,34 @@ fn default_exposure() -> f32 {
 
 fn default_gamma() -> f32 {
     2.2
+}
+
+fn default_gamma_threshold() -> f32 {
+    super::defaults::DEFAULT_GAMMA_THRESHOLD
+}
+
+fn default_brightness() -> f32 {
+    super::defaults::DEFAULT_BRIGHTNESS
+}
+
+fn default_vibrancy() -> f32 {
+    1.0  // Modern vibrant colors by default
+}
+
+fn default_saturation() -> f32 {
+    super::defaults::DEFAULT_SATURATION
+}
+
+fn default_hue_shift() -> f32 {
+    super::defaults::DEFAULT_HUE_SHIFT
+}
+
+fn default_value_scale() -> f32 {
+    super::defaults::DEFAULT_VALUE_SCALE
+}
+
+fn default_palette_rotation() -> f32 {
+    super::defaults::DEFAULT_PALETTE_ROTATION
 }
 
 fn default_true() -> bool {
@@ -146,12 +200,19 @@ impl Default for FractalConfig {
             color_mode: ColorMode::Transform,
             palette_index: 0,
             palette: None,
+            palette_rotation: default_palette_rotation(),
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::default(),
             tonemap_curve: ToneCurve::default(),
             use_curve: default_true(),
             exposure: default_exposure(),
             gamma: default_gamma(),
+            gamma_threshold: default_gamma_threshold(),
+            brightness: default_brightness(),
+            vibrancy: default_vibrancy(),
+            saturation: default_saturation(),
+            hue_shift: default_hue_shift(),
+            value_scale: default_value_scale(),
             deterministic_rng: false,
         }
     }

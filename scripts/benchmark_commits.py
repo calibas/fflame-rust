@@ -206,8 +206,8 @@ def main():
         # {'hash': '06bfcab', 'name': 'Histogram + Local Cache (reverted)'},  # Commented out - catastrophic regression
         # {'hash': 'ce58657', 'name': 'u16 packed histogram (merged)'},
         # {'hash': '9ac278a', 'name': 'Overflow fix (u32 hist, unoptimized)'},
-        {'hash': '77db2be', 'name': 'New Variations (50 limit)'},
-        {'hash': 'c1e5898', 'name': 'Before New Variations'},
+        # {'hash': '77db2be', 'name': 'New Variations (50 limit)'},
+        # {'hash': 'c1e5898', 'name': 'Before New Variations'},
     ]
 
     # Setup

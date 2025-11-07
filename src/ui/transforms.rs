@@ -314,7 +314,7 @@ fn render_color_controls(
     });
 
     let mut temp_speed = transform.color_speed;
-    let response_speed = ui.add(egui::Slider::new(&mut temp_speed, 0.0..=1.0).text("Color Speed"));
+    let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text("Color Speed (Symmetry)"));
     if response_speed.changed() {
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformColorSpeed { index },
@@ -327,6 +327,23 @@ fn render_color_controls(
     }
     if response_speed.drag_stopped() {
         let _ = config_manager.force_commit_preview(&ConfigPath::TransformColorSpeed { index });
+    }
+
+    // Opacity slider
+    let mut temp_opacity = transform.opacity;
+    let response_opacity = ui.add(egui::Slider::new(&mut temp_opacity, 0.0..=1.0).text("Opacity"));
+    if response_opacity.changed() {
+        if let Ok(update_type) = config_manager.update_param(
+            ConfigPath::TransformOpacity { index },
+            temp_opacity.into(),
+            response_opacity.dragged()  // Lazy undo
+        ) {
+            transform.opacity = config_manager.active_config().flame.transforms[index].opacity;
+            max_update = max_update.max(update_type);
+        }
+    }
+    if response_opacity.drag_stopped() {
+        let _ = config_manager.force_commit_preview(&ConfigPath::TransformOpacity { index });
     }
 
     max_update
