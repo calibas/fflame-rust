@@ -420,38 +420,82 @@ fn parse_palette_element(
 
 /// Parse Apophysis curves data into a ToneCurve
 ///
-/// Apophysis stores 48 floats representing 4 curves × 12 points:
-/// - Indices 0-11: X curve (input positions)
-/// - Indices 12-23: R curve (red channel outputs)
-/// - Indices 24-35: G curve (green channel outputs)
-/// - Indices 36-47: B curve (blue channel outputs)
+/// Apophysis stores 48 floats representing 4 curves × 12 values:
+/// - Indices 0-11: Combined/luminance curve (the one we use)
+/// - Indices 12-23: Red channel curve
+/// - Indices 24-35: Green channel curve
+/// - Indices 36-47: Blue channel curve
 ///
-/// We average the R, G, B curves to create a single luminance curve.
+/// Each curve is a Weighted Cubic Bezier (Rational Bezier) with 4 control points:
+/// - 12 values = 4 points × (x, y, weight)
+/// - Formula: B(t) = Σ[w[i] × B³ᵢ(t) × P[i]] / Σ[w[i] × B³ᵢ(t)]
+///
+/// We sample the Bezier curve at 3 intermediate points (t=0.25, 0.5, 0.75) and
+/// combine with the endpoints to create a 5-point linear approximation.
 fn parse_apophysis_curves(data: &[f32]) -> ToneCurve {
     if data.len() != 48 {
         // Invalid data, return linear curve
         return ToneCurve::linear();
     }
 
-    // Extract X positions (indices 0-11) and average RGB values
+    // Extract first 12 values (combined curve) as 4 control points × (x, y, w)
+    let control_points = [
+        (data[0], data[1], data[2]),   // Point 0
+        (data[3], data[4], data[5]),   // Point 1
+        (data[6], data[7], data[8]),   // Point 2
+        (data[9], data[10], data[11]), // Point 3
+    ];
+
+    // Sample the Bezier curve at fixed t values
     let mut points = Vec::new();
 
-    for i in 0..12 {
-        let x = data[i];  // X position
-        let r = data[12 + i];  // R value
-        let g = data[24 + i];  // G value
-        let b = data[36 + i];  // B value
+    // Start point (t=0)
+    points.push(crate::scene::tonemap::CurvePoint::new(0.0, 0.0));
 
-        // Average RGB to get luminance
-        let y = (r + g + b) / 3.0;
-
-        points.push(crate::scene::tonemap::CurvePoint::new(x, y));
+    // Sample at t=0.25, 0.5, 0.75
+    for &t in &[0.25, 0.5, 0.75] {
+        if let Some((x, y)) = eval_rational_bezier(t, &control_points) {
+            points.push(crate::scene::tonemap::CurvePoint::new(x, y));
+        }
     }
+
+    // End point (t=1)
+    points.push(crate::scene::tonemap::CurvePoint::new(1.0, 1.0));
 
     // Sort by x coordinate (should already be sorted, but ensure it)
     points.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
 
     ToneCurve { points }
+}
+
+/// Evaluate a rational cubic Bezier curve at parameter t
+///
+/// control_points: 4 tuples of (x, y, weight)
+/// Returns: Some((x, y)) or None if denominator is zero
+fn eval_rational_bezier(t: f32, control_points: &[(f32, f32, f32); 4]) -> Option<(f32, f32)> {
+    let s = 1.0 - t;
+    let s2 = s * s;
+    let s3 = s2 * s;
+    let t2 = t * t;
+    let t3 = t2 * t;
+
+    // Cubic Bernstein polynomials with weights
+    let b0 = control_points[0].2 * s3;
+    let b1 = control_points[1].2 * 3.0 * s2 * t;
+    let b2 = control_points[2].2 * 3.0 * s * t2;
+    let b3 = control_points[3].2 * t3;
+
+    let nom_x = b0 * control_points[0].0 + b1 * control_points[1].0 +
+                b2 * control_points[2].0 + b3 * control_points[3].0;
+    let nom_y = b0 * control_points[0].1 + b1 * control_points[1].1 +
+                b2 * control_points[2].1 + b3 * control_points[3].1;
+    let denom = b0 + b1 + b2 + b3;
+
+    if denom.abs() < 1e-10 {
+        return None; // Avoid division by zero
+    }
+
+    Some((nom_x / denom, nom_y / denom))
 }
 
 #[cfg(test)]
