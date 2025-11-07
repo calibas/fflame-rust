@@ -39,10 +39,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Update color based on color mode
         if (params.color_mode == 0u) {
-            // Transform color mode: blend with transform color
-            // Uses simple mix for backward compatibility
-            color = mix(color, xform.color, xform.color_speed);
-        } else if (params.color_mode == 1u) {
             // Palette mode: Apophysis color coordinate evolution
             // Formula: new_c = old_c * (1 + symmetry)/2 + transform_color * (1 - symmetry)/2
             // where symmetry = color_speed (-1 to 1)

@@ -3,9 +3,7 @@ use serde::{Deserialize, Serialize};
 /// Color mode determines how colors are assigned during iteration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ColorMode {
-    /// Use per-transform colors
-    Transform,
-    /// Use 1D palette texture lookup
+    /// Use 1D palette texture lookup (Apophysis color coordinate evolution)
     Palette,
     /// Use speed-based coloring (distance traveled per iteration)
     Speed,
@@ -13,7 +11,7 @@ pub enum ColorMode {
 
 impl Default for ColorMode {
     fn default() -> Self {
-        Self::Transform
+        Self::Palette
     }
 }
 

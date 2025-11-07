@@ -200,7 +200,7 @@ impl Default for FractalConfig {
             target_iterations_per_pixel: 0,
             iterations_per_thread: default_iterations_per_thread(),
             speed_multiplier: default_speed_multiplier(),
-            color_mode: ColorMode::Transform,
+            color_mode: ColorMode::Palette,
             palette_index: 0,
             palette: None,
             palette_rotation: default_palette_rotation(),

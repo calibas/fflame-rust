@@ -96,7 +96,7 @@ impl App {
             density_scale: 1.0,
             speed_factor: crate::config::DEFAULT_SPEED_FACTOR,
             max_iterations: crate::config::DEFAULT_MAX_ITERATIONS,
-            color_mode: ColorMode::Transform,
+            color_mode: ColorMode::Palette,
             palette_index: 1,
             palette: Some(initial_palette),
             palette_rotation: 0.0,
