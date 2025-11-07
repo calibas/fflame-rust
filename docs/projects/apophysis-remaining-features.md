@@ -14,33 +14,71 @@ This covers the final features to achieve near-complete parity.
 
 These features are planned for implementation and necessary for good Apophysis compatibility.
 
-### 1. 3D Controls Match Apophysis
+### 1. 3D Camera System Match Apophysis
 
-**Status:** Partially implemented, needs refinement
+**Status:** Partially implemented, needs correction
+
+**📋 Detailed Plan:** See `docs/projects/3d-camera-system-apophysis.md` for complete implementation guide
 
 **Current State:**
 - ✅ Camera pitch and yaw (imported from XML)
 - ✅ Perspective projection (imported from `cam_perspective`)
 - ⚠️ Camera height (Z position) - Not imported
 - ⚠️ Perspective strength - Imported but may need UI adjustment
+- ❌ **Critical Issue:** Axis reference frame problem
 
-**What's Needed:**
-- Import `cam_zpos` attribute from XML (camera Z position)
-- Add UI controls for all 3D camera parameters:
-  - Camera Pitch (X rotation)
-  - Camera Yaw (Y rotation)
-  - Camera Height (Z position)
-  - Perspective Strength (from ProjectionType)
-- Verify 3D rendering matches Apophysis appearance
+**Problems:**
+1. **Axis Reference Frame:** Our camera rotation uses world-space axes, not view-relative
+   - Apophysis rotates around view-relative axes (camera's current orientation)
+   - We rotate around fixed world axes (X, Y, Z)
+   - Result: Different behavior when combining pitch and yaw
+
+2. **Gimbal Lock:** Susceptible to gimbal lock with Euler angles
+   - At pitch = ±90°, yaw and roll become equivalent
+   - Loses one degree of freedom
+   - Camera can get "stuck" in certain orientations
+
+**What Apophysis Does:**
+- Uses view-relative rotation (rotate around camera's current axes)
+- Applies rotations in specific order (yaw, then pitch)
+- Avoids gimbal lock in typical usage
+
+**What We Need:**
+1. **Import `cam_zpos`** - Camera Z position/height
+2. **Fix rotation system:**
+   - Option A: Switch to quaternions (avoids gimbal lock)
+   - Option B: Use view-relative Euler angles (matches Apophysis)
+   - Option C: Use rotation matrices with proper composition
+3. **Add UI controls:**
+   - Camera Pitch (view-relative X rotation)
+   - Camera Yaw (view-relative Y rotation)
+   - Camera Height (Z position)
+   - Perspective Strength
+4. **Test against Apophysis 3D flames:**
+   - Verify identical camera behavior
+   - Test edge cases (pitch near ±90°)
+
+**Recommended Approach:**
+- **Option B (View-Relative Euler):** Closest to Apophysis, easier to implement
+- Store pitch/yaw as separate values
+- Apply in correct order: world_to_camera = rotate_pitch(rotate_yaw(point))
+- Update rotation incrementally (not absolute)
 
 **Files to Modify:**
 - `src/apophysis_xml.rs` - Parse `cam_zpos`
 - `src/config/fractal_config.rs` - Add camera_z field
 - `src/config/delta.rs` - Add ConfigPath::CameraZ
 - `src/ui/` - Add 3D camera controls panel
-- `src/scene/transforms.rs` - Store camera Z in ProjectionType
+- `shaders/core/utilities.wgsl` - Fix camera rotation to use view-relative axes
+- `src/scene/transforms.rs` - Update camera rotation system
 
-**Estimated Effort:** 2-3 hours
+**Estimated Effort:** 8-12 hours (4 phases: camera matrix fix, camera Z, UI controls, testing)
+
+**Implementation Phases:**
+1. **Camera Matrix Fix** (2-3 hours) - Use exact Apophysis ZXY Euler rotation formula
+2. **Camera Z Position** (2-3 hours) - Import and use `cam_zpos`
+3. **UI Controls** (2-3 hours) - Expose pitch/yaw/z/perspective sliders
+4. **Testing & Validation** (2-3 hours) - Verify against Apophysis reference flames
 
 ---
 
