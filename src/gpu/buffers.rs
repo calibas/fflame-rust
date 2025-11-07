@@ -141,6 +141,7 @@ pub struct GpuParams {
     pub perspective_strength: f32, // Strength for perspective projection
     pub camera_rotation_x: f32, // 3D camera pitch (rotation around X axis)
     pub camera_rotation_y: f32, // 3D camera yaw (rotation around Y axis)
+    pub camera_z: f32, // 3D camera Z position (height)
     pub histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
     pub _pad3: f32,
 }
@@ -316,6 +317,7 @@ impl FlameBuffers {
             perspective_strength: 2.0,
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
+            camera_z: 0.0,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             _pad3: 0.0,
         };

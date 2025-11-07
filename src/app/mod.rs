@@ -92,6 +92,7 @@ impl App {
             rotation: 0.0,
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
+            camera_z: 0.0,
             density_scale: 1.0,
             speed_factor: crate::config::DEFAULT_SPEED_FACTOR,
             max_iterations: crate::config::DEFAULT_MAX_ITERATIONS,
@@ -165,7 +166,7 @@ impl App {
                                     });
                                     renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, size.width, size.height,
                                         &app.flame, config.iterations_per_thread, config.zoom, config.pan_x, config.pan_y, config.rotation,
-                                        config.camera_rotation_x, config.camera_rotation_y, config.speed_factor);
+                                        config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor);
                                     app.gpu.queue.submit(std::iter::once(encoder.finish()));
 
                                     // Restore palette and color mode after buffer recreation
@@ -177,7 +178,7 @@ impl App {
                                     }
                                     renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
                                         config.zoom, config.pan_x, config.pan_y, config.rotation,
-                                        config.camera_rotation_x, config.camera_rotation_y, config.speed_factor);
+                                        config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor);
                                 }
                             }
                         },
@@ -193,7 +194,7 @@ impl App {
                                     });
                                     renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, new_size.width, new_size.height,
                                         &app.flame, config.iterations_per_thread, config.zoom, config.pan_x, config.pan_y, config.rotation,
-                                        config.camera_rotation_x, config.camera_rotation_y, config.speed_factor);
+                                        config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor);
                                     app.gpu.queue.submit(std::iter::once(encoder.finish()));
 
                                     // Restore palette and color mode after buffer recreation
@@ -205,7 +206,7 @@ impl App {
                                     }
                                     renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
                                         config.zoom, config.pan_x, config.pan_y, config.rotation,
-                                        config.camera_rotation_x, config.camera_rotation_y, config.speed_factor);
+                                        config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor);
                                 }
                                 window.request_redraw();
                             }
@@ -340,7 +341,7 @@ impl App {
                 let clear_histogram = self.frames_since_accumulation == 1;
                 let samples_this_frame = renderer.compute_pass(&mut encoder, &self.gpu.queue, NUM_WORKGROUPS,
                     config.iterations_per_thread, config.zoom, config.pan_x, config.pan_y, config.rotation,
-                    config.camera_rotation_x, config.camera_rotation_y, config.speed_factor, clear_histogram);
+                    config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor, clear_histogram);
                 self.metrics.record_compute_time(t0.elapsed().as_secs_f64() * 1000.0);
 
                 let t1 = Instant::now();
@@ -956,7 +957,7 @@ impl App {
                 if actions.update_flame {
                     renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame,
                         update_config.iterations_per_thread, update_config.zoom, update_config.pan_x, update_config.pan_y,
-                        update_config.rotation, update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
+                        update_config.rotation, update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                 }
 
                 // Update view parameters (includes view changes and iteration changes)
@@ -964,7 +965,7 @@ impl App {
                     renderer.set_deterministic_rng(update_config.deterministic_rng);
                     renderer.update_iterations(&self.gpu.queue, update_config.iterations_per_thread,
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
-                        update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
+                        update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                 }
 
                 // Update palette if needed (also handles color mode changes)
@@ -981,7 +982,7 @@ impl App {
                     renderer.set_color_mode(&self.gpu.queue, update_config.color_mode,
                         update_config.iterations_per_thread, update_config.zoom, update_config.pan_x,
                         update_config.pan_y, update_config.rotation, update_config.camera_rotation_x,
-                        update_config.camera_rotation_y, update_config.speed_factor);
+                        update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                 }
 
                 // Update tone curve LUT if changed
@@ -1000,7 +1001,7 @@ impl App {
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, update_config.iterations_per_thread,
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
-                        update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.speed_factor);
+                        update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                     self.frames_since_accumulation = 0;  // Reset batch counter
                 }
 

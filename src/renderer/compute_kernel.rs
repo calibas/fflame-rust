@@ -88,7 +88,7 @@ impl FlameRenderer {
     }
 
     /// Resize the accumulation buffer
-    pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
+    pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         self.width = width;
         self.height = height;
 
@@ -101,11 +101,11 @@ impl FlameRenderer {
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
 
         // Clear accumulation counter
-        self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, speed_factor);
+        self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
     }
 
     /// Reset accumulation buffer and sample count
-    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _speed_factor: f32) {
+    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _camera_z: f32, _speed_factor: f32) {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
@@ -120,7 +120,7 @@ impl FlameRenderer {
 
     /// Run compute pass to generate flame samples
     /// Returns the number of samples generated this frame
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32, clear_histogram: bool) -> u64 {
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool) -> u64 {
         // Update seed for new random samples each frame
         let (projection_type, perspective_strength) = match self.current_projection {
             crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
@@ -150,6 +150,7 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            camera_z,
             histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
         };
@@ -334,6 +335,7 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x: config.camera_rotation_x,
             camera_rotation_y: config.camera_rotation_y,
+            camera_z: config.camera_z,
             histogram_color_scale: config.histogram_color_scale,
             _pad3: 0.0,
         };
@@ -353,7 +355,7 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         // Check if shaders need to be recompiled (variations changed)
         let shaders_changed = self.pipelines.ensure_shaders_current(device, flame);
         if shaders_changed {
@@ -396,6 +398,7 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            camera_z,
             histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
         };
@@ -462,10 +465,10 @@ impl FlameRenderer {
         self.deterministic_rng = deterministic;
     }
 
-    pub fn set_histogram_color_scale(&mut self, queue: &Queue, scale: f32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
+    pub fn set_histogram_color_scale(&mut self, queue: &Queue, scale: f32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         self.histogram_color_scale = scale;
         // Update GPU params immediately so new scale takes effect
-        self.update_iterations(queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, speed_factor);
+        self.update_iterations(queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
     }
 
     pub fn set_low_density_smoothing(&mut self, smoothing: f32) {
@@ -503,7 +506,7 @@ impl FlameRenderer {
     }
 
     /// Update iterations per thread
-    pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
+    pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         let (projection_type, perspective_strength) = match self.current_projection {
             crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
             crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
@@ -531,6 +534,7 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            camera_z,
             histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
         };
@@ -636,7 +640,7 @@ impl FlameRenderer {
     }
 
     /// Set color mode
-    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, speed_factor: f32) {
+    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         self.color_mode = color_mode;
 
         let (projection_type, perspective_strength) = match self.current_projection {
@@ -667,6 +671,7 @@ impl FlameRenderer {
             perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
+            camera_z,
             histogram_color_scale: self.histogram_color_scale,
             _pad3: 0.0,
         };

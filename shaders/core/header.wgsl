@@ -51,6 +51,7 @@ struct Params {
     perspective_strength: f32,  // Strength for perspective projection
     camera_rotation_x: f32,  // 3D camera pitch (rotation around X)
     camera_rotation_y: f32,  // 3D camera yaw (rotation around Y)
+    camera_z: f32,  // 3D camera Z position (height)
     histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
     _pad3: f32,
 }
