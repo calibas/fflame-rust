@@ -114,7 +114,7 @@ fn parse_flame_element(
                 gamma = value.parse().unwrap_or(4.0);
             }
             "vibrancy" => vibrancy = value.parse().unwrap_or(1.0),
-            "gamma_threshold" => gamma_threshold = value.parse().unwrap_or(0.0025) * 2000.0 + 50.0,
+            "gamma_threshold" => gamma_threshold = value.parse().unwrap_or(0.0025),
             "cam_pitch" => cam_pitch = value.parse().unwrap_or(0.0),
             "cam_yaw" => cam_yaw = value.parse().unwrap_or(0.0),
             "cam_zpos" => cam_zpos = value.parse().unwrap_or(0.0),
@@ -223,6 +223,13 @@ fn parse_flame_element(
 
     // Convert rotation from degrees to radians
     let rotation = rotate * std::f32::consts::PI / 180.0;
+
+    // Convert gamma_threshold from Apophysis scale to UI scale
+    // Apophysis default: 0.0025 (very small values)
+    // UI scale: 0-1000 (larger range for better slider precision)
+    // Formula: ui_value = apophysis_value * 2000.0 + 50.0
+    // This ensures default 0.0025 becomes 55.0 in UI
+    let gamma_threshold = gamma_threshold * 2000.0 + 50.0;
 
     // Parse tone curve from Apophysis curves data
     // Apophysis: 48 floats = 4 curves (X, R, G, B) × 12 points each
