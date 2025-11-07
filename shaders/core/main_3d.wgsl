@@ -66,12 +66,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Determine final color based on mode
                 var final_color: vec3<f32>;
                 if (params.color_mode == 0u) {
-                    final_color = color;
-                } else if (params.color_mode == 1u) {
-                    // Sample from palette texture
+                    // Palette mode: sample from palette texture using color_index
                     final_color = textureSampleLevel(palette_texture, palette_sampler, color_index, 0.0).rgb;
                 } else {
-                    // Speed mode uses accumulated color
+                    // Speed mode: uses accumulated RGB color
                     final_color = color;
                 }
 
