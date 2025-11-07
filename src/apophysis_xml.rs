@@ -114,7 +114,7 @@ fn parse_flame_element(
                 gamma = value.parse().unwrap_or(4.0);
             }
             "vibrancy" => vibrancy = value.parse().unwrap_or(1.0),
-            "gamma_threshold" => gamma_threshold = value.parse().unwrap_or(0.0025) * 2000.0,
+            "gamma_threshold" => gamma_threshold = value.parse().unwrap_or(0.0025) * 2000.0 + 50.0,
             "cam_pitch" => cam_pitch = value.parse().unwrap_or(0.0),
             "cam_yaw" => cam_yaw = value.parse().unwrap_or(0.0),
             "cam_zpos" => cam_zpos = value.parse().unwrap_or(0.0),
@@ -186,6 +186,18 @@ fn parse_flame_element(
         transforms.push(transform);
     }
 
+    // Determine render mode: if any camera parameters are set, use 3D mode
+    let has_camera_params = f32::abs(cam_pitch) > 0.0001
+        || f32::abs(cam_yaw) > 0.0001
+        || f32::abs(cam_zpos) > 0.0001
+        || f32::abs(cam_perspective) > 0.0001;
+
+    let render_mode = if has_camera_params {
+        RenderMode::ThreeD
+    } else {
+        RenderMode::TwoD
+    };
+
     // Determine projection type from cam_perspective
     let projection = if f32::abs(cam_perspective) > 0.0001 {
         ProjectionType::Perspective { strength: f32::abs(cam_perspective) }
@@ -198,7 +210,7 @@ fn parse_flame_element(
         name,
         transforms,
         final_transform: None,
-        render_mode: RenderMode::TwoD,
+        render_mode,
         projection,
     };
 
