@@ -113,7 +113,7 @@ fn parse_flame_element(
                 gamma = value.parse().unwrap_or(4.0);
             }
             "vibrancy" => vibrancy = value.parse().unwrap_or(1.0),
-            "gamma_threshold" => gamma_threshold = value.parse().unwrap_or(0.0025),
+            "gamma_threshold" => gamma_threshold = value.parse().unwrap_or(0.0025) * 2000.0,
             "cam_pitch" => cam_pitch = value.parse().unwrap_or(0.0),
             "cam_yaw" => cam_yaw = value.parse().unwrap_or(0.0),
             "cam_perspective" => cam_perspective = value.parse().unwrap_or(0.0),
@@ -243,7 +243,7 @@ fn parse_flame_element(
         gamma,
         brightness,  // Use parsed Apophysis brightness value
         vibrancy,  // Use parsed Apophysis vibrancy
-        saturation: 1.0,  // Default saturation
+        saturation: 1.5,  // Default saturation
         hue_shift: 0.0,  // Default hue shift
         value_scale: 1.0,  // Default value scale
         gamma_threshold,  // Use parsed Apophysis gamma_threshold
