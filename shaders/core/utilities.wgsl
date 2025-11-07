@@ -112,13 +112,11 @@ fn project_3d_to_2d_apophysis(
 // Convert 3D fractal coords to pixel coords (with Apophysis camera system)
 fn world_to_pixel_3d(p: vec3<f32>) -> vec2<i32> {
     // Apply Apophysis 3D → 2D projection (camera transform + perspective)
-    // TODO: Add camera_z parameter to params struct (currently hardcoded to 0.0)
-    let camera_z = 0.0;  // Placeholder until we add camera_z to config
     let p2d = project_3d_to_2d_apophysis(
         p,
         params.camera_rotation_x,  // pitch
         params.camera_rotation_y,  // yaw
-        camera_z,
+        params.camera_z,
         params.perspective_strength
     );
 

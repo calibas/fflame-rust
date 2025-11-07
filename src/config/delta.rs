@@ -24,6 +24,7 @@ pub enum ConfigPath {
     Rotation,
     CameraRotationX,
     CameraRotationY,
+    CameraZ,
 
     // ===== Tone mapping (no iteration reset needed) =====
     Exposure,
@@ -108,6 +109,7 @@ impl Display for ConfigPath {
             ConfigPath::Rotation => write!(f, "Rotation"),
             ConfigPath::CameraRotationX => write!(f, "Camera Pitch"),
             ConfigPath::CameraRotationY => write!(f, "Camera Yaw"),
+            ConfigPath::CameraZ => write!(f, "Camera Z"),
 
             // Tone mapping
             ConfigPath::Exposure => write!(f, "Exposure"),
@@ -472,7 +474,8 @@ impl ConfigPath {
             | ConfigPath::PanY
             | ConfigPath::Rotation
             | ConfigPath::CameraRotationX
-            | ConfigPath::CameraRotationY => UpdateType::ViewOnly,
+            | ConfigPath::CameraRotationY
+            | ConfigPath::CameraZ => UpdateType::ViewOnly,
 
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure
