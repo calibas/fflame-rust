@@ -47,55 +47,116 @@ These features are planned for implementation and necessary for good Apophysis c
 
 ---
 
-### 2. Simplify Transform Color UI
+### 2. Versatile Transform Color System
 
 **Status:** Not implemented
 
 **Description:**
-The current transform color UI uses three separate RGB sliders (0-1 range) to control the transform's color coordinate. This is confusing because the sliders don't represent RGB colors - they represent a **position in the palette** (which is then mapped to actual RGB during rendering).
+Replace the confusing 3-RGB-slider UI with a versatile color system that supports both palette-based and direct color workflows, plus add a color blend parameter for finer control.
 
 **Current Problems:**
-- Three RGB sliders suggest you're picking an RGB color
-- Actually controls palette position (0-1 coordinate)
-- No visual feedback showing the actual color from the palette
-- Confusing workflow: adjust sliders → see effect in flame
+- Three RGB sliders (0-1) suggest picking RGB colors
+- Actually controls palette coordinate (single float, averaged from RGB)
+- ColorMode::Transform (mode 0) is broken and unused
+- No way to directly pick a color without palette
+- No visual feedback showing actual resulting color
 
 **Proposed Solution:**
-Replace the three RGB sliders with:
-1. **Single "Transform Color" slider** (0.0 to 1.0)
-   - Directly maps to palette position
-   - Clear label: "Palette Position" or "Color Coordinate"
-2. **Visual color swatch**
-   - Shows the actual RGB color from current palette at this position
-   - Updates in real-time as slider moves or palette changes
-   - Click to open color picker? (future enhancement)
+
+**Phase 1: Clean up broken ColorMode::Transform (1-2 hours)**
+- Remove ColorMode::Transform enum variant
+- Remove mode 0 handling from shaders
+- Everything uses Apophysis palette-based color evolution
+- Simplify ColorMode to just Palette and Speed
+
+**Phase 2: Add Color Blend Parameter (2-3 hours)**
+- Add `color_blend: f32` field to Transform (default: 1.0)
+- Shader formula (Apophysis with blend scaling):
+  ```wgsl
+  let symmetry = xform.color_speed;
+  let colorC1 = (1.0 + symmetry) / 2.0;
+  let colorC2 = xform.color * (1.0 - symmetry) / 2.0 * xform.color_blend;
+  color_index = color_index * colorC1 + colorC2;
+  ```
+- Parse from XML (default to 1.0 if missing)
+- Add UI slider (0.0-1.0, label: "Color Blend")
+- 0.0 = No transform color influence (pure inheritance)
+- 1.0 = Full transform color influence (standard Apophysis)
+
+**Phase 3: Versatile Color Input UI (3-4 hours)**
+- Store as single `f32` (palette coordinate, 0-1)
+  - Migration: Average existing RGB values → single float
+  - `color = (r + g + b) / 3.0`
+
+**UI provides two input modes:**
+
+**Mode A: Palette Position (default)**
+- Single slider (0.0-1.0) for palette coordinate
+- Visual color swatch showing palette color at position
+- Updates in real-time as slider moves or palette changes
+- Stores value directly in `transform.color`
+
+**Mode B: Direct RGB Picker**
+- Color picker widget (standard RGB selector)
+- Visual swatch showing selected color
+- Converts picked RGB to nearest palette coordinate
+- Algorithm: Find closest color in palette, return its position
+- Stores resulting coordinate in `transform.color`
+- Note: Approximate match, may not be exact color
+
+**Mode Toggle:**
+- Radio buttons: [Palette Position] [Color Picker]
+- Stored in FractalConfig for UI state persistence
+- Both modes ultimately store a single palette coordinate
 
 **Benefits:**
-- Matches Apophysis mental model (single color coordinate)
-- Visual feedback shows actual resulting color
-- Less confusing than "RGB" sliders that aren't RGB
-- Easier to understand: "this transform uses this color from the palette"
+- **Versatile**: Two workflows (palette position OR color picker)
+- **Intuitive**: Single value instead of confusing RGB triplet
+- **Visual**: See actual color in both modes
+- **Clean**: Remove broken ColorMode::Transform
+- **Compatible**: Keep Apophasis color_speed formula
+- **Flexible**: New color_blend parameter for fine control
 
-**Implementation Details:**
-- Store transform color as single `f32` instead of `[f32; 3]`
-  - **Breaking change:** Would need migration for old configs
-  - Alternative: Keep `[f32; 3]` storage, but UI treats it as single value
-- Add palette preview swatch in UI
-  - Sample palette at `transform.color` position
-  - Render as small colored rectangle next to slider
-- Update ConfigPath to handle single value or keep vec3 internally
+**Implementation Steps:**
+
+1. **Data Structure Changes:**
+   - Remove ColorMode::Transform
+   - Change `transform.color` from `[f32; 3]` to `f32`
+   - Add `transform.color_blend: f32` (default: 1.0)
+   - Add `transform.color_mode: ColorInputMode` enum (Palette/Picker)
+
+2. **Shader Updates:**
+   - Remove mode 0 (Transform) handling
+   - Update colorC2 formula to include `color_blend`
+   - Simplify to single palette-based path
+
+3. **UI Changes:**
+   - Replace 3 RGB sliders with mode toggle
+   - Palette mode: Single slider + swatch
+   - Picker mode: Color picker + swatch + conversion
+   - Add color_blend slider
+
+4. **XML Import/Export:**
+   - Convert old RGB triplets to single value (average)
+   - Parse color_blend (default: 1.0)
+   - Detect input mode from metadata (default: Palette)
 
 **Files to Modify:**
-- `src/ui/transforms.rs` - Replace RGB sliders with single slider + swatch
-- `src/scene/transforms.rs` - Consider storage format change
-- `src/config/delta.rs` - Update ConfigPath if needed
-- `src/apophysis_xml.rs` - Parse/export single color value
+- `src/scene/transforms.rs` - Change color type, add color_blend
+- `src/scene/palette.rs` - Add color matching function (RGB → position)
+- `src/ui/transforms.rs` - New color UI (mode toggle + inputs)
+- `src/config/delta.rs` - Update ConfigPath for single value
+- `shaders/core/main_2d.wgsl` and `main_3d.wgsl` - Remove mode 0, add blend
+- `shaders/core/header.wgsl` - Update Transform struct
+- `src/gpu/buffers.rs` - Update GpuTransform struct
+- `src/apophysis_xml.rs` - Parse single value + color_blend
 
-**Estimated Effort:** 4-6 hours (depends on whether we change storage format)
+**Total Estimated Effort:** 6-9 hours
 
-**Migration Considerations:**
-- If changing from `[f32; 3]` to `f32`: need to average RGB values or take first component
-- If keeping `[f32; 3]`: UI just uses first component, storage unchanged (easier)
+**Migration Strategy:**
+- Old configs: Average RGB → single float, color_blend = 1.0
+- Default mode: Palette Position
+- Backward compatible with Apophysis XML import
 
 ---
 
