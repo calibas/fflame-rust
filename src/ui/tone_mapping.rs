@@ -52,15 +52,15 @@ pub fn render_tone_mapping_window(
                         max_update = max_update.max(result.update_type);
                     }
 
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, -1.0..=5.0, "Gamma") {
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, -1.0..=10.0, "Gamma") {
                         max_update = max_update.max(result.update_type);
                     }
 
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::GammaThreshold, 0.0..=2.0, "Gamma Threshold") {
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::GammaThreshold, 0.0..=100.0, "Gamma Threshold") {
                         max_update = max_update.max(result.update_type);
                     }
 
-                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Brightness, 0.0..=5.0, "Brightness") {
+                    if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Brightness, 0.001..=100.0, "Brightness") {
                         max_update = max_update.max(result.update_type);
                     }
 
