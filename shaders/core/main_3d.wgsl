@@ -43,10 +43,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Palette mode: Apophysis color coordinate evolution with blend control
             // Formula: new_c = old_c * (1 + symmetry)/2 + transform_color * (1 - symmetry)/2 * blend
             // where symmetry = color_speed (-1 to 1), blend = color_blend (0 to 1)
-            let xform_color_value = (xform.color.r + xform.color.g + xform.color.b) / 3.0;
             let symmetry = xform.color_speed;
             let colorC1 = (1.0 + symmetry) / 2.0;
-            let colorC2 = xform_color_value * (1.0 - symmetry) / 2.0 * xform.color_blend;
+            let colorC2 = xform.color * (1.0 - symmetry) / 2.0 * xform.color_blend;
             color_index = color_index * colorC1 + colorC2;
         } else {
             // Speed mode: blend with speed-based color
