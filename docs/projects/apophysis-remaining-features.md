@@ -47,37 +47,55 @@ These features are planned for implementation and necessary for good Apophysis c
 
 ---
 
-### 2. Direct Color Transforms
+### 2. Simplify Transform Color UI
 
 **Status:** Not implemented
 
 **Description:**
-In Apophysis, transforms can use direct RGB colors instead of palette coordinates.
-This is separate from the palette-based color system.
+The current transform color UI uses three separate RGB sliders (0-1 range) to control the transform's color coordinate. This is confusing because the sliders don't represent RGB colors - they represent a **position in the palette** (which is then mapped to actual RGB during rendering).
 
-**Current State:**
-- We have `ColorMode::Transform` but it's not properly implemented
-- Transform colors are stored but not used correctly
-- XML import sets color mode but doesn't distinguish direct vs palette
+**Current Problems:**
+- Three RGB sliders suggest you're picking an RGB color
+- Actually controls palette position (0-1 coordinate)
+- No visual feedback showing the actual color from the palette
+- Confusing workflow: adjust sliders → see effect in flame
 
-**What's Needed:**
-- Implement `ColorMode::Transform` to use direct RGB from transforms
-- Update shader to check color mode and use `transform.color` as RGB
-- Update XML import to detect direct color vs palette mode
-- Add UI toggle to switch between palette and direct color modes
+**Proposed Solution:**
+Replace the three RGB sliders with:
+1. **Single "Transform Color" slider** (0.0 to 1.0)
+   - Directly maps to palette position
+   - Clear label: "Palette Position" or "Color Coordinate"
+2. **Visual color swatch**
+   - Shows the actual RGB color from current palette at this position
+   - Updates in real-time as slider moves or palette changes
+   - Click to open color picker? (future enhancement)
 
-**Use Case:**
-- Some Apophysis flames use direct RGB colors per transform
-- Allows more precise color control without palette
-- Common in simple flames with 2-3 transforms
+**Benefits:**
+- Matches Apophysis mental model (single color coordinate)
+- Visual feedback shows actual resulting color
+- Less confusing than "RGB" sliders that aren't RGB
+- Easier to understand: "this transform uses this color from the palette"
+
+**Implementation Details:**
+- Store transform color as single `f32` instead of `[f32; 3]`
+  - **Breaking change:** Would need migration for old configs
+  - Alternative: Keep `[f32; 3]` storage, but UI treats it as single value
+- Add palette preview swatch in UI
+  - Sample palette at `transform.color` position
+  - Render as small colored rectangle next to slider
+- Update ConfigPath to handle single value or keep vec3 internally
 
 **Files to Modify:**
-- `shaders/core/main_2d.wgsl` and `main_3d.wgsl` - Check color mode
-- `src/apophysis_xml.rs` - Detect direct color mode
-- `src/ui/color_settings.rs` - Add color mode selector
-- `src/scene/color.rs` - Document ColorMode::Transform behavior
+- `src/ui/transforms.rs` - Replace RGB sliders with single slider + swatch
+- `src/scene/transforms.rs` - Consider storage format change
+- `src/config/delta.rs` - Update ConfigPath if needed
+- `src/apophysis_xml.rs` - Parse/export single color value
 
-**Estimated Effort:** 3-4 hours
+**Estimated Effort:** 4-6 hours (depends on whether we change storage format)
+
+**Migration Considerations:**
+- If changing from `[f32; 3]` to `f32`: need to average RGB values or take first component
+- If keeping `[f32; 3]`: UI just uses first component, storage unchanged (easier)
 
 ---
 
@@ -157,36 +175,86 @@ Shows the visual effect of the transform + variations.
 
 ---
 
-### 5. Direct Color Variations
+### 5. Direct Color Variations & Plugin Color Blending
 
-**Status:** Not implemented (part of variation plugins)
+**Status:** Not implemented (part of variation plugins + color system)
 
 **Description:**
-Some variations can directly modify the color coordinate, not just position.
-This is part of the plugin color system.
+Complete implementation of the Apophysis 3-step color blending system, including the `direct_color` (pluginColor) parameter that allows DirectColor variations to modify the color coordinate.
 
-**Apophysis Concept:**
-- Variations have optional `plugin_color` parameter
-- Variation can return new color: `(x', y', z', c')`
-- Formula: `c_out = c_in + pluginColor × (variation_c - c_in)`
+**Apophysis Color Blending System** (XForm.pas:312-313, 1067, 1078-1081):
 
-**Current State:**
-- Our variations only return position: `(x, y)` or `(x, y, z)`
-- No color output from variations
-- Would require variation signature changes
+**Step 1: Color Speed Blending**
+```pascal
+colorC1 := (1 + symmetry)/2;
+colorC2 := color*(1 - symmetry)/2;
+CPpoint.c := CPpoint.c * colorC1 + colorC2;
+vc := CPpoint.c;
+```
+Blends inherited color with transform base color using `color_speed` (symmetry).
+
+**Step 2: Variation Execution**
+```pascal
+for i:= 0 to FNrFunctions-1 do
+  FCalcFunctionList[i];
+```
+DirectColor variations can modify `vc` (the variation color variable).
+
+**Step 3: Direct Color Blending**
+```pascal
+CPpoint.c := CPpoint.c + pluginColor * (vc - CPpoint.c);
+```
+Blends variation-modified color back: `c_final = c_base + direct_color × (vc - c_base)`
+
+**Current Implementation:**
+- ✅ Step 1: Color speed blending (implemented)
+- ✅ Step 2: Variations execute (implemented, but can't modify color)
+- ❌ Step 3: Direct color blending (missing!)
+- ❌ `direct_color` field not in Transform struct
+- ❌ DirectColor variations can't output color
+- ❌ XML import doesn't parse `pluginColor` attribute
 
 **What's Needed:**
-- Extend variation system to optionally return color
-- Add `plugin_color` parameter to VariationParameter
-- Update shader builder to handle color-returning variations
-- Identify which Apophysis variations use direct color (rare)
+
+**Phase 1: Add direct_color Parameter (2-3 hours)**
+- Add `direct_color: f32` field to Transform struct
+- Parse `pluginColor` from XML (default: 0.0)
+- Add to GPU transform buffer
+- Add ConfigPath::TransformDirectColor
+- Add UI slider (0.0 to 1.0)
+
+**Phase 2: Shader Color Blending (2-3 hours)**
+- Update shader to implement Step 3 formula
+- Add `vc` (variation color) variable
+- Apply direct_color blending after variations
+- Test with existing flames (should have no effect if direct_color=0)
+
+**Phase 3: DirectColor Variation Support (6-8 hours)**
+- Extend variation system to optionally output color
+- Update VariationRegistry to mark DirectColor variations
+- Modify shader builder for color-returning variations
+- Implement key DirectColor variations:
+  - `dc_linear` (linear color gradient)
+  - `dc_bubble` (radial color gradient)
+  - Others as needed
 
 **Use Cases:**
-- Advanced color effects
-- Variation-driven coloring
-- Rarely used in practice
+- Variation-driven color effects (gradients, radial coloring)
+- Advanced color control beyond palette
+- Full Apophysis compatibility for flames using DirectColor variations
 
-**Estimated Effort:** 10-12 hours (requires variation system redesign)
+**Files to Modify:**
+- `src/scene/transforms.rs` - Add direct_color field
+- `src/apophysis_xml.rs` - Parse pluginColor
+- `src/config/delta.rs` - Add ConfigPath variant
+- `src/ui/transforms.rs` - Add direct_color slider
+- `shaders/core/main_2d.wgsl` and `main_3d.wgsl` - Implement Step 3
+- `src/variations/mod.rs` - Add DirectColor variation category
+- `src/shader_builder_v2.rs` - Handle color-returning variations
+
+**Total Estimated Effort:** 10-14 hours
+
+**Priority:** Medium - Required for full DirectColor variation support, but most flames don't use it
 
 ---
 
