@@ -1,1 +1,0 @@
-Resizing the window causes the palette to switch to "fire" even though it says "rainbow (custom)" is selected. Changing the palette fixes things.
