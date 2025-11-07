@@ -363,22 +363,24 @@ fn render_color_controls(
 
                 // Show the actual palette position found
                 ui.label(format!("Palette position: {:.3}", transform.color));
-
-                // Show preview of color at current position
-                let actual_color = palette.sample_color(transform.color);
-                ui.horizontal(|ui| {
-                    ui.label("Actual color:");
-                    let mut color_swatch = egui::Color32::from_rgb(
-                        (actual_color[0] * 255.0) as u8,
-                        (actual_color[1] * 255.0) as u8,
-                        (actual_color[2] * 255.0) as u8,
-                    );
-                    ui.color_edit_button_srgba(&mut color_swatch);
-                });
             } else {
                 ui.label("No palette loaded");
             }
         }
+    }
+
+    // Show preview of color at current position (both modes)
+    if let Some(palette) = &config_manager.active_config().palette {
+        let actual_color = palette.sample_color(transform.color);
+        ui.horizontal(|ui| {
+            ui.label("Actual color:");
+            let mut color_swatch = egui::Color32::from_rgb(
+                (actual_color[0] * 255.0) as u8,
+                (actual_color[1] * 255.0) as u8,
+                (actual_color[2] * 255.0) as u8,
+            );
+            ui.color_edit_button_srgba(&mut color_swatch);
+        });
     }
 
     let mut temp_speed = transform.color_speed;
