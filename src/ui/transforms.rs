@@ -256,62 +256,24 @@ fn render_color_controls(
     index: usize,
     transform: &mut crate::scene::transforms::Transform,
 ) -> UpdateType {
-    use crate::config::ColorComponent;
     let mut max_update = UpdateType::None;
 
-    ui.label("Color");
-    ui.horizontal(|ui| {
-        ui.label("R:");
-        let mut temp_r = transform.color[0];
-        let response_r = ui.add(egui::Slider::new(&mut temp_r, 0.0..=1.0));
-        if response_r.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformColor { index, component: ColorComponent::R },
-                temp_r.into(),
-                response_r.dragged()  // Lazy undo
-            ) {
-                transform.color[0] = config_manager.active_config().flame.transforms[index].color[0];
-                max_update = max_update.max(update_type);
-            }
+    // Color (palette position)
+    let mut temp_color = transform.color;
+    let response_color = ui.add(egui::Slider::new(&mut temp_color, 0.0..=1.0).text("Color (Palette Position)"));
+    if response_color.changed() {
+        if let Ok(update_type) = config_manager.update_param(
+            ConfigPath::TransformColor { index },
+            temp_color.into(),
+            response_color.dragged()  // Lazy undo
+        ) {
+            transform.color = config_manager.active_config().flame.transforms[index].color;
+            max_update = max_update.max(update_type);
         }
-        if response_r.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: ColorComponent::R });
-        }
-
-        ui.label("G:");
-        let mut temp_g = transform.color[1];
-        let response_g = ui.add(egui::Slider::new(&mut temp_g, 0.0..=1.0));
-        if response_g.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformColor { index, component: ColorComponent::G },
-                temp_g.into(),
-                response_g.dragged()  // Lazy undo
-            ) {
-                transform.color[1] = config_manager.active_config().flame.transforms[index].color[1];
-                max_update = max_update.max(update_type);
-            }
-        }
-        if response_g.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: ColorComponent::G });
-        }
-
-        ui.label("B:");
-        let mut temp_b = transform.color[2];
-        let response_b = ui.add(egui::Slider::new(&mut temp_b, 0.0..=1.0));
-        if response_b.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformColor { index, component: ColorComponent::B },
-                temp_b.into(),
-                response_b.dragged()  // Lazy undo
-            ) {
-                transform.color[2] = config_manager.active_config().flame.transforms[index].color[2];
-                max_update = max_update.max(update_type);
-            }
-        }
-        if response_b.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: ColorComponent::B });
-        }
-    });
+    }
+    if response_color.drag_stopped() {
+        let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index });
+    }
 
     let mut temp_speed = transform.color_speed;
     let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text("Color Speed (Symmetry)"));
