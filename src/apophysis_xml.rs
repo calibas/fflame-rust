@@ -74,6 +74,7 @@ fn parse_flame_element(
     let mut gamma_threshold = 0.0025;
     let mut cam_pitch = 0.0;  // Camera rotation X (radians)
     let mut cam_yaw = 0.0;    // Camera rotation Y (radians)
+    let mut cam_zpos = 0.0;   // Camera Z position (height)
     let mut cam_perspective = 0.0;  // Perspective strength
     let mut curves: Option<Vec<f32>> = None;  // Tone curve data (48 floats)
 
@@ -116,6 +117,7 @@ fn parse_flame_element(
             "gamma_threshold" => gamma_threshold = value.parse().unwrap_or(0.0025) * 2000.0,
             "cam_pitch" => cam_pitch = value.parse().unwrap_or(0.0),
             "cam_yaw" => cam_yaw = value.parse().unwrap_or(0.0),
+            "cam_zpos" => cam_zpos = value.parse().unwrap_or(0.0),
             "cam_perspective" => cam_perspective = value.parse().unwrap_or(0.0),
             "curves" => {
                 // Parse space-separated floats (48 values: 4 curves × 12 points)
@@ -228,6 +230,7 @@ fn parse_flame_element(
         rotation,
         camera_rotation_x: cam_pitch,
         camera_rotation_y: cam_yaw,
+        camera_z: cam_zpos,
         density_scale: 1.0,  // Use default, brightness is handled by Apophysis brightness parameter
         speed_factor: 1.0,
         max_iterations: 1_000_000_000,

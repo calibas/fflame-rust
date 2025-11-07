@@ -91,6 +91,7 @@ pub async fn export_headless(
                 config.rotation,
                 config.camera_rotation_x,
                 config.camera_rotation_y,
+                config.camera_z,
                 config.speed_factor,
                 true, // Always clear histogram for export (no batching)
             );
