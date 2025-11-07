@@ -168,42 +168,59 @@ Implement full color system compatibility with Apophysis 7X, including proper pa
 
 ---
 
-### Phase 3.4: Palette Enhancements
+### Phase 3.4: Palette Enhancements ✅ **COMPLETE**
 
-**Goal:** Add Apophysis palette features (hue rotation, white level).
+**Goal:** Add Apophysis palette features and color controls.
 
-#### 3.4.1 - Hue Rotation
-- [ ] Add `hue_rotation: f32` to `FractalConfig` (range 0-1)
-- [ ] Implement RGB→HSV→RGB conversion in palette generation
-- [ ] Apply hue rotation during palette upload:
-  ```rust
-  let hsv = rgb_to_hsv(color);
-  hsv[0] = (hsv[0] + hue_rotation * 360.0) % 360.0;
-  let rotated_color = hsv_to_rgb(hsv);
+#### 3.4.1 - Palette Rotation (Index Shifting)
+- [x] Add `palette_rotation: f32` to `FractalConfig` (range 0-1)
+- [x] Implement index-based rotation in shader (simpler than HSV)
+- [x] Apply rotation during palette lookup:
+  ```wgsl
+  let rotated_index = fract(color_coord + palette_rotation);
+  final_color = textureSampleLevel(palette_texture, palette_sampler, vec2(rotated_index, 0.5), 0.0);
   ```
-- [ ] Add hue rotation slider to Palette Editor
+- [x] Add palette rotation slider to Color Settings window
 
-#### 3.4.2 - White Level (Brightness)
-- [ ] Add `white_level: f32` to `FractalConfig` (default 256.0)
-- [ ] Scale palette colors during upload:
-  ```rust
-  palette_data[i] = ((color * white_level) / 256.0).clamp(0.0, 255.0) as u8;
+#### 3.4.2 - Gamma Threshold
+- [x] Add `gamma_threshold: f32` to `FractalConfig` (default 0.0025)
+- [x] Implement smooth low-density gamma in tonemap shader:
+  ```wgsl
+  let funcval = 1.0 - exp(-tonemap_params.gamma_threshold * ls);
+  let alpha = pow(funcval, inv_gamma);
   ```
-- [ ] Add white level slider to Color Settings
-- [ ] Update XML import/export with `brightness` attribute
+- [x] Add gamma threshold slider to Tone Mapping window (0.0-0.01)
 
-**Files to Modify:**
-- `src/scene/palette.rs` - Add RGB↔HSV conversion utilities
-- `src/gpu/buffers.rs` - Apply hue rotation and white level during upload
-- `src/config/fractal_config.rs` - Add hue_rotation and white_level
-- `src/apophysis_xml.rs` - Parse/export brightness (maps to white_level)
-- `src/ui/palette_editor.rs` - Add hue rotation slider
-- `src/ui/settings.rs` - Add white level slider
+#### 3.4.3 - Additional Color Controls
+- [x] Add `saturation: f32` to `FractalConfig` (default 1.0)
+- [x] Add `hue_shift: f32` to `FractalConfig` (default 0.0, range 0-360°)
+- [x] Add `value_scale: f32` to `FractalConfig` (default 1.0)
+- [x] Implement in tonemap shader (RGB→HSV→RGB with adjustments)
+- [x] Add sliders to Tone Mapping window
 
-**Expected Outcome:**
-- Hue rotation shifts all palette colors by specified degrees
-- White level controls overall palette brightness
-- Matches Apophysis rendering exactly
+**Files Modified:**
+- ✅ `src/config/fractal_config.rs` - Added palette_rotation, gamma_threshold, saturation, hue_shift, value_scale
+- ✅ `src/config/delta.rs` - Added ConfigPath variants for all new parameters
+- ✅ `src/config/manager.rs` - Added getter/setter for all parameters
+- ✅ `shaders/tonemap.wgsl` - Implemented palette rotation, gamma threshold, HSV color adjustments
+- ✅ `src/gpu/buffers.rs` - Added fields to TonemapParams
+- ✅ `src/ui/tone_mapping.rs` - Added all sliders
+- ✅ `src/renderer/compute_kernel.rs` - Updated update_tonemap signature
+- ✅ `src/apophysis_xml.rs` - Parse brightness parameter
+
+**Commits:**
+- 51e5c02 - FEAT: Add palette rotation (index shifting, Apophysis Phase 3.4)
+- 7db3d4c - FIX: Correct palette rotation direction (+ instead of -)
+- dc5c25b - FEAT: Add gamma_threshold for smooth low-density rendering (Apophysis Phase 3.4)
+- d4fde19 - FEAT: Add gamma_threshold UI control
+
+**Outcome:**
+- ✅ Palette rotation shifts color indices (0.0-1.0 range, wraps around)
+- ✅ Gamma threshold smooths harsh darkening at low densities
+- ✅ Saturation control (0.0=grayscale, 1.0=normal, >1.0=oversaturated)
+- ✅ Hue shift rotates colors around hue wheel (0-360°)
+- ✅ Value scale brightens/darkens in HSV space
+- ✅ All parameters integrated with ConfigManager (undo/redo support)
 
 ---
 
@@ -313,9 +330,9 @@ Implement full color system compatibility with Apophysis 7X, including proper pa
 2. ✅ Palette mode works correctly with color_speed
 3. ✅ Opacity creates stochastic transparency
 4. ✅ Vibrancy controls color algorithm blend
-5. ✅ Hue rotation and white level implemented
-6. ✅ XML import/export round-trips perfectly
-7. ✅ Visual regression tests pass (>99% similarity)
+5. ✅ Palette rotation and gamma threshold implemented
+6. [ ] XML import/export round-trips perfectly
+7. [ ] Visual regression tests pass (>99% similarity)
 8. ✅ All existing tests still pass
 
 ---
@@ -369,7 +386,7 @@ Implement full color system compatibility with Apophysis 7X, including proper pa
 ---
 
 **Created:** 2025-01-04
-**Updated:** 2025-01-05
+**Updated:** 2025-01-06
 **Status:** In Progress
-**Completed:** Phase 3.1 (Color Coordinate Evolution), Phase 3.2 (Opacity), Phase 3.3 (Vibrancy)
-**Next Step:** Phase 3.4 - Palette Enhancements (Hue Rotation, White Level)
+**Completed:** Phase 3.1 (Color Coordinate Evolution), Phase 3.2 (Opacity), Phase 3.3 (Vibrancy), Phase 3.4 (Palette Enhancements)
+**Next Step:** Phase 3.5 - XML Import/Export Fixes
