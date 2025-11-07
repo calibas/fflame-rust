@@ -163,12 +163,8 @@ fn parse_flame_element(
         buf.clear();
     }
 
-    // Determine color mode based on whether palette exists
-    let color_mode = if palette.is_some() {
-        ColorMode::Palette
-    } else {
-        ColorMode::Transform
-    };
+    // Always use Palette mode (ColorMode::Transform has been removed)
+    let color_mode = ColorMode::Palette;
 
     // Apply palette color coordinates to transforms (Palette mode)
     // Or keep RGB colors as-is (Transform mode)
