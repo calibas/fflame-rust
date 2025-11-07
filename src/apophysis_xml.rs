@@ -173,9 +173,9 @@ fn parse_flame_element(
         if let Some(idx) = color_index {
             if palette.is_some() {
                 // Palette mode: Store color coordinate (0-1) as averaged RGB
-                // This will be used as palette index in shader
+                // This will be used as palette position in shader
                 let color_coord = idx as f32 / 255.0;
-                transform.color = [color_coord, color_coord, color_coord];
+                transform.color = color_coord;
             }
             // Note: color_speed comes from XML parsing, don't override here
         }
