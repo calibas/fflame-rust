@@ -24,11 +24,11 @@ struct Transform {
     color: vec3<f32>,
     color_speed: f32,
 
-    // Opacity + padding (forms vec4 for alignment)
+    // Color blend + opacity + padding (forms vec4 for alignment)
+    color_blend: f32,
     opacity: f32,
     _padding0: f32,
     _padding1: f32,
-    _padding2: f32,
 }
 
 // Dispatch parameters
