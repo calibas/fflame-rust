@@ -354,6 +354,9 @@ fn parse_xform_element(
         transform.set_variation_param(&var_name, &param_name, value);
     }
 
+    // Not supported in Apophysis
+    transform.color_blend = 0.0;
+
     Ok((transform, color_index))
 }
 
