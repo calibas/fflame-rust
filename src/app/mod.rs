@@ -4,6 +4,7 @@ mod input;
 mod config;
 mod export;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use export::export_headless;
 
 use winit::{event::*, event_loop::{EventLoop, ControlFlow}, window::Window};
@@ -875,9 +876,10 @@ impl App {
                 // any other code runs (single-threaded WASM environment).
                 use wasm_bindgen_futures::spawn_local;
 
+                // Build metadata before borrowing renderer
+                let export_config = self.export_config();
+
                 if let Some(ref mut renderer) = self.flame_renderer {
-                    // Build metadata before moving into async closure
-                    let export_config = self.export_config();
                     let total_iterations = renderer.total_iterations();
                     let render_time_ms = self.metrics.render_time_ms;
                     let iterations_per_thread = export_config.iterations_per_thread;
