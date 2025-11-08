@@ -350,7 +350,75 @@ Creates directed graphs instead of uniform random selection.
 
 ---
 
-### 7. Transform Solo Mode
+### 7. Final Transform
+
+**Status:** Not implemented
+
+**Description:**
+Apply a final post-processing transform after all iterations complete.
+
+**Apophysis Concept:**
+- Final transform is applied AFTER the full iteration chain
+- Not part of the random transform selection
+- Used for final positioning, framing, or effects
+- Common use: frame the output, add borders, apply final symmetry
+
+**Current State:**
+- Code structure exists for final transform in Flame struct
+- Not connected to rendering pipeline
+- No UI controls
+- XML import/export not implemented
+
+**What's Needed:**
+- Wire final transform into compute shader (apply after iteration loop)
+- Add UI panel for final transform editing
+- Parse final_xform from Apophysis XML
+- Export final transform to XML
+
+**Use Cases:**
+- Frame or reposition the entire fractal
+- Apply final symmetry or mirroring
+- Add border effects or vignetting
+- Common in polished Apophysis flames
+
+**Estimated Effort:** 4-6 hours
+
+---
+
+### 8. Separate RGB Channels for Tone Curves
+
+**Status:** Not implemented
+
+**Description:**
+Apophysis tone curves have separate curves for R, G, and B channels (plus combined).
+
+**Current State:**
+- Single combined tone curve only
+- Applies same adjustment to all RGB channels
+- Curve data structure supports separate channels but not used
+
+**Apophysis Approach:**
+- 4 curves: Combined (X), Red, Green, Blue
+- 48 floats total: 4 curves × 12 control points
+- Allows color-specific adjustments
+
+**What's Needed:**
+- Extend ToneCurve to support 4 separate curves
+- Update shader to apply per-channel adjustments
+- Parse all 4 curves from Apophysis XML
+- UI for editing separate channel curves (or just import/export)
+
+**Use Cases:**
+- Color-specific tone adjustments
+- White balance corrections
+- Creative color grading
+- Full Apophysis tone curve compatibility
+
+**Estimated Effort:** 6-8 hours
+
+---
+
+### 9. Transform Solo Mode
 
 **Status:** Not implemented
 
@@ -382,7 +450,7 @@ Temporarily disable all transforms except one to see its contribution.
 
 These features exist in Apophysis but are experimental or rarely used.
 
-### 8. Two-Color System
+### 10. Two-Color System
 
 **Status:** Not implemented
 
@@ -414,7 +482,7 @@ Most flames only use single color coordinate.
 
 These features have fundamental incompatibilities or impractical costs.
 
-### 9. Accumulation Difference
+### 11. Accumulation Difference
 
 **Status:** Architectural difference, not implementing
 
@@ -446,7 +514,7 @@ Apophysis uses a different accumulation model that affects brightness/density.
 
 ---
 
-### 10. 64-bit Floats
+### 12. 64-bit Floats
 
 **Status:** Not implementing
 
@@ -485,15 +553,17 @@ Apophysis uses `double` (64-bit) for variation weights and parameters.
 3. XML Export (6-8 hours) - Enables sharing and round-trip testing
 
 **Medium Priority (Nice to Have):**
-4. Transform Solo Mode (2-3 hours) - Easy, high value for debugging
-5. Variation Preview (8-10 hours) - Educational, not critical
-6. Xaos (12-15 hours) - Advanced feature, rarely used
-7. Direct Color Variations (10-12 hours) - Part of plugin system, rarely used
+4. Final Transform (4-6 hours) - Common in Apophysis flames
+5. Separate RGB Tone Curves (6-8 hours) - Full curve compatibility
+6. Transform Solo Mode (2-3 hours) - Easy, high value for debugging
+7. Variation Preview (8-10 hours) - Educational, not critical
+8. Xaos (12-15 hours) - Advanced feature, rarely used
+9. Direct Color Variations (10-12 hours) - Part of plugin system, rarely used
 
 **Low Priority (Experimental/Not Planned):**
-8. Two-Color System - Unused in practice
-9. Accumulation Difference - Architectural, not worth rewrite
-10. 64-bit Floats - WGSL incompatible, massive performance cost
+10. Two-Color System - Unused in practice
+11. Accumulation Difference - Architectural, not worth rewrite
+12. 64-bit Floats - WGSL incompatible, massive performance cost
 
 ---
 
