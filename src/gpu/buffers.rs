@@ -26,11 +26,11 @@ pub struct GpuTransform {
     // Variations (100 floats: supports all Apophysis 7X + future expansion)
     pub variations: [f32; 100],
 
-    // Color (palette position) + color_speed + color_blend + opacity (forms vec4 for alignment)
+    // Color (palette position) + color_speed + opacity + padding (forms vec4 for alignment)
     pub color: f32,
     pub color_speed: f32,
-    pub color_blend: f32,
     pub opacity: f32,
+    pub _padding: f32,
 }
 
 // Manual implementation for bytemuck (arrays of size 50 not auto-derived)
@@ -52,8 +52,8 @@ impl GpuTransform {
             variations: xform.to_fixed_array(registry),
             color: xform.color,
             color_speed: xform.color_speed,
-            color_blend: xform.color_blend,
             opacity: xform.opacity,
+            _padding: 0.0,
         }
     }
 }

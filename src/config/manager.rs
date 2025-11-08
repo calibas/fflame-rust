@@ -678,14 +678,6 @@ impl ConfigManager {
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.color_speed.into())
             }
-            ConfigPath::TransformColorBlend { index } => {
-                let xform = config
-                    .flame
-                    .transforms
-                    .get(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Ok(xform.color_blend.into())
-            }
             ConfigPath::TransformOpacity { index } => {
                 let xform = config
                     .flame
@@ -915,15 +907,6 @@ impl ConfigManager {
                     .ok_or(ConfigError::InvalidIndex)?;
                 xform.color_speed = value.try_into()?;
             }
-            ConfigPath::TransformColorBlend { index } => {
-                let xform = self
-                    .current
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
-                xform.color_blend = value.try_into()?;
-            }
             ConfigPath::TransformOpacity { index } => {
                 let xform = self
                     .current
@@ -1149,14 +1132,6 @@ impl ConfigManager {
                     .get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 xform.color_speed = value.try_into()?;
-            }
-            ConfigPath::TransformColorBlend { index } => {
-                let xform = preview
-                    .flame
-                    .transforms
-                    .get_mut(*index)
-                    .ok_or(ConfigError::InvalidIndex)?;
-                xform.color_blend = value.try_into()?;
             }
             ConfigPath::TransformOpacity { index } => {
                 let xform = preview
