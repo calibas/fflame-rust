@@ -141,7 +141,6 @@ pub fn render_tone_mapping_window(
                 .show(ui, |ui| {
                     let current_mode = config_manager.active_config().color_mode;
                     let selected_text = match current_mode {
-                        ColorMode::Transform => "Transform Colors",
                         ColorMode::Palette => "Palette",
                         ColorMode::Speed => "Speed",
                     };
@@ -150,11 +149,6 @@ pub fn render_tone_mapping_window(
                     egui::ComboBox::from_label("Color Mode")
                         .selected_text(selected_text)
                         .show_ui(ui, |ui| {
-                            if ui.selectable_value(&mut temp_color_mode, ColorMode::Transform, "Transform Colors").changed() {
-                                if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
-                                    max_update = max_update.max(update);
-                                }
-                            }
                             if ui.selectable_value(&mut temp_color_mode, ColorMode::Palette, "Palette").changed() {
                                 if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
                                     max_update = max_update.max(update);

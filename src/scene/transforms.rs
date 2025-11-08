@@ -27,8 +27,9 @@ pub struct Transform {
     /// Example: "julian.power" -> 3.0
     pub variation_params: HashMap<String, f32>,
 
-    /// Color contribution (RGB)
-    pub color: [f32; 3],
+    /// Color palette position (0.0 to 1.0)
+    /// Represents position in the palette for color coordinate evolution
+    pub color: f32,
 
     /// Color speed / symmetry (-1.0 to 1.0, Apophysis compatibility)
     /// -1.0 = full transform color replacement
@@ -55,7 +56,7 @@ impl Default for Transform {
             weight: 1.0,
             variations: HashMap::new(),
             variation_params: HashMap::new(),
-            color: [1.0, 1.0, 1.0],
+            color: 0.5,        // Mid-palette position (neutral default)
             color_speed: 0.0,  // Apophysis default: 50/50 blend
             opacity: 1.0,      // Apophysis default: always visible
         }
@@ -241,7 +242,7 @@ impl Serialize for Transform {
     {
         use serde::ser::SerializeStruct;
 
-        let mut state = serializer.serialize_struct("Transform", 13)?;
+        let mut state = serializer.serialize_struct("Transform", 14)?;
         state.serialize_field("a", &self.a)?;
         state.serialize_field("b", &self.b)?;
         state.serialize_field("c", &self.c)?;
@@ -357,7 +358,25 @@ impl<'de> Deserialize<'de> for Transform {
                         Field::VariationParams => {
                             variation_params = Some(map.next_value()?);
                         }
-                        Field::Color => color = Some(map.next_value()?),
+                        Field::Color => {
+                            // Handle both old format [f32; 3] and new format f32
+                            let value: serde_json::Value = map.next_value()?;
+                            let color_value = match value {
+                                // New format: single float (palette position)
+                                serde_json::Value::Number(num) => {
+                                    num.as_f64().map(|f| f as f32).unwrap_or(0.5)
+                                }
+                                // Old format: RGB array → average to single value
+                                serde_json::Value::Array(arr) if arr.len() >= 3 => {
+                                    let r = arr[0].as_f64().unwrap_or(0.0) as f32;
+                                    let g = arr[1].as_f64().unwrap_or(0.0) as f32;
+                                    let b = arr[2].as_f64().unwrap_or(0.0) as f32;
+                                    (r + g + b) / 3.0
+                                }
+                                _ => 0.5  // Default to mid-palette
+                            };
+                            color = Some(color_value);
+                        }
                         Field::ColorSpeed => color_speed = Some(map.next_value()?),
                         Field::Opacity => opacity = Some(map.next_value()?),
                     }

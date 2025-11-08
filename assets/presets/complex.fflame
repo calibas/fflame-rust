@@ -183,7 +183,7 @@
   "camera_rotation_y": 0.0,
   "density_scale": 1.0,
   "speed_factor": 0.5,
-  "color_mode": "Transform",
+  "color_mode": "Palette",
   "palette_index": 1,
   "background_color": [
     0.0,

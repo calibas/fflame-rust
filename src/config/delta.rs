@@ -63,7 +63,7 @@ pub enum ConfigPath {
     // ===== Transform-level changes (require iteration reset) =====
     TransformCount,
     TransformWeight { index: usize },
-    TransformColor { index: usize, component: ColorComponent },
+    TransformColor { index: usize },
     TransformColorSpeed { index: usize },
     TransformOpacity { index: usize },
     TransformAffine { index: usize, param: AffineParam },
@@ -77,14 +77,6 @@ pub enum ConfigPath {
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
     ProjectionType,
-}
-
-/// RGB color component
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ColorComponent {
-    R,
-    G,
-    B,
 }
 
 /// Affine transformation parameter (a, b, c, d, e, f, g)
@@ -150,8 +142,8 @@ impl Display for ConfigPath {
             ConfigPath::TransformWeight { index } => {
                 write!(f, "Transform {} → Weight", index + 1)
             }
-            ConfigPath::TransformColor { index, component } => {
-                write!(f, "Transform {} → Color {:?}", index + 1, component)
+            ConfigPath::TransformColor { index } => {
+                write!(f, "Transform {} → Color", index + 1)
             }
             ConfigPath::TransformColorSpeed { index } => {
                 write!(f, "Transform {} → Color Speed", index + 1)
