@@ -40,12 +40,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Update color based on color mode
         if (params.color_mode == 0u) {
-            // Palette mode: Blend accumulated RGB with transform's RGB color
-            // Formula: new_rgb = old_rgb * (1 + symmetry)/2 + xform_rgb * (1 - symmetry)/2 * blend
-            // where symmetry = color_speed (-1 to 1), blend = color_blend (0 to 1)
+            // Palette mode: Evolve BOTH palette position and RGB, then blend them
+            // This allows color_blend to interpolate between palette (0.0) and transform RGB (1.0)
+
             let symmetry = xform.color_speed;
             let colorC1 = (1.0 + symmetry) / 2.0;
-            let colorC2 = (1.0 - symmetry) / 2.0 * xform.color_blend;
+            let colorC2 = (1.0 - symmetry) / 2.0;
+
+            // Evolve palette position using transform color average
+            let xform_color_avg = (xform.color.r + xform.color.g + xform.color.b) / 3.0;
+            color_index = color_index * colorC1 + xform_color_avg * colorC2;
+
+            // Evolve RGB color directly
             color = color * colorC1 + xform.color * colorC2;
         } else {
             // Speed mode: blend with speed-based color
@@ -65,8 +71,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Determine final color based on mode
                 var final_color: vec3<f32>;
                 if (params.color_mode == 0u) {
-                    // Palette mode: Use accumulated RGB color directly
-                    final_color = color;
+                    // Palette mode: Blend between palette color and transform RGB based on color_blend
+                    let palette_color = textureSampleLevel(palette_texture, palette_sampler, color_index, 0.0).rgb;
+                    let blend_factor = xform.color_blend;
+                    final_color = mix(palette_color, color, blend_factor);
                 } else {
                     // Speed mode: uses accumulated RGB color
                     final_color = color;
