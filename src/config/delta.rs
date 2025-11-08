@@ -14,6 +14,14 @@ use crate::scene::transforms::{RenderMode, ProjectionType};
 use std::fmt::{self, Display, Formatter};
 use web_time::Instant;
 
+/// RGB color component (for per-component transform color editing)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ColorComponent {
+    R,
+    G,
+    B,
+}
+
 /// Identifies a specific parameter in the configuration
 #[derive(Debug, Clone)]
 pub enum ConfigPath {
@@ -63,7 +71,7 @@ pub enum ConfigPath {
     // ===== Transform-level changes (require iteration reset) =====
     TransformCount,
     TransformWeight { index: usize },
-    TransformColor { index: usize },
+    TransformColor { index: usize, component: ColorComponent },
     TransformColorSpeed { index: usize },
     TransformColorBlend { index: usize },
     TransformOpacity { index: usize },
@@ -143,8 +151,13 @@ impl Display for ConfigPath {
             ConfigPath::TransformWeight { index } => {
                 write!(f, "Transform {} → Weight", index + 1)
             }
-            ConfigPath::TransformColor { index } => {
-                write!(f, "Transform {} → Color", index + 1)
+            ConfigPath::TransformColor { index, component } => {
+                let comp_name = match component {
+                    ColorComponent::R => "R",
+                    ColorComponent::G => "G",
+                    ColorComponent::B => "B",
+                };
+                write!(f, "Transform {} → Color {}", index + 1, comp_name)
             }
             ConfigPath::TransformColorSpeed { index } => {
                 write!(f, "Transform {} → Color Speed", index + 1)
