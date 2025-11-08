@@ -355,30 +355,74 @@ fn render_color_controls(
         }
         ColorEditMode::ColorPicker => {
             // Color Picker mode: Pick RGB directly → store RGB
-            let mut temp_rgb = transform.color;
-
             ui.label("Pick a color:");
 
-            // RGB sliders for full control
+            // R slider
+            let mut temp_r = transform.color[0];
             ui.horizontal(|ui| {
                 ui.label("R:");
-                ui.add(egui::Slider::new(&mut temp_rgb[0], 0.0..=1.0).fixed_decimals(3));
+                let response_r = ui.add(egui::Slider::new(&mut temp_r, 0.0..=1.0).fixed_decimals(3));
+                if response_r.changed() {
+                    if let Ok(update_type) = config_manager.update_param(
+                        ConfigPath::TransformColor { index, component: crate::config::ColorComponent::R },
+                        temp_r.into(),
+                        response_r.dragged()
+                    ) {
+                        transform.color[0] = config_manager.active_config().flame.transforms[index].color[0];
+                        max_update = max_update.max(update_type);
+                    }
+                }
+                if response_r.drag_stopped() && config_manager.is_in_preview_mode() {
+                    let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: crate::config::ColorComponent::R });
+                }
             });
+
+            // G slider
+            let mut temp_g = transform.color[1];
             ui.horizontal(|ui| {
                 ui.label("G:");
-                ui.add(egui::Slider::new(&mut temp_rgb[1], 0.0..=1.0).fixed_decimals(3));
+                let response_g = ui.add(egui::Slider::new(&mut temp_g, 0.0..=1.0).fixed_decimals(3));
+                if response_g.changed() {
+                    if let Ok(update_type) = config_manager.update_param(
+                        ConfigPath::TransformColor { index, component: crate::config::ColorComponent::G },
+                        temp_g.into(),
+                        response_g.dragged()
+                    ) {
+                        transform.color[1] = config_manager.active_config().flame.transforms[index].color[1];
+                        max_update = max_update.max(update_type);
+                    }
+                }
+                if response_g.drag_stopped() && config_manager.is_in_preview_mode() {
+                    let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: crate::config::ColorComponent::G });
+                }
             });
+
+            // B slider
+            let mut temp_b = transform.color[2];
             ui.horizontal(|ui| {
                 ui.label("B:");
-                ui.add(egui::Slider::new(&mut temp_rgb[2], 0.0..=1.0).fixed_decimals(3));
+                let response_b = ui.add(egui::Slider::new(&mut temp_b, 0.0..=1.0).fixed_decimals(3));
+                if response_b.changed() {
+                    if let Ok(update_type) = config_manager.update_param(
+                        ConfigPath::TransformColor { index, component: crate::config::ColorComponent::B },
+                        temp_b.into(),
+                        response_b.dragged()
+                    ) {
+                        transform.color[2] = config_manager.active_config().flame.transforms[index].color[2];
+                        max_update = max_update.max(update_type);
+                    }
+                }
+                if response_b.drag_stopped() && config_manager.is_in_preview_mode() {
+                    let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: crate::config::ColorComponent::B });
+                }
             });
 
-            // Color preview button
-            let _response_picker = egui::color_picker::color_edit_button_rgb(ui, &mut temp_rgb);
+            // Color preview button (for quick visual reference)
+            let mut temp_rgb = transform.color;
+            let response_picker = egui::color_picker::color_edit_button_rgb(ui, &mut temp_rgb);
 
-            // Check if color changed
-            if temp_rgb != transform.color {
-                // Store RGB directly
+            // Handle color button changes (batch update for all RGB)
+            if response_picker.changed() && temp_rgb != transform.color {
                 let changes = vec![
                     (ConfigPath::TransformColor { index, component: crate::config::ColorComponent::R }, temp_rgb[0].into()),
                     (ConfigPath::TransformColor { index, component: crate::config::ColorComponent::G }, temp_rgb[1].into()),
@@ -388,11 +432,14 @@ fn render_color_controls(
                 if let Ok(update_type) = config_manager.update_batch(
                     changes,
                     format!("Transform {} Color", index + 1),
-                    false
+                    response_picker.dragged()
                 ) {
                     transform.color = config_manager.active_config().flame.transforms[index].color;
                     max_update = max_update.max(update_type);
                 }
+            }
+            if response_picker.drag_stopped() && config_manager.is_in_preview_mode() {
+                let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: crate::config::ColorComponent::R });
             }
         }
     }
