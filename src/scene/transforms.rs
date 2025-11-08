@@ -27,9 +27,9 @@ pub struct Transform {
     /// Example: "julian.power" -> 3.0
     pub variation_params: HashMap<String, f32>,
 
-    /// Color palette position (0.0 to 1.0)
-    /// Represents position in the palette for color coordinate evolution
-    pub color: f32,
+    /// RGB color values (0.0 to 1.0)
+    /// Transform's specific color for color evolution
+    pub color: [f32; 3],
 
     /// Color speed / symmetry (-1.0 to 1.0, Apophysis compatibility)
     /// -1.0 = full transform color replacement
@@ -61,7 +61,7 @@ impl Default for Transform {
             weight: 1.0,
             variations: HashMap::new(),
             variation_params: HashMap::new(),
-            color: 0.5,        // Mid-palette position (neutral default)
+            color: [0.5, 0.5, 0.5],  // Neutral gray
             color_speed: 0.0,  // Apophysis default: 50/50 blend
             color_blend: 1.0,  // Default: full transform color influence
             opacity: 1.0,      // Apophysis default: always visible
@@ -367,21 +367,23 @@ impl<'de> Deserialize<'de> for Transform {
                             variation_params = Some(map.next_value()?);
                         }
                         Field::Color => {
-                            // Handle both old format [f32; 3] and new format f32
+                            // Handle both new format [f32; 3] and old format f32
                             let value: serde_json::Value = map.next_value()?;
                             let color_value = match value {
-                                // New format: single float (palette position)
-                                serde_json::Value::Number(num) => {
-                                    num.as_f64().map(|f| f as f32).unwrap_or(0.5)
-                                }
-                                // Old format: RGB array → average to single value
+                                // New format: RGB array
                                 serde_json::Value::Array(arr) if arr.len() >= 3 => {
-                                    let r = arr[0].as_f64().unwrap_or(0.0) as f32;
-                                    let g = arr[1].as_f64().unwrap_or(0.0) as f32;
-                                    let b = arr[2].as_f64().unwrap_or(0.0) as f32;
-                                    (r + g + b) / 3.0
+                                    let r = arr[0].as_f64().unwrap_or(0.5) as f32;
+                                    let g = arr[1].as_f64().unwrap_or(0.5) as f32;
+                                    let b = arr[2].as_f64().unwrap_or(0.5) as f32;
+                                    [r, g, b]
                                 }
-                                _ => 0.5  // Default to mid-palette
+                                // Old format: single float (palette position) → convert to gray
+                                serde_json::Value::Number(num) => {
+                                    let pos = num.as_f64().map(|f| f as f32).unwrap_or(0.5);
+                                    // Convert palette position to grayscale for backward compatibility
+                                    [pos, pos, pos]
+                                }
+                                _ => [0.5, 0.5, 0.5]  // Default to neutral gray
                             };
                             color = Some(color_value);
                         }

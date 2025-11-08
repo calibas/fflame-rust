@@ -662,13 +662,18 @@ impl ConfigManager {
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.weight.into())
             }
-            ConfigPath::TransformColor { index } => {
+            ConfigPath::TransformColor { index, component } => {
                 let xform = config
                     .flame
                     .transforms
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
-                Ok(xform.color.into())
+                let value = match component {
+                    crate::config::ColorComponent::R => xform.color[0],
+                    crate::config::ColorComponent::G => xform.color[1],
+                    crate::config::ColorComponent::B => xform.color[2],
+                };
+                Ok(value.into())
             }
             ConfigPath::TransformColorSpeed { index } => {
                 let xform = config
@@ -897,14 +902,19 @@ impl ConfigManager {
                     .ok_or(ConfigError::InvalidIndex)?;
                 xform.weight = value.try_into()?;
             }
-            ConfigPath::TransformColor { index } => {
+            ConfigPath::TransformColor { index, component } => {
                 let xform = self
                     .current
                     .flame
                     .transforms
                     .get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
-                xform.color = value.try_into()?;
+                let component_value: f32 = value.try_into()?;
+                match component {
+                    crate::config::ColorComponent::R => xform.color[0] = component_value,
+                    crate::config::ColorComponent::G => xform.color[1] = component_value,
+                    crate::config::ColorComponent::B => xform.color[2] = component_value,
+                };
             }
             ConfigPath::TransformColorSpeed { index } => {
                 let xform = self
@@ -1134,13 +1144,18 @@ impl ConfigManager {
                     .ok_or(ConfigError::InvalidIndex)?;
                 xform.weight = value.try_into()?;
             }
-            ConfigPath::TransformColor { index } => {
+            ConfigPath::TransformColor { index, component } => {
                 let xform = preview
                     .flame
                     .transforms
                     .get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
-                xform.color = value.try_into()?;
+                let component_value: f32 = value.try_into()?;
+                match component {
+                    crate::config::ColorComponent::R => xform.color[0] = component_value,
+                    crate::config::ColorComponent::G => xform.color[1] = component_value,
+                    crate::config::ColorComponent::B => xform.color[2] = component_value,
+                };
             }
             ConfigPath::TransformColorSpeed { index } => {
                 let xform = preview
