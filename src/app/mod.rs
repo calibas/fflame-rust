@@ -96,7 +96,7 @@ impl App {
             density_scale: 1.0,
             speed_factor: crate::config::DEFAULT_SPEED_FACTOR,
             max_iterations: crate::config::DEFAULT_MAX_ITERATIONS,
-            color_mode: ColorMode::Transform,
+            color_mode: ColorMode::Palette,
             palette_index: 1,
             palette: Some(initial_palette),
             palette_rotation: 0.0,
@@ -479,7 +479,7 @@ impl App {
             new_transform.a = 0.5;
             new_transform.d = 0.5;
             new_transform.set_variation("linear", 0.5);
-            new_transform.color = [0.5, 0.5, 0.5];
+            new_transform.color = 0.5;  // Mid-palette position
             new_transform.color_speed = 0.5;
 
             new_config.flame.transforms.push(new_transform);

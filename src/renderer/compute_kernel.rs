@@ -70,7 +70,7 @@ impl FlameRenderer {
             height,
             samples_accumulated: 0,
             total_iterations: 0,
-            color_mode: ColorMode::Transform,
+            color_mode: ColorMode::Palette,
             density_scale: 1.0,
             background_color: [0.0, 0.0, 0.0],
             current_render_mode: flame.render_mode,

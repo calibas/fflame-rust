@@ -39,17 +39,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Update color based on color mode
         if (params.color_mode == 0u) {
-            // Transform color mode: blend with transform color
-            // Uses simple mix for backward compatibility
-            color = mix(color, xform.color, xform.color_speed);
-        } else if (params.color_mode == 1u) {
             // Palette mode: Apophysis color coordinate evolution
             // Formula: new_c = old_c * (1 + symmetry)/2 + transform_color * (1 - symmetry)/2
             // where symmetry = color_speed (-1 to 1)
-            let xform_color_value = (xform.color.r + xform.color.g + xform.color.b) / 3.0;
             let symmetry = xform.color_speed;
             let colorC1 = (1.0 + symmetry) / 2.0;
-            let colorC2 = xform_color_value * (1.0 - symmetry) / 2.0;
+            let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
             color_index = color_index * colorC1 + colorC2;
         } else {
             // Speed mode: blend with speed-based color
@@ -69,12 +64,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Determine final color based on mode
                 var final_color: vec3<f32>;
                 if (params.color_mode == 0u) {
-                    final_color = color;
-                } else if (params.color_mode == 1u) {
-                    // Sample from palette texture
+                    // Palette mode: sample from palette texture using color_index
                     final_color = textureSampleLevel(palette_texture, palette_sampler, color_index, 0.0).rgb;
                 } else {
-                    // Speed mode uses accumulated color
+                    // Speed mode: uses accumulated RGB color
                     final_color = color;
                 }
 

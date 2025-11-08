@@ -249,69 +249,45 @@ fn render_affine_controls(
     max_update
 }
 
-/// Render color controls (RGB color and color speed)
+/// Render color controls (color, color speed, blend, opacity)
 fn render_color_controls(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     index: usize,
     transform: &mut crate::scene::transforms::Transform,
 ) -> UpdateType {
-    use crate::config::ColorComponent;
     let mut max_update = UpdateType::None;
 
-    ui.label("Color");
-    ui.horizontal(|ui| {
-        ui.label("R:");
-        let mut temp_r = transform.color[0];
-        let response_r = ui.add(egui::Slider::new(&mut temp_r, 0.0..=1.0));
-        if response_r.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformColor { index, component: ColorComponent::R },
-                temp_r.into(),
-                response_r.dragged()  // Lazy undo
-            ) {
-                transform.color[0] = config_manager.active_config().flame.transforms[index].color[0];
-                max_update = max_update.max(update_type);
-            }
+    // Palette position slider (0.0 to 1.0)
+    let mut temp_color = transform.color;
+    let response_color = ui.add(egui::Slider::new(&mut temp_color, 0.0..=1.0).text("Palette Position"));
+    if response_color.changed() {
+        if let Ok(update_type) = config_manager.update_param(
+            ConfigPath::TransformColor { index },
+            temp_color.into(),
+            response_color.dragged()  // Preview mode while dragging
+        ) {
+            transform.color = config_manager.active_config().flame.transforms[index].color;
+            max_update = max_update.max(update_type);
         }
-        if response_r.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: ColorComponent::R });
-        }
+    }
+    if response_color.drag_stopped() {
+        let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index });
+    }
 
-        ui.label("G:");
-        let mut temp_g = transform.color[1];
-        let response_g = ui.add(egui::Slider::new(&mut temp_g, 0.0..=1.0));
-        if response_g.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformColor { index, component: ColorComponent::G },
-                temp_g.into(),
-                response_g.dragged()  // Lazy undo
-            ) {
-                transform.color[1] = config_manager.active_config().flame.transforms[index].color[1];
-                max_update = max_update.max(update_type);
-            }
-        }
-        if response_g.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: ColorComponent::G });
-        }
-
-        ui.label("B:");
-        let mut temp_b = transform.color[2];
-        let response_b = ui.add(egui::Slider::new(&mut temp_b, 0.0..=1.0));
-        if response_b.changed() {
-            if let Ok(update_type) = config_manager.update_param(
-                ConfigPath::TransformColor { index, component: ColorComponent::B },
-                temp_b.into(),
-                response_b.dragged()  // Lazy undo
-            ) {
-                transform.color[2] = config_manager.active_config().flame.transforms[index].color[2];
-                max_update = max_update.max(update_type);
-            }
-        }
-        if response_b.drag_stopped() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: ColorComponent::B });
-        }
-    });
+    // Show color preview at current palette position
+    if let Some(palette) = &config_manager.active_config().palette {
+        let actual_color = palette.sample_color(transform.color);
+        ui.horizontal(|ui| {
+            ui.label("Color:");
+            let mut color_swatch = egui::Color32::from_rgb(
+                (actual_color[0] * 255.0) as u8,
+                (actual_color[1] * 255.0) as u8,
+                (actual_color[2] * 255.0) as u8,
+            );
+            ui.color_edit_button_srgba(&mut color_swatch);
+        });
+    }
 
     let mut temp_speed = transform.color_speed;
     let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text("Color Speed (Symmetry)"));
