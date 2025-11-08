@@ -305,23 +305,6 @@ fn render_color_controls(
         let _ = config_manager.force_commit_preview(&ConfigPath::TransformColorSpeed { index });
     }
 
-    // Color Blend slider (how much transform color is applied)
-    let mut temp_blend = transform.color_blend;
-    let response_blend = ui.add(egui::Slider::new(&mut temp_blend, 0.0..=1.0).text("Color Blend"));
-    if response_blend.changed() {
-        if let Ok(update_type) = config_manager.update_param(
-            ConfigPath::TransformColorBlend { index },
-            temp_blend.into(),
-            response_blend.dragged()  // Lazy undo
-        ) {
-            transform.color_blend = config_manager.active_config().flame.transforms[index].color_blend;
-            max_update = max_update.max(update_type);
-        }
-    }
-    if response_blend.drag_stopped() {
-        let _ = config_manager.force_commit_preview(&ConfigPath::TransformColorBlend { index });
-    }
-
     // Opacity slider
     let mut temp_opacity = transform.opacity;
     let response_opacity = ui.add(egui::Slider::new(&mut temp_opacity, 0.0..=1.0).text("Opacity"));
