@@ -59,7 +59,12 @@ impl GpuContext {
             format,
             width: size.width,
             height: size.height,
-            present_mode: PresentMode::Mailbox,  // Fast but smooth - software frame limiter controls speed multiplier
+            // WASM only supports Fifo (vsync), desktop can use Mailbox for lower latency
+            present_mode: if cfg!(target_arch = "wasm32") {
+                PresentMode::Fifo
+            } else {
+                PresentMode::Mailbox  // Fast but smooth - software frame limiter controls speed multiplier
+            },
             // Use Opaque alpha mode to ensure frames don't accumulate
             // Auto mode in WASM can cause compositing issues where frames blend together
             alpha_mode: CompositeAlphaMode::Opaque,
