@@ -421,7 +421,8 @@ fn render_color_controls(
             let mut temp_rgb = transform.color;
             let response_picker = egui::color_picker::color_edit_button_rgb(ui, &mut temp_rgb);
 
-            // Handle color button changes (batch update for all RGB)
+            // The color picker popup is open while being interacted with
+            // Treat all changes as preview mode until the popup closes (detected via changed() stopping)
             if response_picker.changed() && temp_rgb != transform.color {
                 let changes = vec![
                     (ConfigPath::TransformColor { index, component: crate::config::ColorComponent::R }, temp_rgb[0].into()),
@@ -429,16 +430,20 @@ fn render_color_controls(
                     (ConfigPath::TransformColor { index, component: crate::config::ColorComponent::B }, temp_rgb[2].into()),
                 ];
 
+                // Use lazy=true for preview mode (color picker is always "dragging" when popup is open)
                 if let Ok(update_type) = config_manager.update_batch(
                     changes,
                     format!("Transform {} Color", index + 1),
-                    response_picker.dragged()
+                    true  // Preview mode while color picker popup is open
                 ) {
                     transform.color = config_manager.active_config().flame.transforms[index].color;
                     max_update = max_update.max(update_type);
                 }
             }
-            if response_picker.drag_stopped() && config_manager.is_in_preview_mode() {
+            // When interaction ends (popup closes), commit the preview
+            // Note: We check on_hover_text_at_pointer() or has_focus() to detect popup state,
+            // but simpler approach: always commit if we're in preview mode and the response didn't change this frame
+            else if !response_picker.changed() && config_manager.is_in_preview_mode() {
                 let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: crate::config::ColorComponent::R });
             }
         }
