@@ -2,44 +2,6 @@ use crate::scene::transforms::{Flame, RenderMode};
 use crate::variations::VariationCategory;
 use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam};
 use super::variation_controls::render_variation_category;
-use std::collections::HashMap;
-
-/// Color edit mode for transform color UI
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ColorEditMode {
-    /// Edit palette position directly (0-1 slider)
-    PalettePosition,
-    /// Pick RGB color, find closest palette position
-    ColorPicker,
-}
-
-impl Default for ColorEditMode {
-    fn default() -> Self {
-        Self::PalettePosition
-    }
-}
-
-/// UI state for transform color editing (per-transform)
-/// This is UI-only state and is not serialized
-static mut COLOR_EDIT_MODES: Option<HashMap<usize, ColorEditMode>> = None;
-
-fn get_color_edit_mode(transform_index: usize) -> ColorEditMode {
-    unsafe {
-        COLOR_EDIT_MODES
-            .get_or_insert_with(HashMap::new)
-            .get(&transform_index)
-            .copied()
-            .unwrap_or_default()
-    }
-}
-
-fn set_color_edit_mode(transform_index: usize, mode: ColorEditMode) {
-    unsafe {
-        COLOR_EDIT_MODES
-            .get_or_insert_with(HashMap::new)
-            .insert(transform_index, mode);
-    }
-}
 
 /// Render the Transforms window with transform editing controls
 ///
@@ -296,84 +258,28 @@ fn render_color_controls(
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
-    // Mode toggle button
-    let current_mode = get_color_edit_mode(index);
-    let mode_label = match current_mode {
-        ColorEditMode::PalettePosition => "📍 Palette Position",
-        ColorEditMode::ColorPicker => "🎨 Color Picker",
-    };
-
-    ui.horizontal(|ui| {
-        if ui.button(mode_label).clicked() {
-            let new_mode = match current_mode {
-                ColorEditMode::PalettePosition => ColorEditMode::ColorPicker,
-                ColorEditMode::ColorPicker => ColorEditMode::PalettePosition,
-            };
-            set_color_edit_mode(index, new_mode);
-        }
-        ui.label("(click to toggle)");
-    });
-
-    // Render UI based on mode
-    match current_mode {
-        ColorEditMode::PalettePosition => {
-            // Simple 0-1 slider for direct palette position
-            let mut temp_color = transform.color;
-            let response_color = ui.add(egui::Slider::new(&mut temp_color, 0.0..=1.0).text("Palette Position"));
-            if response_color.changed() {
-                if let Ok(update_type) = config_manager.update_param(
-                    ConfigPath::TransformColor { index },
-                    temp_color.into(),
-                    response_color.dragged()  // Lazy undo
-                ) {
-                    transform.color = config_manager.active_config().flame.transforms[index].color;
-                    max_update = max_update.max(update_type);
-                }
-            }
-            if response_color.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index });
-            }
-        }
-        ColorEditMode::ColorPicker => {
-            // RGB color picker with automatic palette position lookup
-            // Clone palette to avoid borrow issues
-            let palette_opt = config_manager.active_config().palette.clone();
-
-            if let Some(palette) = palette_opt {
-                let current_rgb = palette.sample_color(transform.color);
-                let mut temp_rgb = current_rgb;
-
-                // Color picker widget
-                ui.label("Pick a color:");
-                let response_picker = egui::color_picker::color_edit_button_rgb(ui, &mut temp_rgb);
-
-                if response_picker.changed() {
-                    // Find closest palette position for the picked color
-                    let new_position = palette.find_position(temp_rgb);
-
-                    if let Ok(update_type) = config_manager.update_param(
-                        ConfigPath::TransformColor { index },
-                        new_position.into(),
-                        false  // Color picker is discrete (not drag)
-                    ) {
-                        transform.color = config_manager.active_config().flame.transforms[index].color;
-                        max_update = max_update.max(update_type);
-                    }
-                }
-
-                // Show the actual palette position found
-                ui.label(format!("Palette position: {:.3}", transform.color));
-            } else {
-                ui.label("No palette loaded");
-            }
+    // Palette position slider (0.0 to 1.0)
+    let mut temp_color = transform.color;
+    let response_color = ui.add(egui::Slider::new(&mut temp_color, 0.0..=1.0).text("Palette Position"));
+    if response_color.changed() {
+        if let Ok(update_type) = config_manager.update_param(
+            ConfigPath::TransformColor { index },
+            temp_color.into(),
+            response_color.dragged()  // Preview mode while dragging
+        ) {
+            transform.color = config_manager.active_config().flame.transforms[index].color;
+            max_update = max_update.max(update_type);
         }
     }
+    if response_color.drag_stopped() {
+        let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index });
+    }
 
-    // Show preview of color at current position (both modes)
+    // Show color preview at current palette position
     if let Some(palette) = &config_manager.active_config().palette {
         let actual_color = palette.sample_color(transform.color);
         ui.horizontal(|ui| {
-            ui.label("Actual color:");
+            ui.label("Color:");
             let mut color_swatch = egui::Color32::from_rgb(
                 (actual_color[0] * 255.0) as u8,
                 (actual_color[1] * 255.0) as u8,
