@@ -652,10 +652,15 @@ impl App {
                         match crate::apophysis_xml::parse_flame_xml(&xml) {
                             Ok(configs) => {
                                 if !configs.is_empty() {
-                                    if let Ok(json) = serde_json::to_string_pretty(&configs[0]) {
-                                        ctx.copy_text(json);
-                                        log::info!("Apophysis flame converted to JSON - paste to import");
-                                    }
+                                    // Store the config in egui memory for pickup on next frame
+                                    ctx.data_mut(|data| {
+                                        data.insert_temp(
+                                            egui::Id::new("pending_apophysis_import"),
+                                            configs[0].clone()
+                                        );
+                                    });
+                                    log::info!("Apophysis flame imported successfully");
+                                    ctx.request_repaint();
                                 }
                             }
                             Err(e) => {
@@ -811,6 +816,20 @@ impl App {
         }
         if ui_response.redo_requested {
             self.redo();
+        }
+
+        // Check for pending Apophysis import from WASM async file dialog
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(config) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<crate::config::FractalConfig>(egui::Id::new("pending_apophysis_import"))
+            }) {
+                if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
+                    log::error!("Failed to import Apophysis flame: {}", e);
+                } else {
+                    log::info!("Apophysis flame imported successfully");
+                }
+            }
         }
 
         // Handle PNG export
