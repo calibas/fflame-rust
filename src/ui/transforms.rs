@@ -314,74 +314,99 @@ fn render_color_controls(
         ui.label("(click to toggle)");
     });
 
-    // Render UI based on mode
+    // Render UI based on mode (both store RGB directly now!)
     match current_mode {
         ColorEditMode::PalettePosition => {
-            // Simple 0-1 slider for direct palette position
-            let mut temp_color = transform.color;
-            let response_color = ui.add(egui::Slider::new(&mut temp_color, 0.0..=1.0).text("Palette Position"));
-            if response_color.changed() {
-                if let Ok(update_type) = config_manager.update_param(
-                    ConfigPath::TransformColor { index },
-                    temp_color.into(),
-                    response_color.dragged()  // Lazy undo
-                ) {
-                    transform.color = config_manager.active_config().flame.transforms[index].color;
-                    max_update = max_update.max(update_type);
-                }
-            }
-            if response_color.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index });
-            }
-        }
-        ColorEditMode::ColorPicker => {
-            // RGB color picker with automatic palette position lookup
-            // Clone palette to avoid borrow issues
-            let palette_opt = config_manager.active_config().palette.clone();
+            // Palette Position mode: Sample palette → store RGB
+            if let Some(palette) = &config_manager.active_config().palette {
+                // Find current palette position from RGB
+                let current_pos = palette.find_position(transform.color);
+                let mut temp_pos = current_pos;
 
-            if let Some(palette) = palette_opt {
-                let current_rgb = palette.sample_color(transform.color);
-                let mut temp_rgb = current_rgb;
+                let response = ui.add(egui::Slider::new(&mut temp_pos, 0.0..=1.0).text("Palette Position"));
 
-                // Color picker widget
-                ui.label("Pick a color:");
-                let response_picker = egui::color_picker::color_edit_button_rgb(ui, &mut temp_rgb);
+                if response.changed() {
+                    // Sample palette to get RGB
+                    let new_rgb = palette.sample_color(temp_pos);
 
-                if response_picker.changed() {
-                    // Find closest palette position for the picked color
-                    let new_position = palette.find_position(temp_rgb);
+                    // Update all RGB components via batch
+                    let changes = vec![
+                        (ConfigPath::TransformColor { index, component: crate::config::ColorComponent::R }, new_rgb[0].into()),
+                        (ConfigPath::TransformColor { index, component: crate::config::ColorComponent::G }, new_rgb[1].into()),
+                        (ConfigPath::TransformColor { index, component: crate::config::ColorComponent::B }, new_rgb[2].into()),
+                    ];
 
-                    if let Ok(update_type) = config_manager.update_param(
-                        ConfigPath::TransformColor { index },
-                        new_position.into(),
-                        false  // Color picker is discrete (not drag)
+                    if let Ok(update_type) = config_manager.update_batch(
+                        changes,
+                        format!("Transform {} Color", index + 1),
+                        response.dragged()
                     ) {
                         transform.color = config_manager.active_config().flame.transforms[index].color;
                         max_update = max_update.max(update_type);
                     }
                 }
 
-                // Show the actual palette position found
-                ui.label(format!("Palette position: {:.3}", transform.color));
+                if response.drag_stopped() && config_manager.is_in_preview_mode() {
+                    let _ = config_manager.force_commit_preview(&ConfigPath::TransformColor { index, component: crate::config::ColorComponent::R });
+                }
             } else {
                 ui.label("No palette loaded");
             }
         }
+        ColorEditMode::ColorPicker => {
+            // Color Picker mode: Pick RGB directly → store RGB
+            let mut temp_rgb = transform.color;
+
+            ui.label("Pick a color:");
+
+            // RGB sliders for full control
+            ui.horizontal(|ui| {
+                ui.label("R:");
+                ui.add(egui::Slider::new(&mut temp_rgb[0], 0.0..=1.0).fixed_decimals(3));
+            });
+            ui.horizontal(|ui| {
+                ui.label("G:");
+                ui.add(egui::Slider::new(&mut temp_rgb[1], 0.0..=1.0).fixed_decimals(3));
+            });
+            ui.horizontal(|ui| {
+                ui.label("B:");
+                ui.add(egui::Slider::new(&mut temp_rgb[2], 0.0..=1.0).fixed_decimals(3));
+            });
+
+            // Color preview button
+            let _response_picker = egui::color_picker::color_edit_button_rgb(ui, &mut temp_rgb);
+
+            // Check if color changed
+            if temp_rgb != transform.color {
+                // Store RGB directly
+                let changes = vec![
+                    (ConfigPath::TransformColor { index, component: crate::config::ColorComponent::R }, temp_rgb[0].into()),
+                    (ConfigPath::TransformColor { index, component: crate::config::ColorComponent::G }, temp_rgb[1].into()),
+                    (ConfigPath::TransformColor { index, component: crate::config::ColorComponent::B }, temp_rgb[2].into()),
+                ];
+
+                if let Ok(update_type) = config_manager.update_batch(
+                    changes,
+                    format!("Transform {} Color", index + 1),
+                    false
+                ) {
+                    transform.color = config_manager.active_config().flame.transforms[index].color;
+                    max_update = max_update.max(update_type);
+                }
+            }
+        }
     }
 
-    // Show preview of color at current position (both modes)
-    if let Some(palette) = &config_manager.active_config().palette {
-        let actual_color = palette.sample_color(transform.color);
-        ui.horizontal(|ui| {
-            ui.label("Actual color:");
-            let mut color_swatch = egui::Color32::from_rgb(
-                (actual_color[0] * 255.0) as u8,
-                (actual_color[1] * 255.0) as u8,
-                (actual_color[2] * 255.0) as u8,
-            );
-            ui.color_edit_button_srgba(&mut color_swatch);
-        });
-    }
+    // Show color swatch (both modes)
+    ui.horizontal(|ui| {
+        ui.label("Color:");
+        let mut color_swatch = egui::Color32::from_rgb(
+            (transform.color[0] * 255.0) as u8,
+            (transform.color[1] * 255.0) as u8,
+            (transform.color[2] * 255.0) as u8,
+        );
+        ui.color_edit_button_srgba(&mut color_swatch);
+    });
 
     let mut temp_speed = transform.color_speed;
     let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text("Color Speed (Symmetry)"));

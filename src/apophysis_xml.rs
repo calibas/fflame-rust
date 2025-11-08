@@ -166,16 +166,19 @@ fn parse_flame_element(
     // Always use Palette mode (ColorMode::Transform has been removed)
     let color_mode = ColorMode::Palette;
 
-    // Apply palette color coordinates to transforms (Palette mode)
-    // Or keep RGB colors as-is (Transform mode)
+    // Apply palette color coordinates to transforms
+    // Convert palette index to RGB color by sampling the palette
     let mut transforms = Vec::new();
     for (mut transform, color_index) in transforms_with_indices {
         if let Some(idx) = color_index {
-            if palette.is_some() {
-                // Palette mode: Store color coordinate (0-1) as averaged RGB
-                // This will be used as palette position in shader
+            if let Some(ref pal) = palette {
+                // Sample palette at color index position to get RGB
                 let color_coord = idx as f32 / 255.0;
-                transform.color = color_coord;
+                transform.color = pal.sample_color(color_coord);
+            } else {
+                // No palette: use grayscale from index position
+                let gray = idx as f32 / 255.0;
+                transform.color = [gray, gray, gray];
             }
             // Note: color_speed comes from XML parsing, don't override here
         }

@@ -60,10 +60,11 @@ fn benchmark_flame(flame: &Flame) {
             }
         }
 
-        // Blend color (now uses palette position)
+        // Blend color with transform color
         let s = transform.color_speed;
-        let palette_pos = color[0] * (1.0 - s) + transform.color * s;
-        color = [palette_pos, palette_pos, palette_pos];
+        color[0] = color[0] * (1.0 - s) + transform.color[0] * s;
+        color[1] = color[1] * (1.0 - s) + transform.color[1] * s;
+        color[2] = color[2] * (1.0 - s) + transform.color[2] * s;
 
         point = var_point;
     }
@@ -117,7 +118,7 @@ fn benchmark_affine() {
     transform.g = 0.0;
     transform.weight = 1.0;
     transform.variations.insert("linear".to_string(), 1.0);
-    transform.color = 0.1;  // Orange (palette position)
+    transform.color = [1.0, 0.5, 0.0];  // Orange (RGB)
     transform.color_speed = 0.5;
 
     let point = Point::new(0.5, 0.5);
