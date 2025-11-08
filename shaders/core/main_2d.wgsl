@@ -14,6 +14,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var color = vec3<f32>(1.0, 1.0, 1.0);
     var color_index = 0.0;  // For palette mode
+    var blend_accumulator = 1.0;  // Track accumulated blend factor
 
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
@@ -52,6 +53,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             // Evolve RGB color directly
             color = color * colorC1 + xform.color * colorC2;
+
+            // Evolve blend factor (same formula as color evolution)
+            blend_accumulator = blend_accumulator * colorC1 + xform.color_blend * colorC2;
         } else {
             // Speed mode: blend with speed-based color
             let speed_color = speed_to_color(speed);
@@ -70,10 +74,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Determine final color based on mode
                 var final_color: vec3<f32>;
                 if (params.color_mode == 0u) {
-                    // Palette mode: Blend between palette color and transform RGB based on color_blend
+                    // Palette mode: Blend between palette color and transform RGB based on accumulated blend
                     let palette_color = textureSampleLevel(palette_texture, palette_sampler, color_index, 0.0).rgb;
-                    let blend_factor = xform.color_blend;
-                    final_color = mix(palette_color, color, blend_factor);
+                    final_color = mix(palette_color, color, blend_accumulator);
                 } else {
                     // Speed mode: uses accumulated RGB color
                     final_color = color;
