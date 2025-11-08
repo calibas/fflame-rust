@@ -15,7 +15,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var color = vec3<f32>(1.0, 1.0, 1.0);
     var color_index = 0.0;  // For palette mode
-    var blend_accumulator = 1.0;  // Track accumulated blend factor
 
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
@@ -41,22 +40,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Update color based on color mode
         if (params.color_mode == 0u) {
-            // Palette mode: Evolve BOTH palette position and RGB, then blend them
-            // This allows color_blend to interpolate between palette (0.0) and transform RGB (1.0)
-
+            // Palette mode: Apophysis color coordinate evolution with blend control
+            // Formula: new_c = old_c * (1 + symmetry)/2 + transform_color * (1 - symmetry)/2 * blend
+            // where symmetry = color_speed (-1 to 1), blend = color_blend (0 to 1)
             let symmetry = xform.color_speed;
             let colorC1 = (1.0 + symmetry) / 2.0;
-            let colorC2 = (1.0 - symmetry) / 2.0;
-
-            // Evolve palette position using transform color average
-            let xform_color_avg = (xform.color.r + xform.color.g + xform.color.b) / 3.0;
-            color_index = color_index * colorC1 + xform_color_avg * colorC2;
-
-            // Evolve RGB color directly
-            color = color * colorC1 + xform.color * colorC2;
-
-            // Evolve blend factor (same formula as color evolution)
-            blend_accumulator = blend_accumulator * colorC1 + xform.color_blend * colorC2;
+            let colorC2 = xform.color * (1.0 - symmetry) / 2.0 * xform.color_blend;
+            color_index = color_index * colorC1 + colorC2;
         } else {
             // Speed mode: blend with speed-based color
             let speed_color = speed_to_color(speed);
@@ -75,9 +65,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 // Determine final color based on mode
                 var final_color: vec3<f32>;
                 if (params.color_mode == 0u) {
-                    // Palette mode: Blend between palette color and transform RGB based on accumulated blend
-                    let palette_color = textureSampleLevel(palette_texture, palette_sampler, color_index, 0.0).rgb;
-                    final_color = mix(palette_color, color, blend_accumulator);
+                    // Palette mode: sample from palette texture using color_index
+                    final_color = textureSampleLevel(palette_texture, palette_sampler, color_index, 0.0).rgb;
                 } else {
                     // Speed mode: uses accumulated RGB color
                     final_color = color;

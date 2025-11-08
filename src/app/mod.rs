@@ -479,7 +479,7 @@ impl App {
             new_transform.a = 0.5;
             new_transform.d = 0.5;
             new_transform.set_variation("linear", 0.5);
-            new_transform.color = [0.5, 0.5, 0.5];  // Mid-gray
+            new_transform.color = 0.5;  // Mid-palette position
             new_transform.color_speed = 0.5;
 
             new_config.flame.transforms.push(new_transform);

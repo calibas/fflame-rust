@@ -16,7 +16,7 @@ pub fn create_simple_flame() -> Flame {
     xform1.e = 0.1;
     xform1.set_variation("linear", 0.8);
     xform1.set_variation("sinusoidal", 0.2);
-    xform1.color = [1.0, 0.0, 0.0]; // Red
+    xform1.color = 0.0; // Red
     xform1.weight = 1.0;
     flame.add_transform(xform1);
 
@@ -28,7 +28,7 @@ pub fn create_simple_flame() -> Flame {
     xform2.d = 0.6;
     xform2.set_variation("linear", 0.6);
     xform2.set_variation("swirl", 0.4);
-    xform2.color = [0.0, 0.0, 1.0]; // Blue
+    xform2.color = 0.7; // Blue
     xform2.weight = 1.0;
     flame.add_transform(xform2);
 
@@ -45,7 +45,7 @@ pub fn create_spherical_flame() -> Flame {
     xform1.a = 0.9;
     xform1.d = 0.9;
     xform1.set_variation("spherical", 1.0);
-    xform1.color = [1.0, 0.5, 0.0]; // Orange
+    xform1.color = 0.1; // Orange
     xform1.weight = 1.0;
     flame.add_transform(xform1);
 
@@ -55,7 +55,7 @@ pub fn create_spherical_flame() -> Flame {
     xform2.c = -0.5;
     xform2.d = -0.5;
     xform2.set_variation("spherical", 1.0);
-    xform2.color = [0.0, 1.0, 1.0]; // Cyan
+    xform2.color = 0.5; // Cyan
     xform2.weight = 1.0;
     flame.add_transform(xform2);
 
@@ -73,7 +73,7 @@ pub fn create_spiral_flame() -> Flame {
     xform1.d = 0.7;
     xform1.e = 0.2;
     xform1.set_variation("spiral", 1.0);
-    xform1.color = [1.0, 1.0, 0.0]; // Yellow
+    xform1.color = 0.2; // Yellow
     xform1.weight = 1.0;
     flame.add_transform(xform1);
 
@@ -84,7 +84,7 @@ pub fn create_spiral_flame() -> Flame {
     xform2.d = 0.5;
     xform2.set_variation("spiral", 0.7);
     xform2.set_variation("linear", 0.3);
-    xform2.color = [1.0, 0.0, 1.0]; // Magenta
+    xform2.color = 0.8; // Magenta
     xform2.weight = 1.0;
     flame.add_transform(xform2);
 
@@ -101,7 +101,7 @@ pub fn create_julia_flame() -> Flame {
     xform1.a = 0.8;
     xform1.d = 0.8;
     xform1.set_variation("julia", 1.0);
-    xform1.color = [0.5, 0.0, 1.0]; // Purple
+    xform1.color = 0.75; // Purple
     xform1.weight = 1.0;
     flame.add_transform(xform1);
 
@@ -126,7 +126,7 @@ pub fn create_simple2_flame() -> Flame {
     xform1.weight = 1.0;
     xform1.set_variation("sinusoidal", 0.2);
     xform1.set_variation("linear", 0.8);
-    xform1.color = [1.0, 0.0, 0.0]; // Red
+    xform1.color = 0.0;
     xform1.color_speed = 0.5;
     flame.add_transform(xform1);
 
@@ -142,7 +142,7 @@ pub fn create_simple2_flame() -> Flame {
     xform2.weight = 1.0;
     xform2.set_variation("swirl", 0.4);
     xform2.set_variation("linear", 0.6);
-    xform2.color = [0.0, 0.0, 1.0]; // Blue
+    xform2.color = 0.7;
     xform2.color_speed = 0.5;
     flame.add_transform(xform2);
 
@@ -164,7 +164,7 @@ pub fn create_complex_flame() -> Flame {
     xform1.e = 0.3;
     xform1.set_variation("linear", 0.5);
     xform1.set_variation("sinusoidal", 0.5);
-    xform1.color = [1.0, 0.0, 0.0]; // Red
+    xform1.color = 0.0;
     xform1.weight = 2.0;
     flame.add_transform(xform1);
 
@@ -173,7 +173,7 @@ pub fn create_complex_flame() -> Flame {
     xform2.a = 0.7;
     xform2.d = 0.7;
     xform2.set_variation("spherical", 1.0);
-    xform2.color = [0.0, 1.0, 0.0]; // Green
+    xform2.color = 0.4;
     xform2.weight = 1.5;
     flame.add_transform(xform2);
 
@@ -185,7 +185,7 @@ pub fn create_complex_flame() -> Flame {
     xform3.d = 0.4;
     xform3.set_variation("horseshoe", 0.8);
     xform3.set_variation("linear", 0.2);
-    xform3.color = [0.0, 0.0, 1.0]; // Blue
+    xform3.color = 0.7;
     xform3.weight = 1.0;
     flame.add_transform(xform3);
 
@@ -195,7 +195,7 @@ pub fn create_complex_flame() -> Flame {
     xform4.d = 0.6;
     xform4.f = -0.2;
     xform4.set_variation("heart", 1.0);
-    xform4.color = [1.0, 1.0, 0.0]; // Yellow
+    xform4.color = 0.2;
     xform4.weight = 0.8;
     flame.add_transform(xform4);
 
@@ -220,7 +220,7 @@ pub fn create_3d_flame() -> Flame {
     xform1.g = -0.3; // Z offset
     xform1.set_variation("linear", 0.5);
     xform1.set_variation("zcone", 0.5);
-    xform1.color = [1.0, 0.0, 0.0]; // Red
+    xform1.color = 0.05; // Red
     xform1.weight = 1.0;
     flame.add_transform(xform1);
 
@@ -233,7 +233,7 @@ pub fn create_3d_flame() -> Flame {
     xform2.g = 0.2; // Z offset
     xform2.set_variation("spherical", 0.7);
     xform2.set_variation("post_rotate_y", 0.3);
-    xform2.color = [0.0, 0.0, 1.0]; // Blue
+    xform2.color = 0.65; // Blue
     xform2.weight = 1.0;
     flame.add_transform(xform2);
 
@@ -243,7 +243,7 @@ pub fn create_3d_flame() -> Flame {
     xform3.d = 0.5;
     xform3.g = 0.1;
     xform3.set_variation("hemisphere", 1.0);
-    xform3.color = [0.0, 1.0, 0.0]; // Green
+    xform3.color = 0.35; // Green
     xform3.weight = 0.8;
     flame.add_transform(xform3);
 
@@ -264,7 +264,7 @@ pub fn create_flower_of_life() -> Flame {
     center.a = 0.5;
     center.d = 0.5;
     center.set_variation("spiral", 1.0);
-    center.color = [1.0, 1.0, 1.0]; // White center
+    center.color = 0.5; // White center
     center.weight = 1.0;
     flame.add_transform(center);
 
@@ -291,16 +291,8 @@ pub fn create_flower_of_life() -> Flame {
         xform.set_variation("linear", 1.0);
 
         // Create rainbow colors around the circle
-        // Use HSV-like mapping: Red, Yellow, Green, Cyan, Blue, Magenta
-        let colors = [
-            [1.0, 0.0, 0.0], // Red
-            [1.0, 1.0, 0.0], // Yellow
-            [0.0, 1.0, 0.0], // Green
-            [0.0, 1.0, 1.0], // Cyan
-            [0.0, 0.0, 1.0], // Blue
-            [1.0, 0.0, 1.0], // Magenta
-        ];
-        xform.color = colors[i];
+        // Map to palette positions evenly distributed
+        xform.color = (i as f32) / 6.0;
 
         xform.weight = 1.0;
         flame.add_transform(xform);
