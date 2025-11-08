@@ -20,15 +20,11 @@ struct Transform {
     // Variation weights (100 slots: supports all Apophysis 7X + future expansion)
     variations: array<f32, 100>,
 
-    // Color (RGB) + color_speed
-    color: vec3<f32>,
+    // Color (palette position) + color_speed + color_blend + opacity (vec4 for alignment)
+    color: f32,
     color_speed: f32,
-
-    // Color_blend + opacity + padding (vec4 for alignment)
     color_blend: f32,
     opacity: f32,
-    _padding0: f32,
-    _padding1: f32,
 }
 
 // Dispatch parameters

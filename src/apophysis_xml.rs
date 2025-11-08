@@ -166,19 +166,16 @@ fn parse_flame_element(
     // Always use Palette mode (ColorMode::Transform has been removed)
     let color_mode = ColorMode::Palette;
 
-    // Apply palette color coordinates to transforms
-    // Convert palette index to RGB color by sampling the palette
+    // Apply palette color coordinates to transforms (Palette mode)
+    // Or keep RGB colors as-is (Transform mode)
     let mut transforms = Vec::new();
     for (mut transform, color_index) in transforms_with_indices {
         if let Some(idx) = color_index {
-            if let Some(ref pal) = palette {
-                // Sample palette at color index position to get RGB
+            if palette.is_some() {
+                // Palette mode: Store color coordinate (0-1) as averaged RGB
+                // This will be used as palette position in shader
                 let color_coord = idx as f32 / 255.0;
-                transform.color = pal.sample_color(color_coord);
-            } else {
-                // No palette: use grayscale from index position
-                let gray = idx as f32 / 255.0;
-                transform.color = [gray, gray, gray];
+                transform.color = color_coord;
             }
             // Note: color_speed comes from XML parsing, don't override here
         }
@@ -353,9 +350,6 @@ fn parse_xform_element(
     for (var_name, param_name, value) in pending_params {
         transform.set_variation_param(&var_name, &param_name, value);
     }
-
-    // Not supported in Apophysis
-    transform.color_blend = 0.0;
 
     Ok((transform, color_index))
 }
