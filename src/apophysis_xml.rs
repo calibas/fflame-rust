@@ -132,8 +132,9 @@ fn parse_flame_element(
         }
     }
 
-    // Parse child elements (xform and palette)
+    // Parse child elements (xform, finalxform, and palette)
     let mut transforms_with_indices = Vec::new();
+    let mut final_transform_with_index: Option<(Transform, Option<usize>)> = None;
     let mut palette = None;
     let mut buf = Vec::new();
 
@@ -144,6 +145,10 @@ fn parse_flame_element(
                     b"xform" => {
                         let (transform, color_index) = parse_xform_element(reader, &e)?;
                         transforms_with_indices.push((transform, color_index));
+                    }
+                    b"finalxform" => {
+                        let (transform, color_index) = parse_finalxform_element(reader, &e)?;
+                        final_transform_with_index = Some((transform, color_index));
                     }
                     b"palette" => {
                         palette = Some(parse_palette_element(reader, &e)?);
@@ -182,6 +187,20 @@ fn parse_flame_element(
         transforms.push(transform);
     }
 
+    // Process final transform if present
+    let final_transform = if let Some((mut final_xform, color_index)) = final_transform_with_index {
+        if let Some(idx) = color_index {
+            if palette.is_some() {
+                // Palette mode: Store color coordinate (0-1)
+                let color_coord = idx as f32 / 255.0;
+                final_xform.color = color_coord;
+            }
+        }
+        Some(final_xform)
+    } else {
+        None
+    };
+
     // Determine render mode: if any camera parameters are set, use 3D mode
     let has_camera_params = f32::abs(cam_pitch) > 0.0001
         || f32::abs(cam_yaw) > 0.0001
@@ -205,7 +224,7 @@ fn parse_flame_element(
     let flame = Flame {
         name,
         transforms,
-        final_transform: None,
+        final_transform,
         render_mode,
         projection,
     };
@@ -337,6 +356,75 @@ fn parse_xform_element(
                         // Try to parse as variation parameter (e.g., "julian_power", "blob_high")
                         // Try progressively longer prefixes to find matching variation
                         // This handles cases like "pre_blur_param" correctly
+                        if let Some((var_name, param_name)) = find_variation_and_param(key, registry) {
+                            pending_params.push((var_name, param_name, parsed_value));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply collected parameters after all variations are known
+    for (var_name, param_name, value) in pending_params {
+        transform.set_variation_param(&var_name, &param_name, value);
+    }
+
+    Ok((transform, color_index))
+}
+
+/// Parse a <finalxform> element (same as xform but without weight/opacity)
+fn parse_finalxform_element(
+    reader: &mut Reader<&[u8]>,
+    element: &quick_xml::events::BytesStart,
+) -> Result<(Transform, Option<usize>)> {
+    let mut transform = Transform::new();
+    let registry = global_registry();
+    let mut color_index = None;
+
+    // Storage for variation parameters (applied after all attributes parsed)
+    let mut pending_params: Vec<(String, String, f32)> = Vec::new();
+
+    for attr in element.attributes() {
+        let attr = attr?;
+        let key = std::str::from_utf8(attr.key.as_ref())?;
+        let value = std::str::from_utf8(&attr.value)?;
+
+        match key {
+            // NO "weight" attribute - final transform is not part of random selection
+            // NO "opacity" attribute - final transform is always applied
+            "color" => {
+                // In Apophysis, color is a palette index (0.0-1.0 mapped to 0-255)
+                if let Ok(color_value) = value.parse::<f32>() {
+                    color_index = Some((color_value * 255.0) as usize);
+                }
+            }
+            "color_speed" | "symmetry" => {
+                // Apophysis calls this "symmetry" in XML
+                transform.color_speed = value.parse().unwrap_or(0.0);
+            }
+            "coefs" => {
+                // Parse "a c b d e f" format (Apophysis order)
+                let parts: Vec<&str> = value.split_whitespace().collect();
+                if parts.len() >= 6 {
+                    transform.a = parts[0].parse().unwrap_or(1.0);
+                    transform.c = parts[1].parse().unwrap_or(0.0);
+                    transform.b = parts[2].parse().unwrap_or(0.0);
+                    transform.d = parts[3].parse().unwrap_or(1.0);
+                    transform.e = parts[4].parse().unwrap_or(0.0);
+                    transform.f = parts[5].parse().unwrap_or(0.0);
+                }
+            }
+            _ => {
+                // Try to parse as variation or variation parameter
+                if let Ok(parsed_value) = value.parse::<f32>() {
+                    // First, try direct variation lookup
+                    if registry.get(key).is_some() {
+                        if parsed_value != 0.0 {
+                            transform.variations.insert(key.to_string(), parsed_value);
+                        }
+                    } else if key.contains('_') {
+                        // Try to parse as variation parameter
                         if let Some((var_name, param_name)) = find_variation_and_param(key, registry) {
                             pending_params.push((var_name, param_name, parsed_value));
                         }
