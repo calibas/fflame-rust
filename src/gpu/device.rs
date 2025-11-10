@@ -60,7 +60,7 @@ impl GpuContext {
             width: size.width,
             height: size.height,
             // WASM only supports Fifo (vsync), desktop can use Mailbox for lower latency
-            present_mode: if cfg!(target_arch = "wasm32") {
+            present_mode: if cfg!(target_arch = "wasm32") || cfg!(target_os = "macos") {
                 PresentMode::Fifo
             } else {
                 PresentMode::Mailbox  // Fast but smooth - software frame limiter controls speed multiplier
