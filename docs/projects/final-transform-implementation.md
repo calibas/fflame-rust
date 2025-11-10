@@ -40,21 +40,25 @@
   - Direct flame modification (no ConfigManager yet)
   - **Commit:** `fadbf3d` - FEAT: Phase 3 - UI controls for final transform
 
+- ✅ Phase 4: Triangle Editor (completed 2025-11-10) - 0.5 hours
+  - Display final transform triangle with distinctive styling
+  - Light grey color (RGB 180, 180, 180) with dashed lines
+  - Labels marked with "[F]": "O [F]", "X [F]", "Y [F]"
+  - Non-editable display (editing requires Phase 5)
+  - **Commit:** `52566fc` - FEAT: Phase 4 - Triangle Editor displays final transform
+
 ### 🚧 Remaining Work (Optional Enhancements)
 
-**Phase 4: Triangle Editor** (0.5-1 hour)
-- ❌ Display final transform triangle (light grey, distinct)
-- ❌ Allow editing final transform triangle
-
-**Phase 5: ConfigManager Integration** (0.5-1 hour)
+**Phase 5: ConfigManager Integration + Editing** (1-2 hours)
 - ❌ Add ConfigPath variants for final transform
 - ❌ Add methods to ConfigManager
 - ❌ Integrate with undo/redo system
-- ❌ Add variation editing UI
+- ❌ Add variation editing UI for final transform
+- ❌ Make final transform editable in Triangle Editor
 
-**Total Time Spent:** ~4 hours
-**Remaining Time:** ~1-2 hours (optional)
-**Core Functionality:** ✅ COMPLETE
+**Total Time Spent:** ~4.5 hours
+**Remaining Time:** ~1-2 hours (optional - ConfigManager integration only)
+**Core Functionality:** ✅ COMPLETE (all essential features working)
 
 ---
 
