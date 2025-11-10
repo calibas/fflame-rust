@@ -201,7 +201,18 @@ impl App {
         self.last_mouse_pos = Some((x, y));
     }
 
-    pub(super) fn handle_mouse_wheel(&mut self, delta: MouseScrollDelta) {
+    pub(super) fn handle_mouse_wheel(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
+        // Determine if this is continuous touchpad scrolling (PixelDelta) or discrete mouse wheel (LineDelta)
+        let is_touchpad = matches!(delta, MouseScrollDelta::PixelDelta(_));
+
+        // If touchpad scrolling ended, commit the preview
+        if is_touchpad && matches!(phase, TouchPhase::Ended) {
+            if self.config_manager.is_in_preview_mode() {
+                let _ = self.config_manager.force_commit_preview(&crate::config::ConfigPath::Zoom);
+            }
+            return; // Don't process the Ended event as a zoom
+        }
+
         let zoom_factor = match delta {
             MouseScrollDelta::LineDelta(_x, y) => {
                 // Each line is typically one "click" of the wheel
@@ -260,6 +271,7 @@ impl App {
                     let new_pan_y = point_y - new_fractal_offset_y;
 
                     // Update all three parameters atomically
+                    // Use preview mode (lazy=true) for touchpad to avoid resetting on every scroll event
                     let _ = self.config_manager.update_batch(
                         vec![
                             (crate::config::ConfigPath::Zoom, new_zoom.into()),
@@ -267,7 +279,7 @@ impl App {
                             (crate::config::ConfigPath::PanY, new_pan_y.into()),
                         ],
                         "Zoom In (Wheel)".to_string(),
-                        false  // Immediate capture for mouse wheel
+                        is_touchpad  // Preview mode for touchpad, immediate for mouse wheel
                     );
                 } else {
                     // No mouse position, zoom to center
@@ -275,7 +287,7 @@ impl App {
                     let _ = self.config_manager.update_param(
                         crate::config::ConfigPath::Zoom,
                         new_zoom.into(),
-                        false  // Immediate capture for mouse wheel
+                        is_touchpad  // Preview mode for touchpad, immediate for mouse wheel
                     );
                 }
             } else {
@@ -284,11 +296,15 @@ impl App {
                 let _ = self.config_manager.update_param(
                     crate::config::ConfigPath::Zoom,
                     new_zoom.into(),
-                    false  // Immediate capture for mouse wheel
+                    is_touchpad  // Preview mode for touchpad, immediate for mouse wheel
                 );
             }
 
-            self.view_changed_by_keyboard = true; // Reuse same flag
+            // Only trigger immediate reset for discrete mouse wheel events
+            // Touchpad uses preview mode which handles updates through ConfigManager
+            if !is_touchpad {
+                self.view_changed_by_keyboard = true;
+            }
         }
     }
 }

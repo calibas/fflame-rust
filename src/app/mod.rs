@@ -224,8 +224,8 @@ impl App {
                         WindowEvent::CursorMoved { position, .. } if !consumed => {
                             app.handle_mouse_move(position.x as f32, position.y as f32);
                         }
-                        WindowEvent::MouseWheel { delta, .. } if !consumed => {
-                            app.handle_mouse_wheel(delta);
+                        WindowEvent::MouseWheel { delta, phase, .. } if !consumed => {
+                            app.handle_mouse_wheel(delta, phase);
                         }
                         WindowEvent::ModifiersChanged(new_modifiers) => {
                             app.modifiers = new_modifiers.state();
