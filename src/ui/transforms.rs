@@ -30,9 +30,28 @@ pub fn render_transforms_window(
 
             ui.separator();
 
+            // Final Transform checkbox
+            ui.horizontal(|ui| {
+                let mut has_final = flame.final_transform.is_some();
+                if ui.checkbox(&mut has_final, "Enable Final Transform").changed() {
+                    if has_final {
+                        // Create new final transform with identity affine
+                        flame.final_transform = Some(crate::scene::transforms::Transform::new());
+                    } else {
+                        // Remove final transform
+                        flame.final_transform = None;
+                    }
+                    max_update = max_update.max(UpdateType::IterationReset);
+                }
+                if ui.button("❓").on_hover_text("Post-processing transform applied once to every point after iteration loop.\nUsed for framing, positioning, or global effects.").clicked() {}
+            });
+
+            ui.separator();
+
             let mut delete_index = None;
             let num_transforms = flame.transforms.len();
             egui::ScrollArea::vertical().show(ui, |ui| {
+                // Regular transforms
                 for (i, transform) in flame.transforms.iter_mut().enumerate() {
                     ui.push_id(i, |ui| {
                         egui::CollapsingHeader::new(format!("Transform {}", i + 1))
@@ -112,6 +131,69 @@ pub fn render_transforms_window(
                                     if ui.button("🗑 Delete Transform").clicked() {
                                         delete_index = Some(i);
                                                         }
+                                }
+                            });
+                    });
+                }
+
+                // Final transform (if enabled)
+                if let Some(final_xform) = &mut flame.final_transform {
+                    ui.separator();
+                    ui.push_id("final_transform", |ui| {
+                        // Light grey background for final transform
+                        let style = ui.style_mut();
+                        style.visuals.collapsing_header_frame = true;
+
+                        egui::CollapsingHeader::new("Transform [Final]")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                // Note: Final transform has NO weight control (always applied)
+                                ui.colored_label(
+                                    egui::Color32::LIGHT_GRAY,
+                                    "Final transform is applied once to all points after iteration loop."
+                                );
+                                ui.separator();
+
+                                // Affine Matrix controls (using a special index for final transform)
+                                // We'll use index = num_transforms for now (will need ConfigManager support)
+                                let affine_update = render_affine_controls_final(ui, config_manager, final_xform);
+                                max_update = max_update.max(affine_update);
+
+                                // Z offset (only in 3D mode)
+                                if matches!(flame.render_mode, RenderMode::ThreeD) {
+                                    ui.horizontal(|ui| {
+                                        ui.label("g (Z offset):");
+                                        let mut temp_g = final_xform.g;
+                                        if ui.add(egui::DragValue::new(&mut temp_g).speed(0.01)).changed() {
+                                            final_xform.g = temp_g;
+                                            max_update = max_update.max(UpdateType::IterationReset);
+                                        }
+                                    });
+                                }
+
+                                ui.separator();
+
+                                // Color controls
+                                let color_update = render_color_controls_final(ui, config_manager, final_xform);
+                                max_update = max_update.max(color_update);
+
+                                // Variation controls by category
+                                let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Basic2D, "Basic 2D Variations");
+                                max_update = max_update.max(var_update);
+
+                                let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Advanced2D, "Advanced 2D Variations");
+                                max_update = max_update.max(var_update);
+
+                                // 3D variation categories (only visible in 3D mode)
+                                if matches!(flame.render_mode, RenderMode::ThreeD) {
+                                    let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Depth3D, "3D Depth Variations");
+                                    max_update = max_update.max(var_update);
+
+                                    let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Rotation3D, "3D Rotation Variations");
+                                    max_update = max_update.max(var_update);
+
+                                    let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Full3D, "Full 3D Variations");
+                                    max_update = max_update.max(var_update);
                                 }
                             });
                     });
@@ -323,4 +405,97 @@ fn render_color_controls(
     }
 
     max_update
+}
+
+/// Render affine matrix controls for final transform (simplified, no ConfigManager yet)
+fn render_affine_controls_final(
+    ui: &mut egui::Ui,
+    _config_manager: &mut ConfigManager,
+    transform: &mut crate::scene::transforms::Transform,
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
+
+    ui.label("Affine Matrix");
+
+    ui.horizontal(|ui| {
+        ui.label("a:");
+        if ui.add(egui::DragValue::new(&mut transform.a).speed(0.01)).changed() {
+            max_update = max_update.max(UpdateType::IterationReset);
+        }
+
+        ui.label("b:");
+        if ui.add(egui::DragValue::new(&mut transform.b).speed(0.01)).changed() {
+            max_update = max_update.max(UpdateType::IterationReset);
+        }
+
+        ui.label("c:");
+        if ui.add(egui::DragValue::new(&mut transform.c).speed(0.01)).changed() {
+            max_update = max_update.max(UpdateType::IterationReset);
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.label("d:");
+        if ui.add(egui::DragValue::new(&mut transform.d).speed(0.01)).changed() {
+            max_update = max_update.max(UpdateType::IterationReset);
+        }
+
+        ui.label("e:");
+        if ui.add(egui::DragValue::new(&mut transform.e).speed(0.01)).changed() {
+            max_update = max_update.max(UpdateType::IterationReset);
+        }
+
+        ui.label("f:");
+        if ui.add(egui::DragValue::new(&mut transform.f).speed(0.01)).changed() {
+            max_update = max_update.max(UpdateType::IterationReset);
+        }
+    });
+
+    max_update
+}
+
+/// Render color controls for final transform (simplified, no ConfigManager yet)
+fn render_color_controls_final(
+    ui: &mut egui::Ui,
+    _config_manager: &mut ConfigManager,
+    transform: &mut crate::scene::transforms::Transform,
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
+
+    ui.label("Color Properties");
+
+    // Color coordinate slider
+    if ui.add(egui::Slider::new(&mut transform.color, 0.0..=1.0).text("Color Coordinate")).changed() {
+        max_update = max_update.max(UpdateType::IterationReset);
+    }
+
+    // Color speed (symmetry)
+    if ui.add(egui::Slider::new(&mut transform.color_speed, -1.0..=1.0).text("Color Speed (Symmetry)")).changed() {
+        max_update = max_update.max(UpdateType::IterationReset);
+    }
+
+    // Note: NO opacity control for final transform (always applied)
+
+    max_update
+}
+
+/// Render variation controls for final transform by category (simplified, no ConfigManager yet)
+fn render_variation_category_final(
+    ui: &mut egui::Ui,
+    _config_manager: &mut ConfigManager,
+    category: VariationCategory,
+    label: &str,
+) -> UpdateType {
+    // For now, reuse the regular variation rendering but with a special marker
+    // TODO: This will need to be updated when ConfigManager support is added
+    // For Phase 3, we'll just show the variations but they won't be editable yet
+
+    ui.collapsing(label, |ui| {
+        ui.colored_label(
+            egui::Color32::LIGHT_GRAY,
+            "Variation editing for final transform will be added in next phase."
+        );
+    });
+
+    UpdateType::None
 }
