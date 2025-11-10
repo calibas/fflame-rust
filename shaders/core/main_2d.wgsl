@@ -54,8 +54,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         // Skip burn-in iterations
         if (i >= params.burn_in) {
+            // Apply final transform if present
+            var final_pos = current;
+            if (params.has_final_transform != 0u) {
+                let final_xform = transforms[params.final_transform_index];
+                let affine_p = apply_affine(final_xform, current);
+                final_pos = apply_variations(final_xform, params.final_transform_index, affine_p, &rng);
+            }
+
             // Convert to pixel coordinates
-            let pixel = world_to_pixel(current);
+            let pixel = world_to_pixel(final_pos);
 
             // Check bounds
             if (pixel.x >= 0 && pixel.x < i32(params.width) &&
