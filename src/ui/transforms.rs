@@ -1,7 +1,7 @@
 use crate::scene::transforms::{Flame, RenderMode};
 use crate::variations::VariationCategory;
 use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam};
-use super::variation_controls::render_variation_category;
+use super::variation_controls::{render_variation_category, render_variation_category_final};
 
 /// Render the Transforms window with transform editing controls
 ///
@@ -229,12 +229,23 @@ pub fn render_transforms_window(
                                 }
 
                                 // Variation controls by category
-                                // For now just show placeholder - full variation editing needs more work
-                                ui.label("Variations:");
-                                ui.colored_label(
-                                    egui::Color32::LIGHT_GRAY,
-                                    "Variation editing for final transform will be added in a future update."
-                                );
+                                let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Basic2D, "Basic 2D Variations");
+                                max_update = max_update.max(var_update);
+
+                                let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Advanced2D, "Advanced 2D Variations");
+                                max_update = max_update.max(var_update);
+
+                                // 3D variation categories (only visible in 3D mode)
+                                if matches!(flame.render_mode, RenderMode::ThreeD) {
+                                    let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Depth3D, "3D Depth Variations");
+                                    max_update = max_update.max(var_update);
+
+                                    let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Rotation3D, "3D Rotation Variations");
+                                    max_update = max_update.max(var_update);
+
+                                    let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Full3D, "Full 3D Variations");
+                                    max_update = max_update.max(var_update);
+                                }
                             });
                     });
                 }

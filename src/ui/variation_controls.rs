@@ -106,3 +106,83 @@ pub fn render_variation_category(
 
     max_update
 }
+
+/// Render all variations in a specific category for the final transform
+///
+/// This is a specialized version of `render_variation_category` that uses
+/// `ConfigPath::FinalTransformVariation` instead of `ConfigPath::TransformVariation`.
+///
+/// # Arguments
+/// * `ui` - The egui UI context
+/// * `config_manager` - The configuration manager
+/// * `category` - Which category of variations to render
+/// * `category_label` - Display label for the category (e.g., "Basic 2D Variations")
+///
+/// # Returns
+/// The highest UpdateType from all variation changes
+pub fn render_variation_category_final(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    category: VariationCategory,
+    category_label: &str,
+) -> UpdateType {
+    ui.separator();
+    ui.label(category_label);
+
+    let mut max_update = UpdateType::None;
+    let variations = crate::variations::global_registry().by_category(category);
+
+    for var_info in variations {
+        // Get current value from active config (for live preview)
+        let final_transform = match &config_manager.active_config().flame.final_transform {
+            Some(ft) => ft,
+            None => continue, // Skip if no final transform
+        };
+        let mut value = final_transform.get_variation(&var_info.name);
+
+        // Apophysis allows any float value including negative weights
+        // Slider range: -10.0 to 10.0 (covers 99% of use cases)
+        // Users can type values beyond this range (clamped to f32 limits)
+        let response = ui.add(
+            egui::Slider::new(&mut value, -10.0..=10.0)
+                .text(&var_info.display_name)
+                .clamp_to_range(false)  // Allow typing values outside slider range
+        );
+
+        if response.changed() {
+            // Clamp to f32 limits (actual limits: -3.4E38 to 3.4E38)
+            value = value.clamp(f32::MIN, f32::MAX);
+
+            // Update via ConfigManager with lazy undo only during drag
+            let path = ConfigPath::FinalTransformVariation {
+                variation: var_info.name.clone(),
+            };
+
+            if let Ok(update_type) = config_manager.update_param(path, value.into(), response.dragged()) {
+                max_update = max_update.max(update_type);
+            }
+        }
+
+        if response.drag_stopped() {
+            let path = ConfigPath::FinalTransformVariation {
+                variation: var_info.name.clone(),
+            };
+            let _ = config_manager.force_commit_preview(&path);
+        }
+
+        // Show parameters if variation is active and has parameters
+        if value.abs() > 1e-6 && !var_info.parameters.is_empty() {
+            ui.indent(format!("params_{}", var_info.name), |ui| {
+                let param_update = super::variation_params::render_variation_params_final(
+                    ui,
+                    config_manager,
+                    &var_info.name,
+                    &var_info.parameters,
+                );
+                max_update = max_update.max(param_update);
+            });
+        }
+    }
+
+    max_update
+}
