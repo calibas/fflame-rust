@@ -509,6 +509,33 @@ impl EguiLayer {
         // Extract Transform menu actions
         add_transform = menu_actions.transform.add_transform;
 
+        // Handle Rendering menu actions
+        if menu_actions.rendering.pause_toggle {
+            pause_changed = true;
+        }
+
+        if menu_actions.rendering.reset_accumulation {
+            // Trigger reset by updating any view parameter (triggers IterationReset in ConfigManager)
+            let current_zoom = config_manager.active_config().zoom;
+            let _ = config_manager.update_param(ConfigPath::Zoom, current_zoom.into(), false);
+        }
+
+        if let Some(speed) = menu_actions.rendering.set_speed {
+            let _ = config_manager.update_param(
+                ConfigPath::SpeedMultiplier,
+                (speed as f32).into(),
+                false
+            );
+        }
+
+        if let Some(ipt) = menu_actions.rendering.set_iterations_per_thread {
+            let _ = config_manager.update_param(
+                ConfigPath::IterationsPerThread,
+                ipt.into(),
+                false
+            );
+        }
+
         UiResponse {
             pause_changed,
             config_export_requested: config_export_json,

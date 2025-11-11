@@ -49,7 +49,8 @@ pub struct TransformMenuActions {
 pub struct RenderingMenuActions {
     pub pause_toggle: bool,
     pub reset_accumulation: bool,
-    pub set_quality: Option<u32>, // None or quality preset index
+    pub set_speed: Option<u32>, // Speed multiplier (1, 2, 4, 8, 16)
+    pub set_iterations_per_thread: Option<u32>, // Iterations per thread (64, 128, 256, 512, 1024)
 }
 
 /// Combined context for all menu actions

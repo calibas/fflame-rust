@@ -131,6 +131,51 @@ pub fn render_menu_bar(
                 ui.add_enabled(false, egui::Button::new("Randomize Transform"));
             });
 
+            // Rendering Menu
+            ui.menu_button("Rendering", |ui| {
+                // Pause/Resume
+                let pause_text = if menu_state.is_paused { "▶ Resume" } else { "⏸ Pause" };
+                if ui.button(pause_text).clicked() {
+                    menu_actions.rendering.pause_toggle = true;
+                    ui.close();
+                }
+
+                // Reset Accumulation
+                if ui.button("🔄 Reset Accumulation").clicked() {
+                    menu_actions.rendering.reset_accumulation = true;
+                    ui.close();
+                }
+
+                ui.separator();
+
+                // Speed submenu
+                ui.menu_button("Speed ▶", |ui| {
+                    for &speed in &[1u32, 2, 4, 8, 16] {
+                        if ui.button(format!("{}x", speed)).clicked() {
+                            menu_actions.rendering.set_speed = Some(speed);
+                            ui.close();
+                        }
+                    }
+                });
+
+                ui.separator();
+
+                // Iterations per Thread submenu
+                ui.menu_button("Iterations per Thread ▶", |ui| {
+                    for &ipt in &[64u32, 128, 256, 512, 1024] {
+                        if ui.button(format!("{}", ipt)).clicked() {
+                            menu_actions.rendering.set_iterations_per_thread = Some(ipt);
+                            ui.close();
+                        }
+                    }
+                });
+
+                ui.separator();
+
+                // Benchmark (not implemented)
+                ui.add_enabled(false, egui::Button::new("Benchmark..."));
+            });
+
             // Windows Menu
             ui.menu_button("Windows", |ui| {
                 ui.checkbox(show_performance, "📊 Performance");
