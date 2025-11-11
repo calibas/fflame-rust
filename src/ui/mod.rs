@@ -320,6 +320,11 @@ impl EguiLayer {
                         png_export_with_background: &mut png_export_with_background,
                         png_export_transparent: &mut png_export_transparent,
                         custom_palette: &mut custom_palette,
+                        palette_editor: &mut self.palette_editor,
+                        palette_export_json: &mut palette_export_json,
+                        palette_save_file: &mut palette_save_file,
+                        palette_import_json: &mut palette_import_json,
+                        palette_load_file: &mut palette_load_file,
                     },
                 });
         });

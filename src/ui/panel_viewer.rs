@@ -38,6 +38,11 @@ pub struct PanelContext<'a> {
     pub png_export_with_background: &'a mut bool,
     pub png_export_transparent: &'a mut bool,
     pub custom_palette: &'a mut Option<crate::scene::palette::Palette>,
+    pub palette_editor: &'a mut crate::ui::palette_editor::PaletteEditor,
+    pub palette_export_json: &'a mut Option<crate::scene::palette::Palette>,
+    pub palette_save_file: &'a mut Option<crate::scene::palette::Palette>,
+    pub palette_import_json: &'a mut Option<String>,
+    pub palette_load_file: &'a mut bool,
 }
 
 /// Viewer for rendering each panel type
@@ -113,8 +118,16 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Palette Editor panel (palette editing)
     fn render_palette_editor_panel(&mut self, ui: &mut egui::Ui) {
-        ui.label("📝 TODO: Migrate Palette Editor window");
-        ui.label("For now, use: View → Palette Editor");
+        super::palette_editor::render_palette_editor_content(
+            ui,
+            self.context.palette_editor,
+            self.context.config_manager,
+            self.context.custom_palette,
+            self.context.palette_export_json,
+            self.context.palette_save_file,
+            self.context.palette_import_json,
+            self.context.palette_load_file,
+        );
     }
 
     /// Render the View panel (zoom, pan, rotation)
