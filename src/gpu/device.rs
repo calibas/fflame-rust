@@ -44,12 +44,16 @@ impl GpuContext {
             ..Default::default()
         }).await.expect("No suitable GPU adapters found");
 
-        let (device, queue) = adapter.request_device(&DeviceDescriptor {
-            label: None,
-            required_features: Features::CLEAR_TEXTURE,
-            required_limits: Limits::default(),
-            memory_hints: Default::default(),
-        }, None).await?;
+        let (device, queue) = adapter.request_device(
+            &DeviceDescriptor {
+                label: None,
+                required_features: Features::CLEAR_TEXTURE,
+                required_limits: Limits::default(),
+                memory_hints: Default::default(),
+                experimental_features: Default::default(),
+                trace: Default::default(),
+            }
+        ).await?;
 
         let surface_caps = surface.get_capabilities(&adapter);
         let format = surface_caps.formats[0];
