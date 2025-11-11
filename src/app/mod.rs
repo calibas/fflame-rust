@@ -161,6 +161,7 @@ impl App {
                         WindowEvent::CloseRequested => {
                             // Request graceful quit (will be handled at end of frame)
                             app.quit_requested = true;
+                            window.request_redraw(); // Ensure we get a RedrawRequested to process quit
                         },
                         WindowEvent::Resized(size) => {
                             // Skip resize if dimensions are zero (happens when minimizing on Windows)
