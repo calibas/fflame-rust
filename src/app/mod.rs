@@ -7,7 +7,7 @@ mod export;
 #[cfg(not(target_arch = "wasm32"))]
 pub use export::export_headless;
 
-use winit::{event::*, event_loop::{EventLoop, ControlFlow}, window::Window};
+use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, window::Window};
 use egui_wgpu::wgpu::SurfaceError;
 
 use crate::gpu::device::GpuContext;
@@ -159,11 +159,7 @@ impl App {
 
                     match event {
                         WindowEvent::CloseRequested => {
-                            // Handle graceful quit immediately
-                            // TODO: Check for unsaved changes
-                            // TODO: Show confirmation dialog if needed
-                            log::info!("CloseRequested - exiting gracefully");
-                            elwt.exit();
+                            app.shutdown(elwt);
                         },
                         WindowEvent::Resized(size) => {
                             // Skip resize if dimensions are zero (happens when minimizing on Windows)
@@ -249,13 +245,9 @@ impl App {
                                 Err(e) => eprintln!("Render error: {:?}", e),
                             }
 
-                            // Handle graceful quit (triggered by File → Quit, window close button, or Alt+F4)
+                            // Handle graceful quit (triggered by File → Quit menu)
                             if app.quit_requested {
-                                // TODO: Check for unsaved changes
-                                // TODO: Perform cleanup tasks
-                                // TODO: Show confirmation dialog if needed
-                                log::info!("Graceful quit requested");
-                                elwt.exit();
+                                app.shutdown(elwt);
                             }
                         }
                         _ => {}
@@ -1064,5 +1056,16 @@ impl App {
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
 
         Ok(())
+    }
+
+    /// Graceful shutdown - performs cleanup and exits
+    /// Called from: File → Quit, window close button (X), Alt+F4
+    fn shutdown(&mut self, event_loop: &ActiveEventLoop) {
+        // TODO: Check for unsaved changes
+        // TODO: Show confirmation dialog if needed
+        // TODO: Perform cleanup tasks
+
+        log::info!("Graceful shutdown initiated");
+        event_loop.exit();
     }
 }
