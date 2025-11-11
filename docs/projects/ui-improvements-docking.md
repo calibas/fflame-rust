@@ -216,13 +216,21 @@ egui_dock = "0.13"  # Latest version
 - Pause/Resume (Space)
 - Reset Accumulation (Ctrl+R)
 - ---
-- Quality ▶
-  - Preview (Low)
-  - Draft (Medium)
-  - Final (High)
-  - Ultra (Very High)
+- Speed ▶
+  - 1x
+  - 2x
+  - 4x
+  - 8x
+  - 16x
 - ---
-- Benchmark...
+- Iterations per Thread ▶
+  - 64
+  - 128
+  - 256
+  - 512
+  - 1024
+- ---
+- Benchmark... (when implemented)
 
 **Window Menu:**
 - Beginner Layout
