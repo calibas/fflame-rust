@@ -81,9 +81,11 @@ impl<'a> PanelViewer<'a> {
 
     /// Render the View panel (zoom, pan, rotation)
     fn render_view_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("View");
-        ui.label("View controls go here");
-        // TODO: Move view controls from mod.rs
+        super::view::render_view_content(
+            ui,
+            self.context.config_manager,
+            self.context.flame,
+        );
     }
 
     /// Render the Rendering panel (iterations, accumulation)
