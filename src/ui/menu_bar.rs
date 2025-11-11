@@ -3,7 +3,6 @@ use super::menu_context::{MenuActions, MenuState};
 /// Render the top menu bar with window visibility toggles
 pub fn render_menu_bar(
     ctx: &egui::Context,
-    show_performance: &mut bool,
     show_settings: &mut bool,
     show_view: &mut bool,
     show_transforms: &mut bool,
@@ -178,7 +177,12 @@ pub fn render_menu_bar(
 
             // Windows Menu
             ui.menu_button("Windows", |ui| {
-                ui.checkbox(show_performance, "📊 Performance");
+                // Performance opens as floating window in docking system
+                if ui.button("📊 Performance").clicked() {
+                    workspace.right_dock_state.add_window(vec![super::workspace::PanelType::Performance]);
+                    ui.close();
+                }
+
                 ui.checkbox(show_settings, "⚙ Settings");
                 ui.checkbox(show_view, "🔍 View");
                 ui.checkbox(show_transforms, "🔧 Transforms");

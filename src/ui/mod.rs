@@ -39,7 +39,6 @@ pub struct EguiLayer {
     show_palette_editor: bool,
     palette_editor: PaletteEditor,
     // Window visibility (no persistence between sessions)
-    show_performance: bool,
     show_settings: bool,
     show_view: bool,
     show_transforms: bool,
@@ -81,8 +80,7 @@ impl EguiLayer {
             show_config_window: false,
             show_palette_editor: false,
             palette_editor: PaletteEditor::new(),
-            // Window visibility - Performance, Transforms, Help minimized by default
-            show_performance: false,
+            // Window visibility - Transforms, Help minimized by default
             show_settings: true,
             show_view: true,
             show_transforms: false,
@@ -186,7 +184,6 @@ impl EguiLayer {
             // Render menu bar
             menu_bar::render_menu_bar(
                 ctx,
-                &mut self.show_performance,
                 &mut self.show_settings,
                 &mut self.show_view,
                 &mut self.show_transforms,
@@ -201,14 +198,7 @@ impl EguiLayer {
                 &menu_state,
             );
 
-            // Render Performance window
-            performance::render_performance_window(
-                ctx,
-                &mut self.show_performance,
-                metrics,
-                window_size,
-                flame_renderer.as_deref(),
-            );
+            // Performance window is now a dockable panel (see Windows menu)
 
             // Render Settings window
             let _settings_update_type = settings::render_settings_window(
@@ -348,6 +338,10 @@ impl EguiLayer {
                                 palette_save_file: &mut palette_save_file,
                                 palette_import_json: &mut palette_import_json,
                                 palette_load_file: &mut palette_load_file,
+
+                                // Performance metrics
+                                metrics,
+                                window_size,
                             },
                         });
                 });
@@ -398,6 +392,10 @@ impl EguiLayer {
                                 palette_save_file: &mut palette_save_file,
                                 palette_import_json: &mut palette_import_json,
                                 palette_load_file: &mut palette_load_file,
+
+                                // Performance metrics
+                                metrics,
+                                window_size,
                             },
                         });
                 });
