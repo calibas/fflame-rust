@@ -82,8 +82,13 @@ impl<'a> TabViewer for PanelViewer<'a> {
 impl<'a> PanelViewer<'a> {
     /// Render Transforms panel (transform list, affine, variations)
     fn render_transforms_panel(&mut self, ui: &mut egui::Ui) {
-        ui.label("📝 TODO: Migrate Transforms window");
-        ui.label("For now, use: View → Transforms");
+        let _ = super::transforms::render_transforms_content(
+            ui,
+            self.context.config_manager,
+            self.context.flame,
+            self.context.add_transform,
+            self.context.delete_transform,
+        );
     }
 
     /// Render Triangle Editor panel (visual triangle editing)
