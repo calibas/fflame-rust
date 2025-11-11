@@ -63,18 +63,3 @@ pub fn render_performance_content(
             }
     });
 }
-
-/// Render the Performance window (legacy - for backwards compatibility)
-pub fn render_performance_window(
-    ctx: &egui::Context,
-    show_performance: &mut bool,
-    metrics: &PerformanceMetrics,
-    window_size: winit::dpi::PhysicalSize<u32>,
-    flame_renderer: Option<&crate::renderer::compute_kernel::FlameRenderer>,
-) {
-    egui::Window::new("Performance")
-        .open(show_performance)
-        .show(ctx, |ui| {
-            render_performance_content(ui, metrics, window_size, flame_renderer);
-        });
-}

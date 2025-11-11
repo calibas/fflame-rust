@@ -177,9 +177,9 @@ pub fn render_menu_bar(
 
             // Windows Menu
             ui.menu_button("Windows", |ui| {
-                // Performance opens as floating window in docking system
+                // Performance opens as floating window in docking system (only one instance)
                 if ui.button("📊 Performance").clicked() {
-                    workspace.right_dock_state.add_window(vec![super::workspace::PanelType::Performance]);
+                    workspace.open_floating_panel(super::workspace::PanelType::Performance);
                     ui.close();
                 }
 
