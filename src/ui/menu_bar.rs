@@ -3,7 +3,6 @@ use super::menu_context::{MenuActions, MenuState};
 /// Render the top menu bar with window visibility toggles
 pub fn render_menu_bar(
     ctx: &egui::Context,
-    show_view: &mut bool,
     show_transforms: &mut bool,
     show_triangle_editor: &mut bool,
     show_tone_mapping: &mut bool,
@@ -185,11 +184,17 @@ pub fn render_menu_bar(
 
                 // Settings opens Rendering panel as floating window (Settings was renamed to Rendering)
                 let rendering_open = workspace.panel_exists(super::workspace::PanelType::Rendering);
-                if ui.selectable_label(rendering_open, "⚙ Settings").clicked() {
+                if ui.selectable_label(rendering_open, "⚙ Rendering").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Rendering);
                     ui.close();
                 }
-                ui.checkbox(show_view, "🔍 View");
+
+                // View opens as floating window in docking system
+                let view_open = workspace.panel_exists(super::workspace::PanelType::View);
+                if ui.selectable_label(view_open, "🔍 View").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::View);
+                    ui.close();
+                }
                 ui.checkbox(show_transforms, "🔧 Transforms");
                 ui.checkbox(show_triangle_editor, "📐 Triangle Editor");
                 ui.checkbox(show_tone_mapping, "🎨 Tone Mapping & Colors");
