@@ -57,26 +57,52 @@ impl<'a> TabViewer for PanelViewer<'a> {
 impl<'a> PanelViewer<'a> {
     /// Render the Fractal panel (main transform list)
     fn render_fractal_panel(&mut self, ui: &mut egui::Ui) {
-        // Placeholder for now - old window rendering still active
         ui.heading("Fractal Transforms");
-        ui.label("Transform list will appear here.");
         ui.label(format!("{} transforms", self.context.flame.transforms.len()));
         ui.separator();
-        ui.label("(Enable via menu: View → Transforms)");
+
+        ui.label("📝 TODO: Migrate from existing windows:");
+        ui.label("  • Transform List");
+        ui.label("  • Add/Delete Transforms");
+        ui.label("  • Final Transform Toggle");
+
+        ui.separator();
+        ui.label("For now, use:");
+        ui.label("  View → Transforms");
+        ui.label("  View → Triangle Editor");
     }
 
     /// Render the Transform Editor panel (affine, variations)
     fn render_transform_editor_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Transform Editor");
-        ui.label("Transform editing goes here");
-        // TODO: Move transform editing from transforms.rs
+        ui.label("Edit selected transform.");
+        ui.separator();
+
+        ui.label("📝 TODO: Migrate from existing windows:");
+        ui.label("  • Affine Matrix Controls");
+        ui.label("  • Variation Weights");
+        ui.label("  • Color Properties");
+
+        ui.separator();
+        ui.label("For now, use:");
+        ui.label("  View → Transforms");
     }
 
     /// Render the Appearance panel (palette, color, tone mapping)
     fn render_appearance_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Appearance");
-        ui.label("Appearance controls go here");
-        // TODO: Move appearance controls from mod.rs
+        ui.label("Color and tone mapping controls.");
+        ui.separator();
+
+        ui.label("📝 TODO: Migrate from existing windows:");
+        ui.label("  • Color Mode (Palette/Speed)");
+        ui.label("  • Palette Selection");
+        ui.label("  • Tone Mapping Controls");
+        ui.label("  • Exposure, Gamma, etc.");
+
+        ui.separator();
+        ui.label("For now, use:");
+        ui.label("  View → Tone Mapping & Colors");
     }
 
     /// Render the View panel (zoom, pan, rotation)
@@ -90,16 +116,36 @@ impl<'a> PanelViewer<'a> {
 
     /// Render the Rendering panel (iterations, accumulation)
     fn render_rendering_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Rendering");
-        ui.label("Rendering controls go here");
-        // TODO: Move rendering controls from mod.rs
+        ui.heading("Rendering Quality");
+        ui.label("Performance and quality settings.");
+        ui.separator();
+
+        ui.label("📝 TODO: Migrate from existing windows:");
+        ui.label("  • Iterations per Thread");
+        ui.label("  • Histogram Color Scale");
+        ui.label("  • Accumulation Controls");
+        ui.label("  • Max Iterations");
+
+        ui.separator();
+        ui.label("For now, use:");
+        ui.label("  View → Settings");
     }
 
     /// Render the Advanced panel (expert features)
     fn render_advanced_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("Advanced");
-        ui.label("Advanced features go here");
-        // TODO: Move advanced features from mod.rs
+        ui.label("Export and advanced features.");
+        ui.separator();
+
+        ui.label("📝 TODO: Migrate from existing windows:");
+        ui.label("  • PNG Export");
+        ui.label("  • Config Import/Export");
+        ui.label("  • Apophysis Import");
+
+        ui.separator();
+        ui.label("For now, use:");
+        ui.label("  View → Settings (Export section)");
+        ui.label("  View → Config Import/Export");
     }
 
     /// Render the History panel (undo/redo browser)
