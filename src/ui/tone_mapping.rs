@@ -511,3 +511,291 @@ fn render_curve_editor(
 
     max_update
 }
+
+/// Render the Colors panel content (tone mapping, color mode, palette)
+///
+/// This is the panel version without the Window wrapper.
+pub fn render_colors_content(
+    ui: &mut egui::Ui,
+    show_palette_editor: &mut bool,
+    config_manager: &mut ConfigManager,
+    palette_library: &PaletteLibrary,
+    custom_palette: &mut Option<crate::scene::palette::Palette>,
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
+
+    // Section 1: Tone Mapping
+    egui::CollapsingHeader::new("Tone Mapping")
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label("Tone Map Mode");
+            let current_tonemap_mode = config_manager.active_config().tonemap_mode;
+            ui.horizontal(|ui| {
+                if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Linear), "Linear").clicked() {
+                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Linear.into(), false) {
+                        max_update = max_update.max(update);
+                    }
+                }
+                if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Logarithmic), "Logarithmic").clicked() {
+                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into(), false) {
+                        max_update = max_update.max(update);
+                    }
+                }
+                if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::DensityVisualization), "Density").clicked() {
+                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::DensityVisualization.into(), false) {
+                        max_update = max_update.max(update);
+                    }
+                }
+            });
+
+            ui.separator();
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Exposure, 0.01..=10.0, "Exposure") {
+                max_update = max_update.max(result.update_type);
+            }
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Gamma, -1.0..=10.0, "Gamma") {
+                max_update = max_update.max(result.update_type);
+            }
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::GammaThreshold, 0.0..=1000.0, "Gamma Threshold") {
+                max_update = max_update.max(result.update_type);
+            }
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Brightness, 0.001..=100.0, "Brightness") {
+                max_update = max_update.max(result.update_type);
+            }
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Vibrancy, 0.0..=30.0, "Vibrancy") {
+                max_update = max_update.max(result.update_type);
+            }
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::Saturation, 0.0..=3.0, "Saturation") {
+                max_update = max_update.max(result.update_type);
+            }
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::HueShift, -360.0..=360.0, "Hue Shift") {
+                max_update = max_update.max(result.update_type);
+            }
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::ValueScale, 0.0..=3.0, "Value Scale") {
+                max_update = max_update.max(result.update_type);
+            }
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::DensityScale, 0.01..=10.0, "Density Scale") {
+                max_update = max_update.max(result.update_type);
+            }
+        });
+
+    // Section 2: Tone Curve
+    egui::CollapsingHeader::new("Tone Curve")
+        .default_open(false)
+        .show(ui, |ui| {
+            let mut temp_use_curve = config_manager.active_config().use_curve;
+            if ui.checkbox(&mut temp_use_curve, "Enable Tone Curve").changed() {
+                if let Ok(update) = config_manager.update_param(ConfigPath::UseCurve, temp_use_curve.into(), false) {
+                    max_update = max_update.max(update);
+                }
+            }
+
+            let current_use_curve = config_manager.active_config().use_curve;
+            ui.add_enabled_ui(current_use_curve, |ui| {
+                ui.label("Presets");
+                ui.horizontal(|ui| {
+                    if ui.button("Linear").clicked() {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::linear().into(), false) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    if ui.button("S-Curve").clicked() {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::s_curve().into(), false) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    if ui.button("Brighten Shadows").clicked() {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::brighten_shadows().into(), false) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Darken Highlights").clicked() {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::darken_highlights().into(), false) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                });
+
+                ui.separator();
+
+                let curve_update = render_curve_editor(ui, config_manager);
+                max_update = max_update.max(curve_update);
+            });
+        });
+
+    // Section 3: Color & Appearance
+    egui::CollapsingHeader::new("Color & Appearance")
+        .default_open(true)
+        .show(ui, |ui| {
+            let current_mode = config_manager.active_config().color_mode;
+            let selected_text = match current_mode {
+                ColorMode::Palette => "Palette",
+                ColorMode::Speed => "Speed",
+            };
+
+            let mut temp_color_mode = current_mode;
+            egui::ComboBox::from_label("Color Mode")
+                .selected_text(selected_text)
+                .show_ui(ui, |ui| {
+                    if ui.selectable_value(&mut temp_color_mode, ColorMode::Palette, "Palette").changed() {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    if ui.selectable_value(&mut temp_color_mode, ColorMode::Speed, "Speed").changed() {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                });
+
+            let current_color_mode = config_manager.active_config().color_mode;
+            if matches!(current_color_mode, ColorMode::Palette | ColorMode::Speed) {
+                let palettes = palette_library.palettes();
+
+                let current_palette = config_manager.active_config().palette.clone();
+                let current_palette_name = current_palette
+                    .as_ref()
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "(None)".to_string());
+
+                egui::ComboBox::from_id_source(format!("palette_selector_{}", palettes.len()))
+                    .selected_text(&current_palette_name)
+                    .show_ui(ui, |ui| {
+                        ui.label("Palette");
+
+                        for palette in palettes.iter() {
+                            let is_selected = current_palette.as_ref().map(|p| &p.name) == Some(&palette.name);
+                            if ui.selectable_label(is_selected, &palette.name).clicked() {
+                                let mut palette_copy = palette.clone();
+
+                                if palette.built_in {
+                                    let base_name = &palette.name;
+                                    let mut new_name = format!("{} (Custom)", base_name);
+                                    let mut counter = 2;
+
+                                    while palette_library.palettes().iter().any(|p| p.name == new_name)
+                                        || (current_palette.as_ref().map(|p| &p.name) == Some(&new_name)) {
+                                        new_name = format!("{} (Custom {})", base_name, counter);
+                                        counter += 1;
+                                    }
+
+                                    palette_copy.name = new_name;
+                                }
+
+                                palette_copy.built_in = false;
+
+                                if let Ok(update) = config_manager.update_param(
+                                    ConfigPath::Palette,
+                                    palette_copy.clone().into(),
+                                    false
+                                ) {
+                                    max_update = max_update.max(update);
+                                }
+
+                                *custom_palette = Some(palette_copy);
+                            }
+                        }
+                    });
+
+                ui.horizontal(|ui| {
+                    if ui.button("🎨 Edit Palette").clicked() {
+                        *show_palette_editor = !*show_palette_editor;
+
+                        if current_palette.is_none() {
+                            let palette_index = config_manager.active_config().palette_index;
+                            if let Some(lib_pal) = palette_library.get(palette_index) {
+                                let mut pal = lib_pal.clone();
+
+                                if lib_pal.built_in {
+                                    let base_name = &lib_pal.name;
+                                    let mut new_name = format!("{} (Custom)", base_name);
+                                    let mut counter = 2;
+
+                                    while palette_library.palettes().iter().any(|p| p.name == new_name) {
+                                        new_name = format!("{} (Custom {})", base_name, counter);
+                                        counter += 1;
+                                    }
+
+                                    pal.name = new_name;
+                                }
+
+                                pal.built_in = false;
+
+                                let _ = config_manager.update_param(
+                                    ConfigPath::Palette,
+                                    pal.into(),
+                                    false
+                                );
+                            }
+                        }
+                    }
+
+                    if ui.button("📋 Clone").clicked() {
+                        if let Some(pal) = &current_palette {
+                            let mut cloned_palette = pal.clone();
+                            let base_name = &pal.name;
+                            let mut new_name = format!("{} (Copy)", base_name);
+                            let mut counter = 2;
+
+                            while palette_library.palettes().iter().any(|p| p.name == new_name)
+                                || (current_palette.as_ref().map(|p| &p.name) == Some(&new_name)) {
+                                new_name = format!("{} (Copy {})", base_name, counter);
+                                counter += 1;
+                            }
+
+                            cloned_palette.name = new_name;
+                            cloned_palette.built_in = false;
+
+                            if let Ok(update) = config_manager.update_param(
+                                ConfigPath::Palette,
+                                cloned_palette.clone().into(),
+                                false
+                            ) {
+                                max_update = max_update.max(update);
+                            }
+
+                            *custom_palette = Some(cloned_palette);
+                        }
+                    }
+                });
+
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteRotation, 0.0..=1.0, "Palette Rotation") {
+                    max_update = max_update.max(result.update_type);
+                }
+            }
+
+            if matches!(current_color_mode, ColorMode::Speed) {
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::SpeedFactor, 0.0..=1.0, "Speed Blend Factor") {
+                    max_update = max_update.max(result.update_type);
+                }
+            }
+
+            ui.separator();
+
+            let current_bg = config_manager.active_config().background_color;
+            let mut bg_array = [current_bg[0], current_bg[1], current_bg[2]];
+            if ui.color_edit_button_rgb(&mut bg_array).changed() {
+                if let Ok(update) = config_manager.update_param(
+                    ConfigPath::BackgroundColor,
+                    [bg_array[0], bg_array[1], bg_array[2]].into(),
+                    false
+                ) {
+                    max_update = max_update.max(update);
+                }
+            }
+            ui.label("Background Color");
+        });
+
+    max_update
+}
