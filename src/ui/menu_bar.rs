@@ -74,6 +74,40 @@ pub fn render_menu_bar(
                 ui.add_enabled(false, egui::Button::new("⚙ Preferences..."));
             });
 
+            // View Menu
+            ui.menu_button("View", |ui| {
+                if ui.button("Reset View").clicked() {
+                    menu_actions.view.reset_view = true;
+                    ui.close();
+                }
+
+                ui.separator();
+
+                if ui.button("Zoom In").clicked() {
+                    menu_actions.view.zoom_in = true;
+                    ui.close();
+                }
+
+                if ui.button("Zoom Out").clicked() {
+                    menu_actions.view.zoom_out = true;
+                    ui.close();
+                }
+
+                ui.separator();
+
+                // Radio buttons for render mode
+                let is_2d = menu_state.render_mode_2d;
+                if ui.selectable_label(is_2d, "2D Mode").clicked() {
+                    menu_actions.view.set_mode_2d = true;
+                    ui.close();
+                }
+
+                if ui.selectable_label(!is_2d, "3D Mode").clicked() {
+                    menu_actions.view.set_mode_3d = true;
+                    ui.close();
+                }
+            });
+
             // Windows Menu
             ui.menu_button("Windows", |ui| {
                 ui.checkbox(show_performance, "📊 Performance");

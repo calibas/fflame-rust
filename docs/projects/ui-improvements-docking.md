@@ -186,7 +186,7 @@ egui_dock = "0.13"  # Latest version
 
 **View Menu:**
 - Reset View (Home)
-- Fit to Window (F)
+- Fit to Window (F) (when implemented)
 - ---
 - Zoom In (Ctrl++)
 - Zoom Out (Ctrl+-)
