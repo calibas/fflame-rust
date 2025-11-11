@@ -159,9 +159,11 @@ impl App {
 
                     match event {
                         WindowEvent::CloseRequested => {
-                            // Request graceful quit (will be handled at end of frame)
-                            app.quit_requested = true;
-                            window.request_redraw(); // Ensure we get a RedrawRequested to process quit
+                            // Handle graceful quit immediately
+                            // TODO: Check for unsaved changes
+                            // TODO: Show confirmation dialog if needed
+                            log::info!("CloseRequested - exiting gracefully");
+                            elwt.exit();
                         },
                         WindowEvent::Resized(size) => {
                             // Skip resize if dimensions are zero (happens when minimizing on Windows)
