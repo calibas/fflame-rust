@@ -183,6 +183,7 @@ impl EguiLayer {
                 &mut self.show_palette_editor,
                 &mut self.show_config_window,
                 &mut self.show_undo_history,
+                workspace,
             );
 
             // Render Performance window
