@@ -88,7 +88,7 @@ impl Workspace {
         state
     }
 
-    /// Create Standard layout: Fractal + Transform Editor | Appearance + View
+    /// Create Standard layout: Fractal + Transform Editor | Appearance + View + History
     fn create_standard_layout() -> DockState<PanelType> {
         let mut state = DockState::new(vec![PanelType::Fractal]);
         let root = state.main_surface_mut();
@@ -96,8 +96,9 @@ impl Workspace {
         // Split right for Appearance
         let [left, right] = root.split_right(NodeIndex::root(), 0.25, vec![PanelType::Appearance]);
 
-        // Add View tab to right side
+        // Add View and History tabs to right side
         root.push_to_focused_leaf(PanelType::View);
+        root.push_to_focused_leaf(PanelType::History);
 
         // Add Transform Editor tab to left side
         root.set_focused_node(left);
