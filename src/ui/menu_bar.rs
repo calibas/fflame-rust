@@ -20,41 +20,36 @@ pub fn render_menu_bar(
     quit_requested: &mut bool,
 ) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-        egui::menu::bar(ui, |ui| {
+        egui::MenuBar::new().ui(ui, |ui| {
             // File Menu
             ui.menu_button("File", |ui| {
                 if ui.button("📂 Open Config...").clicked() {
                     *config_load_file = true;
-                    ui.close_menu();
-                }
-
-                if ui.button("💾 Save Config").clicked() {
-                    *config_save_file = true;
-                    ui.close_menu();
+                    ui.close();
                 }
 
                 if ui.button("💾 Save Config As...").clicked() {
                     *config_save_file = true;
-                    ui.close_menu();
+                    ui.close();
                 }
 
                 ui.separator();
 
                 if ui.button("🔥 Import Apophysis XML...").clicked() {
                     *apophysis_import_file = true;
-                    ui.close_menu();
+                    ui.close();
                 }
 
                 if ui.button("🖼 Export PNG...").clicked() {
                     *png_export_requested = true;
-                    ui.close_menu();
+                    ui.close();
                 }
 
                 ui.separator();
 
                 if ui.button("❌ Quit").clicked() {
                     *quit_requested = true;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
 
@@ -78,19 +73,19 @@ pub fn render_menu_bar(
 
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Beginner, "Beginner").clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Beginner);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Standard, "Standard").clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, "Advanced").clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Advanced);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Export, "Export").clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Export);
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
             });

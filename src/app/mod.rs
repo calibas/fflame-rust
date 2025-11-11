@@ -37,6 +37,7 @@ pub struct App {
     pub(super) last_mouse_pos: Option<(f32, f32)>,
     pub(super) paused: bool,
     pub(super) modifiers: winit::keyboard::ModifiersState,
+    pub(super) quit_requested: bool,  // Graceful quit requested (check unsaved changes, etc.)
 
     // Libraries (not saved in config)
     pub(super) palette_library: PaletteLibrary,
@@ -139,6 +140,7 @@ impl App {
             last_mouse_pos: None,
             paused: false,
             modifiers: winit::keyboard::ModifiersState::default(),
+            quit_requested: false,
             palette_library,
             preset_library,
             current_preset_index: 0,
@@ -156,7 +158,10 @@ impl App {
                     let consumed = app.egui_layer.handle_event(&event, &window);
 
                     match event {
-                        WindowEvent::CloseRequested => elwt.exit(),
+                        WindowEvent::CloseRequested => {
+                            // Request graceful quit (will be handled at end of frame)
+                            app.quit_requested = true;
+                        },
                         WindowEvent::Resized(size) => {
                             // Skip resize if dimensions are zero (happens when minimizing on Windows)
                             if size.width > 0 && size.height > 0 {
@@ -239,6 +244,15 @@ impl App {
                                 Err(SurfaceError::Lost | SurfaceError::Outdated) => app.gpu.resize(app.gpu.size),
                                 Err(SurfaceError::OutOfMemory) => elwt.exit(),
                                 Err(e) => eprintln!("Render error: {:?}", e),
+                            }
+
+                            // Handle graceful quit (triggered by File → Quit, window close button, or Alt+F4)
+                            if app.quit_requested {
+                                // TODO: Check for unsaved changes
+                                // TODO: Perform cleanup tasks
+                                // TODO: Show confirmation dialog if needed
+                                log::info!("Graceful quit requested");
+                                elwt.exit();
                             }
                         }
                         _ => {}
@@ -402,6 +416,7 @@ impl App {
             &self.preset_library,
             &mut self.current_preset_index,
             &mut self.paused,
+            &mut self.quit_requested,
             can_undo,
             can_redo,
             &mut self.workspace,
