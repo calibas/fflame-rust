@@ -451,14 +451,14 @@ impl FlameBuffers {
 
         // Upload palette data
         queue.write_texture(
-            ImageCopyTexture {
+            TexelCopyTextureInfo {
                 texture: &palette_texture,
                 mip_level: 0,
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
             &palette_data_u8,
-            ImageDataLayout {
+            TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(256 * 4), // 256 pixels * 4 components * 1 byte
                 rows_per_image: None,
@@ -493,14 +493,14 @@ impl FlameBuffers {
 
         // Upload curve LUT data
         queue.write_texture(
-            ImageCopyTexture {
+            TexelCopyTextureInfo {
                 texture: &curve_lut_texture,
                 mip_level: 0,
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
             &curve_lut_data,
-            ImageDataLayout {
+            TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: None,  // 1D textures don't have rows
                 rows_per_image: None,
@@ -782,14 +782,14 @@ impl FlameBuffers {
             .collect();
 
         queue.write_texture(
-            ImageCopyTexture {
+            TexelCopyTextureInfo {
                 texture: &self.palette_texture,
                 mip_level: 0,
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
             &palette_data_u8,
-            ImageDataLayout {
+            TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(256 * 4), // 256 pixels * 4 components * 1 byte
                 rows_per_image: None,
@@ -807,14 +807,14 @@ impl FlameBuffers {
         let curve_lut_data = curve.generate_lut();
 
         queue.write_texture(
-            ImageCopyTexture {
+            TexelCopyTextureInfo {
                 texture: &self.curve_lut_texture,
                 mip_level: 0,
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
             &curve_lut_data,
-            ImageDataLayout {
+            TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: None,  // 1D textures don't have rows
                 rows_per_image: None,

@@ -266,6 +266,7 @@ impl FlameRenderer {
                     load: LoadOp::Clear(Color::BLACK),
                     store: StoreOp::Store,
                 },
+                depth_slice: None,
             })],
             depth_stencil_attachment: None,
             occlusion_query_set: None,
@@ -779,15 +780,15 @@ impl FlameRenderer {
 
         // Copy accumulation texture to buffer
         encoder.copy_texture_to_buffer(
-            ImageCopyTexture {
+            TexelCopyTextureInfo {
                 texture: self.buffers.current_accumulation_texture(),
                 mip_level: 0,
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
-            ImageCopyBuffer {
+            TexelCopyBufferInfo {
                 buffer: &buffer,
-                layout: ImageDataLayout {
+                layout: TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
                     rows_per_image: Some(self.height),
@@ -808,7 +809,7 @@ impl FlameRenderer {
         buffer_slice.map_async(MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        device.poll(Maintain::Wait);
+        device.poll(PollType::Wait { submission_index: None, timeout: None });
 
         rx.await.map_err(|_| "Failed to map buffer".to_string())?
             .map_err(|e| format!("Buffer map error: {:?}", e))?;
@@ -899,7 +900,7 @@ impl FlameRenderer {
         // Create buffer to copy texture data to
         let bytes_per_pixel = 4; // RGBA8
         let unpadded_bytes_per_row = self.width * bytes_per_pixel;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
         let buffer_size = (padded_bytes_per_row * self.height) as u64;
         let buffer = device.create_buffer(&BufferDescriptor {
@@ -911,15 +912,15 @@ impl FlameRenderer {
 
         // Copy texture to buffer
         encoder.copy_texture_to_buffer(
-            ImageCopyTexture {
+            TexelCopyTextureInfo {
                 texture: &texture,
                 mip_level: 0,
                 origin: Origin3d::ZERO,
                 aspect: TextureAspect::All,
             },
-            ImageCopyBuffer {
+            TexelCopyBufferInfo {
                 buffer: &buffer,
-                layout: ImageDataLayout {
+                layout: TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
                     rows_per_image: Some(self.height),
@@ -940,7 +941,7 @@ impl FlameRenderer {
         buffer_slice.map_async(MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        device.poll(Maintain::Wait);
+        device.poll(PollType::Wait { submission_index: None, timeout: None });
 
         rx.await.map_err(|_| "Failed to map buffer".to_string())?
             .map_err(|e| format!("Buffer map error: {:?}", e))?;

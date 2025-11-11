@@ -164,7 +164,7 @@ impl App {
                                 // Also resize renderer buffers to match
                                 if let Some(ref mut renderer) = app.flame_renderer {
                                     let config = app.config_manager.active_config();
-                                    let mut encoder = app.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    let mut encoder = app.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                                         label: Some("Resize Encoder"),
                                     });
                                     renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, size.width, size.height,
@@ -192,7 +192,7 @@ impl App {
                                 app.gpu.resize(new_size);
                                 if let Some(ref mut renderer) = app.flame_renderer {
                                     let config = app.config_manager.active_config();
-                                    let mut encoder = app.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    let mut encoder = app.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                                         label: Some("Scale Factor Resize Encoder"),
                                     });
                                     renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, new_size.width, new_size.height,
@@ -973,7 +973,7 @@ impl App {
                 // Get current config for updates
                 let update_config = self.config_manager.active_config();
 
-                let mut update_encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                let mut update_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                     label: Some("Update Encoder"),
                 });
 
