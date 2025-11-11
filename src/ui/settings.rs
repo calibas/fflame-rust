@@ -757,16 +757,36 @@ pub fn render_settings_content(
                 let _ = config_manager.force_commit_preview(&ConfigPath::TargetIterationsPerPixel);
             }
 
-            // Accumulation blend rate
-            let mut temp_blend = config.blend_factor;
-            let response = ui.add(egui::Slider::new(&mut temp_blend, 0.01..=1.0)
-                .text("Blend Rate"))
+            // Dynamic blend mode
+            let mut temp_dynamic = config.use_dynamic_blend;
+            if ui.checkbox(&mut temp_dynamic, "Use Dynamic Blend")
                 .on_hover_text(
-                    "Controls how quickly new samples blend with history.\n\
-                    0.01 = Very slow/smooth\n\
-                    0.1 = Balanced (default)\n\
-                    1.0 = Fast/flickery"
+                    "Exponential convergence (old behavior).\n\
+                    When enabled, blend rate adapts over time.\n\
+                    When disabled, uses fixed blend rate below."
+                )
+                .changed()
+            {
+                let _ = config_manager.update_param(
+                    ConfigPath::UseDynamicBlend,
+                    temp_dynamic.into(),
+                    false
                 );
+            }
+
+            // Fixed blend rate (only enabled when dynamic blend is disabled)
+            let mut temp_blend = config.blend_factor;
+            let response = ui.add_enabled(
+                !config.use_dynamic_blend,
+                egui::Slider::new(&mut temp_blend, 0.01..=1.0)
+                    .text("Fixed Blend Rate")
+            ).on_hover_text(
+                "Controls how quickly new samples blend with history.\n\
+                Only active when Dynamic Blend is disabled.\n\n\
+                0.01 = Very slow/smooth\n\
+                0.1 = Balanced (default)\n\
+                1.0 = Fast/flickery"
+            );
 
             if response.changed() {
                 let _ = config_manager.update_param(
@@ -778,16 +798,6 @@ pub fn render_settings_content(
 
             if response.drag_stopped() {
                 let _ = config_manager.force_commit_preview(&ConfigPath::BlendFactor);
-            }
-
-            // Dynamic blend mode
-            let mut temp_dynamic = config.use_dynamic_blend;
-            if ui.checkbox(&mut temp_dynamic, "Use Dynamic Blend").changed() {
-                let _ = config_manager.update_param(
-                    ConfigPath::UseDynamicBlend,
-                    temp_dynamic.into(),
-                    false
-                );
             }
 
             ui.separator();
@@ -846,5 +856,24 @@ pub fn render_settings_content(
 
             ui.separator();
             ui.label("Use File → Export to save PNG");
+        });
+
+    ui.separator();
+
+    // Section 4: Advanced
+    egui::CollapsingHeader::new("Advanced")
+        .default_open(false)
+        .show(ui, |ui| {
+            let mut temp_deterministic = config.deterministic_rng;
+            if ui.checkbox(&mut temp_deterministic, "Deterministic RNG").on_hover_text(
+                "Use fixed random seed for reproducible rendering.\n\
+                Enable for testing/comparison, disable for varied output."
+            ).changed() {
+                let _ = config_manager.update_param(
+                    ConfigPath::DeterministicRng,
+                    temp_deterministic.into(),
+                    false  // Immediate
+                );
+            }
         });
 }
