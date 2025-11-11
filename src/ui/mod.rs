@@ -455,6 +455,41 @@ impl EguiLayer {
             self.renderer.free_texture(id);
         }
 
+        // Handle View menu actions BEFORE syncing flame (so changes take effect this frame)
+        use crate::config::ConfigPath;
+        if menu_actions.view.reset_view {
+            let _ = config_manager.update_param(ConfigPath::Zoom, 1.0.into(), false);
+            let _ = config_manager.update_param(ConfigPath::PanX, 0.0.into(), false);
+            let _ = config_manager.update_param(ConfigPath::PanY, 0.0.into(), false);
+            let _ = config_manager.update_param(ConfigPath::Rotation, 0.0.into(), false);
+        }
+
+        if menu_actions.view.zoom_in {
+            let current_zoom = config_manager.active_config().zoom;
+            let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom * 1.2).into(), false);
+        }
+
+        if menu_actions.view.zoom_out {
+            let current_zoom = config_manager.active_config().zoom;
+            let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom / 1.2).into(), false);
+        }
+
+        if menu_actions.view.set_mode_2d {
+            let _ = config_manager.update_param(
+                ConfigPath::RenderMode,
+                crate::scene::transforms::RenderMode::TwoD.into(),
+                false
+            );
+        }
+
+        if menu_actions.view.set_mode_3d {
+            let _ = config_manager.update_param(
+                ConfigPath::RenderMode,
+                crate::scene::transforms::RenderMode::ThreeD.into(),
+                false
+            );
+        }
+
         // Sync flame from ConfigManager AFTER UI updates (for live preview during drag)
         // This ensures app.rs gets the latest preview state when checking is_in_preview_mode()
         *flame = config_manager.active_config().flame.clone();
@@ -470,45 +505,6 @@ impl EguiLayer {
 
         undo_requested = menu_actions.edit.undo;
         redo_requested = menu_actions.edit.redo;
-
-        // Handle View menu actions
-        if menu_actions.view.reset_view {
-            use crate::config::ConfigPath;
-            let _ = config_manager.update_param(ConfigPath::Zoom, 1.0.into(), false);
-            let _ = config_manager.update_param(ConfigPath::PanX, 0.0.into(), false);
-            let _ = config_manager.update_param(ConfigPath::PanY, 0.0.into(), false);
-            let _ = config_manager.update_param(ConfigPath::Rotation, 0.0.into(), false);
-        }
-
-        if menu_actions.view.zoom_in {
-            use crate::config::ConfigPath;
-            let current_zoom = config_manager.active_config().zoom;
-            let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom * 1.2).into(), false);
-        }
-
-        if menu_actions.view.zoom_out {
-            use crate::config::ConfigPath;
-            let current_zoom = config_manager.active_config().zoom;
-            let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom / 1.2).into(), false);
-        }
-
-        if menu_actions.view.set_mode_2d {
-            use crate::config::ConfigPath;
-            let _ = config_manager.update_param(
-                ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::TwoD.into(),
-                false
-            );
-        }
-
-        if menu_actions.view.set_mode_3d {
-            use crate::config::ConfigPath;
-            let _ = config_manager.update_param(
-                ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::ThreeD.into(),
-                false
-            );
-        }
 
         UiResponse {
             pause_changed,
