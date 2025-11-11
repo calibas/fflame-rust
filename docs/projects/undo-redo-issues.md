@@ -10,6 +10,12 @@ UPDATE: This may have been related to preview mode issues.
 
 UPDATE #2: I believe this issue may be a problem with syncing between the UI, ConfigManager, and the fractal itself. We're missing some state capture in the undo history, so undo/redo doesn't create the same fractal visible on the screen. We need to diagnose which step has the wrong info.
 
+UPDATE #3: I'm not sure this is related, but I think this problem, UI option getting "stuck", and inconsistent Preview Mode quality (flickering) are all related. I believe the timing between the UI, the fractal and the ConfigManager are to blame, and it's creating race conditions.
+
+We need to trace the order. I'd like to sync things up so it goes frame draw -> any UI changes -> UI updates -> iterations -> frame draw
+
+I think this is the best order? I'm open to suggestions. We need it done synchronously so everything is ready between frame draws.
+
 ## Observed Issues
 
 **Symptoms:**
