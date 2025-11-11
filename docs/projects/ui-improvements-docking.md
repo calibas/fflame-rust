@@ -50,7 +50,7 @@ Modernize the UI with a professional docking layout system, better organization,
 - Keep all existing functionality unchanged
 - No reorganization or refactoring yet
 - Get docking working first, optimize later
-- Progress: 2/7 panels migrated (History ✅, View ✅)
+- Progress: 3/6 panels migrated (History ✅, View ✅, Rendering ✅)
 
 **Features:**
 - Multiple tabs/panels that can be rearranged
@@ -59,36 +59,34 @@ Modernize the UI with a professional docking layout system, better organization,
 - Default layouts for different workflows
 
 **Tabs/Panels:**
-1. **Fractal** (main controls)
-   - Transforms list
+1. **Transforms** (existing Transforms window)
+   - Transform list with controls
    - Add/delete transform buttons
-   - Basic transform parameters (weight, color)
-2. **Transform Editor** (detailed editing)
-   - Affine matrix controls
-   - Variation weights and parameters
-   - Triangle editor (if transform selected)
-3. **Appearance** (visual controls)
-   - Palette selector
+   - Affine matrix, variation weights, parameters
+2. **Triangle Editor** (existing Triangle Editor window)
+   - Visual triangle editing
+   - All existing functionality
+3. **Colors** (existing Tone Mapping & Colors window)
    - Color mode controls
-   - Background color
+   - Palette selector
    - Tone mapping settings
-4. **View** (camera/navigation)
+   - Background color
+4. **Palette Editor** (existing Palette Editor window)
+   - Palette editing controls
+   - Import/export palette
+5. **View** (camera/navigation) ✅
    - Zoom, pan, rotation
-   - 3D camera controls (if 3D mode)
+   - 3D camera controls
    - Reset view button
-5. **Rendering** (performance/quality)
+6. **Rendering** (performance/quality) ✅
+   - File & Project (presets, config I/O, undo/redo)
    - Iteration controls
    - Accumulation settings
    - Speed multiplier
-   - Quality presets (Low/Medium/High/Ultra)
-6. **Advanced** (expert features)
-   - Histogram color scale
-   - Per-pixel iteration limit
-   - Density compression
-   - Debug overlays
-7. **History** (undo/redo)
+   - PNG export
+7. **History** (undo/redo) ✅
    - Visual undo history browser
-   - Config snapshots
+   - Jump to any config state
 
 **Implementation:**
 ```toml
