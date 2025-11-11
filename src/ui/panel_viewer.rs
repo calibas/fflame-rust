@@ -4,15 +4,39 @@ use egui_dock::{egui, TabViewer};
 use super::workspace::PanelType;
 
 /// Context needed by panels to render
+///
+/// Holds references to all UI state from EguiLayer that panels might need.
+/// This avoids passing 20+ parameters to each panel.
 pub struct PanelContext<'a> {
+    // Core state
     pub config_manager: &'a mut crate::config::ConfigManager,
     pub flame: &'a mut crate::scene::transforms::Flame,
+
+    // Libraries
+    pub preset_library: &'a crate::scene::presets::PresetLibrary,
+    pub palette_library: &'a crate::scene::palette::PaletteLibrary,
+
+    // Renderer (optional, might not exist during init)
+    pub flame_renderer: Option<&'a crate::renderer::compute_kernel::FlameRenderer>,
+
+    // Window visibility flags
+    pub show_config_window: &'a mut bool,
+    pub show_palette_editor: &'a mut bool,
+    pub show_triangle_editor: &'a mut bool,
+
+    // Action flags
     pub add_transform: &'a mut bool,
     pub delete_transform: &'a mut Option<usize>,
-    pub show_triangle_editor: &'a mut bool,
-    pub show_undo_history: &'a mut bool,
     pub undo_requested: &'a mut bool,
     pub redo_requested: &'a mut bool,
+    pub preset_changed: &'a mut bool,
+    pub pause_changed: &'a mut bool,
+
+    // UI state
+    pub current_preset_index: &'a mut usize,
+    pub paused: &'a mut bool,
+    pub png_export_with_background: &'a mut bool,
+    pub png_export_transparent: &'a mut bool,
 }
 
 /// Viewer for rendering each panel type
