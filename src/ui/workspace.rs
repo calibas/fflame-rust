@@ -89,6 +89,26 @@ impl Workspace {
         self.current_layout = layout;
     }
 
+    /// Check if a panel type already exists in either dock state
+    pub fn panel_exists(&self, panel_type: PanelType) -> bool {
+        // Check left dock
+        if self.left_dock_state.iter_all_tabs().any(|(_, tab)| *tab == panel_type) {
+            return true;
+        }
+        // Check right dock
+        if self.right_dock_state.iter_all_tabs().any(|(_, tab)| *tab == panel_type) {
+            return true;
+        }
+        false
+    }
+
+    /// Open a panel as a floating window (only if it doesn't already exist)
+    pub fn open_floating_panel(&mut self, panel_type: PanelType) {
+        if !self.panel_exists(panel_type) {
+            self.right_dock_state.add_window(vec![panel_type]);
+        }
+    }
+
     /// Create Beginner layout: Left (Transforms) | Right (Colors)
     fn create_beginner_layout() -> (DockState<PanelType>, DockState<PanelType>) {
         let left = DockState::new(vec![PanelType::Transforms]);
