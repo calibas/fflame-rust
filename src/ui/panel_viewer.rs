@@ -55,9 +55,12 @@ impl<'a> TabViewer for PanelViewer<'a> {
 impl<'a> PanelViewer<'a> {
     /// Render the Fractal panel (main transform list)
     fn render_fractal_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Fractal");
-        ui.label("Transform list goes here");
-        // TODO: Move transform list from mod.rs
+        // Placeholder for now - old window rendering still active
+        ui.heading("Fractal Transforms");
+        ui.label("Transform list will appear here.");
+        ui.label(format!("{} transforms", self.context.flame.transforms.len()));
+        ui.separator();
+        ui.label("(Enable via menu: View → Transforms)");
     }
 
     /// Render the Transform Editor panel (affine, variations)
