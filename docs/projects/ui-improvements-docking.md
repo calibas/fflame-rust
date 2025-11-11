@@ -41,7 +41,16 @@ Modernize the UI with a professional docking layout system, better organization,
 
 ### Phase 1: egui_dock Integration (6-8 hours)
 
+**Status:** In Progress - Using Simplified Approach
+
 **Goal:** Replace fixed side panel with flexible docking system
+
+**Simplified Implementation (Current):**
+- Convert existing windows → dockable panels (1:1 mapping)
+- Keep all existing functionality unchanged
+- No reorganization or refactoring yet
+- Get docking working first, optimize later
+- Progress: 2/7 panels migrated (History ✅, View ✅)
 
 **Features:**
 - Multiple tabs/panels that can be rearranged
