@@ -52,20 +52,47 @@ pub fn render_palette_editor_window(
         .open(show_palette_editor)
         .default_width(600.0)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Palette Name:");
-                let name_response = ui.text_edit_singleline(&mut palette.name);
+            render_palette_editor_core_impl(
+                ui,
+                palette_editor,
+                config_manager,
+                &mut palette,
+                custom_palette,
+                palette_export_json,
+                palette_save_file,
+                palette_import_json,
+                palette_load_file,
+            );
+        });
 
-                // Update library and create undo point when user finishes editing name
-                if name_response.lost_focus() {
-                    let _ = config_manager.update_param(
-                        crate::config::ConfigPath::Palette,
-                        palette.clone().into(),
-                        false, // immediate undo for discrete action
-                    );
-                }
-            });
-            ui.separator();
+    render_fixed_mode_warning(ctx, palette_editor, config_manager);
+}
+
+/// Core implementation of palette editor (shared by window and panel)
+fn render_palette_editor_core_impl(
+    ui: &mut egui::Ui,
+    palette_editor: &mut PaletteEditor,
+    config_manager: &mut crate::config::ConfigManager,
+    palette: &mut Palette,
+    custom_palette: &mut Option<Palette>,
+    palette_export_json: &mut Option<Palette>,
+    palette_save_file: &mut Option<Palette>,
+    palette_import_json: &mut Option<String>,
+    palette_load_file: &mut bool,
+) {
+    ui.horizontal(|ui| {
+        ui.label("Palette Name:");
+        let name_response = ui.text_edit_singleline(&mut palette.name);
+
+        if name_response.lost_focus() {
+            let _ = config_manager.update_param(
+                crate::config::ConfigPath::Palette,
+                palette.clone().into(),
+                false,
+            );
+        }
+    });
+    ui.separator();
 
             // Gradient preview
             ui.label("Gradient Preview:");
@@ -277,8 +304,13 @@ pub fn render_palette_editor_window(
 
             // Note: Apply button removed - all changes now applied live via ConfigManager
             ui.label("💡 All changes are applied instantly and tracked in undo history.");
-        });
+}
 
+fn render_fixed_mode_warning(
+    ctx: &egui::Context,
+    palette_editor: &mut PaletteEditor,
+    config_manager: &mut crate::config::ConfigManager,
+) {
     // Fixed mode warning dialog
     if palette_editor.show_fixed_mode_warning {
         egui::Window::new("⚠️ Convert to Fixed 256-Color Mode?")
@@ -295,8 +327,15 @@ pub fn render_palette_editor_window(
 
                 ui.horizontal(|ui| {
                     if ui.button("✅ Convert to Fixed Mode").clicked() {
-                        palette.convert_to_fixed();
-                        // Auto-apply the palette when converting to fixed mode
+                        // Get current palette and convert it
+                        if let Some(mut palette) = config_manager.active_config().palette.clone() {
+                            palette.convert_to_fixed();
+                            let _ = config_manager.update_param(
+                                crate::config::ConfigPath::Palette,
+                                palette.into(),
+                                false,
+                            );
+                        }
                         palette_editor.show_fixed_mode_warning = false;
                     }
 
@@ -306,4 +345,43 @@ pub fn render_palette_editor_window(
                 });
             });
     }
+}
+
+/// Render the Palette Editor panel content (palette editing)
+///
+/// This is the panel version without the Window wrapper.
+pub fn render_palette_editor_content(
+    ui: &mut egui::Ui,
+    palette_editor: &mut PaletteEditor,
+    config_manager: &mut crate::config::ConfigManager,
+    custom_palette: &mut Option<Palette>,
+    palette_export_json: &mut Option<Palette>,
+    palette_save_file: &mut Option<Palette>,
+    palette_import_json: &mut Option<String>,
+    palette_load_file: &mut bool,
+) {
+    // Always read from config.palette (single source of truth)
+    let Some(config_palette) = &config_manager.active_config().palette else {
+        ui.label("⚠ No palette selected");
+        ui.label("Open the Colors panel and click 'Edit Palette' to create one");
+        return;
+    };
+
+    // Work on a mutable copy for this frame
+    let mut palette = config_palette.clone();
+
+    render_palette_editor_core_impl(
+        ui,
+        palette_editor,
+        config_manager,
+        &mut palette,
+        custom_palette,
+        palette_export_json,
+        palette_save_file,
+        palette_import_json,
+        palette_load_file,
+    );
+
+    // Note: The warning dialog can't be shown in panel mode (needs Window)
+    // It will only appear when using the floating window mode
 }
