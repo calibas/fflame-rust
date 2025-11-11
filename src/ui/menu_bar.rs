@@ -18,6 +18,11 @@ pub fn render_menu_bar(
     apophysis_import_file: &mut bool,
     png_export_requested: &mut bool,
     quit_requested: &mut bool,
+    // Edit menu actions
+    can_undo: bool,
+    can_redo: bool,
+    undo_requested: &mut bool,
+    redo_requested: &mut bool,
 ) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
@@ -35,10 +40,11 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                if ui.button("🔥 Import Apophysis XML...").clicked() {
+                if ui.button("Import Apophysis XML...").clicked() {
                     *apophysis_import_file = true;
                     ui.close();
                 }
+                ui.add_enabled(false, egui::Button::new("Export Apophysis XML..."));
 
                 if ui.button("🖼 Export PNG...").clicked() {
                     *png_export_requested = true;
@@ -51,6 +57,28 @@ pub fn render_menu_bar(
                     *quit_requested = true;
                     ui.close();
                 }
+            });
+
+            // Edit Menu
+            ui.menu_button("Edit", |ui| {
+                if ui.add_enabled(can_undo, egui::Button::new("⮪ Undo")).clicked() {
+                    *undo_requested = true;
+                }
+
+                if ui.add_enabled(can_redo, egui::Button::new("⮬ Redo")).clicked() {
+                    *redo_requested = true;
+                }
+
+                ui.separator();
+
+                // Future features (not implemented yet)
+                ui.add_enabled(false, egui::Button::new("📋 Copy Transform"));
+                ui.add_enabled(false, egui::Button::new("📄 Paste Transform"));
+                ui.add_enabled(false, egui::Button::new("📑 Duplicate Transform"));
+
+                ui.separator();
+
+                ui.add_enabled(false, egui::Button::new("⚙ Preferences..."));
             });
 
             // Windows Menu

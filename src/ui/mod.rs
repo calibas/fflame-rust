@@ -191,6 +191,10 @@ impl EguiLayer {
                 &mut apophysis_import_file,
                 &mut png_export_requested,
                 quit_requested,
+                can_undo,
+                can_redo,
+                &mut undo_requested,
+                &mut redo_requested,
             );
 
             // Render Performance window
