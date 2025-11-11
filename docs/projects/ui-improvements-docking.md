@@ -168,24 +168,19 @@ egui_dock = "0.13"  # Latest version
 **File Menu:**
 - New Flame (Ctrl+N)
 - Open Config... (Ctrl+O)
-- Save Config (Ctrl+S)
 - Save Config As... (Ctrl+Shift+S)
 - ---
 - Import Apophysis XML... (Ctrl+I)
 - Export PNG... (Ctrl+E)
 - Export Apophysis XML... (when implemented)
 - ---
-- Recent Files ▶
+- Recent Files ▶ (when implemented)
 - ---
 - Quit (Ctrl+Q)
 
 **Edit Menu:**
 - Undo (Ctrl+Z)
 - Redo (Ctrl+Y / Ctrl+Shift+Z)
-- ---
-- Copy Transform (Ctrl+C)
-- Paste Transform (Ctrl+V)
-- Duplicate Transform (Ctrl+D)
 - ---
 - Preferences...
 
@@ -199,12 +194,16 @@ egui_dock = "0.13"  # Latest version
 - 2D Mode
 - 3D Mode
 - ---
-- Show Grid (G)
-- Show Triangle Editor (T)
-- Show Undo History (H)
+- Show Grid (G) (when implemented)
 
-**Fractal Menu:**
+**Transforms Menu:**
+- Show Transform Editor (E)
+- Show Triangle Editor (T)
+- ---
 - Add Transform (Ctrl+T)
+- Copy Transform (Ctrl+C)
+- Paste Transform (Ctrl+V)
+- Duplicate Transform (Ctrl+D)
 - Delete Transform (Delete)
 - Randomize Transform (R)
 - ---

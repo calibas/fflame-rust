@@ -4,6 +4,7 @@ mod help;
 mod helpers;
 mod lazy_undo;
 mod menu_bar;
+mod menu_context;
 mod palette_editor;
 mod panel_viewer;
 mod performance;
@@ -19,6 +20,7 @@ mod view;
 mod workspace;
 
 pub use lazy_undo::LazyUndoHelper;
+pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
 pub use workspace::Workspace;
@@ -167,6 +169,15 @@ impl EguiLayer {
         let mut png_export_transparent = false;
         let mut png_export_requested = false;
 
+        // Menu actions and state
+        let mut menu_actions = MenuActions::default();
+        let menu_state = MenuState {
+            can_undo,
+            can_redo,
+            is_paused: *paused,
+            render_mode_2d: config_manager.active_config().flame.render_mode == crate::scene::transforms::RenderMode::TwoD,
+        };
+
         // Log ConfigManager state at start of UI render
         // log::debug!("render_ui start: ConfigManager has exposure={:.3}, gamma={:.3}",
         //     config_manager.config().exposure, config_manager.config().gamma);
@@ -186,15 +197,8 @@ impl EguiLayer {
                 &mut self.show_config_window,
                 &mut self.show_undo_history,
                 workspace,
-                &mut config_load_file,
-                &mut config_save_file,
-                &mut apophysis_import_file,
-                &mut png_export_requested,
-                quit_requested,
-                can_undo,
-                can_redo,
-                &mut undo_requested,
-                &mut redo_requested,
+                &mut menu_actions,
+                &menu_state,
             );
 
             // Render Performance window
@@ -455,10 +459,17 @@ impl EguiLayer {
         // This ensures app.rs gets the latest preview state when checking is_in_preview_mode()
         *flame = config_manager.active_config().flame.clone();
 
-        // Handle png_export_requested from File menu (default to transparent)
-        if png_export_requested {
+        // Extract menu actions into individual flags for backward compatibility
+        config_load_file = menu_actions.file.load_config;
+        config_save_file = menu_actions.file.save_config;
+        apophysis_import_file = menu_actions.file.import_apophysis;
+        if menu_actions.file.export_png {
             png_export_transparent = true;
         }
+        *quit_requested = menu_actions.file.quit;
+
+        undo_requested = menu_actions.edit.undo;
+        redo_requested = menu_actions.edit.redo;
 
         UiResponse {
             pause_changed,
