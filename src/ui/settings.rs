@@ -538,16 +538,28 @@ pub fn render_settings_content(
         .show(ui, |ui| {
             // Preset selector
             ui.label("Presets");
-            let preset_names: Vec<_> = preset_library.presets().iter().map(|p| p.flame.name.as_str()).collect();
-            let current_name = preset_names.get(*current_preset_index).copied().unwrap_or("(None)");
+            let presets = preset_library.presets();
+            let current_preset_name = presets.get(*current_preset_index)
+                .map(|p| p.flame.name.as_str())
+                .unwrap_or("Unknown");
 
             egui::ComboBox::from_label("Load Preset")
-                .selected_text(current_name)
+                .selected_text(current_preset_name)
                 .show_ui(ui, |ui| {
-                    for (i, name) in preset_names.iter().enumerate() {
-                        if ui.selectable_label(*current_preset_index == i, *name).clicked() {
-                            *current_preset_index = i;
-                            *preset_changed = true;
+                    for (idx, preset) in presets.iter().enumerate() {
+                        if ui.selectable_value(current_preset_index, idx, &preset.flame.name).changed() {
+                            println!("UI: Loading preset: {} ({})", preset.flame.name, idx);
+                            // Load preset via ConfigManager (creates two undo points)
+                            if let Err(e) = config_manager.load_config(
+                                preset.clone(),
+                                format!("Load Preset: {}", preset.flame.name),
+                            ) {
+                                log::error!("Failed to load preset: {}", e);
+                            } else {
+                                // Update flame reference from config
+                                *flame = config_manager.active_config().flame.clone();
+                                *preset_changed = true;
+                            }
                         }
                     }
                 });
