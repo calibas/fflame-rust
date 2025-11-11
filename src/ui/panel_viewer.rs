@@ -43,6 +43,10 @@ pub struct PanelContext<'a> {
     pub palette_save_file: &'a mut Option<crate::scene::palette::Palette>,
     pub palette_import_json: &'a mut Option<String>,
     pub palette_load_file: &'a mut bool,
+
+    // Performance metrics
+    pub metrics: &'a crate::util::PerformanceMetrics,
+    pub window_size: winit::dpi::PhysicalSize<u32>,
 }
 
 /// Viewer for rendering each panel type
@@ -79,6 +83,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::History => {
                 self.render_history_panel(ui);
+            }
+            PanelType::Performance => {
+                self.render_performance_panel(ui);
             }
         }
     }
@@ -169,6 +176,16 @@ impl<'a> PanelViewer<'a> {
             self.context.config_manager,
             self.context.undo_requested,
             self.context.redo_requested,
+        );
+    }
+
+    /// Render the Performance panel (stats and version info)
+    fn render_performance_panel(&mut self, ui: &mut egui::Ui) {
+        super::performance::render_performance_content(
+            ui,
+            self.context.metrics,
+            self.context.window_size,
+            self.context.flame_renderer,
         );
     }
 }

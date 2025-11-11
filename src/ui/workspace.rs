@@ -23,6 +23,8 @@ pub enum PanelType {
     Rendering,
     /// Undo/redo history browser
     History,
+    /// Performance stats and version info
+    Performance,
 }
 
 impl std::fmt::Display for PanelType {
@@ -35,6 +37,7 @@ impl std::fmt::Display for PanelType {
             PanelType::View => write!(f, "View"),
             PanelType::Rendering => write!(f, "Rendering"),
             PanelType::History => write!(f, "History"),
+            PanelType::Performance => write!(f, "Performance"),
         }
     }
 }
