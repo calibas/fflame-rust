@@ -127,6 +127,7 @@ impl EguiLayer {
         preset_library: &crate::scene::presets::PresetLibrary,
         current_preset_index: &mut usize,
         paused: &mut bool,
+        quit_requested: &mut bool,
         can_undo: bool,
         can_redo: bool,
         workspace: &mut workspace::Workspace,
@@ -166,9 +167,6 @@ impl EguiLayer {
         let mut png_export_transparent = false;
         let mut png_export_requested = false;
 
-        // Quit flag
-        let mut quit_requested = false;
-
         // Log ConfigManager state at start of UI render
         // log::debug!("render_ui start: ConfigManager has exposure={:.3}, gamma={:.3}",
         //     config_manager.config().exposure, config_manager.config().gamma);
@@ -192,7 +190,7 @@ impl EguiLayer {
                 &mut config_save_file,
                 &mut apophysis_import_file,
                 &mut png_export_requested,
-                &mut quit_requested,
+                quit_requested,
             );
 
             // Render Performance window
@@ -396,10 +394,7 @@ impl EguiLayer {
                         });
                 });
 
-            // Handle quit request from File menu
-            if quit_requested {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+            // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
         });
 
         self.state
