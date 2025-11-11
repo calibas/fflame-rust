@@ -516,16 +516,13 @@ impl EguiLayer {
         }
 
         if menu_actions.rendering.reset_accumulation {
-            // Reset by triggering any IterationReset-level change
-            // SpeedMultiplier changes trigger IterationReset, so update to same value
-            let current_speed = config_manager.active_config().speed_multiplier;
-            let _ = config_manager.update_param(ConfigPath::SpeedMultiplier, current_speed.into(), false);
+            let _ = config_manager.request_reset();
         }
 
         if let Some(speed) = menu_actions.rendering.set_speed {
             let _ = config_manager.update_param(
                 ConfigPath::SpeedMultiplier,
-                (speed as f32).into(),
+                speed.into(),
                 false
             );
         }
