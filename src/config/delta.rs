@@ -74,6 +74,17 @@ pub enum ConfigPath {
         param: String,
     },
 
+    // ===== Final Transform (require iteration reset) =====
+    FinalTransformEnabled,
+    FinalTransformAffine { param: AffineParam },
+    FinalTransformColor,
+    FinalTransformColorSpeed,
+    FinalTransformVariation { variation: String },
+    FinalTransformVariationParam {
+        variation: String,
+        param: String,
+    },
+
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
     ProjectionType,
@@ -169,6 +180,20 @@ impl Display for ConfigPath {
                     variation,
                     param
                 )
+            }
+
+            // Final Transform
+            ConfigPath::FinalTransformEnabled => write!(f, "Final Transform → Enabled"),
+            ConfigPath::FinalTransformAffine { param } => {
+                write!(f, "Final Transform → Affine {:?}", param)
+            }
+            ConfigPath::FinalTransformColor => write!(f, "Final Transform → Color"),
+            ConfigPath::FinalTransformColorSpeed => write!(f, "Final Transform → Color Speed"),
+            ConfigPath::FinalTransformVariation { variation } => {
+                write!(f, "Final Transform → {} variation", variation)
+            }
+            ConfigPath::FinalTransformVariationParam { variation, param } => {
+                write!(f, "Final Transform → {} → {}", variation, param)
             }
 
             // Flame
@@ -510,6 +535,12 @@ impl ConfigPath {
             | ConfigPath::TransformAffine { .. }
             | ConfigPath::TransformVariation { .. }
             | ConfigPath::TransformVariationParam { .. }
+            | ConfigPath::FinalTransformEnabled
+            | ConfigPath::FinalTransformAffine { .. }
+            | ConfigPath::FinalTransformColor
+            | ConfigPath::FinalTransformColorSpeed
+            | ConfigPath::FinalTransformVariation { .. }
+            | ConfigPath::FinalTransformVariationParam { .. }
             | ConfigPath::RenderMode
             | ConfigPath::ProjectionType
             | ConfigPath::MaxIterations

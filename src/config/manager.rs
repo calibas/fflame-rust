@@ -732,6 +732,66 @@ impl ConfigManager {
                 Ok(value.into())
             }
 
+            // Final Transform
+            ConfigPath::FinalTransformEnabled => {
+                Ok(config.flame.final_transform.is_some().into())
+            }
+            ConfigPath::FinalTransformAffine { param } => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let value = match param {
+                    AffineParam::A => final_xform.a,
+                    AffineParam::B => final_xform.b,
+                    AffineParam::C => final_xform.c,
+                    AffineParam::D => final_xform.d,
+                    AffineParam::E => final_xform.e,
+                    AffineParam::F => final_xform.f,
+                    AffineParam::G => final_xform.g,
+                };
+                Ok(value.into())
+            }
+            ConfigPath::FinalTransformColor => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(final_xform.color.into())
+            }
+            ConfigPath::FinalTransformColorSpeed => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(final_xform.color_speed.into())
+            }
+            ConfigPath::FinalTransformVariation { variation } => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let weight = final_xform.variations.get(variation).copied().unwrap_or(0.0);
+                Ok(weight.into())
+            }
+            ConfigPath::FinalTransformVariationParam { variation, param } => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let value = final_xform.get_variation_param_or_default(
+                    variation,
+                    param,
+                    &crate::variations::global_registry()
+                );
+                Ok(value.into())
+            }
+
             // Flame
             ConfigPath::RenderMode => Ok(config.flame.render_mode.into()),
             ConfigPath::ProjectionType => Ok(config.flame.projection.into()),
@@ -964,6 +1024,81 @@ impl ConfigManager {
                 xform.variation_params.insert(key, new_value);
             }
 
+            // Final Transform
+            ConfigPath::FinalTransformEnabled => {
+                let enabled: bool = value.try_into()?;
+                if enabled && self.current.flame.final_transform.is_none() {
+                    // Create new final transform with identity affine and linear variation
+                    let mut final_xform = crate::scene::transforms::Transform::new();
+                    final_xform.set_variation("linear", 1.0);
+                    self.current.flame.final_transform = Some(final_xform);
+                } else if !enabled {
+                    // Remove final transform
+                    self.current.flame.final_transform = None;
+                }
+            }
+            ConfigPath::FinalTransformAffine { param } => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                match param {
+                    AffineParam::A => final_xform.a = new_value,
+                    AffineParam::B => final_xform.b = new_value,
+                    AffineParam::C => final_xform.c = new_value,
+                    AffineParam::D => final_xform.d = new_value,
+                    AffineParam::E => final_xform.e = new_value,
+                    AffineParam::F => final_xform.f = new_value,
+                    AffineParam::G => final_xform.g = new_value,
+                }
+            }
+            ConfigPath::FinalTransformColor => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                final_xform.color = value.try_into()?;
+            }
+            ConfigPath::FinalTransformColorSpeed => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                final_xform.color_speed = value.try_into()?;
+            }
+            ConfigPath::FinalTransformVariation { variation } => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let weight: f32 = value.try_into()?;
+                if weight == 0.0 {
+                    final_xform.variations.remove(variation);
+                } else {
+                    final_xform.variations.insert(variation.clone(), weight);
+                }
+            }
+            ConfigPath::FinalTransformVariationParam { variation, param } => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                let key = format!("{}.{}", variation, param);
+                final_xform.variation_params.insert(key, new_value);
+            }
+
             // Flame
             ConfigPath::RenderMode => {
                 self.current.flame.render_mode = value.try_into()?;
@@ -1184,6 +1319,76 @@ impl ConfigManager {
                 let new_value: f32 = value.try_into()?;
                 let key = format!("{}.{}", variation, param);
                 xform.variation_params.insert(key, new_value);
+            }
+
+            // Final Transform
+            ConfigPath::FinalTransformEnabled => {
+                let enabled: bool = value.try_into()?;
+                if enabled && preview.flame.final_transform.is_none() {
+                    // Create new final transform with identity affine and linear variation
+                    let mut final_xform = crate::scene::transforms::Transform::new();
+                    final_xform.set_variation("linear", 1.0);
+                    preview.flame.final_transform = Some(final_xform);
+                } else if !enabled {
+                    // Remove final transform
+                    preview.flame.final_transform = None;
+                }
+            }
+            ConfigPath::FinalTransformAffine { param } => {
+                let final_xform = preview
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                match param {
+                    AffineParam::A => final_xform.a = new_value,
+                    AffineParam::B => final_xform.b = new_value,
+                    AffineParam::C => final_xform.c = new_value,
+                    AffineParam::D => final_xform.d = new_value,
+                    AffineParam::E => final_xform.e = new_value,
+                    AffineParam::F => final_xform.f = new_value,
+                    AffineParam::G => final_xform.g = new_value,
+                }
+            }
+            ConfigPath::FinalTransformColor => {
+                let final_xform = preview
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                final_xform.color = value.try_into()?;
+            }
+            ConfigPath::FinalTransformColorSpeed => {
+                let final_xform = preview
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                final_xform.color_speed = value.try_into()?;
+            }
+            ConfigPath::FinalTransformVariation { variation } => {
+                let final_xform = preview
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let weight: f32 = value.try_into()?;
+                if weight == 0.0 {
+                    final_xform.variations.remove(variation);
+                } else {
+                    final_xform.variations.insert(variation.clone(), weight);
+                }
+            }
+            ConfigPath::FinalTransformVariationParam { variation, param } => {
+                let final_xform = preview
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                let key = format!("{}.{}", variation, param);
+                final_xform.variation_params.insert(key, new_value);
             }
 
             // Flame

@@ -49,7 +49,10 @@ struct Params {
     camera_rotation_y: f32,  // 3D camera yaw (rotation around Y)
     camera_z: f32,  // 3D camera Z position (height)
     histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
+    has_final_transform: u32,  // 0 = disabled, 1 = enabled
+    final_transform_index: u32,  // Index in transform buffer (after regular transforms)
     _pad3: f32,
+    _pad4: f32,
 }
 
 // Variation parameters for one transform
