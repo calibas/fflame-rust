@@ -95,23 +95,13 @@ impl EguiLayer {
     pub fn handle_event(&mut self, event: &WindowEvent, window: &Window) -> bool {
         let response = self.state.on_window_event(window, event);
 
-        // For mouse events, check if we're actually interacting with UI
-        // DockArea covers entire screen but we want clicks to pass through to fractal
+        // For mouse events, check if egui context is actually using the pointer
+        // DockArea covers entire screen but ctx.is_using_pointer() correctly reports
+        // whether we're hovering/clicking an actual widget vs empty background
         match event {
-            WindowEvent::MouseInput { state, button, .. } => {
-                let wants_input = self.ctx.wants_pointer_input();
-                let is_over_area = self.ctx.is_pointer_over_area();
-                let pointer_pos = self.ctx.pointer_latest_pos();
-                let using_pointer = self.ctx.is_using_pointer();
-
-                log::info!("Mouse {:?} {:?}: consumed={}, wants_input={}, is_over_area={}, pos={:?}",
-                    button, state, response.consumed, wants_input, is_over_area, pointer_pos);
-                log::info!("{:?} using pointer={}", self.ctx, using_pointer);
-                response.consumed && wants_input
-            }
-            WindowEvent::CursorMoved { .. } | WindowEvent::MouseWheel { .. } => {
-                // Only consume if egui wants the pointer input (hovering/clicking widgets)
-                response.consumed && self.ctx.wants_pointer_input()
+            WindowEvent::MouseInput { .. } | WindowEvent::CursorMoved { .. } | WindowEvent::MouseWheel { .. } => {
+                // Only consume if egui is actively using the pointer (over a widget)
+                response.consumed && self.ctx.is_using_pointer()
             }
             _ => response.consumed
         }
