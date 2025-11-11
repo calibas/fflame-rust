@@ -506,6 +506,9 @@ impl EguiLayer {
         undo_requested = menu_actions.edit.undo;
         redo_requested = menu_actions.edit.redo;
 
+        // Extract Transform menu actions
+        add_transform = menu_actions.transform.add_transform;
+
         UiResponse {
             pause_changed,
             config_export_requested: config_export_json,
