@@ -1028,8 +1028,10 @@ impl ConfigManager {
             ConfigPath::FinalTransformEnabled => {
                 let enabled: bool = value.try_into()?;
                 if enabled && self.current.flame.final_transform.is_none() {
-                    // Create new final transform with identity affine
-                    self.current.flame.final_transform = Some(crate::scene::transforms::Transform::new());
+                    // Create new final transform with identity affine and linear variation
+                    let mut final_xform = crate::scene::transforms::Transform::new();
+                    final_xform.set_variation("linear", 1.0);
+                    self.current.flame.final_transform = Some(final_xform);
                 } else if !enabled {
                     // Remove final transform
                     self.current.flame.final_transform = None;
@@ -1323,8 +1325,10 @@ impl ConfigManager {
             ConfigPath::FinalTransformEnabled => {
                 let enabled: bool = value.try_into()?;
                 if enabled && preview.flame.final_transform.is_none() {
-                    // Create new final transform with identity affine
-                    preview.flame.final_transform = Some(crate::scene::transforms::Transform::new());
+                    // Create new final transform with identity affine and linear variation
+                    let mut final_xform = crate::scene::transforms::Transform::new();
+                    final_xform.set_variation("linear", 1.0);
+                    preview.flame.final_transform = Some(final_xform);
                 } else if !enabled {
                     // Remove final transform
                     preview.flame.final_transform = None;
