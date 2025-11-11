@@ -88,35 +88,37 @@ impl Workspace {
         state
     }
 
-    /// Create Standard layout: Transforms | Colors + View + History
+    /// Create Standard layout: Transforms | Colors + View + Rendering + History
     fn create_standard_layout() -> DockState<PanelType> {
         let mut state = DockState::new(vec![PanelType::Transforms]);
         let root = state.main_surface_mut();
 
-        // Split right for Colors
+        // Split right for Colors and other panels
         let [_left, _right] = root.split_right(NodeIndex::root(), 0.25, vec![PanelType::Colors]);
 
-        // Add View and History tabs to right side
+        // Add View, Rendering, and History tabs to right side
         root.push_to_focused_leaf(PanelType::View);
+        root.push_to_focused_leaf(PanelType::Rendering);
         root.push_to_focused_leaf(PanelType::History);
 
         state
     }
 
-    /// Create Advanced layout: All panels in split layout
+    /// Create Advanced layout: All 7 panels visible
     fn create_advanced_layout() -> DockState<PanelType> {
         let mut state = DockState::new(vec![PanelType::Transforms]);
         let root = state.main_surface_mut();
 
-        // Split into left (Transforms + Triangle Editor) and right (Colors + View + Rendering)
+        // Split into left (Transforms + Triangle Editor) and right (Colors + Palette Editor + View + Rendering + History)
         let [left, right] = root.split_right(NodeIndex::root(), 0.3, vec![PanelType::Colors]);
 
-        // Add panels to left side
+        // Add Triangle Editor tab to left side
         root.set_focused_node(left);
         root.push_to_focused_leaf(PanelType::TriangleEditor);
 
-        // Add panels to right side
+        // Add all other panels to right side
         root.set_focused_node(right);
+        root.push_to_focused_leaf(PanelType::PaletteEditor);
         root.push_to_focused_leaf(PanelType::View);
         root.push_to_focused_leaf(PanelType::Rendering);
         root.push_to_focused_leaf(PanelType::History);
