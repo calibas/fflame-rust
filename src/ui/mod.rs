@@ -295,6 +295,7 @@ impl EguiLayer {
                 .resizable(true)
                 .show(ctx, |ui| {
                     egui_dock::DockArea::new(&mut workspace.left_dock_state)
+                        .id(egui::Id::new("left_dock_area"))
                         .show_inside(ui, &mut panel_viewer::PanelViewer {
                             context: panel_viewer::PanelContext {
                                 // Core state
@@ -344,6 +345,7 @@ impl EguiLayer {
                 .resizable(true)
                 .show(ctx, |ui| {
                     egui_dock::DockArea::new(&mut workspace.right_dock_state)
+                        .id(egui::Id::new("right_dock_area"))
                         .show_inside(ui, &mut panel_viewer::PanelViewer {
                             context: panel_viewer::PanelContext {
                                 // Core state
