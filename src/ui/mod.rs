@@ -290,14 +290,35 @@ impl EguiLayer {
             egui_dock::DockArea::new(&mut workspace.dock_state)
                 .show(ctx, &mut panel_viewer::PanelViewer {
                     context: panel_viewer::PanelContext {
+                        // Core state
                         config_manager,
                         flame,
+
+                        // Libraries
+                        preset_library,
+                        palette_library,
+
+                        // Renderer
+                        flame_renderer: flame_renderer.as_ref().map(|v| &**v),
+
+                        // Window visibility
+                        show_config_window: &mut self.show_config_window,
+                        show_palette_editor: &mut self.show_palette_editor,
+                        show_triangle_editor: &mut show_triangle_editor,
+
+                        // Action flags
                         add_transform: &mut add_transform,
                         delete_transform: &mut delete_transform,
-                        show_triangle_editor: &mut show_triangle_editor,
-                        show_undo_history: &mut show_undo_history,
                         undo_requested: &mut undo_requested,
                         redo_requested: &mut redo_requested,
+                        preset_changed: &mut preset_changed,
+                        pause_changed: &mut pause_changed,
+
+                        // UI state
+                        current_preset_index,
+                        paused,
+                        png_export_with_background: &mut png_export_with_background,
+                        png_export_transparent: &mut png_export_transparent,
                     },
                 });
         });
