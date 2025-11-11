@@ -137,7 +137,10 @@ pub struct GpuParams {
     pub camera_rotation_y: f32, // 3D camera yaw (rotation around Y axis)
     pub camera_z: f32, // 3D camera Z position (height)
     pub histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
+    pub has_final_transform: u32, // 0 = disabled, 1 = enabled
+    pub final_transform_index: u32, // Index in transform buffer (always last slot)
     pub _pad3: f32,
+    pub _pad4: f32,
 }
 
 /// Tonemap parameters
@@ -313,7 +316,10 @@ impl FlameBuffers {
             camera_rotation_y: 0.0,
             camera_z: 0.0,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
+            has_final_transform: if flame.final_transform.is_some() { 1 } else { 0 },
+            final_transform_index: flame.transforms.len() as u32,
             _pad3: 0.0,
+            _pad4: 0.0,
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -684,8 +690,10 @@ impl FlameBuffers {
 
     /// Update transforms
     pub fn update_transforms(&self, queue: &Queue, flame: &Flame) {
-        if flame.transforms.len() > MAX_TRANSFORMS {
-            panic!("Flame has {} transforms but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
+        // Check space for regular transforms + optional final transform
+        let total_transforms = flame.transforms.len() + if flame.final_transform.is_some() { 1 } else { 0 };
+        if total_transforms > MAX_TRANSFORMS {
+            panic!("Flame has {} transforms (+ final) but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
         }
 
         // Create a fixed-size array with all transforms, padding with zeroes
@@ -695,6 +703,11 @@ impl FlameBuffers {
             .iter()
             .map(|xform| GpuTransform::from_transform(xform, registry))
             .collect();
+
+        // Append final transform if present (always at end of regular transforms)
+        if let Some(final_xform) = &flame.final_transform {
+            gpu_transforms.push(GpuTransform::from_transform(final_xform, registry));
+        }
 
         // Pad with zeroed transforms to fill the buffer
         // This ensures old transforms don't remain in GPU memory when switching to fewer transforms
@@ -707,8 +720,10 @@ impl FlameBuffers {
 
     /// Update variation parameters
     pub fn update_variation_params(&self, queue: &Queue, flame: &Flame) {
-        if flame.transforms.len() > MAX_TRANSFORMS {
-            panic!("Flame has {} transforms but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
+        // Check space for regular transforms + optional final transform
+        let total_transforms = flame.transforms.len() + if flame.final_transform.is_some() { 1 } else { 0 };
+        if total_transforms > MAX_TRANSFORMS {
+            panic!("Flame has {} transforms (+ final) but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
         }
 
         // Create a fixed-size array with all variation parameters, padding with zeroes
@@ -718,6 +733,11 @@ impl FlameBuffers {
             .iter()
             .map(|xform| GpuVariationParams::from_transform(xform, registry))
             .collect();
+
+        // Append final transform parameters if present
+        if let Some(final_xform) = &flame.final_transform {
+            gpu_params.push(GpuVariationParams::from_transform(final_xform, registry));
+        }
 
         // Pad with zeroed params to fill the buffer
         while gpu_params.len() < MAX_TRANSFORMS {

@@ -36,9 +36,10 @@ pub fn render_triangle_editor_window(
             ui.separator();
 
             // Transform selector (persisted across frames)
+            // Option<usize>: Some(i) for regular transform, None for final transform
             let mut selected_transform = ui.ctx().data_mut(|d| {
-                d.get_persisted::<usize>(egui::Id::new("triangle_editor_selected_transform"))
-                    .unwrap_or(0)
+                d.get_persisted::<Option<usize>>(egui::Id::new("triangle_editor_selected_transform"))
+                    .unwrap_or(Some(0))
             });
 
             // Clamp selection to valid range
@@ -46,16 +47,30 @@ pub fn render_triangle_editor_window(
                 ui.label("No transforms available");
                 return;
             }
-            selected_transform = selected_transform.min(flame.transforms.len() - 1);
+            if let Some(idx) = selected_transform {
+                if idx >= flame.transforms.len() {
+                    selected_transform = Some(flame.transforms.len() - 1);
+                }
+            }
 
             ui.horizontal(|ui| {
                 ui.label("Transform:");
                 let old_selection = selected_transform;
+                let display_text = match selected_transform {
+                    Some(i) => format!("Transform {}", i + 1),
+                    None => "Transform [Final]".to_string(),
+                };
                 egui::ComboBox::new("triangle_editor_transform_selector", "")
-                    .selected_text(format!("Transform {}", selected_transform + 1))
+                    .selected_text(display_text)
                     .show_ui(ui, |ui| {
+                        // Regular transforms
                         for i in 0..flame.transforms.len() {
-                            ui.selectable_value(&mut selected_transform, i, format!("Transform {}", i + 1));
+                            ui.selectable_value(&mut selected_transform, Some(i), format!("Transform {}", i + 1));
+                        }
+                        // Final transform (if it exists)
+                        if flame.final_transform.is_some() {
+                            ui.separator();
+                            ui.selectable_value(&mut selected_transform, None, "Transform [Final]");
                         }
                     });
 
@@ -173,8 +188,49 @@ pub fn render_triangle_editor_window(
             // Track if we were dragging in the previous frame
             let was_dragging = drag_target != DragTarget::None || drag_start_pos.is_some();
 
-            // Get current triangle for selected transform
-            if let Some(transform) = flame.transforms.get_mut(selected_transform) {
+            // Helper to create affine changes for either regular or final transform
+            let make_affine_changes = |xform: &crate::scene::transforms::Transform| -> Vec<(ConfigPath, crate::config::ConfigValue)> {
+                match selected_transform {
+                    Some(index) => vec![
+                        (ConfigPath::TransformAffine { index, param: AffineParam::A }, xform.a.into()),
+                        (ConfigPath::TransformAffine { index, param: AffineParam::B }, xform.b.into()),
+                        (ConfigPath::TransformAffine { index, param: AffineParam::C }, xform.c.into()),
+                        (ConfigPath::TransformAffine { index, param: AffineParam::D }, xform.d.into()),
+                        (ConfigPath::TransformAffine { index, param: AffineParam::E }, xform.e.into()),
+                        (ConfigPath::TransformAffine { index, param: AffineParam::F }, xform.f.into()),
+                    ],
+                    None => vec![
+                        (ConfigPath::FinalTransformAffine { param: AffineParam::A }, xform.a.into()),
+                        (ConfigPath::FinalTransformAffine { param: AffineParam::B }, xform.b.into()),
+                        (ConfigPath::FinalTransformAffine { param: AffineParam::C }, xform.c.into()),
+                        (ConfigPath::FinalTransformAffine { param: AffineParam::D }, xform.d.into()),
+                        (ConfigPath::FinalTransformAffine { param: AffineParam::E }, xform.e.into()),
+                        (ConfigPath::FinalTransformAffine { param: AffineParam::F }, xform.f.into()),
+                    ],
+                }
+            };
+
+            // Helper to sync transform back from config
+            let sync_transform = |xform: &mut crate::scene::transforms::Transform, cfg_mgr: &ConfigManager| {
+                match selected_transform {
+                    Some(index) => *xform = cfg_mgr.active_config().flame.transforms[index].clone(),
+                    None => *xform = cfg_mgr.active_config().flame.final_transform.as_ref().unwrap().clone(),
+                }
+            };
+
+            // Helper for display text
+            let transform_name = match selected_transform {
+                Some(i) => format!("Transform {}", i + 1),
+                None => "Transform [Final]".to_string(),
+            };
+
+            // Get current triangle for selected transform (regular or final)
+            let transform_mut = match selected_transform {
+                Some(idx) => flame.transforms.get_mut(idx),
+                None => flame.final_transform.as_mut(),
+            };
+
+            if let Some(transform) = transform_mut {
                 let (mut o, mut x, mut y) = transform.to_triangle();
 
                 let o_pos = to_canvas(o);
@@ -213,17 +269,10 @@ pub fn render_triangle_editor_window(
 
                                 // Apply triangle changes via update_batch
                                 transform.from_triangle(o, x, y);
-                                let changes = vec![
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, transform.a.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, transform.b.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, transform.c.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, transform.d.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, transform.e.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, transform.f.into()),
-                                ];
+                                let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Move Points)".to_string(), true) {
                                     // Sync transform from active_config for live preview
-                                    *transform = config_manager.active_config().flame.transforms[selected_transform].clone();
+                                    sync_transform(transform, config_manager);
                                     max_update = max_update.max(update_type);
                                 }
                             }
@@ -254,16 +303,9 @@ pub fn render_triangle_editor_window(
 
                                 // Apply triangle changes via update_batch
                                 transform.from_triangle(o, x, y);
-                                let changes = vec![
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, transform.a.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, transform.b.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, transform.c.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, transform.d.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, transform.e.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, transform.f.into()),
-                                ];
+                                let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Translate)".to_string(), true) {
-                                    *transform = config_manager.active_config().flame.transforms[selected_transform].clone();
+                                    sync_transform(transform, config_manager);
                                     max_update = max_update.max(update_type);
                                 }
 
@@ -310,16 +352,9 @@ pub fn render_triangle_editor_window(
 
                                 // Apply triangle changes via update_batch
                                 transform.from_triangle(o, x, y);
-                                let changes = vec![
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, transform.a.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, transform.b.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, transform.c.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, transform.d.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, transform.e.into()),
-                                    (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, transform.f.into()),
-                                ];
+                                let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Rotate)".to_string(), true) {
-                                    *transform = config_manager.active_config().flame.transforms[selected_transform].clone();
+                                    sync_transform(transform, config_manager);
                                     max_update = max_update.max(update_type);
                                 }
 
@@ -374,16 +409,9 @@ pub fn render_triangle_editor_window(
 
                                         // Apply triangle changes via update_batch
                                         transform.from_triangle(o, x, y);
-                                        let changes = vec![
-                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, transform.a.into()),
-                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, transform.b.into()),
-                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, transform.c.into()),
-                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, transform.d.into()),
-                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, transform.e.into()),
-                                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, transform.f.into()),
-                                        ];
+                                        let changes = make_affine_changes(transform);
                                         if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Scale)".to_string(), true) {
-                                            *transform = config_manager.active_config().flame.transforms[selected_transform].clone();
+                                            sync_transform(transform, config_manager);
                                             max_update = max_update.max(update_type);
                                         }
                                     }
@@ -401,10 +429,11 @@ pub fn render_triangle_editor_window(
                     // Drag ended - force commit any pending preview changes
                     if was_dragging && config_manager.is_in_preview_mode() {
                         // Force commit with any affine parameter (they all return IterationReset)
-                        if let Ok(_) = config_manager.force_commit_preview(&crate::config::ConfigPath::TransformAffine {
-                            index: selected_transform,
-                            param: crate::config::AffineParam::A
-                        }) {
+                        let commit_path = match selected_transform {
+                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::A },
+                            None => ConfigPath::FinalTransformAffine { param: AffineParam::A },
+                        };
+                        if let Ok(_) = config_manager.force_commit_preview(&commit_path) {
                             log::debug!("Triangle Editor: Force-committed preview on drag end");
                         }
                     }
@@ -429,7 +458,7 @@ pub fn render_triangle_editor_window(
 
                 // Color per transform
                 let base_color = get_transform_color(i);
-                let alpha = if i == selected_transform { 255 } else { 80 };
+                let alpha = if Some(i) == selected_transform { 255 } else { 80 };
                 let color = Color32::from_rgba_unmultiplied(
                     base_color.r(),
                     base_color.g(),
@@ -451,10 +480,10 @@ pub fn render_triangle_editor_window(
                 painter.line_segment([x_pos, y_pos], Stroke::new(1.5, transparent_color));
 
                 // Draw points with highlighting for active drag target
-                let point_radius = if i == selected_transform { 6.0 } else { 4.0 };
+                let point_radius = if Some(i) == selected_transform { 6.0 } else { 4.0 };
 
                 // Highlight the point being dragged
-                if i == selected_transform {
+                if Some(i) == selected_transform {
                     let highlight_radius = point_radius + 3.0;
                     match drag_target {
                         DragTarget::Origin => {
@@ -475,7 +504,7 @@ pub fn render_triangle_editor_window(
                 painter.circle_filled(y_pos, point_radius, color);
 
                 // Labels for selected transform
-                if i == selected_transform {
+                if Some(i) == selected_transform {
                     painter.text(
                         o_pos + Vec2::new(-15.0, -15.0),
                         egui::Align2::CENTER_CENTER,
@@ -500,13 +529,91 @@ pub fn render_triangle_editor_window(
                 }
             }
 
+            // Draw final transform if present (light grey, distinct style)
+            if let Some(final_xform) = &flame.final_transform {
+                let (o, x, y) = final_xform.to_triangle();
+
+                let o_pos = to_canvas(o);
+                let x_pos = to_canvas(x);
+                let y_pos = to_canvas(y);
+
+                // Light grey color for final transform
+                let final_color = Color32::from_rgb(180, 180, 180);
+                let alpha = 200; // Semi-transparent to distinguish from regular transforms
+
+                let color = Color32::from_rgba_unmultiplied(
+                    final_color.r(),
+                    final_color.g(),
+                    final_color.b(),
+                    alpha,
+                );
+
+                // Draw lines with dashed style (simulated with dots)
+                // Draw O→X and O→Y with dashed appearance
+                let draw_dashed_line = |start: Pos2, end: Pos2| {
+                    let dash_length = 10.0;
+                    let gap_length = 5.0;
+                    let total_length = start.distance(end);
+                    let direction = (end - start) / total_length;
+
+                    let mut pos = 0.0;
+                    while pos < total_length {
+                        let dash_start = start + direction * pos;
+                        let dash_end_pos = (pos + dash_length).min(total_length);
+                        let dash_end = start + direction * dash_end_pos;
+                        painter.line_segment([dash_start, dash_end], Stroke::new(2.0, color));
+                        pos += dash_length + gap_length;
+                    }
+                };
+
+                draw_dashed_line(o_pos, x_pos);
+                draw_dashed_line(o_pos, y_pos);
+                draw_dashed_line(x_pos, y_pos);
+
+                // Draw points (larger to make them stand out)
+                let point_radius = 7.0;
+                painter.circle_filled(o_pos, point_radius, color);
+                painter.circle_filled(x_pos, point_radius, color);
+                painter.circle_filled(y_pos, point_radius, color);
+
+                // Labels only when final transform is selected
+                if selected_transform.is_none() {
+                    painter.text(
+                        o_pos + Vec2::new(-15.0, 15.0),
+                        egui::Align2::CENTER_CENTER,
+                        "O",
+                        egui::FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                    painter.text(
+                        x_pos + Vec2::new(10.0, 10.0),
+                        egui::Align2::CENTER_CENTER,
+                        "X",
+                        egui::FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                    painter.text(
+                        y_pos + Vec2::new(10.0, 10.0),
+                        egui::Align2::CENTER_CENTER,
+                        "Y",
+                        egui::FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                }
+            }
+
             ui.separator();
 
             // Editable coordinates for selected transform
-            if let Some(transform) = flame.transforms.get_mut(selected_transform) {
+            let transform_for_coords = match selected_transform {
+                Some(idx) => flame.transforms.get_mut(idx),
+                None => flame.final_transform.as_mut(),
+            };
+
+            if let Some(transform) = transform_for_coords {
                 let (mut o, mut x, mut y) = transform.to_triangle();
 
-                ui.label(format!("Triangle Coordinates (Transform {}):", selected_transform + 1));
+                ui.label(format!("Triangle Coordinates ({}):", transform_name));
 
                 let mut coords_changed = false;
                 let mut dragging = false;
@@ -551,14 +658,24 @@ pub fn render_triangle_editor_window(
                                                            description: &str| {
                             let mut temp = transform_ref.clone();
                             temp.from_triangle(o, x, y);
-                            let changes = vec![
-                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, temp.a.into()),
-                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, temp.b.into()),
-                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, temp.c.into()),
-                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, temp.d.into()),
-                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, temp.e.into()),
-                                (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, temp.f.into()),
-                            ];
+                            let changes = match selected_transform {
+                                Some(index) => vec![
+                                    (ConfigPath::TransformAffine { index, param: AffineParam::A }, temp.a.into()),
+                                    (ConfigPath::TransformAffine { index, param: AffineParam::B }, temp.b.into()),
+                                    (ConfigPath::TransformAffine { index, param: AffineParam::C }, temp.c.into()),
+                                    (ConfigPath::TransformAffine { index, param: AffineParam::D }, temp.d.into()),
+                                    (ConfigPath::TransformAffine { index, param: AffineParam::E }, temp.e.into()),
+                                    (ConfigPath::TransformAffine { index, param: AffineParam::F }, temp.f.into()),
+                                ],
+                                None => vec![
+                                    (ConfigPath::FinalTransformAffine { param: AffineParam::A }, temp.a.into()),
+                                    (ConfigPath::FinalTransformAffine { param: AffineParam::B }, temp.b.into()),
+                                    (ConfigPath::FinalTransformAffine { param: AffineParam::C }, temp.c.into()),
+                                    (ConfigPath::FinalTransformAffine { param: AffineParam::D }, temp.d.into()),
+                                    (ConfigPath::FinalTransformAffine { param: AffineParam::E }, temp.e.into()),
+                                    (ConfigPath::FinalTransformAffine { param: AffineParam::F }, temp.f.into()),
+                                ],
+                            };
                             config_manager.update_batch(changes, description.to_string(), false)
                         };
 
@@ -571,7 +688,7 @@ pub fn render_triangle_editor_window(
                                 x_new[1] += 0.1;
                                 y_new[1] += 0.1;
                                 if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("Translate up (Transform {})", selected_transform + 1)) {
+                                    &format!("Translate up ({})", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -583,7 +700,7 @@ pub fn render_triangle_editor_window(
                                 x_new[0] -= 0.1;
                                 y_new[0] -= 0.1;
                                 if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("Translate left (Transform {})", selected_transform + 1)) {
+                                    &format!("Translate left ({})", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -593,7 +710,7 @@ pub fn render_triangle_editor_window(
                                 x_new[1] -= 0.1;
                                 y_new[1] -= 0.1;
                                 if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("Translate down (Transform {})", selected_transform + 1)) {
+                                    &format!("Translate down ({})", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -603,7 +720,7 @@ pub fn render_triangle_editor_window(
                                 x_new[0] += 0.1;
                                 y_new[0] += 0.1;
                                 if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("Translate right (Transform {})", selected_transform + 1)) {
+                                    &format!("Translate right ({})", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -629,7 +746,7 @@ pub fn render_triangle_editor_window(
                                 let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
 
                                 if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("Rotate CW (Transform {})", selected_transform + 1)) {
+                                    &format!("Rotate CW ({})", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -649,7 +766,7 @@ pub fn render_triangle_editor_window(
                                 let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
 
                                 if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("Rotate CCW (Transform {})", selected_transform + 1)) {
+                                    &format!("Rotate CCW ({})", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -666,7 +783,7 @@ pub fn render_triangle_editor_window(
                                 let y_new = [o_curr[0] + y_vec[0] * 1.1, o_curr[1] + y_vec[1] * 1.1];
 
                                 if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("Scale up (Transform {})", selected_transform + 1)) {
+                                    &format!("Scale up ({})", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -679,7 +796,7 @@ pub fn render_triangle_editor_window(
                                 let y_new = [o_curr[0] + y_vec[0] * 0.9, o_curr[1] + y_vec[1] * 0.9];
 
                                 if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("Scale down (Transform {})", selected_transform + 1)) {
+                                    &format!("Scale down ({})", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -693,19 +810,12 @@ pub fn render_triangle_editor_window(
                     temp_transform.from_triangle(o, x, y);
 
                     // Batch update all affine parameters via ConfigManager
-                    let changes = vec![
-                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, temp_transform.a.into()),
-                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, temp_transform.b.into()),
-                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, temp_transform.c.into()),
-                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, temp_transform.d.into()),
-                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, temp_transform.e.into()),
-                        (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, temp_transform.f.into()),
-                    ];
+                    let changes = make_affine_changes(&temp_transform);
 
                     // Use lazy=true while dragging
                     if let Ok(update) = config_manager.update_batch(
                         changes,
-                        format!("Edit triangle coordinates (Transform {})", selected_transform + 1),
+                        format!("Edit triangle coordinates ({})", transform_name),
                         dragging && !drag_stopped // lazy while dragging
                     ) {
                         max_update = max_update.max(update);
@@ -715,8 +825,11 @@ pub fn render_triangle_editor_window(
                 // Force commit preview when drag stops
                 if drag_stopped && config_manager.is_in_preview_mode() {
                     // Use first affine parameter as representative for batch
-                    let path = ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A };
-                    if let Ok(update) = config_manager.force_commit_preview(&path) {
+                    let commit_path = match selected_transform {
+                        Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::A },
+                        None => ConfigPath::FinalTransformAffine { param: AffineParam::A },
+                    };
+                    if let Ok(update) = config_manager.force_commit_preview(&commit_path) {
                         max_update = max_update.max(update);
                     }
                     config_manager.reset_lazy_undo();
@@ -733,8 +846,12 @@ pub fn render_triangle_editor_window(
                 ui.horizontal(|ui| {
                     let a_resp = ui.add(egui::DragValue::new(&mut transform.a).speed(0.01).prefix("a: "));
                     if a_resp.changed() {
+                        let path = match selected_transform {
+                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::A },
+                            None => ConfigPath::FinalTransformAffine { param: AffineParam::A },
+                        };
                         if let Ok(update) = config_manager.update_param(
-                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A },
+                            path,
                             transform.a.into(),
                             a_resp.dragged()
                         ) {
@@ -746,8 +863,12 @@ pub fn render_triangle_editor_window(
 
                     let b_resp = ui.add(egui::DragValue::new(&mut transform.b).speed(0.01).prefix("b: "));
                     if b_resp.changed() {
+                        let path = match selected_transform {
+                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::B },
+                            None => ConfigPath::FinalTransformAffine { param: AffineParam::B },
+                        };
                         if let Ok(update) = config_manager.update_param(
-                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B },
+                            path,
                             transform.b.into(),
                             b_resp.dragged()
                         ) {
@@ -759,8 +880,12 @@ pub fn render_triangle_editor_window(
 
                     let e_resp = ui.add(egui::DragValue::new(&mut transform.e).speed(0.01).prefix("e: "));
                     if e_resp.changed() {
+                        let path = match selected_transform {
+                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::E },
+                            None => ConfigPath::FinalTransformAffine { param: AffineParam::E },
+                        };
                         if let Ok(update) = config_manager.update_param(
-                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E },
+                            path,
                             transform.e.into(),
                             e_resp.dragged()
                         ) {
@@ -773,8 +898,12 @@ pub fn render_triangle_editor_window(
                 ui.horizontal(|ui| {
                     let c_resp = ui.add(egui::DragValue::new(&mut transform.c).speed(0.01).prefix("c: "));
                     if c_resp.changed() {
+                        let path = match selected_transform {
+                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::C },
+                            None => ConfigPath::FinalTransformAffine { param: AffineParam::C },
+                        };
                         if let Ok(update) = config_manager.update_param(
-                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C },
+                            path,
                             transform.c.into(),
                             c_resp.dragged()
                         ) {
@@ -786,8 +915,12 @@ pub fn render_triangle_editor_window(
 
                     let d_resp = ui.add(egui::DragValue::new(&mut transform.d).speed(0.01).prefix("d: "));
                     if d_resp.changed() {
+                        let path = match selected_transform {
+                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::D },
+                            None => ConfigPath::FinalTransformAffine { param: AffineParam::D },
+                        };
                         if let Ok(update) = config_manager.update_param(
-                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D },
+                            path,
                             transform.d.into(),
                             d_resp.dragged()
                         ) {
@@ -799,8 +932,12 @@ pub fn render_triangle_editor_window(
 
                     let f_resp = ui.add(egui::DragValue::new(&mut transform.f).speed(0.01).prefix("f: "));
                     if f_resp.changed() {
+                        let path = match selected_transform {
+                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::F },
+                            None => ConfigPath::FinalTransformAffine { param: AffineParam::F },
+                        };
                         if let Ok(update) = config_manager.update_param(
-                            ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F },
+                            path,
                             transform.f.into(),
                             f_resp.dragged()
                         ) {
@@ -813,8 +950,11 @@ pub fn render_triangle_editor_window(
 
                 // Force commit preview when drag stops
                 if drag_stopped && config_manager.is_in_preview_mode() {
-                    let path = ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A };
-                    if let Ok(update) = config_manager.force_commit_preview(&path) {
+                    let commit_path = match selected_transform {
+                        Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::A },
+                        None => ConfigPath::FinalTransformAffine { param: AffineParam::A },
+                    };
+                    if let Ok(update) = config_manager.force_commit_preview(&commit_path) {
                         max_update = max_update.max(update);
                     }
                     config_manager.reset_lazy_undo();
@@ -825,17 +965,13 @@ pub fn render_triangle_editor_window(
                 // Control buttons
                 {
                     if ui.button("Reset to Identity").clicked() {
-                        let changes = vec![
-                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::A }, 1.0f32.into()),
-                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::B }, 0.0f32.into()),
-                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::C }, 0.0f32.into()),
-                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::D }, 1.0f32.into()),
-                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::E }, 0.0f32.into()),
-                            (ConfigPath::TransformAffine { index: selected_transform, param: AffineParam::F }, 0.0f32.into()),
-                        ];
+                        let mut identity_transform = crate::scene::transforms::Transform::new();
+                        identity_transform.a = 1.0;
+                        identity_transform.d = 1.0;
+                        let changes = make_affine_changes(&identity_transform);
                         if let Ok(update) = config_manager.update_batch(
                             changes,
-                            format!("Reset to identity (Transform {})", selected_transform + 1),
+                            format!("Reset to identity ({})", transform_name),
                             false
                         ) {
                             max_update = max_update.max(update);

@@ -1,7 +1,7 @@
 use crate::scene::transforms::{Flame, RenderMode};
 use crate::variations::VariationCategory;
 use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam};
-use super::variation_controls::render_variation_category;
+use super::variation_controls::{render_variation_category, render_variation_category_final};
 
 /// Render the Transforms window with transform editing controls
 ///
@@ -30,9 +30,29 @@ pub fn render_transforms_window(
 
             ui.separator();
 
+            // Final Transform checkbox
+            ui.horizontal(|ui| {
+                let mut has_final = flame.final_transform.is_some();
+                if ui.checkbox(&mut has_final, "Enable Final Transform").changed() {
+                    if let Ok(update_type) = config_manager.update_param(
+                        ConfigPath::FinalTransformEnabled,
+                        has_final.into(),
+                        false  // Discrete action
+                    ) {
+                        // Sync flame with config
+                        flame.final_transform = config_manager.active_config().flame.final_transform.clone();
+                        max_update = max_update.max(update_type);
+                    }
+                }
+                if ui.button("❓").on_hover_text("Post-processing transform applied once to every point after iteration loop.\nUsed for framing, positioning, or global effects.").clicked() {}
+            });
+
+            ui.separator();
+
             let mut delete_index = None;
             let num_transforms = flame.transforms.len();
             egui::ScrollArea::vertical().show(ui, |ui| {
+                // Regular transforms
                 for (i, transform) in flame.transforms.iter_mut().enumerate() {
                     ui.push_id(i, |ui| {
                         egui::CollapsingHeader::new(format!("Transform {}", i + 1))
@@ -112,6 +132,119 @@ pub fn render_transforms_window(
                                     if ui.button("🗑 Delete Transform").clicked() {
                                         delete_index = Some(i);
                                                         }
+                                }
+                            });
+                    });
+                }
+
+                // Final transform (if enabled)
+                if let Some(final_xform) = &mut flame.final_transform {
+                    ui.separator();
+                    ui.push_id("final_transform", |ui| {
+                        // Light grey background for final transform
+                        let style = ui.style_mut();
+                        style.visuals.collapsing_header_frame = true;
+
+                        egui::CollapsingHeader::new("Transform [Final]")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                // Note: Final transform has NO weight control (always applied)
+                                ui.colored_label(
+                                    egui::Color32::LIGHT_GRAY,
+                                    "Final transform is applied once to all points after iteration loop."
+                                );
+                                ui.separator();
+
+                                // Affine Matrix controls
+                                ui.label("Affine Matrix");
+                                macro_rules! affine_param {
+                                    ($label:expr, $field:ident, $param:ident) => {
+                                        ui.horizontal(|ui| {
+                                            ui.label($label);
+                                            let mut temp = final_xform.$field;
+                                            let response = ui.add(egui::DragValue::new(&mut temp).speed(0.01));
+                                            if response.changed() {
+                                                if let Ok(update_type) = config_manager.update_param(
+                                                    ConfigPath::FinalTransformAffine { param: AffineParam::$param },
+                                                    temp.into(),
+                                                    response.dragged()
+                                                ) {
+                                                    final_xform.$field = config_manager.active_config().flame.final_transform.as_ref().unwrap().$field;
+                                                    max_update = max_update.max(update_type);
+                                                }
+                                            }
+                                            if response.drag_stopped() {
+                                                let _ = config_manager.force_commit_preview(&ConfigPath::FinalTransformAffine { param: AffineParam::$param });
+                                            }
+                                        });
+                                    };
+                                }
+
+                                affine_param!("a:", a, A);
+                                affine_param!("b:", b, B);
+                                affine_param!("c:", c, C);
+                                affine_param!("d:", d, D);
+                                affine_param!("e:", e, E);
+                                affine_param!("f:", f, F);
+
+                                // Z offset (only in 3D mode)
+                                if matches!(flame.render_mode, RenderMode::ThreeD) {
+                                    affine_param!("g (Z offset):", g, G);
+                                }
+
+                                ui.separator();
+
+                                // Color controls
+                                ui.label("Color Properties");
+                                let mut temp_color = final_xform.color;
+                                let response_color = ui.add(egui::Slider::new(&mut temp_color, 0.0..=1.0).text("Color Coordinate"));
+                                if response_color.changed() {
+                                    if let Ok(update_type) = config_manager.update_param(
+                                        ConfigPath::FinalTransformColor,
+                                        temp_color.into(),
+                                        response_color.dragged()
+                                    ) {
+                                        final_xform.color = config_manager.active_config().flame.final_transform.as_ref().unwrap().color;
+                                        max_update = max_update.max(update_type);
+                                    }
+                                }
+                                if response_color.drag_stopped() {
+                                    let _ = config_manager.force_commit_preview(&ConfigPath::FinalTransformColor);
+                                }
+
+                                let mut temp_speed = final_xform.color_speed;
+                                let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text("Color Speed (Symmetry)"));
+                                if response_speed.changed() {
+                                    if let Ok(update_type) = config_manager.update_param(
+                                        ConfigPath::FinalTransformColorSpeed,
+                                        temp_speed.into(),
+                                        response_speed.dragged()
+                                    ) {
+                                        final_xform.color_speed = config_manager.active_config().flame.final_transform.as_ref().unwrap().color_speed;
+                                        max_update = max_update.max(update_type);
+                                    }
+                                }
+                                if response_speed.drag_stopped() {
+                                    let _ = config_manager.force_commit_preview(&ConfigPath::FinalTransformColorSpeed);
+                                }
+
+                                // Variation controls by category
+                                let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Basic2D, "Basic 2D Variations");
+                                max_update = max_update.max(var_update);
+
+                                let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Advanced2D, "Advanced 2D Variations");
+                                max_update = max_update.max(var_update);
+
+                                // 3D variation categories (only visible in 3D mode)
+                                if matches!(flame.render_mode, RenderMode::ThreeD) {
+                                    let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Depth3D, "3D Depth Variations");
+                                    max_update = max_update.max(var_update);
+
+                                    let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Rotation3D, "3D Rotation Variations");
+                                    max_update = max_update.max(var_update);
+
+                                    let var_update = render_variation_category_final(ui, config_manager, VariationCategory::Full3D, "Full 3D Variations");
+                                    max_update = max_update.max(var_update);
                                 }
                             });
                     });
@@ -324,3 +457,4 @@ fn render_color_controls(
 
     max_update
 }
+

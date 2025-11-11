@@ -30,6 +30,8 @@ pub struct FlameRenderer {
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
     target_iterations_per_pixel: u32, // Per-pixel convergence: stop updating pixel after N iterations (0 = disabled)
     overwrite_mode: bool, // When true, replace accumulation buffer instead of blending (for live preview)
+    num_transforms: u32, // Number of regular transforms (not including final transform)
+    has_final_transform: bool, // Whether final transform is present
 }
 
 impl FlameRenderer {
@@ -84,6 +86,8 @@ impl FlameRenderer {
             use_dynamic_blend: true, // Default to exponential convergence (old behavior)
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
             overwrite_mode: false, // Default to normal blending (progressive refinement)
+            num_transforms: flame.transforms.len() as u32,
+            has_final_transform: flame.final_transform.is_some(),
         }
     }
 
@@ -129,7 +133,7 @@ impl FlameRenderer {
 
         let seed = self.get_rng_seed();
         let params = GpuParams {
-            num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
+            num_transforms: self.num_transforms,
             iterations_per_thread,
             burn_in: 20,
             width: self.width,
@@ -152,7 +156,10 @@ impl FlameRenderer {
             camera_rotation_y,
             camera_z,
             histogram_color_scale: self.histogram_color_scale,
+            has_final_transform: if self.has_final_transform { 1 } else { 0 },
+            final_transform_index: self.num_transforms, // Final transform is appended after regular transforms
             _pad3: 0.0,
+            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
 
@@ -313,8 +320,12 @@ impl FlameRenderer {
             crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
         };
 
+        // Update transform tracking
+        self.num_transforms = config.flame.transforms.len() as u32;
+        self.has_final_transform = config.flame.final_transform.is_some();
+
         let params = GpuParams {
-            num_transforms: config.flame.transforms.len() as u32,
+            num_transforms: self.num_transforms,
             iterations_per_thread,
             burn_in: 20,
             width: self.width,
@@ -337,7 +348,10 @@ impl FlameRenderer {
             camera_rotation_y: config.camera_rotation_y,
             camera_z: config.camera_z,
             histogram_color_scale: config.histogram_color_scale,
+            has_final_transform: if self.has_final_transform { 1 } else { 0 },
+            final_transform_index: self.num_transforms,
             _pad3: 0.0,
+            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
 
@@ -371,13 +385,17 @@ impl FlameRenderer {
         self.current_render_mode = flame.render_mode;
         self.current_projection = flame.projection;
 
+        // Update transform tracking
+        self.num_transforms = flame.transforms.len() as u32;
+        self.has_final_transform = flame.final_transform.is_some();
+
         let (projection_type, perspective_strength) = match self.current_projection {
             crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
             crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
         };
 
         let params = GpuParams {
-            num_transforms: flame.transforms.len() as u32,
+            num_transforms: self.num_transforms,
             iterations_per_thread,
             burn_in: 20,
             width: self.width,
@@ -400,7 +418,10 @@ impl FlameRenderer {
             camera_rotation_y,
             camera_z,
             histogram_color_scale: self.histogram_color_scale,
+            has_final_transform: if self.has_final_transform { 1 } else { 0 },
+            final_transform_index: self.num_transforms,
             _pad3: 0.0,
+            _pad4: 0.0,
         };
 
         self.buffers.update_params(queue, &params);
@@ -513,7 +534,7 @@ impl FlameRenderer {
         };
 
         let params = GpuParams {
-            num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
+            num_transforms: self.num_transforms,
             iterations_per_thread,
             burn_in: 20,
             width: self.width,
@@ -536,7 +557,10 @@ impl FlameRenderer {
             camera_rotation_y,
             camera_z,
             histogram_color_scale: self.histogram_color_scale,
+            has_final_transform: if self.has_final_transform { 1 } else { 0 },
+            final_transform_index: self.num_transforms,
             _pad3: 0.0,
+            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -650,7 +674,7 @@ impl FlameRenderer {
 
         // Update params to reflect new color mode
         let params = GpuParams {
-            num_transforms: self.buffers.transform_buffer.size() as u32 / std::mem::size_of::<GpuTransform>() as u32,
+            num_transforms: self.num_transforms,
             iterations_per_thread,
             burn_in: 20,
             width: self.width,
@@ -673,7 +697,10 @@ impl FlameRenderer {
             camera_rotation_y,
             camera_z,
             histogram_color_scale: self.histogram_color_scale,
+            has_final_transform: if self.has_final_transform { 1 } else { 0 },
+            final_transform_index: self.num_transforms,
             _pad3: 0.0,
+            _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
     }
