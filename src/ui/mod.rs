@@ -319,6 +319,7 @@ impl EguiLayer {
                         paused,
                         png_export_with_background: &mut png_export_with_background,
                         png_export_transparent: &mut png_export_transparent,
+                        custom_palette: &mut custom_palette,
                     },
                 });
         });

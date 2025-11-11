@@ -37,6 +37,7 @@ pub struct PanelContext<'a> {
     pub paused: &'a mut bool,
     pub png_export_with_background: &'a mut bool,
     pub png_export_transparent: &'a mut bool,
+    pub custom_palette: &'a mut Option<crate::scene::palette::Palette>,
 }
 
 /// Viewer for rendering each panel type
@@ -93,8 +94,13 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Colors panel (color mode, palette, tone mapping)
     fn render_colors_panel(&mut self, ui: &mut egui::Ui) {
-        ui.label("📝 TODO: Migrate Tone Mapping & Colors window");
-        ui.label("For now, use: View → Tone Mapping & Colors");
+        let _ = super::tone_mapping::render_colors_content(
+            ui,
+            self.context.show_palette_editor,
+            self.context.config_manager,
+            self.context.palette_library,
+            self.context.custom_palette,
+        );
     }
 
     /// Render Palette Editor panel (palette editing)
