@@ -1,4 +1,4 @@
-use wgpu::*;
+use egui_wgpu::wgpu::*;
 use crate::shader_cache::ShaderCache;
 use crate::scene::transforms::Flame;
 

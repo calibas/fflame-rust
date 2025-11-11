@@ -1,5 +1,5 @@
-use wgpu::*;
-use wgpu::util::DeviceExt;
+use egui_wgpu::wgpu::*;
+use egui_wgpu::wgpu::util::DeviceExt;
 use crate::scene::transforms::{Transform, Flame};
 use crate::scene::palette::Palette;
 
