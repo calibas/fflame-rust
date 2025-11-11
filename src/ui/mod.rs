@@ -39,7 +39,6 @@ pub struct EguiLayer {
     show_palette_editor: bool,
     palette_editor: PaletteEditor,
     // Window visibility (no persistence between sessions)
-    show_settings: bool,
     show_view: bool,
     show_transforms: bool,
     show_triangle_editor: bool,
@@ -81,7 +80,6 @@ impl EguiLayer {
             show_palette_editor: false,
             palette_editor: PaletteEditor::new(),
             // Window visibility - Transforms, Help minimized by default
-            show_settings: true,
             show_view: true,
             show_transforms: false,
             show_triangle_editor: false,
@@ -184,7 +182,6 @@ impl EguiLayer {
             // Render menu bar
             menu_bar::render_menu_bar(
                 ctx,
-                &mut self.show_settings,
                 &mut self.show_view,
                 &mut self.show_transforms,
                 &mut self.show_triangle_editor,
@@ -198,29 +195,7 @@ impl EguiLayer {
                 &menu_state,
             );
 
-            // Performance window is now a dockable panel (see Windows menu)
-
-            // Render Settings window
-            let _settings_update_type = settings::render_settings_window(
-                ctx,
-                &mut self.show_settings,
-                &mut self.show_config_window,
-                &mut self.show_palette_editor,
-                can_undo,
-                can_redo,
-                &mut undo_requested,
-                &mut redo_requested,
-                &mut png_export_with_background,
-                &mut png_export_transparent,
-                preset_library,
-                current_preset_index,
-                &mut preset_changed,
-                flame,
-                flame_renderer.as_deref(),
-                paused,
-                &mut pause_changed,
-                config_manager,
-            );
+            // Performance and Settings windows are now dockable panels (see Windows menu)
 
             // Render View window
             let _view_update_type =
