@@ -54,8 +54,10 @@ pub enum WorkspaceLayout {
 
 /// Manages the docking workspace state
 pub struct Workspace {
-    /// Current dock state
-    pub dock_state: DockState<PanelType>,
+    /// Left side dock state (Transforms, Triangle Editor)
+    pub left_dock_state: DockState<PanelType>,
+    /// Right side dock state (Colors, Palette Editor, View, Rendering, History)
+    pub right_dock_state: DockState<PanelType>,
     /// Active layout preset
     pub current_layout: WorkspaceLayout,
 }
@@ -63,75 +65,72 @@ pub struct Workspace {
 impl Workspace {
     /// Create a new workspace with default Standard layout
     pub fn new() -> Self {
+        let (left, right) = Self::create_standard_layout();
         Self {
-            dock_state: Self::create_standard_layout(),
+            left_dock_state: left,
+            right_dock_state: right,
             current_layout: WorkspaceLayout::Standard,
         }
     }
 
     /// Apply a predefined layout
     pub fn apply_layout(&mut self, layout: WorkspaceLayout) {
-        self.dock_state = match layout {
+        let (left, right) = match layout {
             WorkspaceLayout::Beginner => Self::create_beginner_layout(),
             WorkspaceLayout::Standard => Self::create_standard_layout(),
             WorkspaceLayout::Advanced => Self::create_advanced_layout(),
             WorkspaceLayout::Export => Self::create_export_layout(),
         };
+        self.left_dock_state = left;
+        self.right_dock_state = right;
         self.current_layout = layout;
     }
 
-    /// Create Beginner layout: Transforms + Colors
-    fn create_beginner_layout() -> DockState<PanelType> {
-        let mut state = DockState::new(vec![PanelType::Transforms]);
-        let root = state.main_surface_mut();
-        let [_left, _right] = root.split_right(NodeIndex::root(), 0.25, vec![PanelType::Colors]);
-        state
+    /// Create Beginner layout: Left (Transforms) | Right (Colors)
+    fn create_beginner_layout() -> (DockState<PanelType>, DockState<PanelType>) {
+        let left = DockState::new(vec![PanelType::Transforms]);
+        let right = DockState::new(vec![PanelType::Colors]);
+        (left, right)
     }
 
-    /// Create Standard layout: Transforms | Colors + View + Rendering + History
-    fn create_standard_layout() -> DockState<PanelType> {
-        let mut state = DockState::new(vec![PanelType::Transforms]);
-        let root = state.main_surface_mut();
+    /// Create Standard layout: Left (Transforms) | Right (Colors, View, Rendering, History)
+    fn create_standard_layout() -> (DockState<PanelType>, DockState<PanelType>) {
+        let left = DockState::new(vec![PanelType::Transforms]);
 
-        // Split right for Colors and other panels
-        let [_left, _right] = root.split_right(NodeIndex::root(), 0.25, vec![PanelType::Colors]);
-
-        // Add View, Rendering, and History tabs to right side
+        let mut right = DockState::new(vec![PanelType::Colors]);
+        let root = right.main_surface_mut();
         root.push_to_focused_leaf(PanelType::View);
         root.push_to_focused_leaf(PanelType::Rendering);
         root.push_to_focused_leaf(PanelType::History);
 
-        state
+        (left, right)
     }
 
-    /// Create Advanced layout: All 7 panels visible
-    fn create_advanced_layout() -> DockState<PanelType> {
-        let mut state = DockState::new(vec![PanelType::Transforms]);
-        let root = state.main_surface_mut();
+    /// Create Advanced layout: Left (Transforms, Triangle Editor) | Right (Colors, Palette Editor, View, Rendering, History)
+    fn create_advanced_layout() -> (DockState<PanelType>, DockState<PanelType>) {
+        let mut left = DockState::new(vec![PanelType::Transforms]);
+        let left_root = left.main_surface_mut();
+        left_root.push_to_focused_leaf(PanelType::TriangleEditor);
 
-        // Split into left (Transforms + Triangle Editor) and right (Colors + Palette Editor + View + Rendering + History)
-        let [left, right] = root.split_right(NodeIndex::root(), 0.3, vec![PanelType::Colors]);
+        let mut right = DockState::new(vec![PanelType::Colors]);
+        let right_root = right.main_surface_mut();
+        right_root.push_to_focused_leaf(PanelType::PaletteEditor);
+        right_root.push_to_focused_leaf(PanelType::View);
+        right_root.push_to_focused_leaf(PanelType::Rendering);
+        right_root.push_to_focused_leaf(PanelType::History);
 
-        // Add Triangle Editor tab to left side
-        root.set_focused_node(left);
-        root.push_to_focused_leaf(PanelType::TriangleEditor);
-
-        // Add all other panels to right side
-        root.set_focused_node(right);
-        root.push_to_focused_leaf(PanelType::PaletteEditor);
-        root.push_to_focused_leaf(PanelType::View);
-        root.push_to_focused_leaf(PanelType::Rendering);
-        root.push_to_focused_leaf(PanelType::History);
-
-        state
+        (left, right)
     }
 
-    /// Create Export layout: Rendering + Colors focused
-    fn create_export_layout() -> DockState<PanelType> {
-        let mut state = DockState::new(vec![PanelType::Rendering]);
-        let root = state.main_surface_mut();
-        let [_left, _right] = root.split_right(NodeIndex::root(), 0.25, vec![PanelType::Colors]);
-        state
+    /// Create Export layout: Left (empty) | Right (Rendering, Colors)
+    fn create_export_layout() -> (DockState<PanelType>, DockState<PanelType>) {
+        let left = DockState::new(vec![]);
+
+        let mut right = DockState::new(vec![PanelType::Rendering]);
+        let root = right.main_surface_mut();
+        root.push_to_focused_leaf(PanelType::Colors);
+
+        (left, right)
     }
 
     /// Get the dock style (visual appearance)
