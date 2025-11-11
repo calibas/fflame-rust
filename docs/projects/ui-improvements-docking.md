@@ -50,7 +50,7 @@ Modernize the UI with a professional docking layout system, better organization,
 - Keep all existing functionality unchanged
 - No reorganization or refactoring yet
 - Get docking working first, optimize later
-- Progress: 3/6 panels migrated (History ✅, View ✅, Rendering ✅)
+- Progress: 5/7 panels migrated (History ✅, View ✅, Rendering ✅, Colors ✅, Transforms ✅)
 
 **Features:**
 - Multiple tabs/panels that can be rearranged
