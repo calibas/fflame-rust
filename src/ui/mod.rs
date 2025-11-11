@@ -287,46 +287,53 @@ impl EguiLayer {
                 &mut redo_requested,
             );
 
-            // Render Docking Workspace
-            egui_dock::DockArea::new(&mut workspace.dock_state)
-                .show(ctx, &mut panel_viewer::PanelViewer {
-                    context: panel_viewer::PanelContext {
-                        // Core state
-                        config_manager,
-                        flame,
+            // Render Docking Workspace in right side panel
+            egui::SidePanel::right("dock_panel")
+                .default_width(window_size.width as f32 * 0.25)
+                .min_width(200.0)
+                .max_width(window_size.width as f32 * 0.5)
+                .resizable(true)
+                .show(ctx, |ui| {
+                    egui_dock::DockArea::new(&mut workspace.dock_state)
+                        .show_inside(ui, &mut panel_viewer::PanelViewer {
+                            context: panel_viewer::PanelContext {
+                                // Core state
+                                config_manager,
+                                flame,
 
-                        // Libraries
-                        preset_library,
-                        palette_library,
+                                // Libraries
+                                preset_library,
+                                palette_library,
 
-                        // Renderer
-                        flame_renderer: flame_renderer.as_ref().map(|v| &**v),
+                                // Renderer
+                                flame_renderer: flame_renderer.as_ref().map(|v| &**v),
 
-                        // Window visibility
-                        show_config_window: &mut self.show_config_window,
-                        show_palette_editor: &mut self.show_palette_editor,
-                        show_triangle_editor: &mut show_triangle_editor,
+                                // Window visibility
+                                show_config_window: &mut self.show_config_window,
+                                show_palette_editor: &mut self.show_palette_editor,
+                                show_triangle_editor: &mut show_triangle_editor,
 
-                        // Action flags
-                        add_transform: &mut add_transform,
-                        delete_transform: &mut delete_transform,
-                        undo_requested: &mut undo_requested,
-                        redo_requested: &mut redo_requested,
-                        preset_changed: &mut preset_changed,
-                        pause_changed: &mut pause_changed,
+                                // Action flags
+                                add_transform: &mut add_transform,
+                                delete_transform: &mut delete_transform,
+                                undo_requested: &mut undo_requested,
+                                redo_requested: &mut redo_requested,
+                                preset_changed: &mut preset_changed,
+                                pause_changed: &mut pause_changed,
 
-                        // UI state
-                        current_preset_index,
-                        paused,
-                        png_export_with_background: &mut png_export_with_background,
-                        png_export_transparent: &mut png_export_transparent,
-                        custom_palette: &mut custom_palette,
-                        palette_editor: &mut self.palette_editor,
-                        palette_export_json: &mut palette_export_json,
-                        palette_save_file: &mut palette_save_file,
-                        palette_import_json: &mut palette_import_json,
-                        palette_load_file: &mut palette_load_file,
-                    },
+                                // UI state
+                                current_preset_index,
+                                paused,
+                                png_export_with_background: &mut png_export_with_background,
+                                png_export_transparent: &mut png_export_transparent,
+                                custom_palette: &mut custom_palette,
+                                palette_editor: &mut self.palette_editor,
+                                palette_export_json: &mut palette_export_json,
+                                palette_save_file: &mut palette_save_file,
+                                palette_import_json: &mut palette_import_json,
+                                palette_load_file: &mut palette_load_file,
+                            },
+                        });
                 });
         });
 
