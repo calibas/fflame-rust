@@ -31,6 +31,19 @@ pub fn render_triangle_editor_window(
         .open(show_triangle_editor)
         .default_size([500.0, 600.0])
         .show(ctx, |ui| {
+            max_update = max_update.max(render_triangle_editor_core(ui, config_manager, flame));
+        });
+
+    max_update
+}
+
+/// Core triangle editor rendering (shared by window and panel)
+fn render_triangle_editor_core(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    flame: &mut Flame,
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
             ui.heading("Affine Transform Visualizer");
             ui.label("Displays the coordinate system for each transform as triangles (O, X, Y)");
             ui.separator();
@@ -45,7 +58,7 @@ pub fn render_triangle_editor_window(
             // Clamp selection to valid range
             if flame.transforms.is_empty() {
                 ui.label("No transforms available");
-                return;
+                return max_update;
             }
             if let Some(idx) = selected_transform {
                 if idx >= flame.transforms.len() {
@@ -979,9 +992,19 @@ pub fn render_triangle_editor_window(
                     }
                 }
             }
-        });
 
     max_update
+}
+
+/// Render the Triangle Editor panel content (visual affine editor)
+///
+/// This is the panel version without the Window wrapper.
+pub fn render_triangle_editor_content(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    flame: &mut Flame,
+) -> UpdateType {
+    render_triangle_editor_core(ui, config_manager, flame)
 }
 
 /// Get a distinct color for each transform index

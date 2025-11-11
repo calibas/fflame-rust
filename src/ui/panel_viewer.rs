@@ -93,8 +93,11 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Triangle Editor panel (visual triangle editing)
     fn render_triangle_editor_panel(&mut self, ui: &mut egui::Ui) {
-        ui.label("📝 TODO: Migrate Triangle Editor window");
-        ui.label("For now, use: View → Triangle Editor");
+        let _ = super::triangle_editor::render_triangle_editor_content(
+            ui,
+            self.context.config_manager,
+            self.context.flame,
+        );
     }
 
     /// Render Colors panel (color mode, palette, tone mapping)
