@@ -31,6 +31,7 @@ pub struct App {
     pub(super) flame: Flame,  // Working copy for renderer (synced from config_manager)
 
     // UI state (not saved in config)
+    pub(super) workspace: crate::ui::Workspace,
     pub(super) view_changed_by_keyboard: bool,
     pub(super) mouse_dragging: bool,
     pub(super) last_mouse_pos: Option<(f32, f32)>,
@@ -132,6 +133,7 @@ impl App {
             egui_layer,
             flame_renderer: Some(flame_renderer),
             flame,
+            workspace: crate::ui::Workspace::new(),
             view_changed_by_keyboard: false,
             mouse_dragging: false,
             last_mouse_pos: None,
@@ -402,6 +404,7 @@ impl App {
             &mut self.paused,
             can_undo,
             can_redo,
+            &mut self.workspace,
         );
         self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
 

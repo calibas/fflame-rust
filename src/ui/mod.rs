@@ -21,6 +21,7 @@ mod workspace;
 pub use lazy_undo::LazyUndoHelper;
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
+pub use workspace::Workspace;
 
 use egui_wgpu::Renderer as EguiRenderer;
 use egui_winit::State as EguiWinitState;
@@ -109,6 +110,7 @@ impl EguiLayer {
         paused: &mut bool,
         can_undo: bool,
         can_redo: bool,
+        workspace: &mut workspace::Workspace,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
