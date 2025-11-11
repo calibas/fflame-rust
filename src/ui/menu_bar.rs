@@ -3,7 +3,6 @@ use super::menu_context::{MenuActions, MenuState};
 /// Render the top menu bar with window visibility toggles
 pub fn render_menu_bar(
     ctx: &egui::Context,
-    show_transforms: &mut bool,
     show_triangle_editor: &mut bool,
     show_tone_mapping: &mut bool,
     show_help: &mut bool,
@@ -108,7 +107,11 @@ pub fn render_menu_bar(
             // Transforms Menu
             ui.menu_button("Transforms", |ui| {
                 // Panel visibility toggles
-                ui.checkbox(show_transforms, "Show Transform Editor");
+                let transforms_open = workspace.panel_exists(super::workspace::PanelType::Transforms);
+                if ui.selectable_label(transforms_open, "Show Transform Editor").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Transforms);
+                    ui.close();
+                }
                 ui.checkbox(show_triangle_editor, "Show Triangle Editor");
                 ui.checkbox(show_palette_editor, "Show Palette Editor");
 
@@ -195,7 +198,13 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::View);
                     ui.close();
                 }
-                ui.checkbox(show_transforms, "🔧 Transforms");
+
+                // Transforms opens as floating window in docking system
+                let transforms_open = workspace.panel_exists(super::workspace::PanelType::Transforms);
+                if ui.selectable_label(transforms_open, "🔧 Transforms").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Transforms);
+                    ui.close();
+                }
                 ui.checkbox(show_triangle_editor, "📐 Triangle Editor");
                 ui.checkbox(show_tone_mapping, "🎨 Tone Mapping & Colors");
                 ui.checkbox(show_help, "❓ Help");

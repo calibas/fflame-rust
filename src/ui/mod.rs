@@ -39,7 +39,6 @@ pub struct EguiLayer {
     show_palette_editor: bool,
     palette_editor: PaletteEditor,
     // Window visibility (no persistence between sessions)
-    show_transforms: bool,
     show_triangle_editor: bool,
     show_tone_mapping: bool,
     show_help: bool,
@@ -78,8 +77,7 @@ impl EguiLayer {
             show_config_window: false,
             show_palette_editor: false,
             palette_editor: PaletteEditor::new(),
-            // Window visibility - Transforms, Help minimized by default
-            show_transforms: false,
+            // Window visibility - Help minimized by default
             show_triangle_editor: false,
             show_tone_mapping: true, // Show by default
             show_help: false,
@@ -180,7 +178,6 @@ impl EguiLayer {
             // Render menu bar
             menu_bar::render_menu_bar(
                 ctx,
-                &mut self.show_transforms,
                 &mut self.show_triangle_editor,
                 &mut self.show_tone_mapping,
                 &mut self.show_help,
@@ -192,20 +189,10 @@ impl EguiLayer {
                 &menu_state,
             );
 
-            // Performance, Settings, and View windows are now dockable panels (see Windows menu)
+            // Performance, Settings, View, and Transforms windows are now dockable panels (see Windows menu)
 
             // Render Help window
             help::render_help_window(ctx, &mut self.show_help);
-
-            // Render Transforms window
-            let _transforms_update_type = transforms::render_transforms_window(
-                ctx,
-                &mut self.show_transforms,
-                config_manager,
-                flame,
-                &mut add_transform,
-                &mut delete_transform,
-            );
 
             // Render Triangle Editor window
             let _triangle_editor_update = triangle_editor::render_triangle_editor_window(
