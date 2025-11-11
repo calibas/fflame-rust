@@ -108,6 +108,29 @@ pub fn render_menu_bar(
                 }
             });
 
+            // Transforms Menu
+            ui.menu_button("Transforms", |ui| {
+                // Panel visibility toggles
+                ui.checkbox(show_transforms, "Show Transform Editor");
+                ui.checkbox(show_triangle_editor, "Show Triangle Editor");
+                ui.checkbox(show_palette_editor, "Show Palette Editor");
+
+                ui.separator();
+
+                // Add Transform (functional)
+                if ui.button("Add Transform").clicked() {
+                    menu_actions.transform.add_transform = true;
+                    ui.close();
+                }
+
+                // Not implemented yet
+                ui.add_enabled(false, egui::Button::new("Copy Transform"));
+                ui.add_enabled(false, egui::Button::new("Paste Transform"));
+                ui.add_enabled(false, egui::Button::new("Duplicate Transform"));
+                ui.add_enabled(false, egui::Button::new("Delete Transform"));
+                ui.add_enabled(false, egui::Button::new("Randomize Transform"));
+            });
+
             // Windows Menu
             ui.menu_button("Windows", |ui| {
                 ui.checkbox(show_performance, "📊 Performance");

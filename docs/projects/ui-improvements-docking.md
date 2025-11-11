@@ -167,6 +167,7 @@ egui_dock = "0.13"  # Latest version
 
 **File Menu:**
 - New Flame (Ctrl+N)
+- Load Preset ▶
 - Open Config... (Ctrl+O)
 - Save Config As... (Ctrl+Shift+S)
 - ---
@@ -199,6 +200,7 @@ egui_dock = "0.13"  # Latest version
 **Transforms Menu:**
 - Show Transform Editor (E)
 - Show Triangle Editor (T)
+- Show Palette Editor (P)
 - ---
 - Add Transform (Ctrl+T)
 - Copy Transform (Ctrl+C)
@@ -206,9 +208,6 @@ egui_dock = "0.13"  # Latest version
 - Duplicate Transform (Ctrl+D)
 - Delete Transform (Delete)
 - Randomize Transform (R)
-- ---
-- Load Preset ▶
-- Save as Preset...
 - ---
 - Import Palette...
 - Export Palette...
