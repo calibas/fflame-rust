@@ -1079,10 +1079,10 @@ impl ConfigManager {
                     .as_mut()
                     .ok_or(ConfigError::InvalidIndex)?;
                 let weight: f32 = value.try_into()?;
-                if weight > 0.0 {
-                    final_xform.variations.insert(variation.clone(), weight);
-                } else {
+                if weight == 0.0 {
                     final_xform.variations.remove(variation);
+                } else {
+                    final_xform.variations.insert(variation.clone(), weight);
                 }
             }
             ConfigPath::FinalTransformVariationParam { variation, param } => {
@@ -1370,10 +1370,10 @@ impl ConfigManager {
                     .as_mut()
                     .ok_or(ConfigError::InvalidIndex)?;
                 let weight: f32 = value.try_into()?;
-                if weight > 0.0 {
-                    final_xform.variations.insert(variation.clone(), weight);
-                } else {
+                if weight == 0.0 {
                     final_xform.variations.remove(variation);
+                } else {
+                    final_xform.variations.insert(variation.clone(), weight);
                 }
             }
             ConfigPath::FinalTransformVariationParam { variation, param } => {
