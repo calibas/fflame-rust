@@ -130,6 +130,8 @@ impl EguiLayer {
         let mut preset_changed = false;
         let mut add_transform = false;
         let mut delete_transform = None;
+        let mut show_triangle_editor = false;
+        let mut show_undo_history = false;
 
         // Config import/export
         let mut config_export_json = None;
@@ -274,13 +276,18 @@ impl EguiLayer {
                 &mut redo_requested,
             );
 
-            // TODO: Render Docking Workspace (blocked by egui version mismatch)
-            // egui_dock re-exports its own version of egui, causing type mismatches
-            // Need to either:
-            // 1. Find egui_dock version that exactly matches our egui 0.30
-            // 2. Upgrade entire app to egui 0.33+ (requires wgpu upgrade)
-            // 3. Use a different docking solution
-            let _ = workspace; // Silence unused warning
+            // Render Docking Workspace
+            egui_dock::DockArea::new(&mut workspace.dock_state)
+                .show(ctx, &mut panel_viewer::PanelViewer {
+                    context: panel_viewer::PanelContext {
+                        config_manager,
+                        flame,
+                        add_transform: &mut add_transform,
+                        delete_transform: &mut delete_transform,
+                        show_triangle_editor: &mut show_triangle_editor,
+                        show_undo_history: &mut show_undo_history,
+                    },
+                });
         });
 
         self.state
