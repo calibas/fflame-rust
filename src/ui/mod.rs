@@ -164,6 +164,10 @@ impl EguiLayer {
         // Export
         let mut png_export_with_background = false;
         let mut png_export_transparent = false;
+        let mut png_export_requested = false;
+
+        // Quit flag
+        let mut quit_requested = false;
 
         // Log ConfigManager state at start of UI render
         // log::debug!("render_ui start: ConfigManager has exposure={:.3}, gamma={:.3}",
@@ -184,6 +188,11 @@ impl EguiLayer {
                 &mut self.show_config_window,
                 &mut self.show_undo_history,
                 workspace,
+                &mut config_load_file,
+                &mut config_save_file,
+                &mut apophysis_import_file,
+                &mut png_export_requested,
+                &mut quit_requested,
             );
 
             // Render Performance window
@@ -386,6 +395,11 @@ impl EguiLayer {
                             },
                         });
                 });
+
+            // Handle quit request from File menu
+            if quit_requested {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         });
 
         self.state
@@ -441,6 +455,11 @@ impl EguiLayer {
         // Sync flame from ConfigManager AFTER UI updates (for live preview during drag)
         // This ensures app.rs gets the latest preview state when checking is_in_preview_mode()
         *flame = config_manager.active_config().flame.clone();
+
+        // Handle png_export_requested from File menu (default to transparent)
+        if png_export_requested {
+            png_export_transparent = true;
+        }
 
         UiResponse {
             pause_changed,

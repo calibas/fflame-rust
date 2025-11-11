@@ -12,9 +12,53 @@ pub fn render_menu_bar(
     show_config_window: &mut bool,
     show_undo_history: &mut bool,
     workspace: &mut super::workspace::Workspace,
+    // File menu actions
+    config_load_file: &mut bool,
+    config_save_file: &mut bool,
+    apophysis_import_file: &mut bool,
+    png_export_requested: &mut bool,
+    quit_requested: &mut bool,
 ) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::menu::bar(ui, |ui| {
+            // File Menu
+            ui.menu_button("File", |ui| {
+                if ui.button("📂 Open Config...").clicked() {
+                    *config_load_file = true;
+                    ui.close_menu();
+                }
+
+                if ui.button("💾 Save Config").clicked() {
+                    *config_save_file = true;
+                    ui.close_menu();
+                }
+
+                if ui.button("💾 Save Config As...").clicked() {
+                    *config_save_file = true;
+                    ui.close_menu();
+                }
+
+                ui.separator();
+
+                if ui.button("🔥 Import Apophysis XML...").clicked() {
+                    *apophysis_import_file = true;
+                    ui.close_menu();
+                }
+
+                if ui.button("🖼 Export PNG...").clicked() {
+                    *png_export_requested = true;
+                    ui.close_menu();
+                }
+
+                ui.separator();
+
+                if ui.button("❌ Quit").clicked() {
+                    *quit_requested = true;
+                    ui.close_menu();
+                }
+            });
+
+            // Windows Menu
             ui.menu_button("Windows", |ui| {
                 ui.checkbox(show_performance, "📊 Performance");
                 ui.checkbox(show_settings, "⚙ Settings");
