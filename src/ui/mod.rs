@@ -5,6 +5,7 @@ mod helpers;
 mod lazy_undo;
 mod menu_bar;
 mod palette_editor;
+mod panel_viewer;
 mod performance;
 mod response;
 mod settings;
@@ -15,6 +16,7 @@ mod undo_history;
 mod variation_controls;
 mod variation_params;
 mod view;
+mod workspace;
 
 pub use lazy_undo::LazyUndoHelper;
 pub use palette_editor::PaletteEditor;
