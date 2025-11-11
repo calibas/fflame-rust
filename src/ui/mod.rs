@@ -511,13 +511,15 @@ impl EguiLayer {
 
         // Handle Rendering menu actions
         if menu_actions.rendering.pause_toggle {
+            *paused = !*paused;
             pause_changed = true;
         }
 
         if menu_actions.rendering.reset_accumulation {
-            // Trigger reset by updating any view parameter (triggers IterationReset in ConfigManager)
-            let current_zoom = config_manager.active_config().zoom;
-            let _ = config_manager.update_param(ConfigPath::Zoom, current_zoom.into(), false);
+            // Reset by triggering any IterationReset-level change
+            // SpeedMultiplier changes trigger IterationReset, so update to same value
+            let current_speed = config_manager.active_config().speed_multiplier;
+            let _ = config_manager.update_param(ConfigPath::SpeedMultiplier, current_speed.into(), false);
         }
 
         if let Some(speed) = menu_actions.rendering.set_speed {
