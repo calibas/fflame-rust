@@ -11,6 +11,8 @@ pub struct PanelContext<'a> {
     pub delete_transform: &'a mut Option<usize>,
     pub show_triangle_editor: &'a mut bool,
     pub show_undo_history: &'a mut bool,
+    pub undo_requested: &'a mut bool,
+    pub redo_requested: &'a mut bool,
 }
 
 /// Viewer for rendering each panel type
@@ -100,8 +102,11 @@ impl<'a> PanelViewer<'a> {
 
     /// Render the History panel (undo/redo browser)
     fn render_history_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("History");
-        ui.label("Undo/redo history goes here");
-        // TODO: Use existing undo_history.rs
+        super::undo_history::render_undo_history_content(
+            ui,
+            self.context.config_manager,
+            self.context.undo_requested,
+            self.context.redo_requested,
+        );
     }
 }

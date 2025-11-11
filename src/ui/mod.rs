@@ -286,6 +286,8 @@ impl EguiLayer {
                         delete_transform: &mut delete_transform,
                         show_triangle_editor: &mut show_triangle_editor,
                         show_undo_history: &mut show_undo_history,
+                        undo_requested: &mut undo_requested,
+                        redo_requested: &mut redo_requested,
                     },
                 });
         });
