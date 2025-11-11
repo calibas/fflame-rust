@@ -576,28 +576,30 @@ pub fn render_triangle_editor_window(
                 painter.circle_filled(x_pos, point_radius, color);
                 painter.circle_filled(y_pos, point_radius, color);
 
-                // Labels for final transform
-                painter.text(
-                    o_pos + Vec2::new(-15.0, 15.0),
-                    egui::Align2::CENTER_CENTER,
-                    "O [F]",
-                    egui::FontId::proportional(14.0),
-                    Color32::WHITE,
-                );
-                painter.text(
-                    x_pos + Vec2::new(10.0, 10.0),
-                    egui::Align2::CENTER_CENTER,
-                    "X [F]",
-                    egui::FontId::proportional(14.0),
-                    Color32::WHITE,
-                );
-                painter.text(
-                    y_pos + Vec2::new(10.0, 10.0),
-                    egui::Align2::CENTER_CENTER,
-                    "Y [F]",
-                    egui::FontId::proportional(14.0),
-                    Color32::WHITE,
-                );
+                // Labels only when final transform is selected
+                if selected_transform.is_none() {
+                    painter.text(
+                        o_pos + Vec2::new(-15.0, 15.0),
+                        egui::Align2::CENTER_CENTER,
+                        "O [F]",
+                        egui::FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                    painter.text(
+                        x_pos + Vec2::new(10.0, 10.0),
+                        egui::Align2::CENTER_CENTER,
+                        "X [F]",
+                        egui::FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                    painter.text(
+                        y_pos + Vec2::new(10.0, 10.0),
+                        egui::Align2::CENTER_CENTER,
+                        "Y [F]",
+                        egui::FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                }
             }
 
             ui.separator();
