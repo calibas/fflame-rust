@@ -652,9 +652,20 @@ impl Flame {
     pub fn extract_active_variations(&self) -> HashMap<String, f32> {
         let mut all_variations = HashMap::new();
 
+        // Extract from regular transforms
         for transform in &self.transforms {
             for (name, weight) in &transform.variations {
                 // Track max weight if variation used in multiple transforms
+                if weight.abs() > 1e-6 {
+                    let existing = all_variations.entry(name.clone()).or_insert(0.0);
+                    *existing = f32::max(*existing, *weight);
+                }
+            }
+        }
+
+        // Extract from final transform if present
+        if let Some(final_xform) = &self.final_transform {
+            for (name, weight) in &final_xform.variations {
                 if weight.abs() > 1e-6 {
                     let existing = all_variations.entry(name.clone()).or_insert(0.0);
                     *existing = f32::max(*existing, *weight);
