@@ -581,21 +581,21 @@ pub fn render_triangle_editor_window(
                     painter.text(
                         o_pos + Vec2::new(-15.0, 15.0),
                         egui::Align2::CENTER_CENTER,
-                        "O [F]",
+                        "O",
                         egui::FontId::proportional(14.0),
                         Color32::WHITE,
                     );
                     painter.text(
                         x_pos + Vec2::new(10.0, 10.0),
                         egui::Align2::CENTER_CENTER,
-                        "X [F]",
+                        "X",
                         egui::FontId::proportional(14.0),
                         Color32::WHITE,
                     );
                     painter.text(
                         y_pos + Vec2::new(10.0, 10.0),
                         egui::Align2::CENTER_CENTER,
-                        "Y [F]",
+                        "Y",
                         egui::FontId::proportional(14.0),
                         Color32::WHITE,
                     );
