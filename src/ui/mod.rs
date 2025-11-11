@@ -23,17 +23,17 @@ pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
 pub use workspace::Workspace;
 
-use egui_wgpu::Renderer as EguiRenderer;
+use egui_wgpu::wgpu::*;
+use egui_wgpu::{Renderer as EguiRenderer, RendererOptions};
 use egui_winit::State as EguiWinitState;
-use wgpu::*;
 use winit::{event::WindowEvent, window::Window};
 
 pub struct EguiLayer {
     state: EguiWinitState,
-    pub ctx: egui::Context,
+    pub ctx: egui_dock::egui::Context,
     renderer: EguiRenderer,
     config_json_buffer: String,
-    show_config_window: bool,  // For Import/Export Config dialog
+    show_config_window: bool, // For Import/Export Config dialog
     show_palette_editor: bool,
     palette_editor: PaletteEditor,
     // Window visibility (no persistence between sessions)
@@ -51,17 +51,26 @@ pub struct EguiLayer {
 
 impl EguiLayer {
     pub fn new(window: &Window, device: &Device, format: TextureFormat) -> Self {
-        let ctx = egui::Context::default();
+        let ctx = egui_dock::egui::Context::default();
 
         // Configure style to disable window shadows
-        ctx.set_visuals(egui::Visuals {
-            window_shadow: egui::epaint::Shadow::NONE,
-            ..egui::Visuals::dark()
+        ctx.set_visuals(egui_dock::egui::Visuals {
+            window_shadow: egui_dock::egui::epaint::Shadow::NONE,
+            ..egui_dock::egui::Visuals::dark()
         });
 
         let viewport_id = ctx.viewport_id();
         let state = EguiWinitState::new(ctx.clone(), viewport_id, window, None, None, None);
-        let renderer = EguiRenderer::new(device, format, None, 1, false);
+        let renderer = EguiRenderer::new(
+            device,
+            format,
+            RendererOptions {
+                msaa_samples: 1,
+                depth_stencil_format: None,
+                dithering: false,
+                predictable_texture_filtering: false,
+            },
+        );
         Self {
             state,
             ctx,
@@ -76,7 +85,7 @@ impl EguiLayer {
             show_view: true,
             show_transforms: false,
             show_triangle_editor: false,
-            show_tone_mapping: true,  // Show by default
+            show_tone_mapping: true, // Show by default
             show_help: false,
             show_undo_history: false,
             lazy_undo_tone_mapping: LazyUndoHelper::new(),
@@ -94,10 +103,10 @@ impl EguiLayer {
 
     pub fn render_ui(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target_view: &wgpu::TextureView,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+        encoder: &mut egui_wgpu::wgpu::CommandEncoder,
+        target_view: &egui_wgpu::wgpu::TextureView,
         window: &Window,
         window_size: winit::dpi::PhysicalSize<u32>,
         metrics: &crate::util::PerformanceMetrics,
@@ -143,7 +152,6 @@ impl EguiLayer {
         // Export
         let mut png_export_with_background = false;
         let mut png_export_transparent = false;
-
 
         // Log ConfigManager state at start of UI render
         // log::debug!("render_ui start: ConfigManager has exposure={:.3}, gamma={:.3}",
@@ -197,12 +205,8 @@ impl EguiLayer {
             );
 
             // Render View window
-            let _view_update_type = view::render_view_window(
-                ctx,
-                &mut self.show_view,
-                config_manager,
-                flame,
-            );
+            let _view_update_type =
+                view::render_view_window(ctx, &mut self.show_view, config_manager, flame);
 
             // Render Help window
             help::render_help_window(ctx, &mut self.show_help);
@@ -269,11 +273,22 @@ impl EguiLayer {
                 &mut undo_requested,
                 &mut redo_requested,
             );
+
+            // TODO: Render Docking Workspace (blocked by egui version mismatch)
+            // egui_dock re-exports its own version of egui, causing type mismatches
+            // Need to either:
+            // 1. Find egui_dock version that exactly matches our egui 0.30
+            // 2. Upgrade entire app to egui 0.33+ (requires wgpu upgrade)
+            // 3. Use a different docking solution
+            let _ = workspace; // Silence unused warning
         });
 
-        self.state.handle_platform_output(window, full_output.platform_output);
+        self.state
+            .handle_platform_output(window, full_output.platform_output);
 
-        let tris = self.ctx.tessellate(full_output.shapes, full_output.pixels_per_point);
+        let tris = self
+            .ctx
+            .tessellate(full_output.shapes, full_output.pixels_per_point);
 
         let screen_descriptor = egui_wgpu::ScreenDescriptor {
             size_in_pixels: [window_size.width, window_size.height],
@@ -281,20 +296,22 @@ impl EguiLayer {
         };
 
         for (id, image_delta) in &full_output.textures_delta.set {
-            self.renderer.update_texture(device, queue, *id, image_delta);
+            self.renderer
+                .update_texture(device, queue, *id, image_delta);
         }
 
-        self.renderer.update_buffers(device, queue, encoder, &tris, &screen_descriptor);
+        self.renderer
+            .update_buffers(device, queue, encoder, &tris, &screen_descriptor);
 
         {
-            let mut rpass = encoder.begin_render_pass(&RenderPassDescriptor {
+            let mut rpass = encoder.begin_render_pass(&egui_wgpu::wgpu::RenderPassDescriptor {
                 label: Some("egui render pass"),
-                color_attachments: &[Some(RenderPassColorAttachment {
+                color_attachments: &[Some(egui_wgpu::wgpu::RenderPassColorAttachment {
                     view: target_view,
                     resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Load, // Load existing content (flame rendering)
-                        store: StoreOp::Store,
+                    ops: egui_wgpu::wgpu::Operations {
+                        load: egui_wgpu::wgpu::LoadOp::Load, // Load existing content (flame rendering)
+                        store: egui_wgpu::wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: None,
@@ -304,11 +321,11 @@ impl EguiLayer {
 
             // SAFETY: egui-wgpu's render method has an overly restrictive 'static lifetime.
             // This transmute is safe because we immediately drop the render pass after calling render.
-            let rpass_static: &mut wgpu::RenderPass<'static> = unsafe {
-                std::mem::transmute(&mut rpass)
-            };
+            let rpass_static: &mut egui_wgpu::wgpu::RenderPass<'static> =
+                unsafe { std::mem::transmute(&mut rpass) };
 
-            self.renderer.render(rpass_static, &tris, &screen_descriptor);
+            self.renderer
+                .render(rpass_static, &tris, &screen_descriptor);
         } // Render pass is dropped here
 
         for id in &full_output.textures_delta.free {

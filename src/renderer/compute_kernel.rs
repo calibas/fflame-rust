@@ -1,4 +1,4 @@
-use wgpu::*;
+use egui_wgpu::wgpu::*;
 use crate::gpu::{buffers::*, pipelines::FlamePipelines};
 use crate::scene::transforms::Flame;
 use crate::scene::palette::{Palette, ColorMode};
@@ -767,7 +767,7 @@ impl FlameRenderer {
         // Create buffer to copy accumulation texture data (Rgba16Float format)
         let bytes_per_pixel = 8; // Rgba16Float = 4 channels × 2 bytes each
         let unpadded_bytes_per_row = self.width * bytes_per_pixel;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let align = egui_wgpu::wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
         let buffer_size = (padded_bytes_per_row * self.height) as u64;
         let buffer = device.create_buffer(&BufferDescriptor {

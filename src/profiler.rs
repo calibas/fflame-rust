@@ -1,15 +1,15 @@
 /// GPU and CPU profiling utilities for performance analysis
 use web_time::Instant;
-use wgpu::{Device, Queue};
+use egui_wgpu::wgpu::{Device, Queue};
 
 /// GPU timestamp query pool for measuring GPU pass durations
 ///
 /// **WASM Support:** GPU profiling works on WASM but requires async context.
 /// For WASM builds, use CPU timing (PerformanceMetrics) for synchronous profiling.
 pub struct GpuProfiler {
-    query_set: Option<wgpu::QuerySet>,
-    resolve_buffer: Option<wgpu::Buffer>,
-    read_buffer: Option<wgpu::Buffer>,
+    query_set: Option<egui_wgpu::wgpu::QuerySet>,
+    resolve_buffer: Option<egui_wgpu::wgpu::Buffer>,
+    read_buffer: Option<egui_wgpu::wgpu::Buffer>,
     query_count: u32,
     enabled: bool,
 }
@@ -18,7 +18,7 @@ impl GpuProfiler {
     pub fn new(device: &Device) -> Self {
         // Check if timestamp queries are supported
         let features = device.features();
-        let enabled = features.contains(wgpu::Features::TIMESTAMP_QUERY);
+        let enabled = features.contains(egui_wgpu::wgpu::Features::TIMESTAMP_QUERY);
 
         if !enabled {
             log::warn!("GPU timestamp queries not supported on this device");
@@ -33,25 +33,25 @@ impl GpuProfiler {
 
         // Create query set for 10 queries (5 passes × 2 timestamps each)
         let query_count = 10;
-        let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
+        let query_set = device.create_query_set(&egui_wgpu::wgpu::QuerySetDescriptor {
             label: Some("GPU Profiler Query Set"),
-            ty: wgpu::QueryType::Timestamp,
+            ty: egui_wgpu::wgpu::QueryType::Timestamp,
             count: query_count,
         });
 
         // Buffer to resolve query results to
-        let resolve_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let resolve_buffer = device.create_buffer(&egui_wgpu::wgpu::BufferDescriptor {
             label: Some("GPU Profiler Resolve Buffer"),
             size: (query_count as u64) * 8, // 8 bytes per timestamp
-            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            usage: egui_wgpu::wgpu::BufferUsages::QUERY_RESOLVE | egui_wgpu::wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
         // Buffer to read query results from
-        let read_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        let read_buffer = device.create_buffer(&egui_wgpu::wgpu::BufferDescriptor {
             label: Some("GPU Profiler Read Buffer"),
             size: (query_count as u64) * 8,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            usage: egui_wgpu::wgpu::BufferUsages::MAP_READ | egui_wgpu::wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -68,26 +68,26 @@ impl GpuProfiler {
         self.enabled
     }
 
-    pub fn query_set(&self) -> Option<&wgpu::QuerySet> {
+    pub fn query_set(&self) -> Option<&egui_wgpu::wgpu::QuerySet> {
         self.query_set.as_ref()
     }
 
     /// Begin a profiling scope (write start timestamp)
-    pub fn begin_scope(&self, encoder: &mut wgpu::CommandEncoder, query_index: u32) {
+    pub fn begin_scope(&self, encoder: &mut egui_wgpu::wgpu::CommandEncoder, query_index: u32) {
         if let Some(query_set) = &self.query_set {
             encoder.write_timestamp(query_set, query_index * 2);
         }
     }
 
     /// End a profiling scope (write end timestamp)
-    pub fn end_scope(&self, encoder: &mut wgpu::CommandEncoder, query_index: u32) {
+    pub fn end_scope(&self, encoder: &mut egui_wgpu::wgpu::CommandEncoder, query_index: u32) {
         if let Some(query_set) = &self.query_set {
             encoder.write_timestamp(query_set, query_index * 2 + 1);
         }
     }
 
     /// Resolve query results and copy to read buffer
-    pub fn resolve(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub fn resolve(&self, encoder: &mut egui_wgpu::wgpu::CommandEncoder) {
         if let (Some(query_set), Some(resolve_buffer), Some(read_buffer)) =
             (&self.query_set, &self.resolve_buffer, &self.read_buffer)
         {
@@ -114,7 +114,7 @@ impl GpuProfiler {
         let buffer_slice = read_buffer.slice(..);
         let (tx, rx) = futures::channel::oneshot::channel();
 
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
+        buffer_slice.map_async(egui_wgpu::wgpu::MapMode::Read, move |result| {
             tx.send(result).ok();
         });
 

@@ -8,7 +8,7 @@ mod export;
 pub use export::export_headless;
 
 use winit::{event::*, event_loop::{EventLoop, ControlFlow}, window::Window};
-use wgpu::SurfaceError;
+use egui_wgpu::wgpu::SurfaceError;
 
 use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
@@ -309,9 +309,9 @@ impl App {
         let palette_rotation = config.palette_rotation;  // Copy to avoid borrow issues
 
         let frame = self.gpu.surface.get_current_texture()?;
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
 

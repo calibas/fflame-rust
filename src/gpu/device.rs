@@ -1,5 +1,5 @@
 use winit::window::Window;
-use wgpu::*;
+use egui_wgpu::wgpu::*;
 
 pub struct GpuContext {
     #[allow(dead_code)]
