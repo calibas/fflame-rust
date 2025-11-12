@@ -18,25 +18,6 @@ impl Default for MouseMode {
     }
 }
 
-/// Render the Triangle Editor window
-pub fn render_triangle_editor_window(
-    ctx: &egui::Context,
-    show_triangle_editor: &mut bool,
-    config_manager: &mut ConfigManager,
-    flame: &mut Flame,
-) -> UpdateType {
-    let mut max_update = UpdateType::None;
-
-    egui::Window::new("Triangle Editor")
-        .open(show_triangle_editor)
-        .default_size([500.0, 600.0])
-        .show(ctx, |ui| {
-            max_update = max_update.max(render_triangle_editor_core(ui, config_manager, flame));
-        });
-
-    max_update
-}
-
 /// Core triangle editor rendering (shared by window and panel)
 fn render_triangle_editor_core(
     ui: &mut egui::Ui,

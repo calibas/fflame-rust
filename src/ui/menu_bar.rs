@@ -3,7 +3,6 @@ use super::menu_context::{MenuActions, MenuState};
 /// Render the top menu bar with window visibility toggles
 pub fn render_menu_bar(
     ctx: &egui::Context,
-    show_triangle_editor: &mut bool,
     show_tone_mapping: &mut bool,
     show_help: &mut bool,
     show_palette_editor: &mut bool,
@@ -112,7 +111,11 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::Transforms);
                     ui.close();
                 }
-                ui.checkbox(show_triangle_editor, "Show Triangle Editor");
+                let triangle_editor_open = workspace.panel_exists(super::workspace::PanelType::TriangleEditor);
+                if ui.selectable_label(triangle_editor_open, "Show Triangle Editor").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor);
+                    ui.close();
+                }
                 ui.checkbox(show_palette_editor, "Show Palette Editor");
 
                 ui.separator();
@@ -205,7 +208,13 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::Transforms);
                     ui.close();
                 }
-                ui.checkbox(show_triangle_editor, "📐 Triangle Editor");
+
+                // Triangle Editor opens as floating window in docking system
+                let triangle_editor_open = workspace.panel_exists(super::workspace::PanelType::TriangleEditor);
+                if ui.selectable_label(triangle_editor_open, "📐 Triangle Editor").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor);
+                    ui.close();
+                }
                 ui.checkbox(show_tone_mapping, "🎨 Tone Mapping & Colors");
                 ui.checkbox(show_help, "❓ Help");
                 ui.separator();
