@@ -272,7 +272,7 @@ impl FlamePipelines {
                 module: &tonemap_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(ColorTargetState {
-                    format: surface_format,
+                    format: TextureFormat::Rgba8Unorm, // Use Rgba8Unorm for egui compatibility
                     blend: None, // No blending - shader does color mixing internally
                     write_mask: ColorWrites::ALL,
                 })],
