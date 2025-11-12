@@ -21,6 +21,7 @@ pub fn render_settings_content(
     paused: &mut bool,
     pause_changed: &mut bool,
     config_manager: &mut ConfigManager,
+    open_config_dialog: &mut bool,
 ) {
     // Clone config to avoid borrow conflicts (allows mutation of config_manager in closures)
     let config = config_manager.active_config().clone();
@@ -61,7 +62,7 @@ pub fn render_settings_content(
 
             // Config Import/Export
             if ui.button("📁 Config Import/Export").clicked() {
-                *show_config_window = true;
+                *open_config_dialog = true;
             }
 
             ui.separator();
