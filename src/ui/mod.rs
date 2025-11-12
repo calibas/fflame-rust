@@ -71,13 +71,26 @@ impl EguiLayer {
     pub fn handle_event(&mut self, event: &WindowEvent, window: &Window) -> bool {
         let response = self.state.on_window_event(window, event);
 
-        // For mouse events, check if egui context is actually using the pointer
-        // DockArea covers entire screen but ctx.is_using_pointer() correctly reports
-        // whether we're hovering/clicking an actual widget vs empty background
+        // For mouse events, we need to be more aggressive about detecting UI interaction
+        // The issue: is_using_pointer() can return false even when over panels
+        // Better approach: Check if pointer is over ANY layer (not just interacting with widgets)
         match event {
             WindowEvent::MouseInput { .. } | WindowEvent::CursorMoved { .. } | WindowEvent::MouseWheel { .. } => {
-                // Only consume if egui is actively using the pointer (over a widget)
-                response.consumed && self.ctx.is_using_pointer()
+                // Check multiple egui states to detect UI interaction
+                let is_using = self.ctx.is_using_pointer();
+                let wants_pointer = self.ctx.wants_pointer_input();
+                let is_pointer_over_area = self.ctx.is_pointer_over_area();
+
+                // Consume if egui wants the pointer OR pointer is over any UI area
+                let consumed = response.consumed && (is_using || wants_pointer || is_pointer_over_area);
+
+                // DEBUG: Log pointer state for cursor moves (only when dragging might be active)
+                if matches!(event, WindowEvent::CursorMoved { .. }) && consumed {
+                    log::debug!("CursorMoved over UI: consumed={}, is_using={}, wants_pointer={}, is_over_area={}",
+                        response.consumed, is_using, wants_pointer, is_pointer_over_area);
+                }
+
+                consumed
             }
             _ => response.consumed
         }
