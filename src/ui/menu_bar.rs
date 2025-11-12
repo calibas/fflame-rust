@@ -4,7 +4,6 @@ use super::menu_context::{MenuActions, MenuState};
 pub fn render_menu_bar(
     ctx: &egui::Context,
     show_help: &mut bool,
-    show_palette_editor: &mut bool,
     show_config_window: &mut bool,
     show_undo_history: &mut bool,
     workspace: &mut super::workspace::Workspace,
@@ -115,7 +114,11 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor);
                     ui.close();
                 }
-                ui.checkbox(show_palette_editor, "Show Palette Editor");
+                let palette_editor_open = workspace.panel_exists(super::workspace::PanelType::PaletteEditor);
+                if ui.selectable_label(palette_editor_open, "Show Palette Editor").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor);
+                    ui.close();
+                }
 
                 ui.separator();
 
@@ -223,7 +226,13 @@ pub fn render_menu_bar(
                 }
                 ui.checkbox(show_help, "❓ Help");
                 ui.separator();
-                ui.checkbox(show_palette_editor, "🎨 Palette Editor");
+
+                // Palette Editor opens as floating window in docking system
+                let palette_editor_open = workspace.panel_exists(super::workspace::PanelType::PaletteEditor);
+                if ui.selectable_label(palette_editor_open, "🎨 Palette Editor").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor);
+                    ui.close();
+                }
                 ui.checkbox(show_config_window, "📄 Config Import/Export");
                 ui.checkbox(show_undo_history, "⮪ Undo/Redo History");
 

@@ -16,58 +16,6 @@ impl PaletteEditor {
     }
 }
 
-/// Render the Palette Editor window
-///
-/// Note: Config change tracking is now handled by ConfigManager.get_pending_actions()
-pub fn render_palette_editor_window(
-    ctx: &egui::Context,
-    show_palette_editor: &mut bool,
-    palette_editor: &mut PaletteEditor,
-    config_manager: &mut crate::config::ConfigManager,
-    custom_palette: &mut Option<Palette>,
-    palette_export_json: &mut Option<Palette>,
-    palette_save_file: &mut Option<Palette>,
-    palette_import_json: &mut Option<String>,
-    palette_load_file: &mut bool,
-) {
-    if !*show_palette_editor {
-        return;
-    }
-
-    // Always read from config.palette (single source of truth)
-    let Some(config_palette) = &config_manager.active_config().palette else {
-        // No palette to edit
-        egui::Window::new("Palette Editor")
-            .open(show_palette_editor)
-            .show(ctx, |ui| {
-                ui.label("⚠ No palette selected");
-            });
-        return;
-    };
-
-    // Work on a mutable copy for this frame
-    let mut palette = config_palette.clone();
-
-    egui::Window::new("Palette Editor")
-        .open(show_palette_editor)
-        .default_width(600.0)
-        .show(ctx, |ui| {
-            render_palette_editor_core_impl(
-                ui,
-                palette_editor,
-                config_manager,
-                &mut palette,
-                custom_palette,
-                palette_export_json,
-                palette_save_file,
-                palette_import_json,
-                palette_load_file,
-            );
-        });
-
-    render_fixed_mode_warning(ctx, palette_editor, config_manager);
-}
-
 /// Core implementation of palette editor (shared by window and panel)
 fn render_palette_editor_core_impl(
     ui: &mut egui::Ui,

@@ -21,8 +21,6 @@ pub struct PanelContext<'a> {
 
     // Window visibility flags
     pub show_config_window: &'a mut bool,
-    pub show_palette_editor: &'a mut bool,
-    pub show_triangle_editor: &'a mut bool,
 
     // Action flags
     pub add_transform: &'a mut bool,
@@ -116,7 +114,6 @@ impl<'a> PanelViewer<'a> {
     fn render_colors_panel(&mut self, ui: &mut egui::Ui) {
         let _ = super::tone_mapping::render_colors_content(
             ui,
-            self.context.show_palette_editor,
             self.context.config_manager,
             self.context.palette_library,
             self.context.custom_palette,

@@ -36,7 +36,6 @@ pub struct EguiLayer {
     renderer: EguiRenderer,
     config_json_buffer: String,
     show_config_window: bool, // For Import/Export Config dialog
-    show_palette_editor: bool,
     palette_editor: PaletteEditor,
     // Window visibility (no persistence between sessions)
     show_help: bool,
@@ -71,7 +70,6 @@ impl EguiLayer {
             renderer,
             config_json_buffer: String::new(),
             show_config_window: false,
-            show_palette_editor: false,
             palette_editor: PaletteEditor::new(),
             // Window visibility - Help minimized by default
             show_help: false,
@@ -172,7 +170,6 @@ impl EguiLayer {
             menu_bar::render_menu_bar(
                 ctx,
                 &mut self.show_help,
-                &mut self.show_palette_editor,
                 &mut self.show_config_window,
                 &mut self.show_undo_history,
                 workspace,
@@ -180,23 +177,10 @@ impl EguiLayer {
                 &menu_state,
             );
 
-            // Performance, Settings, View, Transforms, Triangle Editor, and Colors windows are now dockable panels (see Windows menu)
+            // Performance, Settings, View, Transforms, Triangle Editor, Colors, and Palette Editor windows are now dockable panels (see Windows menu)
 
             // Render Help window
             help::render_help_window(ctx, &mut self.show_help);
-
-            // Render Palette Editor window
-            palette_editor::render_palette_editor_window(
-                ctx,
-                &mut self.show_palette_editor,
-                &mut self.palette_editor,
-                config_manager,
-                &mut custom_palette,
-                &mut palette_export_json,
-                &mut palette_save_file,
-                &mut palette_import_json,
-                &mut palette_load_file,
-            );
 
             // Render Config Dialog window
             config_dialog::render_config_dialog(
@@ -243,8 +227,6 @@ impl EguiLayer {
 
                                 // Window visibility
                                 show_config_window: &mut self.show_config_window,
-                                show_palette_editor: &mut self.show_palette_editor,
-                                show_triangle_editor: &mut show_triangle_editor,
 
                                 // Action flags
                                 add_transform: &mut add_transform,
@@ -297,8 +279,6 @@ impl EguiLayer {
 
                                 // Window visibility
                                 show_config_window: &mut self.show_config_window,
-                                show_palette_editor: &mut self.show_palette_editor,
-                                show_triangle_editor: &mut show_triangle_editor,
 
                                 // Action flags
                                 add_transform: &mut add_transform,
