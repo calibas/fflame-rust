@@ -186,9 +186,15 @@ impl EguiLayer {
             // Dynamic docking system: users can dock panels to left/right/bottom edges
             // Center area remains transparent to show the fractal
 
-            // Render single DockArea at top level
-            // This allows panels to float or dock to any edge (left/right/bottom)
-            // The fractal renders first (before egui), shows through where no panels exist
+            // Reserve center area for fractal (transparent panel)
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none()) // Completely transparent - fractal shows through
+                .show(ctx, |_ui| {
+                    // Empty - just reserves space for fractal
+                });
+
+            // Render DockArea - manages dockable windows around the central area
+            // Panels can dock to left/right/bottom edges, but center stays clear
             egui_dock::DockArea::new(&mut workspace.dock_state)
                 .id(egui::Id::new("main_dock_area"))
                 .show(ctx, &mut panel_viewer::PanelViewer {
