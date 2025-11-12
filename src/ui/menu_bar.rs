@@ -3,7 +3,6 @@ use super::menu_context::{MenuActions, MenuState};
 /// Render the top menu bar with window visibility toggles
 pub fn render_menu_bar(
     ctx: &egui::Context,
-    show_config_window: &mut bool,
     workspace: &mut super::workspace::Workspace,
     menu_actions: &mut MenuActions,
     menu_state: &MenuState,
@@ -237,7 +236,13 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor);
                     ui.close();
                 }
-                ui.checkbox(show_config_window, "📄 Config Import/Export");
+
+                // Config Import/Export opens as floating window in docking system
+                let config_dialog_open = workspace.panel_exists(super::workspace::PanelType::ConfigDialog);
+                if ui.selectable_label(config_dialog_open, "📄 Config Import/Export").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog);
+                    ui.close();
+                }
 
                 // Undo/Redo History opens as floating window in docking system
                 let history_open = workspace.panel_exists(super::workspace::PanelType::History);

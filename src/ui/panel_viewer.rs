@@ -46,6 +46,14 @@ pub struct PanelContext<'a> {
     // Performance metrics
     pub metrics: &'a crate::util::PerformanceMetrics,
     pub window_size: winit::dpi::PhysicalSize<u32>,
+
+    // Config dialog state
+    pub config_json_buffer: &'a mut String,
+    pub config_export_json: &'a mut Option<String>,
+    pub config_import_json: &'a mut Option<String>,
+    pub config_save_file: &'a mut bool,
+    pub config_load_file: &'a mut bool,
+    pub apophysis_import_file: &'a mut bool,
 }
 
 /// Viewer for rendering each panel type
@@ -88,6 +96,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::Help => {
                 self.render_help_panel(ui);
+            }
+            PanelType::ConfigDialog => {
+                self.render_config_dialog_panel(ui);
             }
         }
     }
@@ -194,5 +205,18 @@ impl<'a> PanelViewer<'a> {
     /// Render Help panel (keyboard shortcuts and documentation)
     fn render_help_panel(&mut self, ui: &mut egui::Ui) {
         super::help::render_help_content(ui);
+    }
+
+    /// Render Config Dialog panel (import/export configuration)
+    fn render_config_dialog_panel(&mut self, ui: &mut egui::Ui) {
+        super::config_dialog::render_config_dialog_content(
+            ui,
+            self.context.config_json_buffer,
+            self.context.config_export_json,
+            self.context.config_import_json,
+            self.context.config_save_file,
+            self.context.config_load_file,
+            self.context.apophysis_import_file,
+        );
     }
 }
