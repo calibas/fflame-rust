@@ -140,6 +140,79 @@ pub fn render_view_content(
         }
     });
 
+    ui.separator();
+
+    // 3D Rendering Controls
+    ui.label("Render Mode");
+    ui.horizontal(|ui| {
+        let was_2d = matches!(config.flame.render_mode, crate::scene::transforms::RenderMode::TwoD);
+        if ui.selectable_label(was_2d, "2D").clicked() {
+            if let Err(e) = config_manager.update_param(
+                ConfigPath::RenderMode,
+                crate::scene::transforms::RenderMode::TwoD.into(),
+                false,
+            ) {
+                log::error!("Failed to update render mode: {}", e);
+            }
+        }
+        if ui.selectable_label(!was_2d, "3D").clicked() {
+            if let Err(e) = config_manager.update_param(
+                ConfigPath::RenderMode,
+                crate::scene::transforms::RenderMode::ThreeD.into(),
+                false,
+            ) {
+                log::error!("Failed to update render mode: {}", e);
+            }
+        }
+    });
+
+    // Show projection controls only in 3D mode
+    if matches!(config.flame.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
+        ui.label("Projection");
+        ui.horizontal(|ui| {
+            let is_ortho = matches!(config.flame.projection, crate::scene::transforms::ProjectionType::Orthographic);
+            if ui.selectable_label(is_ortho, "Orthographic").clicked() {
+                if let Err(e) = config_manager.update_param(
+                    ConfigPath::ProjectionType,
+                    crate::scene::transforms::ProjectionType::Orthographic.into(),
+                    false,
+                ) {
+                    log::error!("Failed to update projection type: {}", e);
+                }
+            }
+            if ui.selectable_label(!is_ortho, "Perspective").clicked() {
+                if let Err(e) = config_manager.update_param(
+                    ConfigPath::ProjectionType,
+                    crate::scene::transforms::ProjectionType::Perspective { strength: 2.0 }.into(),
+                    false,
+                ) {
+                    log::error!("Failed to update projection type: {}", e);
+                }
+            }
+        });
+
+        // Perspective strength slider
+        if let crate::scene::transforms::ProjectionType::Perspective { mut strength } = config.flame.projection {
+            let response = ui.add(egui::Slider::new(&mut strength, 0.5..=10.0).text("Perspective Strength"));
+            if response.changed() {
+                if let Err(e) = config_manager.update_param(
+                    ConfigPath::ProjectionType,
+                    crate::scene::transforms::ProjectionType::Perspective { strength }.into(),
+                    response.dragged(),
+                ) {
+                    log::error!("Failed to update perspective strength: {}", e);
+                }
+            }
+            if response.drag_stopped() && config_manager.is_in_preview_mode() {
+                if let Err(e) = config_manager.force_commit_preview(&ConfigPath::ProjectionType) {
+                    log::error!("Failed to commit perspective strength preview: {}", e);
+                }
+            }
+        }
+    }
+
+    ui.separator();
+
     // 3D Camera rotation controls (only visible in 3D mode)
     if matches!(flame.render_mode, RenderMode::ThreeD) {
         ui.separator();
