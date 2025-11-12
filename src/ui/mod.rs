@@ -39,7 +39,6 @@ pub struct EguiLayer {
     palette_editor: PaletteEditor,
     // Window visibility (no persistence between sessions)
     show_help: bool,
-    show_undo_history: bool,
 }
 
 impl EguiLayer {
@@ -73,7 +72,6 @@ impl EguiLayer {
             palette_editor: PaletteEditor::new(),
             // Window visibility - Help minimized by default
             show_help: false,
-            show_undo_history: false,
         }
     }
 
@@ -174,13 +172,12 @@ impl EguiLayer {
                 ctx,
                 &mut self.show_help,
                 &mut self.show_config_window,
-                &mut self.show_undo_history,
                 workspace,
                 &mut menu_actions,
                 &menu_state,
             );
 
-            // Performance, Settings, View, Transforms, Triangle Editor, Colors, and Palette Editor windows are now dockable panels (see Windows menu)
+            // Performance, Settings, View, Transforms, Triangle Editor, Colors, Palette Editor, and History windows are now dockable panels (see Windows menu)
 
             // Render Help window
             help::render_help_window(ctx, &mut self.show_help);
@@ -195,15 +192,6 @@ impl EguiLayer {
                 &mut config_save_file,
                 &mut config_load_file,
                 &mut apophysis_import_file,
-            );
-
-            // Render Undo/Redo History window
-            undo_history::render_undo_history_window(
-                ctx,
-                &mut self.show_undo_history,
-                config_manager,
-                &mut undo_requested,
-                &mut redo_requested,
             );
 
             // Render Left Docking Workspace (Transforms, Triangle Editor)
