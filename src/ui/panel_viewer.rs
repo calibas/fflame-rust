@@ -240,17 +240,90 @@ impl<'a> PanelViewer<'a> {
             // Report the size back so texture can be resized to match
             *self.context.fractal_viewport_size = Some((width, height));
 
-            // Display the fractal texture, scaled to fill available space
+            // Display the fractal texture with drag and scroll interaction
             let image = egui::Image::new(egui::load::SizedTexture::new(texture_id, available_size))
                 .fit_to_exact_size(available_size)
-                .maintain_aspect_ratio(false); // Fill entire panel
+                .maintain_aspect_ratio(false) // Fill entire panel
+                .sense(egui::Sense::click_and_drag()); // Enable drag interaction
 
-            ui.add(image);
+            let response = ui.add(image);
+
+            // Handle mouse drag for panning
+            if response.dragged_by(egui::PointerButton::Primary) {
+                let drag_delta = response.drag_delta();
+                self.handle_fractal_drag(drag_delta, available_size);
+            }
+
+            // Commit preview when drag ends
+            if response.drag_stopped() && self.context.config_manager.is_in_preview_mode() {
+                let _ = self.context.config_manager.force_commit_preview(&crate::config::ConfigPath::PanX);
+            }
+
+            // Handle mouse wheel for zooming
+            if response.hovered() {
+                let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+                if scroll_delta.abs() > 0.1 {
+                    self.handle_fractal_scroll(scroll_delta, response.hover_pos());
+                }
+            }
         } else {
             // Fallback if texture not available yet
             ui.centered_and_justified(|ui| {
                 ui.label("Initializing fractal renderer...");
             });
+        }
+    }
+
+    /// Handle fractal panning via mouse drag
+    fn handle_fractal_drag(&mut self, drag_delta: egui::Vec2, panel_size: egui::Vec2) {
+        let config = self.context.config_manager.active_config();
+
+        // Convert screen space delta to fractal space
+        // Invert both X and Y (drag right = pan left, drag down = pan up)
+        let screen_dx = -drag_delta.x / panel_size.x;
+        let screen_dy = -drag_delta.y / panel_size.y;
+
+        // Apply rotation (negate to convert screen to fractal space)
+        let cos_r = (-config.rotation).cos();
+        let sin_r = (-config.rotation).sin();
+
+        // Scale by zoom (4.0 is the full visible range: -2 to +2)
+        let scale = 4.0 / config.zoom;
+        let fractal_dx = (screen_dx * cos_r - screen_dy * sin_r) * scale;
+        let fractal_dy = (screen_dx * sin_r + screen_dy * cos_r) * scale;
+
+        let new_pan_x = config.pan_x + fractal_dx;
+        let new_pan_y = config.pan_y + fractal_dy;
+
+        let _ = self.context.config_manager.update_batch(
+            vec![
+                (crate::config::ConfigPath::PanX, new_pan_x.into()),
+                (crate::config::ConfigPath::PanY, new_pan_y.into()),
+            ],
+            "Pan (Mouse Drag)".to_string(),
+            true  // Preview mode while dragging
+        );
+    }
+
+    /// Handle fractal zooming via mouse wheel
+    fn handle_fractal_scroll(&mut self, scroll_delta: f32, _mouse_pos: Option<egui::Pos2>) {
+        let config = self.context.config_manager.active_config();
+
+        // Use power-based zoom for smooth scrolling (matches original code)
+        let zoom_factor = if scroll_delta.abs() > 0.1 {
+            1.1f32.powf(scroll_delta * 0.05)
+        } else {
+            1.0
+        };
+
+        if zoom_factor != 1.0 {
+            let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+
+            let _ = self.context.config_manager.update_param(
+                crate::config::ConfigPath::Zoom,
+                new_zoom.into(),
+                false  // Discrete action for scroll
+            );
         }
     }
 }
