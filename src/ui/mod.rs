@@ -183,130 +183,64 @@ impl EguiLayer {
             );
 
             // All windows are now dockable panels (see Windows menu)
-            // Performance, Settings, View, Transforms, Triangle Editor, Colors, Palette Editor, History, Help, and Config Import/Export
+            // Dynamic docking system: users can dock panels to left/right/bottom edges
+            // Center area remains transparent to show the fractal
 
-            // Render Left Docking Workspace (Transforms, Triangle Editor)
-            egui::SidePanel::left("left_dock_panel")
-                .default_width(window_size.width as f32 * 0.25)
-                .min_width(200.0)
-                .max_width(window_size.width as f32 * 0.5)
-                .resizable(true)
-                .show(ctx, |ui| {
-                    egui_dock::DockArea::new(&mut workspace.left_dock_state)
-                        .id(egui::Id::new("left_dock_area"))
-                        .show_inside(ui, &mut panel_viewer::PanelViewer {
-                            context: panel_viewer::PanelContext {
-                                // Core state
-                                config_manager,
-                                flame,
+            // Render single DockArea at top level
+            // This allows panels to float or dock to any edge (left/right/bottom)
+            // The fractal renders first (before egui), shows through where no panels exist
+            egui_dock::DockArea::new(&mut workspace.dock_state)
+                .id(egui::Id::new("main_dock_area"))
+                .show(ctx, &mut panel_viewer::PanelViewer {
+                    context: panel_viewer::PanelContext {
+                        // Core state
+                        config_manager,
+                        flame,
 
-                                // Libraries
-                                preset_library,
-                                palette_library,
+                        // Libraries
+                        preset_library,
+                        palette_library,
 
-                                // Renderer
-                                flame_renderer: flame_renderer.as_ref().map(|v| &**v),
+                        // Renderer
+                        flame_renderer: flame_renderer.as_ref().map(|v| &**v),
 
-                                // Window visibility (deprecated - will be removed)
-                                show_config_window: &mut false,
+                        // Window visibility (deprecated - will be removed)
+                        show_config_window: &mut false,
 
-                                // Action flags
-                                add_transform: &mut add_transform,
-                                delete_transform: &mut delete_transform,
-                                undo_requested: &mut undo_requested,
-                                redo_requested: &mut redo_requested,
-                                preset_changed: &mut preset_changed,
-                                pause_changed: &mut pause_changed,
-                                open_palette_editor: &mut open_palette_editor,
+                        // Action flags
+                        add_transform: &mut add_transform,
+                        delete_transform: &mut delete_transform,
+                        undo_requested: &mut undo_requested,
+                        redo_requested: &mut redo_requested,
+                        preset_changed: &mut preset_changed,
+                        pause_changed: &mut pause_changed,
+                        open_palette_editor: &mut open_palette_editor,
 
-                                // UI state
-                                current_preset_index,
-                                paused,
-                                png_export_with_background: &mut png_export_with_background,
-                                png_export_transparent: &mut png_export_transparent,
-                                custom_palette: &mut custom_palette,
-                                palette_editor: &mut self.palette_editor,
-                                palette_export_json: &mut palette_export_json,
-                                palette_save_file: &mut palette_save_file,
-                                palette_import_json: &mut palette_import_json,
-                                palette_load_file: &mut palette_load_file,
+                        // UI state
+                        current_preset_index,
+                        paused,
+                        png_export_with_background: &mut png_export_with_background,
+                        png_export_transparent: &mut png_export_transparent,
+                        custom_palette: &mut custom_palette,
+                        palette_editor: &mut self.palette_editor,
+                        palette_export_json: &mut palette_export_json,
+                        palette_save_file: &mut palette_save_file,
+                        palette_import_json: &mut palette_import_json,
+                        palette_load_file: &mut palette_load_file,
 
-                                // Performance metrics
-                                metrics,
-                                window_size,
+                        // Performance metrics
+                        metrics,
+                        window_size,
 
-                                // Config dialog state
-                                config_json_buffer: &mut self.config_json_buffer,
-                                config_export_json: &mut config_export_json,
-                                config_import_json: &mut config_import_json,
-                                config_save_file: &mut config_save_file,
-                                config_load_file: &mut config_load_file,
-                                apophysis_import_file: &mut apophysis_import_file,
-                                open_config_dialog: &mut open_config_dialog,
-                            },
-                        });
-                });
-
-            // Render Right Docking Workspace (Colors, Palette Editor, View, Rendering, History)
-            egui::SidePanel::right("right_dock_panel")
-                .default_width(window_size.width as f32 * 0.25)
-                .min_width(200.0)
-                .max_width(window_size.width as f32 * 0.5)
-                .resizable(true)
-                .show(ctx, |ui| {
-                    egui_dock::DockArea::new(&mut workspace.right_dock_state)
-                        .id(egui::Id::new("right_dock_area"))
-                        .show_inside(ui, &mut panel_viewer::PanelViewer {
-                            context: panel_viewer::PanelContext {
-                                // Core state
-                                config_manager,
-                                flame,
-
-                                // Libraries
-                                preset_library,
-                                palette_library,
-
-                                // Renderer
-                                flame_renderer: flame_renderer.as_ref().map(|v| &**v),
-
-                                // Window visibility (deprecated - will be removed)
-                                show_config_window: &mut false,
-
-                                // Action flags
-                                add_transform: &mut add_transform,
-                                delete_transform: &mut delete_transform,
-                                undo_requested: &mut undo_requested,
-                                redo_requested: &mut redo_requested,
-                                preset_changed: &mut preset_changed,
-                                pause_changed: &mut pause_changed,
-                                open_palette_editor: &mut open_palette_editor,
-
-                                // UI state
-                                current_preset_index,
-                                paused,
-                                png_export_with_background: &mut png_export_with_background,
-                                png_export_transparent: &mut png_export_transparent,
-                                custom_palette: &mut custom_palette,
-                                palette_editor: &mut self.palette_editor,
-                                palette_export_json: &mut palette_export_json,
-                                palette_save_file: &mut palette_save_file,
-                                palette_import_json: &mut palette_import_json,
-                                palette_load_file: &mut palette_load_file,
-
-                                // Performance metrics
-                                metrics,
-                                window_size,
-
-                                // Config dialog state
-                                config_json_buffer: &mut self.config_json_buffer,
-                                config_export_json: &mut config_export_json,
-                                config_import_json: &mut config_import_json,
-                                config_save_file: &mut config_save_file,
-                                config_load_file: &mut config_load_file,
-                                apophysis_import_file: &mut apophysis_import_file,
-                                open_config_dialog: &mut open_config_dialog,
-                            },
-                        });
+                        // Config dialog state
+                        config_json_buffer: &mut self.config_json_buffer,
+                        config_export_json: &mut config_export_json,
+                        config_import_json: &mut config_import_json,
+                        config_save_file: &mut config_save_file,
+                        config_load_file: &mut config_load_file,
+                        apophysis_import_file: &mut apophysis_import_file,
+                        open_config_dialog: &mut open_config_dialog,
+                    },
                 });
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
