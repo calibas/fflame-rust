@@ -226,6 +226,9 @@ impl EguiLayer {
         let mut open_palette_editor = false;
         let mut open_config_dialog = false;
 
+        // Fractal viewport size tracking
+        let mut fractal_viewport_size = None;
+
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
         let menu_state = MenuState {
@@ -302,6 +305,7 @@ impl EguiLayer {
 
                         // Fractal texture for display
                         fractal_texture_id,
+                        fractal_viewport_size: &mut fractal_viewport_size,
 
                         // Config dialog state
                         config_json_buffer: &mut self.config_json_buffer,
@@ -470,6 +474,7 @@ impl EguiLayer {
             delete_transform,
             open_palette_editor,
             open_config_dialog,
+            fractal_viewport_size,
         }
     }
 }
