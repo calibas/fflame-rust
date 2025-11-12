@@ -49,6 +49,7 @@ pub struct PanelContext<'a> {
 
     // Fractal texture for display
     pub fractal_texture_id: Option<egui::TextureId>,
+    pub fractal_viewport_size: &'a mut Option<(u32, u32)>,
 
     // Config dialog state
     pub config_json_buffer: &'a mut String,
@@ -231,10 +232,15 @@ impl<'a> PanelViewer<'a> {
     /// Render Fractal Viewport (main fractal rendering area)
     fn render_fractal_viewport(&mut self, ui: &mut egui::Ui) {
         if let Some(texture_id) = self.context.fractal_texture_id {
-            // Display the fractal texture, scaled to fill available space
+            // Get the actual panel size and report it for texture sizing
             let available_size = ui.available_size();
+            let width = available_size.x.max(1.0) as u32;
+            let height = available_size.y.max(1.0) as u32;
 
-            // Use SizeHint::Size to maintain aspect ratio while filling space
+            // Report the size back so texture can be resized to match
+            *self.context.fractal_viewport_size = Some((width, height));
+
+            // Display the fractal texture, scaled to fill available space
             let image = egui::Image::new(egui::load::SizedTexture::new(texture_id, available_size))
                 .fit_to_exact_size(available_size)
                 .maintain_aspect_ratio(false); // Fill entire panel

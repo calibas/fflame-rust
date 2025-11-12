@@ -51,6 +51,9 @@ pub struct App {
     pub(super) last_frame_time: Option<web_time::Instant>,
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
+
+    // Fractal viewport size (updated from UI each frame)
+    pub(super) fractal_viewport_size: (u32, u32),
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -128,6 +131,9 @@ impl App {
 
         let config_manager = ConfigManager::new(initial_config.clone());
 
+        // Get initial size before moving gpu
+        let initial_viewport_size = (gpu.size.width, gpu.size.height);
+
         let mut app = Self {
             config_manager,
             gpu,
@@ -148,6 +154,7 @@ impl App {
             last_frame_time: None,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
+            fractal_viewport_size: initial_viewport_size, // Initialize to window size
         };
 
         #[allow(deprecated)]
@@ -326,8 +333,8 @@ impl App {
             label: Some("Render Encoder"),
         });
 
-        // Ensure fractal texture exists and is correct size
-        let fractal_view = self.egui_layer.ensure_fractal_texture(&self.gpu.device, self.gpu.size.width, self.gpu.size.height);
+        // Ensure fractal texture exists and is correct size (use viewport size, not window size)
+        let fractal_view = self.egui_layer.ensure_fractal_texture(&self.gpu.device, self.fractal_viewport_size.0, self.fractal_viewport_size.1);
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
@@ -422,6 +429,26 @@ impl App {
             &mut self.workspace,
         );
         self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
+
+        // Update fractal viewport size and resize renderer if changed
+        if let Some(viewport_size) = ui_response.fractal_viewport_size {
+            if viewport_size != self.fractal_viewport_size {
+                self.fractal_viewport_size = viewport_size;
+
+                // Resize renderer to match new viewport dimensions
+                if let Some(ref mut renderer) = self.flame_renderer {
+                    // Get config again to avoid borrow conflict
+                    let resize_config = self.config_manager.active_config();
+                    let mut resize_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                        label: Some("Viewport Resize Encoder"),
+                    });
+                    renderer.resize(&self.gpu.device, &mut resize_encoder, &self.gpu.queue, viewport_size.0, viewport_size.1,
+                        &self.flame, resize_config.iterations_per_thread, resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
+                        resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
+                    self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
+                }
+            }
+        }
 
         let t4 = Instant::now();
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
