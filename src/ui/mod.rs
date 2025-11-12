@@ -17,7 +17,7 @@ mod undo_history;
 mod variation_controls;
 mod variation_params;
 mod view;
-mod workspace;
+pub mod workspace;
 
 pub use lazy_undo::LazyUndoHelper;
 pub use menu_context::{MenuActions, MenuState};
@@ -152,6 +152,9 @@ impl EguiLayer {
         let mut png_export_transparent = false;
         let mut png_export_requested = false;
 
+        // Panel open requests
+        let mut open_palette_editor = false;
+
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
         let menu_state = MenuState {
@@ -235,6 +238,7 @@ impl EguiLayer {
                                 redo_requested: &mut redo_requested,
                                 preset_changed: &mut preset_changed,
                                 pause_changed: &mut pause_changed,
+                                open_palette_editor: &mut open_palette_editor,
 
                                 // UI state
                                 current_preset_index,
@@ -287,6 +291,7 @@ impl EguiLayer {
                                 redo_requested: &mut redo_requested,
                                 preset_changed: &mut preset_changed,
                                 pause_changed: &mut pause_changed,
+                                open_palette_editor: &mut open_palette_editor,
 
                                 // UI state
                                 current_preset_index,
@@ -461,6 +466,7 @@ impl EguiLayer {
             preset_changed,
             add_transform,
             delete_transform,
+            open_palette_editor,
         }
     }
 }

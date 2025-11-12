@@ -36,6 +36,9 @@ pub struct UiResponse {
     // Transform management (creates config deltas but needs special handling)
     pub add_transform: bool,
     pub delete_transform: Option<usize>,
+
+    // Panel open requests
+    pub open_palette_editor: bool,
 }
 
 impl Default for UiResponse {
@@ -61,6 +64,7 @@ impl Default for UiResponse {
             preset_changed: false,
             add_transform: false,
             delete_transform: None,
+            open_palette_editor: false,
         }
     }
 }
