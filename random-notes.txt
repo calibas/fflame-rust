@@ -216,3 +216,11 @@ Good - the export_headless function now takes config: &FractalConfig as a parame
 Prebuild shaders with every static setting instead of passing them via buffers.
 
 Precache the first X iterations and store it in the buffers.
+
+
+
+2,048 length palette in the shaders (may already exist, need to check math)
+Allow stretching/squishing of palette via slider
+
+
+Investigate HDR and ways of storing iteration data in ways that aren't limited to screen display.

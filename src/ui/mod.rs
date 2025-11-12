@@ -39,11 +39,8 @@ pub struct EguiLayer {
     show_palette_editor: bool,
     palette_editor: PaletteEditor,
     // Window visibility (no persistence between sessions)
-    show_tone_mapping: bool,
     show_help: bool,
     show_undo_history: bool,
-    // Lazy undo helpers for throttling undo captures during continuous drag
-    lazy_undo_tone_mapping: LazyUndoHelper,
 }
 
 impl EguiLayer {
@@ -77,10 +74,8 @@ impl EguiLayer {
             show_palette_editor: false,
             palette_editor: PaletteEditor::new(),
             // Window visibility - Help minimized by default
-            show_tone_mapping: true, // Show by default
             show_help: false,
             show_undo_history: false,
-            lazy_undo_tone_mapping: LazyUndoHelper::new(),
         }
     }
 
@@ -176,7 +171,6 @@ impl EguiLayer {
             // Render menu bar
             menu_bar::render_menu_bar(
                 ctx,
-                &mut self.show_tone_mapping,
                 &mut self.show_help,
                 &mut self.show_palette_editor,
                 &mut self.show_config_window,
@@ -186,21 +180,10 @@ impl EguiLayer {
                 &menu_state,
             );
 
-            // Performance, Settings, View, Transforms, and Triangle Editor windows are now dockable panels (see Windows menu)
+            // Performance, Settings, View, Transforms, Triangle Editor, and Colors windows are now dockable panels (see Windows menu)
 
             // Render Help window
             help::render_help_window(ctx, &mut self.show_help);
-
-            // Render Tone Mapping window
-            let _tonemap_update = tone_mapping::render_tone_mapping_window(
-                ctx,
-                &mut self.show_tone_mapping,
-                &mut self.show_palette_editor,
-                config_manager,
-                palette_library,
-                &mut custom_palette,
-                &mut self.lazy_undo_tone_mapping,
-            );
 
             // Render Palette Editor window
             palette_editor::render_palette_editor_window(
