@@ -33,8 +33,6 @@ pub struct App {
     // UI state (not saved in config)
     pub(super) workspace: crate::ui::Workspace,
     pub(super) view_changed_by_keyboard: bool,
-    pub(super) mouse_dragging: bool,
-    pub(super) last_mouse_pos: Option<(f32, f32)>,
     pub(super) paused: bool,
     pub(super) modifiers: winit::keyboard::ModifiersState,
     pub(super) quit_requested: bool,  // Graceful quit requested (check unsaved changes, etc.)
@@ -142,8 +140,6 @@ impl App {
             flame,
             workspace: crate::ui::Workspace::new(),
             view_changed_by_keyboard: false,
-            mouse_dragging: false,
-            last_mouse_pos: None,
             paused: false,
             modifiers: winit::keyboard::ModifiersState::default(),
             quit_requested: false,
@@ -228,19 +224,6 @@ impl App {
                         WindowEvent::KeyboardInput { event: key_event, .. } if !consumed => {
                             // Handle keyboard input only if egui didn't consume it
                             app.handle_keyboard(&key_event);
-                        }
-                        WindowEvent::MouseInput { state, button, .. } => {
-                            // Always handle mouse releases to clear dragging state,
-                            // but only handle presses if egui didn't consume them
-                            app.handle_mouse_button(state, button, consumed);
-                        }
-                        WindowEvent::CursorMoved { position, .. } => {
-                            // Always handle mouse moves to track position and cancel drags if needed
-                            // The handler will check 'consumed' and cancel drag if pointer entered UI
-                            app.handle_mouse_move(position.x as f32, position.y as f32, consumed);
-                        }
-                        WindowEvent::MouseWheel { delta, phase, .. } if !consumed => {
-                            app.handle_mouse_wheel(delta, phase);
                         }
                         WindowEvent::ModifiersChanged(new_modifiers) => {
                             app.modifiers = new_modifiers.state();
