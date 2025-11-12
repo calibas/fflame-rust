@@ -29,6 +29,15 @@ pub fn render_menu_bar(
                 }
                 ui.add_enabled(false, egui::Button::new("Export Apophysis XML..."));
 
+                ui.separator();
+
+                if ui.button("📄 Config Import/Export...").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog);
+                    ui.close();
+                }
+
+                ui.separator();
+
                 if ui.button("🖼 Export PNG...").clicked() {
                     menu_actions.file.export_png = true;
                     ui.close();

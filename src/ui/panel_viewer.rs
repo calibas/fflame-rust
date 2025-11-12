@@ -54,6 +54,7 @@ pub struct PanelContext<'a> {
     pub config_save_file: &'a mut bool,
     pub config_load_file: &'a mut bool,
     pub apophysis_import_file: &'a mut bool,
+    pub open_config_dialog: &'a mut bool,
 }
 
 /// Viewer for rendering each panel type
@@ -178,6 +179,7 @@ impl<'a> PanelViewer<'a> {
             self.context.paused,
             self.context.pause_changed,
             self.context.config_manager,
+            self.context.open_config_dialog,
         );
     }
 

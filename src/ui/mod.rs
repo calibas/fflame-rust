@@ -145,6 +145,7 @@ impl EguiLayer {
 
         // Panel open requests
         let mut open_palette_editor = false;
+        let mut open_config_dialog = false;
 
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
@@ -228,6 +229,7 @@ impl EguiLayer {
                                 config_save_file: &mut config_save_file,
                                 config_load_file: &mut config_load_file,
                                 apophysis_import_file: &mut apophysis_import_file,
+                                open_config_dialog: &mut open_config_dialog,
                             },
                         });
                 });
@@ -289,6 +291,7 @@ impl EguiLayer {
                                 config_save_file: &mut config_save_file,
                                 config_load_file: &mut config_load_file,
                                 apophysis_import_file: &mut apophysis_import_file,
+                                open_config_dialog: &mut open_config_dialog,
                             },
                         });
                 });
@@ -448,6 +451,7 @@ impl EguiLayer {
             add_transform,
             delete_transform,
             open_palette_editor,
+            open_config_dialog,
         }
     }
 }

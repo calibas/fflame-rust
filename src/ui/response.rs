@@ -39,6 +39,7 @@ pub struct UiResponse {
 
     // Panel open requests
     pub open_palette_editor: bool,
+    pub open_config_dialog: bool,
 }
 
 impl Default for UiResponse {
@@ -65,6 +66,7 @@ impl Default for UiResponse {
             add_transform: false,
             delete_transform: None,
             open_palette_editor: false,
+            open_config_dialog: false,
         }
     }
 }
