@@ -3,7 +3,6 @@ use super::menu_context::{MenuActions, MenuState};
 /// Render the top menu bar with window visibility toggles
 pub fn render_menu_bar(
     ctx: &egui::Context,
-    show_tone_mapping: &mut bool,
     show_help: &mut bool,
     show_palette_editor: &mut bool,
     show_config_window: &mut bool,
@@ -215,7 +214,13 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor);
                     ui.close();
                 }
-                ui.checkbox(show_tone_mapping, "🎨 Tone Mapping & Colors");
+
+                // Tone Mapping & Colors opens Colors panel as floating window
+                let colors_open = workspace.panel_exists(super::workspace::PanelType::Colors);
+                if ui.selectable_label(colors_open, "🎨 Tone Mapping & Colors").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Colors);
+                    ui.close();
+                }
                 ui.checkbox(show_help, "❓ Help");
                 ui.separator();
                 ui.checkbox(show_palette_editor, "🎨 Palette Editor");
