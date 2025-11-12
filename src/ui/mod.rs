@@ -19,7 +19,6 @@ mod variation_params;
 mod view;
 pub mod workspace;
 
-pub use lazy_undo::LazyUndoHelper;
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
@@ -37,8 +36,6 @@ pub struct EguiLayer {
     config_json_buffer: String,
     show_config_window: bool, // For Import/Export Config dialog
     palette_editor: PaletteEditor,
-    // Window visibility (no persistence between sessions)
-    show_help: bool,
 }
 
 impl EguiLayer {
@@ -70,8 +67,6 @@ impl EguiLayer {
             config_json_buffer: String::new(),
             show_config_window: false,
             palette_editor: PaletteEditor::new(),
-            // Window visibility - Help minimized by default
-            show_help: false,
         }
     }
 
@@ -170,17 +165,13 @@ impl EguiLayer {
             // Render menu bar
             menu_bar::render_menu_bar(
                 ctx,
-                &mut self.show_help,
                 &mut self.show_config_window,
                 workspace,
                 &mut menu_actions,
                 &menu_state,
             );
 
-            // Performance, Settings, View, Transforms, Triangle Editor, Colors, Palette Editor, and History windows are now dockable panels (see Windows menu)
-
-            // Render Help window
-            help::render_help_window(ctx, &mut self.show_help);
+            // Performance, Settings, View, Transforms, Triangle Editor, Colors, Palette Editor, History, and Help windows are now dockable panels (see Windows menu)
 
             // Render Config Dialog window
             config_dialog::render_config_dialog(

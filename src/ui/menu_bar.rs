@@ -3,7 +3,6 @@ use super::menu_context::{MenuActions, MenuState};
 /// Render the top menu bar with window visibility toggles
 pub fn render_menu_bar(
     ctx: &egui::Context,
-    show_help: &mut bool,
     show_config_window: &mut bool,
     workspace: &mut super::workspace::Workspace,
     menu_actions: &mut MenuActions,
@@ -223,7 +222,13 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::Colors);
                     ui.close();
                 }
-                ui.checkbox(show_help, "❓ Help");
+
+                // Help opens as floating window in docking system
+                let help_open = workspace.panel_exists(super::workspace::PanelType::Help);
+                if ui.selectable_label(help_open, "❓ Help").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Help);
+                    ui.close();
+                }
                 ui.separator();
 
                 // Palette Editor opens as floating window in docking system

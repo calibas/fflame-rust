@@ -86,6 +86,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             PanelType::Performance => {
                 self.render_performance_panel(ui);
             }
+            PanelType::Help => {
+                self.render_help_panel(ui);
+            }
         }
     }
 }
@@ -186,5 +189,10 @@ impl<'a> PanelViewer<'a> {
             self.context.window_size,
             self.context.flame_renderer,
         );
+    }
+
+    /// Render Help panel (keyboard shortcuts and documentation)
+    fn render_help_panel(&mut self, ui: &mut egui::Ui) {
+        super::help::render_help_content(ui);
     }
 }
