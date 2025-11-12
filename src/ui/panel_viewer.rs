@@ -263,7 +263,7 @@ impl<'a> PanelViewer<'a> {
             if response.hovered() {
                 let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
                 if scroll_delta.abs() > 0.1 {
-                    self.handle_fractal_scroll(scroll_delta, response.hover_pos());
+                    self.handle_fractal_scroll(scroll_delta, response.hover_pos(), response.rect, available_size);
                 }
             }
         } else {
@@ -306,7 +306,13 @@ impl<'a> PanelViewer<'a> {
     }
 
     /// Handle fractal zooming via mouse wheel
-    fn handle_fractal_scroll(&mut self, scroll_delta: f32, _mouse_pos: Option<egui::Pos2>) {
+    fn handle_fractal_scroll(
+        &mut self,
+        scroll_delta: f32,
+        mouse_pos: Option<egui::Pos2>,
+        panel_rect: egui::Rect,
+        panel_size: egui::Vec2,
+    ) {
         let config = self.context.config_manager.active_config();
 
         // Use power-based zoom for smooth scrolling (matches original code)
@@ -317,13 +323,63 @@ impl<'a> PanelViewer<'a> {
         };
 
         if zoom_factor != 1.0 {
-            let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+            // Zoom in toward cursor, zoom out from center
+            if zoom_factor > 1.0 {
+                // Zooming in - zoom toward mouse cursor position
+                if let Some(mouse_pos) = mouse_pos {
+                    // Convert mouse position from panel space to fractal space
+                    // Panel center
+                    let center_x = panel_rect.center().x;
+                    let center_y = panel_rect.center().y;
 
-            let _ = self.context.config_manager.update_param(
-                crate::config::ConfigPath::Zoom,
-                new_zoom.into(),
-                false  // Discrete action for scroll
-            );
+                    // Mouse offset from center in panel pixels
+                    let mouse_offset_x = mouse_pos.x - center_x;
+                    let mouse_offset_y = mouse_pos.y - center_y;
+
+                    // Convert to fractal space (account for current zoom and scale)
+                    let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
+                    let fractal_offset_x = mouse_offset_x / (scale * config.zoom);
+                    let fractal_offset_y = mouse_offset_y / (scale * config.zoom);
+
+                    // Calculate the point in fractal space that the mouse is pointing at
+                    let point_x = config.pan_x + fractal_offset_x;
+                    let point_y = config.pan_y + fractal_offset_y;
+
+                    // Apply zoom and adjust pan
+                    let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+                    let new_fractal_offset_x = mouse_offset_x / (scale * new_zoom);
+                    let new_fractal_offset_y = mouse_offset_y / (scale * new_zoom);
+                    let new_pan_x = point_x - new_fractal_offset_x;
+                    let new_pan_y = point_y - new_fractal_offset_y;
+
+                    // Update all three parameters atomically
+                    let _ = self.context.config_manager.update_batch(
+                        vec![
+                            (crate::config::ConfigPath::Zoom, new_zoom.into()),
+                            (crate::config::ConfigPath::PanX, new_pan_x.into()),
+                            (crate::config::ConfigPath::PanY, new_pan_y.into()),
+                        ],
+                        "Zoom In (Wheel)".to_string(),
+                        false, // Discrete action for scroll
+                    );
+                } else {
+                    // No mouse position, zoom to center
+                    let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+                    let _ = self.context.config_manager.update_param(
+                        crate::config::ConfigPath::Zoom,
+                        new_zoom.into(),
+                        false, // Discrete action for scroll
+                    );
+                }
+            } else {
+                // Zooming out - always zoom from center
+                let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
+                let _ = self.context.config_manager.update_param(
+                    crate::config::ConfigPath::Zoom,
+                    new_zoom.into(),
+                    false, // Discrete action for scroll
+                );
+            }
         }
     }
 }
