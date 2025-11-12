@@ -183,21 +183,14 @@ impl EguiLayer {
             );
 
             // All windows are now dockable panels (see Windows menu)
-            // Single dock on right side - all panels draggable within dock
-            // Center/left area shows the fractal
+            // Fullscreen docking system with Fractal Viewport as a panel
+            // Fractal renders as a panel in the dock, can be arranged with other panels
 
-            // Render single SidePanel on right with DockArea inside
-            // All panels are in one dock = draggable between tabs and can be split
-            // Fractal shows on left/center (not covered by panel)
-            egui::SidePanel::right("main_dock_panel")
-                .default_width(window_size.width as f32 * 0.3)
-                .min_width(200.0)
-                .max_width(window_size.width as f32 * 0.8)
-                .resizable(true)
-                .show(ctx, |ui| {
-                    egui_dock::DockArea::new(&mut workspace.dock_state)
-                        .id(egui::Id::new("main_dock_area"))
-                        .show_inside(ui, &mut panel_viewer::PanelViewer {
+            // Render fullscreen DockArea - manages all panels including FractalViewport
+            // egui automatically handles input routing for panels
+            egui_dock::DockArea::new(&mut workspace.dock_state)
+                .id(egui::Id::new("main_dock_area"))
+                .show(ctx, &mut panel_viewer::PanelViewer {
                     context: panel_viewer::PanelContext {
                         // Core state
                         config_manager,
@@ -247,7 +240,6 @@ impl EguiLayer {
                         apophysis_import_file: &mut apophysis_import_file,
                         open_config_dialog: &mut open_config_dialog,
                     },
-                        });
                 });
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
