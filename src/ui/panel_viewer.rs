@@ -71,6 +71,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
+            PanelType::FractalViewport => {
+                self.render_fractal_viewport(ui);
+            }
             PanelType::Transforms => {
                 self.render_transforms_panel(ui);
             }
@@ -220,5 +223,15 @@ impl<'a> PanelViewer<'a> {
             self.context.config_load_file,
             self.context.apophysis_import_file,
         );
+    }
+
+    /// Render Fractal Viewport (main fractal rendering area)
+    fn render_fractal_viewport(&mut self, ui: &mut egui::Ui) {
+        // For now, just show a placeholder
+        // TODO: Render the fractal texture here as an egui::Image
+        ui.centered_and_justified(|ui| {
+            ui.heading("Fractal Viewport");
+            ui.label("(Fractal will render here)");
+        });
     }
 }

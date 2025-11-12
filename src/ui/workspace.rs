@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 /// Identifies which panel to display
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PanelType {
+    /// Fractal viewport (main fractal rendering)
+    FractalViewport,
     /// Transform list, affine, variations (existing Transforms window)
     Transforms,
     /// Visual triangle editor (existing Triangle Editor window)
@@ -34,6 +36,7 @@ pub enum PanelType {
 impl std::fmt::Display for PanelType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            PanelType::FractalViewport => write!(f, "Fractal"),
             PanelType::Transforms => write!(f, "Transforms"),
             PanelType::TriangleEditor => write!(f, "Triangle Editor"),
             PanelType::Colors => write!(f, "Colors"),
@@ -109,14 +112,25 @@ impl Workspace {
         state
     }
 
-    /// Create Standard layout: Tabbed panel with common panels
+    /// Create Standard layout: Fractal in center, controls on sides
     fn create_standard_layout() -> DockState<PanelType> {
-        let mut state = DockState::new(vec![PanelType::Transforms]);
-        let root = state.main_surface_mut();
-        root.push_to_focused_leaf(PanelType::Colors);
-        root.push_to_focused_leaf(PanelType::View);
-        root.push_to_focused_leaf(PanelType::Rendering);
-        root.push_to_focused_leaf(PanelType::History);
+        // Start with FractalViewport in the center
+        let mut state = DockState::new(vec![PanelType::FractalViewport]);
+
+        // Split left for Transforms
+        let [_fractal_node, left_node] = state.main_surface_mut().split_left(
+            egui_dock::NodeIndex::root(),
+            0.25, // 25% width for left panel
+            vec![PanelType::Transforms],
+        );
+
+        // Split right for other controls (Colors, View, Rendering, History)
+        let [_fractal_node, right_node] = state.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.75, // Right panel starts at 75% (takes remaining 25%)
+            vec![PanelType::Colors, PanelType::View, PanelType::Rendering, PanelType::History],
+        );
+
         state
     }
 
