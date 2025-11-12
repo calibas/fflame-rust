@@ -320,11 +320,14 @@ impl App {
         let palette_rotation = config.palette_rotation;  // Copy to avoid borrow issues
 
         let frame = self.gpu.surface.get_current_texture()?;
-        let view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
+        let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
 
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
+
+        // Ensure fractal texture exists and is correct size
+        let fractal_view = self.egui_layer.ensure_fractal_texture(&self.gpu.device, self.gpu.size.width, self.gpu.size.height);
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
@@ -381,11 +384,11 @@ impl App {
             }
 
             let t2 = Instant::now();
-            // 3. Update tonemap parameters and render to screen
+            // 3. Update tonemap parameters and render to fractal texture
             renderer.update_density_scale(&self.gpu.queue, config.density_scale);
             renderer.update_background_color(&self.gpu.queue, config.background_color);
             renderer.update_tonemap(&self.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, renderer.width, renderer.height, renderer.total_iterations(), config.max_iterations);
-            renderer.tonemap_pass(&mut encoder, &view);
+            renderer.tonemap_pass(&mut encoder, fractal_view);
             self.metrics.record_tonemap_time(t2.elapsed().as_secs_f64() * 1000.0);
 
             // DEBUG: Log scale statistics every 60 frames
@@ -402,7 +405,7 @@ impl App {
             &self.gpu.device,
             &self.gpu.queue,
             &mut encoder,
-            &view,
+            &surface_view,
             window,
             self.gpu.size,
             &self.metrics,
