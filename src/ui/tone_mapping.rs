@@ -178,6 +178,7 @@ pub fn render_colors_content(
     config_manager: &mut ConfigManager,
     palette_library: &PaletteLibrary,
     custom_palette: &mut Option<crate::scene::palette::Palette>,
+    open_palette_editor: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
@@ -367,36 +368,7 @@ pub fn render_colors_content(
 
                 ui.horizontal(|ui| {
                     if ui.button("🎨 Edit Palette").clicked() {
-                        // Palette Editor is now accessible via Windows menu
-                        // *show_palette_editor = !*show_palette_editor;
-
-                        if current_palette.is_none() {
-                            let palette_index = config_manager.active_config().palette_index;
-                            if let Some(lib_pal) = palette_library.get(palette_index) {
-                                let mut pal = lib_pal.clone();
-
-                                if lib_pal.built_in {
-                                    let base_name = &lib_pal.name;
-                                    let mut new_name = format!("{} (Custom)", base_name);
-                                    let mut counter = 2;
-
-                                    while palette_library.palettes().iter().any(|p| p.name == new_name) {
-                                        new_name = format!("{} (Custom {})", base_name, counter);
-                                        counter += 1;
-                                    }
-
-                                    pal.name = new_name;
-                                }
-
-                                pal.built_in = false;
-
-                                let _ = config_manager.update_param(
-                                    ConfigPath::Palette,
-                                    pal.into(),
-                                    false
-                                );
-                            }
-                        }
+                        *open_palette_editor = true;
                     }
 
                     if ui.button("📋 Clone").clicked() {

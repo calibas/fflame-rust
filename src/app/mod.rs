@@ -831,6 +831,12 @@ impl App {
             self.redo();
         }
 
+        // Handle panel open requests
+        if ui_response.open_palette_editor {
+            use crate::ui::workspace::PanelType;
+            self.workspace.open_floating_panel(PanelType::PaletteEditor);
+        }
+
         // Check for pending Apophysis import from WASM async file dialog
         #[cfg(target_arch = "wasm32")]
         {

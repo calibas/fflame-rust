@@ -29,6 +29,7 @@ pub struct PanelContext<'a> {
     pub redo_requested: &'a mut bool,
     pub preset_changed: &'a mut bool,
     pub pause_changed: &'a mut bool,
+    pub open_palette_editor: &'a mut bool,
 
     // UI state
     pub current_preset_index: &'a mut usize,
@@ -117,6 +118,7 @@ impl<'a> PanelViewer<'a> {
             self.context.config_manager,
             self.context.palette_library,
             self.context.custom_palette,
+            self.context.open_palette_editor,
         );
     }
 
