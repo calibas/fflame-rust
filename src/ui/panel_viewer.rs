@@ -47,6 +47,9 @@ pub struct PanelContext<'a> {
     pub metrics: &'a crate::util::PerformanceMetrics,
     pub window_size: winit::dpi::PhysicalSize<u32>,
 
+    // Fractal texture for display
+    pub fractal_texture_id: Option<egui::TextureId>,
+
     // Config dialog state
     pub config_json_buffer: &'a mut String,
     pub config_export_json: &'a mut Option<String>,
@@ -227,11 +230,21 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Fractal Viewport (main fractal rendering area)
     fn render_fractal_viewport(&mut self, ui: &mut egui::Ui) {
-        // For now, just show a placeholder
-        // TODO: Render the fractal texture here as an egui::Image
-        ui.centered_and_justified(|ui| {
-            ui.heading("Fractal Viewport");
-            ui.label("(Fractal will render here)");
-        });
+        if let Some(texture_id) = self.context.fractal_texture_id {
+            // Display the fractal texture, scaled to fill available space
+            let available_size = ui.available_size();
+
+            // Use SizeHint::Size to maintain aspect ratio while filling space
+            let image = egui::Image::new(egui::load::SizedTexture::new(texture_id, available_size))
+                .fit_to_exact_size(available_size)
+                .maintain_aspect_ratio(false); // Fill entire panel
+
+            ui.add(image);
+        } else {
+            // Fallback if texture not available yet
+            ui.centered_and_justified(|ui| {
+                ui.label("Initializing fractal renderer...");
+            });
+        }
     }
 }

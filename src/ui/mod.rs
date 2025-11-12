@@ -35,6 +35,11 @@ pub struct EguiLayer {
     renderer: EguiRenderer,
     config_json_buffer: String,
     palette_editor: PaletteEditor,
+
+    // Fractal rendering texture (for displaying fractal in panel)
+    fractal_texture: Option<Texture>,
+    fractal_texture_view: Option<TextureView>,
+    fractal_texture_id: Option<egui_dock::egui::TextureId>,
 }
 
 impl EguiLayer {
@@ -65,6 +70,9 @@ impl EguiLayer {
             renderer,
             config_json_buffer: String::new(),
             palette_editor: PaletteEditor::new(),
+            fractal_texture: None,
+            fractal_texture_view: None,
+            fractal_texture_id: None,
         }
     }
 
@@ -98,6 +106,64 @@ impl EguiLayer {
 
     pub fn update_palette_editor(&mut self, palette: crate::scene::palette::Palette) {
         self.palette_editor.current_palette = palette;
+    }
+
+    /// Ensure fractal texture exists and is the correct size
+    /// Returns the texture view for rendering
+    pub fn ensure_fractal_texture(&mut self, device: &Device, width: u32, height: u32) -> &TextureView {
+        // Check if we need to create/recreate the texture
+        let needs_recreate = self.fractal_texture.is_none() || {
+            if let Some(ref tex) = self.fractal_texture {
+                tex.width() != width || tex.height() != height
+            } else {
+                true
+            }
+        };
+
+        if needs_recreate {
+            // Unregister old texture if it exists
+            if let Some(old_id) = self.fractal_texture_id.take() {
+                self.renderer.free_texture(&old_id);
+            }
+
+            // Create new texture for fractal rendering
+            // Must be Rgba8Unorm for egui compatibility
+            let texture = device.create_texture(&TextureDescriptor {
+                label: Some("Fractal Render Texture"),
+                size: Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::Rgba8Unorm,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+
+            let view = texture.create_view(&TextureViewDescriptor::default());
+
+            // Register with egui
+            let texture_id = self.renderer.register_native_texture(
+                device,
+                &view,
+                FilterMode::Linear,
+            );
+
+            self.fractal_texture = Some(texture);
+            self.fractal_texture_view = Some(view);
+            self.fractal_texture_id = Some(texture_id);
+        }
+
+        // Safe to unwrap - we just ensured it exists
+        self.fractal_texture_view.as_ref().unwrap()
+    }
+
+    /// Get the egui TextureId for the fractal texture (for displaying in UI)
+    pub fn fractal_texture_id(&self) -> Option<egui_dock::egui::TextureId> {
+        self.fractal_texture_id
     }
 
     pub fn render_ui(
@@ -173,6 +239,9 @@ impl EguiLayer {
         // log::debug!("render_ui start: ConfigManager has exposure={:.3}, gamma={:.3}",
         //     config_manager.config().exposure, config_manager.config().gamma);
 
+        // Get fractal texture ID before the closure (avoid borrow conflict)
+        let fractal_texture_id = self.fractal_texture_id();
+
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Render menu bar
             menu_bar::render_menu_bar(
@@ -230,6 +299,9 @@ impl EguiLayer {
                         // Performance metrics
                         metrics,
                         window_size,
+
+                        // Fractal texture for display
+                        fractal_texture_id,
 
                         // Config dialog state
                         config_json_buffer: &mut self.config_json_buffer,
