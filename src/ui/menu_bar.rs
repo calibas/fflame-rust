@@ -5,7 +5,6 @@ pub fn render_menu_bar(
     ctx: &egui::Context,
     show_help: &mut bool,
     show_config_window: &mut bool,
-    show_undo_history: &mut bool,
     workspace: &mut super::workspace::Workspace,
     menu_actions: &mut MenuActions,
     menu_state: &MenuState,
@@ -234,7 +233,13 @@ pub fn render_menu_bar(
                     ui.close();
                 }
                 ui.checkbox(show_config_window, "📄 Config Import/Export");
-                ui.checkbox(show_undo_history, "⮪ Undo/Redo History");
+
+                // Undo/Redo History opens as floating window in docking system
+                let history_open = workspace.panel_exists(super::workspace::PanelType::History);
+                if ui.selectable_label(history_open, "⮪ Undo/Redo History").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::History);
+                    ui.close();
+                }
 
                 ui.separator();
                 ui.menu_button("📐 Workspace Layout", |ui| {
