@@ -282,6 +282,27 @@ pub fn render_menu_bar(
                     }
                 });
             });
+
+            // Help Menu
+            ui.menu_button("Help", |ui| {
+                // Help panel opens as floating window in docking system
+                let help_open = workspace.panel_exists(super::workspace::PanelType::Help);
+                if ui.selectable_label(help_open, "❓ Help (F1)").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Help);
+                    ui.close();
+                }
+
+                if ui.selectable_label(help_open, "⌨ Keyboard Shortcuts (Ctrl+/)").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Help);
+                    ui.close();
+                }
+
+                ui.separator();
+
+                // Future features (not implemented yet)
+                ui.add_enabled(false, egui::Button::new("🐛 Report Bug..."));
+                ui.add_enabled(false, egui::Button::new("ℹ About..."));
+            });
         });
     });
 }
