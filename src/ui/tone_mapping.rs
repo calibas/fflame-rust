@@ -175,7 +175,6 @@ fn render_curve_editor(
 /// This is the panel version without the Window wrapper.
 pub fn render_colors_content(
     ui: &mut egui::Ui,
-    show_palette_editor: &mut bool,
     config_manager: &mut ConfigManager,
     palette_library: &PaletteLibrary,
     custom_palette: &mut Option<crate::scene::palette::Palette>,
@@ -368,7 +367,8 @@ pub fn render_colors_content(
 
                 ui.horizontal(|ui| {
                     if ui.button("🎨 Edit Palette").clicked() {
-                        *show_palette_editor = !*show_palette_editor;
+                        // Palette Editor is now accessible via Windows menu
+                        // *show_palette_editor = !*show_palette_editor;
 
                         if current_palette.is_none() {
                             let palette_index = config_manager.active_config().palette_index;
