@@ -25,6 +25,8 @@ pub enum PanelType {
     History,
     /// Performance stats and version info
     Performance,
+    /// Help and keyboard shortcuts
+    Help,
 }
 
 impl std::fmt::Display for PanelType {
@@ -38,6 +40,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Rendering => write!(f, "Rendering"),
             PanelType::History => write!(f, "History"),
             PanelType::Performance => write!(f, "Performance"),
+            PanelType::Help => write!(f, "Help"),
         }
     }
 }
