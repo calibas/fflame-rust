@@ -183,21 +183,21 @@ impl EguiLayer {
             );
 
             // All windows are now dockable panels (see Windows menu)
-            // Dynamic docking system: users can dock panels to left/right/bottom edges
-            // Center area remains transparent to show the fractal
+            // Single dock on right side - all panels draggable within dock
+            // Center/left area shows the fractal
 
-            // Reserve center area for fractal (transparent panel)
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none()) // Completely transparent - fractal shows through
-                .show(ctx, |_ui| {
-                    // Empty - just reserves space for fractal
-                });
-
-            // Render DockArea - manages dockable windows around the central area
-            // Panels can dock to left/right/bottom edges, but center stays clear
-            egui_dock::DockArea::new(&mut workspace.dock_state)
-                .id(egui::Id::new("main_dock_area"))
-                .show(ctx, &mut panel_viewer::PanelViewer {
+            // Render single SidePanel on right with DockArea inside
+            // All panels are in one dock = draggable between tabs and can be split
+            // Fractal shows on left/center (not covered by panel)
+            egui::SidePanel::right("main_dock_panel")
+                .default_width(window_size.width as f32 * 0.3)
+                .min_width(200.0)
+                .max_width(window_size.width as f32 * 0.8)
+                .resizable(true)
+                .show(ctx, |ui| {
+                    egui_dock::DockArea::new(&mut workspace.dock_state)
+                        .id(egui::Id::new("main_dock_area"))
+                        .show_inside(ui, &mut panel_viewer::PanelViewer {
                     context: panel_viewer::PanelContext {
                         // Core state
                         config_manager,
@@ -247,6 +247,7 @@ impl EguiLayer {
                         apophysis_import_file: &mut apophysis_import_file,
                         open_config_dialog: &mut open_config_dialog,
                     },
+                        });
                 });
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
