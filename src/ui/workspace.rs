@@ -27,6 +27,8 @@ pub enum PanelType {
     Performance,
     /// Help and keyboard shortcuts
     Help,
+    /// Config import/export dialog
+    ConfigDialog,
 }
 
 impl std::fmt::Display for PanelType {
@@ -41,6 +43,7 @@ impl std::fmt::Display for PanelType {
             PanelType::History => write!(f, "History"),
             PanelType::Performance => write!(f, "Performance"),
             PanelType::Help => write!(f, "Help"),
+            PanelType::ConfigDialog => write!(f, "Config Import/Export"),
         }
     }
 }

@@ -34,7 +34,6 @@ pub struct EguiLayer {
     pub ctx: egui_dock::egui::Context,
     renderer: EguiRenderer,
     config_json_buffer: String,
-    show_config_window: bool, // For Import/Export Config dialog
     palette_editor: PaletteEditor,
 }
 
@@ -65,7 +64,6 @@ impl EguiLayer {
             ctx,
             renderer,
             config_json_buffer: String::new(),
-            show_config_window: false,
             palette_editor: PaletteEditor::new(),
         }
     }
@@ -165,25 +163,13 @@ impl EguiLayer {
             // Render menu bar
             menu_bar::render_menu_bar(
                 ctx,
-                &mut self.show_config_window,
                 workspace,
                 &mut menu_actions,
                 &menu_state,
             );
 
-            // Performance, Settings, View, Transforms, Triangle Editor, Colors, Palette Editor, History, and Help windows are now dockable panels (see Windows menu)
-
-            // Render Config Dialog window
-            config_dialog::render_config_dialog(
-                ctx,
-                &mut self.show_config_window,
-                &mut self.config_json_buffer,
-                &mut config_export_json,
-                &mut config_import_json,
-                &mut config_save_file,
-                &mut config_load_file,
-                &mut apophysis_import_file,
-            );
+            // All windows are now dockable panels (see Windows menu)
+            // Performance, Settings, View, Transforms, Triangle Editor, Colors, Palette Editor, History, Help, and Config Import/Export
 
             // Render Left Docking Workspace (Transforms, Triangle Editor)
             egui::SidePanel::left("left_dock_panel")
@@ -207,8 +193,8 @@ impl EguiLayer {
                                 // Renderer
                                 flame_renderer: flame_renderer.as_ref().map(|v| &**v),
 
-                                // Window visibility
-                                show_config_window: &mut self.show_config_window,
+                                // Window visibility (deprecated - will be removed)
+                                show_config_window: &mut false,
 
                                 // Action flags
                                 add_transform: &mut add_transform,
@@ -234,6 +220,14 @@ impl EguiLayer {
                                 // Performance metrics
                                 metrics,
                                 window_size,
+
+                                // Config dialog state
+                                config_json_buffer: &mut self.config_json_buffer,
+                                config_export_json: &mut config_export_json,
+                                config_import_json: &mut config_import_json,
+                                config_save_file: &mut config_save_file,
+                                config_load_file: &mut config_load_file,
+                                apophysis_import_file: &mut apophysis_import_file,
                             },
                         });
                 });
@@ -260,8 +254,8 @@ impl EguiLayer {
                                 // Renderer
                                 flame_renderer: flame_renderer.as_ref().map(|v| &**v),
 
-                                // Window visibility
-                                show_config_window: &mut self.show_config_window,
+                                // Window visibility (deprecated - will be removed)
+                                show_config_window: &mut false,
 
                                 // Action flags
                                 add_transform: &mut add_transform,
@@ -287,6 +281,14 @@ impl EguiLayer {
                                 // Performance metrics
                                 metrics,
                                 window_size,
+
+                                // Config dialog state
+                                config_json_buffer: &mut self.config_json_buffer,
+                                config_export_json: &mut config_export_json,
+                                config_import_json: &mut config_import_json,
+                                config_save_file: &mut config_save_file,
+                                config_load_file: &mut config_load_file,
+                                apophysis_import_file: &mut apophysis_import_file,
                             },
                         });
                 });
