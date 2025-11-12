@@ -159,8 +159,19 @@ impl App {
         }
     }
 
-    pub(super) fn handle_mouse_move(&mut self, x: f32, y: f32) {
+    pub(super) fn handle_mouse_move(&mut self, x: f32, y: f32, consumed: bool) {
         if self.mouse_dragging {
+            // NEW: Cancel drag if egui is now consuming pointer events (mouse entered UI mid-drag)
+            if consumed {
+                log::debug!("Canceling mouse drag - pointer entered UI");
+                self.mouse_dragging = false;
+                self.last_mouse_pos = Some((x, y));
+
+                // Commit any pending preview from the drag before canceling
+                let _ = self.config_manager.force_commit_preview(&crate::config::ConfigPath::PanX);
+                return;
+            }
+
             if let Some((last_x, last_y)) = self.last_mouse_pos {
                 // Read current view state from config
                 let config = self.config_manager.active_config();

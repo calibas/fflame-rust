@@ -227,8 +227,10 @@ impl App {
                             // but only handle presses if egui didn't consume them
                             app.handle_mouse_button(state, button, consumed);
                         }
-                        WindowEvent::CursorMoved { position, .. } if !consumed => {
-                            app.handle_mouse_move(position.x as f32, position.y as f32);
+                        WindowEvent::CursorMoved { position, .. } => {
+                            // Always handle mouse moves to track position and cancel drags if needed
+                            // The handler will check 'consumed' and cancel drag if pointer entered UI
+                            app.handle_mouse_move(position.x as f32, position.y as f32, consumed);
                         }
                         WindowEvent::MouseWheel { delta, phase, .. } if !consumed => {
                             app.handle_mouse_wheel(delta, phase);
