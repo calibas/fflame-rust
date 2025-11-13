@@ -368,12 +368,12 @@ pub fn render_settings_content(
                 .unwrap_or(&locales[0]);
 
             egui::ComboBox::from_label("Language")
-                .selected_text(format!("{} ({})", current_locale_info.native_name, current_locale_info.name))
+                .selected_text(current_locale_info.display_text())
                 .show_ui(ui, |ui| {
                     for locale in &locales {
                         if ui.selectable_label(
                             current_locale == locale.code,
-                            format!("{} ({})", locale.native_name, locale.name)
+                            locale.display_text()
                         ).clicked() {
                             // Try to load font for this locale
                             let font_loaded = crate::ui::ensure_font_for_locale(ui.ctx(), locale.code);

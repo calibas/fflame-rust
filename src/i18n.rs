@@ -44,28 +44,35 @@ pub struct LocaleInfo {
     pub code: &'static str,
     pub name: &'static str,
     pub native_name: &'static str,
+    pub icon: &'static str, // Language code or emoji for display
 }
 
 impl LocaleInfo {
-    pub const fn new(code: &'static str, name: &'static str, native_name: &'static str) -> Self {
-        Self { code, name, native_name }
+    pub const fn new(code: &'static str, name: &'static str, native_name: &'static str, icon: &'static str) -> Self {
+        Self { code, name, native_name, icon }
+    }
+
+    /// Get display text that works without CJK fonts loaded
+    /// Format: "🌐 EN English" - icon and code are ASCII, name is readable
+    pub fn display_text(&self) -> String {
+        format!("{} {} {}", self.icon, self.code.to_uppercase(), self.name)
     }
 }
 
 /// Get list of supported locales with display names
 pub fn supported_locales() -> Vec<LocaleInfo> {
     vec![
-        LocaleInfo::new("en", "English", "English"),
-        LocaleInfo::new("es", "Spanish", "Español"),
-        LocaleInfo::new("ja", "Japanese", "日本語"),
-        LocaleInfo::new("zh-CN", "Chinese (Simplified)", "简体中文"),
+        LocaleInfo::new("en", "English", "English", "🌐"),
+        LocaleInfo::new("es", "Spanish", "Español", "🌐"),
+        LocaleInfo::new("ja", "Japanese", "日本語", "🌐"),
+        LocaleInfo::new("zh-CN", "Chinese (Simplified)", "简体中文", "🌐"),
         // Add more as translation files are created:
-        // LocaleInfo::new("zh-TW", "Chinese (Traditional)", "繁體中文"),
-        // LocaleInfo::new("ko", "Korean", "한국어"),
-        // LocaleInfo::new("fr", "French", "Français"),
-        // LocaleInfo::new("de", "German", "Deutsch"),
-        // LocaleInfo::new("ru", "Russian", "Русский"),
-        // LocaleInfo::new("ar", "Arabic", "العربية"),
+        // LocaleInfo::new("zh-TW", "Chinese (Traditional)", "繁體中文", "🌐"),
+        // LocaleInfo::new("ko", "Korean", "한국어", "🌐"),
+        // LocaleInfo::new("fr", "French", "Français", "🌐"),
+        // LocaleInfo::new("de", "German", "Deutsch", "🌐"),
+        // LocaleInfo::new("ru", "Russian", "Русский", "🌐"),
+        // LocaleInfo::new("ar", "Arabic", "العربية", "🌐"),
     ]
 }
 
