@@ -305,8 +305,14 @@ impl App {
         let render_start = Instant::now();
         self.last_frame_time = Some(render_start);
 
-        // NOTE: Config is intentionally NOT read here yet - will be read after UI updates
-        // This ensures we use the most recent state after user interactions
+        // ============================================================================
+        // NEW FRAME ORDER (Fixed race conditions):
+        // 1. Render UI (reads current state, shows previous frame's fractal)
+        // 2. Process all UI responses and config updates
+        // 3. Get FINAL config after all updates
+        // 4. Compute/accumulate/tonemap (generates new fractal with updated config)
+        // 5. Submit and present
+        // ============================================================================
 
         let frame = self.gpu.surface.get_current_texture()?;
         let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
@@ -315,85 +321,11 @@ impl App {
             label: Some("Render Encoder"),
         });
 
-        // Ensure fractal texture exists and is correct size (use viewport size, not window size)
-        let fractal_view = self.egui_layer.ensure_fractal_texture(&self.gpu.device, self.fractal_viewport_size.0, self.fractal_viewport_size.1);
-
         // ============================================================================
-        // PHASE 1: Get config BEFORE UI (for rendering decisions only)
-        // This will be read again AFTER UI for GPU updates
+        // PHASE 1: Render UI First
         // ============================================================================
-        let config_for_rendering = self.config_manager.active_config();
-        let palette_rotation = config_for_rendering.palette_rotation;  // Copy to avoid borrow issues
-
-        // Run flame compute shader with progressive refinement
-        if let Some(ref mut renderer) = self.flame_renderer {
-            // Live mode: Enable overwrite mode during preview, reset when exiting
-            let in_preview_mode = self.config_manager.is_in_preview_mode();
-            renderer.set_overwrite_mode(in_preview_mode);
-
-            // Note: tonemap parameters are updated when they actually change (via ui_response handlers)
-            // No need to update every frame
-
-            // Check if we should continue iterating
-            let max_iterations = Some(config.max_iterations);
-            let should_iterate = !self.paused &&
-                (max_iterations.map_or(true, |max| renderer.total_iterations() < max) ||
-                 self.config_manager.is_in_preview_mode());
-
-            if should_iterate {
-                const NUM_WORKGROUPS: u32 = 128;
-
-                self.frames_since_accumulation += 1;
-
-                // Determine if we should accumulate this frame
-                let should_accumulate = self.frames_since_accumulation >= self.accumulation_batch_size;
-
-                let t0 = Instant::now();
-                // 1. Compute new samples with fresh random seed
-                // Clear histogram only when starting a new batch (frame 1 of batch)
-                let clear_histogram = self.frames_since_accumulation == 1;
-                let samples_this_frame = renderer.compute_pass(&mut encoder, &self.gpu.queue, NUM_WORKGROUPS,
-                    config.iterations_per_thread, config.zoom, config.pan_x, config.pan_y, config.rotation,
-                    config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor, clear_histogram);
-                self.metrics.record_compute_time(t0.elapsed().as_secs_f64() * 1000.0);
-
-                let t1 = Instant::now();
-                // 2. Accumulate samples - but only every N frames if batching enabled
-                if should_accumulate {
-                    // samples_this_frame is only THIS frame's samples, but histogram contains
-                    // accumulated samples from all frames in the batch
-                    // Pass total samples for proper blend_factor calculation
-                    let total_samples_in_batch = samples_this_frame * self.accumulation_batch_size as u64;
-                    renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
-                    self.frames_since_accumulation = 0;
-                    self.metrics.record_accumulate_time(t1.elapsed().as_secs_f64() * 1000.0);
-                } else {
-                    self.metrics.record_accumulate_time(0.0);
-                }
-
-                // 3. Adjust per-pixel scales every frame (prevents temporal aliasing / vertical lines)
-                // TEST: Disable adaptive scaling to test fixed global scale
-                // renderer.adjust_scale_pass(&mut encoder);
-            } else {
-                self.metrics.record_compute_time(0.0);
-                self.metrics.record_accumulate_time(0.0);
-            }
-
-            let t2 = Instant::now();
-            // 3. Update tonemap parameters and render to fractal texture
-            renderer.update_density_scale(&self.gpu.queue, config.density_scale);
-            renderer.update_background_color(&self.gpu.queue, config.background_color);
-            renderer.update_tonemap(&self.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, renderer.width, renderer.height, renderer.total_iterations(), config.max_iterations);
-            renderer.tonemap_pass(&mut encoder, fractal_view);
-            self.metrics.record_tonemap_time(t2.elapsed().as_secs_f64() * 1000.0);
-
-            // DEBUG: Log scale statistics every 60 frames
-            static mut DEBUG_FRAME_COUNT: u32 = 0;
-            // Note: debug_scale_stats() removed - scale is now a uniform constant
-        }
-
-        // Render UI on top and handle updates
-        let t3 = Instant::now();
+        // UI displays PREVIOUS frame's fractal while we prepare CURRENT frame
+        let t_ui_start = Instant::now();
         let can_undo = self.can_undo();
         let can_redo = self.can_redo();
 
@@ -417,16 +349,16 @@ impl App {
             can_redo,
             &mut self.workspace,
         );
-        self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
+        self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
 
-        // Update fractal viewport size and resize renderer if changed
+        // Handle viewport resize immediately (before rendering)
         if let Some(viewport_size) = ui_response.fractal_viewport_size {
             if viewport_size != self.fractal_viewport_size {
                 self.fractal_viewport_size = viewport_size;
 
                 // Resize renderer to match new viewport dimensions
                 if let Some(ref mut renderer) = self.flame_renderer {
-                    // Get config again to avoid borrow conflict
+                    // Get config for resize
                     let resize_config = self.config_manager.active_config();
                     let mut resize_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                         label: Some("Viewport Resize Encoder"),
@@ -437,7 +369,6 @@ impl App {
                     self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
 
                     // Restore palette and color mode after buffer recreation
-                    // (FlameBuffers::new() resets to defaults: fire palette and transform colors)
                     let palette = resize_config.palette.as_ref()
                         .or_else(|| self.palette_library.get(resize_config.palette_index));
                     if let Some(palette) = palette {
@@ -450,9 +381,14 @@ impl App {
             }
         }
 
-        let t4 = Instant::now();
+        // Submit UI rendering (must happen before we start processing responses)
+        let t_submit = Instant::now();
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
-        self.metrics.record_submit_time(t4.elapsed().as_secs_f64() * 1000.0);
+        self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
+
+        // ============================================================================
+        // PHASE 2: Process ALL UI Responses and Config Updates
+        // ============================================================================
 
         // Handle config export
         if ui_response.config_export_requested.is_some() {
@@ -587,7 +523,7 @@ impl App {
             let config = self.config_manager.active_config();
             if let Some(ref mut renderer) = self.flame_renderer {
                 if let Some(palette) = palette_lib.get(config.palette_index) {
-                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, palette_rotation);
+                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, config.palette_rotation);
                 }
             }
         }
@@ -780,8 +716,9 @@ impl App {
                     );
 
                     // Update renderer
+                    let config = self.config_manager.active_config();
                     if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, palette_rotation);
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation);
                     }
                 }
                 Err(e) => {
@@ -817,8 +754,9 @@ impl App {
                                     );
 
                                     // Update renderer
+                                    let config = self.config_manager.active_config();
                                     if let Some(ref mut renderer) = self.flame_renderer {
-                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, palette_rotation);
+                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation);
                                     }
 
                                     println!("Palette loaded from: {}", path.display());
@@ -1051,7 +989,7 @@ impl App {
                         .or_else(|| self.palette_library.get(update_config.palette_index));
 
                     if let Some(palette) = palette {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, palette_rotation);
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, update_config.palette_rotation);
                     }
 
                     // Update color mode in GPU params (ColorMode changes trigger update_palette)
@@ -1090,6 +1028,84 @@ impl App {
 
         // Clear keyboard flag for next frame
         self.view_changed_by_keyboard = false;
+
+        // ============================================================================
+        // PHASE 3: Get FINAL Config and Render Fractal
+        // ============================================================================
+        // Single config read after all updates are complete
+        let final_config = self.config_manager.active_config();
+
+        // Create new encoder for rendering phase
+        let mut render_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+            label: Some("Fractal Render Encoder"),
+        });
+
+        // Run flame compute shader with progressive refinement
+        if let Some(ref mut renderer) = self.flame_renderer {
+            // Live mode: Enable overwrite mode during preview, reset when exiting
+            let in_preview_mode = self.config_manager.is_in_preview_mode();
+            renderer.set_overwrite_mode(in_preview_mode);
+
+            // Check if we should continue iterating
+            let max_iterations = Some(final_config.max_iterations);
+            let should_iterate = !self.paused &&
+                (max_iterations.map_or(true, |max| renderer.total_iterations() < max) ||
+                 self.config_manager.is_in_preview_mode());
+
+            if should_iterate {
+                const NUM_WORKGROUPS: u32 = 128;
+
+                self.frames_since_accumulation += 1;
+
+                // Determine if we should accumulate this frame
+                let should_accumulate = self.frames_since_accumulation >= self.accumulation_batch_size;
+
+                let t_compute = Instant::now();
+                // 1. Compute new samples with fresh random seed
+                // Clear histogram only when starting a new batch (frame 1 of batch)
+                let clear_histogram = self.frames_since_accumulation == 1;
+                let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, NUM_WORKGROUPS,
+                    final_config.iterations_per_thread, final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
+                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram);
+                self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
+
+                let t_accumulate = Instant::now();
+                // 2. Accumulate samples - but only every N frames if batching enabled
+                if should_accumulate {
+                    // samples_this_frame is only THIS frame's samples, but histogram contains
+                    // accumulated samples from all frames in the batch
+                    // Pass total samples for proper blend_factor calculation
+                    let total_samples_in_batch = samples_this_frame * self.accumulation_batch_size as u64;
+                    renderer.accumulate_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                    self.frames_since_accumulation = 0;
+                    self.metrics.record_accumulate_time(t_accumulate.elapsed().as_secs_f64() * 1000.0);
+                } else {
+                    self.metrics.record_accumulate_time(0.0);
+                }
+            } else {
+                self.metrics.record_compute_time(0.0);
+                self.metrics.record_accumulate_time(0.0);
+            }
+
+            let t_tonemap = Instant::now();
+            // 3. Update tonemap parameters and render to fractal texture
+            renderer.update_density_scale(&self.gpu.queue, final_config.density_scale);
+            renderer.update_background_color(&self.gpu.queue, final_config.background_color);
+            renderer.update_tonemap(&self.gpu.queue, final_config.tonemap_mode, final_config.use_curve,
+                final_config.exposure, final_config.gamma, final_config.gamma_threshold, final_config.brightness,
+                final_config.vibrancy, final_config.saturation, final_config.hue_shift, final_config.value_scale,
+                renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations);
+
+            // Ensure fractal texture exists and get view (use viewport size, not window size)
+            let fractal_view = self.egui_layer.ensure_fractal_texture(&self.gpu.device, self.fractal_viewport_size.0, self.fractal_viewport_size.1);
+            renderer.tonemap_pass(&mut render_encoder, fractal_view);
+            self.metrics.record_tonemap_time(t_tonemap.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        // Submit rendering commands
+        let t_submit = Instant::now();
+        self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
+        self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
         let t5 = Instant::now();
         frame.present();
