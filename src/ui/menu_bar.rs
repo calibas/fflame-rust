@@ -14,19 +14,19 @@ pub fn render_menu_bar(
             ui.menu_button(t!("menu.file"), |ui| {
                 if ui.button("📂 Open Config...").clicked() {
                     menu_actions.file.load_config = true;
-                    ui.close();
+
                 }
 
                 if ui.button("💾 Save Config As...").clicked() {
                     menu_actions.file.save_config = true;
-                    ui.close();
+
                 }
 
                 ui.separator();
 
                 if ui.button("Import Apophysis XML...").clicked() {
                     menu_actions.file.import_apophysis = true;
-                    ui.close();
+
                 }
                 ui.add_enabled(false, egui::Button::new("Export Apophysis XML..."));
 
@@ -34,21 +34,21 @@ pub fn render_menu_bar(
 
                 if ui.button("📄 Config Import/Export...").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog);
-                    ui.close();
+
                 }
 
                 ui.separator();
 
                 if ui.button("🖼 Export PNG...").clicked() {
                     menu_actions.file.export_png = true;
-                    ui.close();
+
                 }
 
                 ui.separator();
 
                 if ui.button("❌ Quit").clicked() {
                     menu_actions.file.quit = true;
-                    ui.close();
+
                 }
             });
 
@@ -78,19 +78,19 @@ pub fn render_menu_bar(
             ui.menu_button(t!("menu.view"), |ui| {
                 if ui.button("Reset View").clicked() {
                     menu_actions.view.reset_view = true;
-                    ui.close();
+
                 }
 
                 ui.separator();
 
                 if ui.button("Zoom In").clicked() {
                     menu_actions.view.zoom_in = true;
-                    ui.close();
+
                 }
 
                 if ui.button("Zoom Out").clicked() {
                     menu_actions.view.zoom_out = true;
-                    ui.close();
+
                 }
 
                 ui.separator();
@@ -99,12 +99,12 @@ pub fn render_menu_bar(
                 let is_2d = menu_state.render_mode_2d;
                 if ui.selectable_label(is_2d, "2D Mode").clicked() {
                     menu_actions.view.set_mode_2d = true;
-                    ui.close();
+
                 }
 
                 if ui.selectable_label(!is_2d, "3D Mode").clicked() {
                     menu_actions.view.set_mode_3d = true;
-                    ui.close();
+
                 }
             });
 
@@ -114,17 +114,17 @@ pub fn render_menu_bar(
                 let transforms_open = workspace.panel_exists(super::workspace::PanelType::Transforms);
                 if ui.selectable_label(transforms_open, "Show Transform Editor").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Transforms);
-                    ui.close();
+
                 }
                 let triangle_editor_open = workspace.panel_exists(super::workspace::PanelType::TriangleEditor);
                 if ui.selectable_label(triangle_editor_open, "Show Triangle Editor").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor);
-                    ui.close();
+
                 }
                 let palette_editor_open = workspace.panel_exists(super::workspace::PanelType::PaletteEditor);
                 if ui.selectable_label(palette_editor_open, "Show Palette Editor").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor);
-                    ui.close();
+
                 }
 
                 ui.separator();
@@ -132,7 +132,7 @@ pub fn render_menu_bar(
                 // Add Transform (functional)
                 if ui.button("Add Transform").clicked() {
                     menu_actions.transform.add_transform = true;
-                    ui.close();
+
                 }
 
                 // Not implemented yet
@@ -149,13 +149,13 @@ pub fn render_menu_bar(
                 let pause_text = if menu_state.is_paused { "▶ Resume" } else { "⏸ Pause" };
                 if ui.button(pause_text).clicked() {
                     menu_actions.rendering.pause_toggle = true;
-                    ui.close();
+
                 }
 
                 // Reset Accumulation
                 if ui.button("🔄 Reset Accumulation").clicked() {
                     menu_actions.rendering.reset_accumulation = true;
-                    ui.close();
+
                 }
 
                 ui.separator();
@@ -165,7 +165,7 @@ pub fn render_menu_bar(
                     for &speed in &[1u32, 2, 4, 8, 16] {
                         if ui.button(format!("{}x", speed)).clicked() {
                             menu_actions.rendering.set_speed = Some(speed);
-                            ui.close();
+
                         }
                     }
                 });
@@ -177,7 +177,7 @@ pub fn render_menu_bar(
                     for &ipt in &[64u32, 128, 256, 512, 1024] {
                         if ui.button(format!("{}", ipt)).clicked() {
                             menu_actions.rendering.set_iterations_per_thread = Some(ipt);
-                            ui.close();
+
                         }
                     }
                 });
@@ -194,49 +194,49 @@ pub fn render_menu_bar(
                 let performance_open = workspace.panel_exists(super::workspace::PanelType::Performance);
                 if ui.selectable_label(performance_open, "📊 Performance").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Performance);
-                    ui.close();
+
                 }
 
                 // Settings opens Rendering panel as floating window (Settings was renamed to Rendering)
                 let rendering_open = workspace.panel_exists(super::workspace::PanelType::Rendering);
                 if ui.selectable_label(rendering_open, "⚙ Rendering").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Rendering);
-                    ui.close();
+
                 }
 
                 // View opens as floating window in docking system
                 let view_open = workspace.panel_exists(super::workspace::PanelType::View);
                 if ui.selectable_label(view_open, "🔍 View").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::View);
-                    ui.close();
+
                 }
 
                 // Transforms opens as floating window in docking system
                 let transforms_open = workspace.panel_exists(super::workspace::PanelType::Transforms);
                 if ui.selectable_label(transforms_open, "🔧 Transforms").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Transforms);
-                    ui.close();
+
                 }
 
                 // Triangle Editor opens as floating window in docking system
                 let triangle_editor_open = workspace.panel_exists(super::workspace::PanelType::TriangleEditor);
                 if ui.selectable_label(triangle_editor_open, "📐 Triangle Editor").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor);
-                    ui.close();
+
                 }
 
                 // Tone Mapping & Colors opens Colors panel as floating window
                 let colors_open = workspace.panel_exists(super::workspace::PanelType::Colors);
                 if ui.selectable_label(colors_open, "🎨 Tone Mapping & Colors").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Colors);
-                    ui.close();
+
                 }
 
                 // Help opens as floating window in docking system
                 let help_open = workspace.panel_exists(super::workspace::PanelType::Help);
                 if ui.selectable_label(help_open, "❓ Help").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Help);
-                    ui.close();
+
                 }
                 ui.separator();
 
@@ -244,21 +244,21 @@ pub fn render_menu_bar(
                 let palette_editor_open = workspace.panel_exists(super::workspace::PanelType::PaletteEditor);
                 if ui.selectable_label(palette_editor_open, "🎨 Palette Editor").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor);
-                    ui.close();
+
                 }
 
                 // Config Import/Export opens as floating window in docking system
                 let config_dialog_open = workspace.panel_exists(super::workspace::PanelType::ConfigDialog);
                 if ui.selectable_label(config_dialog_open, "📄 Config Import/Export").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog);
-                    ui.close();
+
                 }
 
                 // Undo/Redo History opens as floating window in docking system
                 let history_open = workspace.panel_exists(super::workspace::PanelType::History);
                 if ui.selectable_label(history_open, "⮪ Undo/Redo History").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::History);
-                    ui.close();
+
                 }
 
                 ui.separator();
@@ -267,19 +267,19 @@ pub fn render_menu_bar(
 
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Beginner, "Beginner").clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Beginner);
-                        ui.close();
+
                     }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Standard, "Standard").clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
-                        ui.close();
+
                     }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, "Advanced").clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Advanced);
-                        ui.close();
+
                     }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Export, "Export").clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Export);
-                        ui.close();
+
                     }
                 });
             });
@@ -290,12 +290,12 @@ pub fn render_menu_bar(
                 let help_open = workspace.panel_exists(super::workspace::PanelType::Help);
                 if ui.selectable_label(help_open, "❓ Help (F1)").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Help);
-                    ui.close();
+
                 }
 
                 if ui.selectable_label(help_open, "⌨ Keyboard Shortcuts (Ctrl+/)").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Help);
-                    ui.close();
+
                 }
 
                 ui.separator();
@@ -324,7 +324,7 @@ pub fn render_menu_bar(
                                 // Font loaded or default font is sufficient
                                 crate::i18n::set_locale(locale.code);
                                 log::info!("Language changed to: {} ({})", locale.name, locale.code);
-                                ui.close();
+
                             } else {
                                 // Font required but not available - reset to English
                                 log::warn!("Font required for {} not found - resetting to English", locale.code);
@@ -350,7 +350,7 @@ pub fn render_menu_bar(
                                 #[cfg(target_arch = "wasm32")]
                                 log::error!("CJK fonts not embedded in WASM build - use English");
 
-                                ui.close();
+
                             }
                         }
                     }
