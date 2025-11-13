@@ -1,4 +1,5 @@
 use super::menu_context::{MenuActions, MenuState};
+use rust_i18n::t;
 
 /// Render the top menu bar with window visibility toggles
 pub fn render_menu_bar(
@@ -10,7 +11,7 @@ pub fn render_menu_bar(
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             // File Menu
-            ui.menu_button("File", |ui| {
+            ui.menu_button(t!("menu.file"), |ui| {
                 if ui.button("📂 Open Config...").clicked() {
                     menu_actions.file.load_config = true;
                     ui.close();
@@ -52,7 +53,7 @@ pub fn render_menu_bar(
             });
 
             // Edit Menu
-            ui.menu_button("Edit", |ui| {
+            ui.menu_button(t!("menu.edit"), |ui| {
                 if ui.add_enabled(menu_state.can_undo, egui::Button::new("⮪ Undo")).clicked() {
                     menu_actions.edit.undo = true;
                 }
@@ -74,7 +75,7 @@ pub fn render_menu_bar(
             });
 
             // View Menu
-            ui.menu_button("View", |ui| {
+            ui.menu_button(t!("menu.view"), |ui| {
                 if ui.button("Reset View").clicked() {
                     menu_actions.view.reset_view = true;
                     ui.close();
@@ -143,7 +144,7 @@ pub fn render_menu_bar(
             });
 
             // Rendering Menu
-            ui.menu_button("Rendering", |ui| {
+            ui.menu_button(t!("menu.rendering"), |ui| {
                 // Pause/Resume
                 let pause_text = if menu_state.is_paused { "▶ Resume" } else { "⏸ Pause" };
                 if ui.button(pause_text).clicked() {
@@ -188,7 +189,7 @@ pub fn render_menu_bar(
             });
 
             // Windows Menu
-            ui.menu_button("Windows", |ui| {
+            ui.menu_button(t!("menu.window"), |ui| {
                 // Performance opens as floating window in docking system (only one instance)
                 let performance_open = workspace.panel_exists(super::workspace::PanelType::Performance);
                 if ui.selectable_label(performance_open, "📊 Performance").clicked() {
@@ -284,7 +285,7 @@ pub fn render_menu_bar(
             });
 
             // Help Menu
-            ui.menu_button("Help", |ui| {
+            ui.menu_button(t!("menu.help"), |ui| {
                 // Help panel opens as floating window in docking system
                 let help_open = workspace.panel_exists(super::workspace::PanelType::Help);
                 if ui.selectable_label(help_open, "❓ Help (F1)").clicked() {

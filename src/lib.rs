@@ -1,3 +1,10 @@
+// Load I18n macro to allow use of `t!` macro anywhere
+#[macro_use]
+extern crate rust_i18n;
+
+// Initialize rust-i18n with the locales directory
+rust_i18n::i18n!("locales", fallback = "en");
+
 mod app;
 pub mod gpu;
 mod ui;
