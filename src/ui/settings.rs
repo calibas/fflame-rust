@@ -358,58 +358,8 @@ pub fn render_settings_content(
     egui::CollapsingHeader::new("Preferences")
         .default_open(false)
         .show(ui, |ui| {
-            // Language selector
-            ui.label("Language");
-            let current_locale = crate::i18n::current_locale();
-            let locales = crate::i18n::supported_locales();
-
-            let current_locale_info = locales.iter()
-                .find(|l| l.code == current_locale.as_str())
-                .unwrap_or(&locales[0]);
-
-            egui::ComboBox::from_label("Language")
-                .selected_text(current_locale_info.display_text())
-                .show_ui(ui, |ui| {
-                    for locale in &locales {
-                        if ui.selectable_label(
-                            current_locale == locale.code,
-                            locale.display_text()
-                        ).clicked() {
-                            // Try to load font for this locale
-                            let font_loaded = crate::ui::ensure_font_for_locale(ui.ctx(), locale.code);
-
-                            if font_loaded {
-                                // Font loaded or default font is sufficient
-                                crate::i18n::set_locale(locale.code);
-                                log::info!("Language changed to: {} ({})", locale.native_name, locale.code);
-                            } else {
-                                // Font required but not available - reset to English
-                                log::warn!("Font required for {} not found - resetting to English", locale.code);
-                                crate::i18n::set_locale("en");
-
-                                // Show error message to user
-                                #[cfg(not(target_arch = "wasm32"))]
-                                {
-                                    rfd::MessageDialog::new()
-                                        .set_title("Font Required")
-                                        .set_description(&format!(
-                                            "The {} language requires additional fonts that are not installed.\n\n\
-                                            Please download the required font file and place it in:\n\
-                                            assets/fonts/\n\n\
-                                            See docs/I18N.md for details.\n\n\
-                                            Falling back to English.",
-                                            locale.native_name
-                                        ))
-                                        .set_level(rfd::MessageLevel::Warning)
-                                        .show();
-                                }
-
-                                #[cfg(target_arch = "wasm32")]
-                                log::error!("CJK fonts not embedded in WASM build - use English");
-                            }
-                        }
-                    }
-                });
+            // Language selector moved to menu bar (globe icon 🌐)
+            ui.label("Language: Use the 🌐 globe icon in the menu bar");
 
             ui.separator();
 
