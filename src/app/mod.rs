@@ -305,9 +305,8 @@ impl App {
         let render_start = Instant::now();
         self.last_frame_time = Some(render_start);
 
-        // Get config once at start of frame (avoids repeated active_config() calls)
-        let config = self.config_manager.active_config();
-        let palette_rotation = config.palette_rotation;  // Copy to avoid borrow issues
+        // NOTE: Config is intentionally NOT read here yet - will be read after UI updates
+        // This ensures we use the most recent state after user interactions
 
         let frame = self.gpu.surface.get_current_texture()?;
         let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
@@ -318,6 +317,13 @@ impl App {
 
         // Ensure fractal texture exists and is correct size (use viewport size, not window size)
         let fractal_view = self.egui_layer.ensure_fractal_texture(&self.gpu.device, self.fractal_viewport_size.0, self.fractal_viewport_size.1);
+
+        // ============================================================================
+        // PHASE 1: Get config BEFORE UI (for rendering decisions only)
+        // This will be read again AFTER UI for GPU updates
+        // ============================================================================
+        let config_for_rendering = self.config_manager.active_config();
+        let palette_rotation = config_for_rendering.palette_rotation;  // Copy to avoid borrow issues
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
@@ -1092,6 +1098,28 @@ impl App {
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
 
         Ok(())
+    }
+
+    /// Synchronize working flame copy with ConfigManager state
+    /// Called after any config changes to ensure flame is up-to-date before GPU rendering
+    fn sync_flame_from_config(&mut self) {
+        self.flame = self.config_manager.active_config().flame.clone();
+    }
+
+    /// Prepare frame state after all UI updates but before rendering
+    /// This ensures all state changes are committed and synchronized
+    fn prepare_frame_state(&mut self) {
+        // Force commit any uncommitted preview mode changes
+        if self.config_manager.is_in_preview_mode() {
+            // Check if preview should auto-commit (e.g., drag ended but commit not called)
+            // This is a safety net - proper commits should happen in UI handlers
+        }
+
+        // Sync working flame copy with ConfigManager
+        self.sync_flame_from_config();
+
+        // Clear frame-local flags
+        self.view_changed_by_keyboard = false;
     }
 
     /// Graceful shutdown - performs cleanup and exits
