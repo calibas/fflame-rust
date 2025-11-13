@@ -19,6 +19,8 @@
 //!
 //! - English (en) - Default
 //! - Spanish (es)
+//! - Japanese (ja)
+//! - Chinese Simplified (zh-CN)
 //! - More languages can be added by creating .yml files in locales/
 
 // Note: rust-i18n::i18n!() is initialized in lib.rs
@@ -55,11 +57,15 @@ pub fn supported_locales() -> Vec<LocaleInfo> {
     vec![
         LocaleInfo::new("en", "English", "English"),
         LocaleInfo::new("es", "Spanish", "Español"),
+        LocaleInfo::new("ja", "Japanese", "日本語"),
+        LocaleInfo::new("zh-CN", "Chinese (Simplified)", "简体中文"),
         // Add more as translation files are created:
+        // LocaleInfo::new("zh-TW", "Chinese (Traditional)", "繁體中文"),
+        // LocaleInfo::new("ko", "Korean", "한국어"),
         // LocaleInfo::new("fr", "French", "Français"),
         // LocaleInfo::new("de", "German", "Deutsch"),
-        // LocaleInfo::new("ja", "Japanese", "日本語"),
-        // LocaleInfo::new("zh-CN", "Chinese (Simplified)", "简体中文"),
+        // LocaleInfo::new("ru", "Russian", "Русский"),
+        // LocaleInfo::new("ar", "Arabic", "العربية"),
     ]
 }
 
