@@ -12,6 +12,11 @@ pub struct FlameRenderer {
     accumulate_bind_group: BindGroup,
     // adjust_scale_bind_group removed - pipeline unused
     tonemap_bind_group: BindGroup,
+
+    // Output texture that tonemap_pass renders to (for both display and export)
+    fractal_texture: Texture,
+    fractal_texture_view: TextureView,
+
     pub width: u32,
     pub height: u32,
     samples_accumulated: u64,
@@ -51,6 +56,23 @@ impl FlameRenderer {
         // adjust_scale_bind_group removed - pipeline unused
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
 
+        // Create fractal output texture (Rgba8Unorm for compatibility with tonemap pipeline)
+        let fractal_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Fractal Output"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let fractal_texture_view = fractal_texture.create_view(&TextureViewDescriptor::default());
+
         // DEBUG: Log renderer initialization
         #[cfg(target_arch = "wasm32")]
         log::info!("=== FlameRenderer Created ===");
@@ -68,6 +90,8 @@ impl FlameRenderer {
             accumulate_bind_group,
             // adjust_scale_bind_group removed
             tonemap_bind_group,
+            fractal_texture,
+            fractal_texture_view,
             width,
             height,
             samples_accumulated: 0,
@@ -103,6 +127,23 @@ impl FlameRenderer {
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
+
+        // Recreate fractal output texture with new size
+        self.fractal_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Fractal Output"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        self.fractal_texture_view = self.fractal_texture.create_view(&TextureViewDescriptor::default());
 
         // Clear accumulation counter
         self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
@@ -465,6 +506,11 @@ impl FlameRenderer {
 
     pub fn total_iterations(&self) -> u64 {
         self.total_iterations
+    }
+
+    /// Get fractal output texture view for display
+    pub fn get_fractal_texture_view(&self) -> &TextureView {
+        &self.fractal_texture_view
     }
 
     /// Get RNG seed based on deterministic mode
