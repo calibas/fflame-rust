@@ -7,8 +7,8 @@ mod export;
 #[cfg(not(target_arch = "wasm32"))]
 pub use export::export_headless;
 
-use winit::{event::*, event_loop::{EventLoop, ControlFlow}, window::Window};
-use wgpu::SurfaceError;
+use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, window::Window};
+use egui_wgpu::wgpu::SurfaceError;
 
 use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
@@ -31,11 +31,11 @@ pub struct App {
     pub(super) flame: Flame,  // Working copy for renderer (synced from config_manager)
 
     // UI state (not saved in config)
+    pub(super) workspace: crate::ui::Workspace,
     pub(super) view_changed_by_keyboard: bool,
-    pub(super) mouse_dragging: bool,
-    pub(super) last_mouse_pos: Option<(f32, f32)>,
     pub(super) paused: bool,
     pub(super) modifiers: winit::keyboard::ModifiersState,
+    pub(super) quit_requested: bool,  // Graceful quit requested (check unsaved changes, etc.)
 
     // Libraries (not saved in config)
     pub(super) palette_library: PaletteLibrary,
@@ -49,6 +49,9 @@ pub struct App {
     pub(super) last_frame_time: Option<web_time::Instant>,
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
+
+    // Fractal viewport size (updated from UI each frame)
+    pub(super) fractal_viewport_size: (u32, u32),
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -126,17 +129,20 @@ impl App {
 
         let config_manager = ConfigManager::new(initial_config.clone());
 
+        // Get initial size before moving gpu
+        let initial_viewport_size = (gpu.size.width, gpu.size.height);
+
         let mut app = Self {
             config_manager,
             gpu,
             egui_layer,
             flame_renderer: Some(flame_renderer),
             flame,
+            workspace: crate::ui::Workspace::new(),
             view_changed_by_keyboard: false,
-            mouse_dragging: false,
-            last_mouse_pos: None,
             paused: false,
             modifiers: winit::keyboard::ModifiersState::default(),
+            quit_requested: false,
             palette_library,
             preset_library,
             current_preset_index: 0,
@@ -144,6 +150,7 @@ impl App {
             last_frame_time: None,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
+            fractal_viewport_size: initial_viewport_size, // Initialize to window size
         };
 
         #[allow(deprecated)]
@@ -154,7 +161,9 @@ impl App {
                     let consumed = app.egui_layer.handle_event(&event, &window);
 
                     match event {
-                        WindowEvent::CloseRequested => elwt.exit(),
+                        WindowEvent::CloseRequested => {
+                            app.shutdown(elwt);
+                        },
                         WindowEvent::Resized(size) => {
                             // Skip resize if dimensions are zero (happens when minimizing on Windows)
                             if size.width > 0 && size.height > 0 {
@@ -162,7 +171,7 @@ impl App {
                                 // Also resize renderer buffers to match
                                 if let Some(ref mut renderer) = app.flame_renderer {
                                     let config = app.config_manager.active_config();
-                                    let mut encoder = app.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    let mut encoder = app.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                                         label: Some("Resize Encoder"),
                                     });
                                     renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, size.width, size.height,
@@ -190,7 +199,7 @@ impl App {
                                 app.gpu.resize(new_size);
                                 if let Some(ref mut renderer) = app.flame_renderer {
                                     let config = app.config_manager.active_config();
-                                    let mut encoder = app.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    let mut encoder = app.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                                         label: Some("Scale Factor Resize Encoder"),
                                     });
                                     renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, new_size.width, new_size.height,
@@ -216,17 +225,6 @@ impl App {
                             // Handle keyboard input only if egui didn't consume it
                             app.handle_keyboard(&key_event);
                         }
-                        WindowEvent::MouseInput { state, button, .. } => {
-                            // Always handle mouse releases to clear dragging state,
-                            // but only handle presses if egui didn't consume them
-                            app.handle_mouse_button(state, button, consumed);
-                        }
-                        WindowEvent::CursorMoved { position, .. } if !consumed => {
-                            app.handle_mouse_move(position.x as f32, position.y as f32);
-                        }
-                        WindowEvent::MouseWheel { delta, phase, .. } if !consumed => {
-                            app.handle_mouse_wheel(delta, phase);
-                        }
                         WindowEvent::ModifiersChanged(new_modifiers) => {
                             app.modifiers = new_modifiers.state();
                         }
@@ -237,6 +235,11 @@ impl App {
                                 Err(SurfaceError::Lost | SurfaceError::Outdated) => app.gpu.resize(app.gpu.size),
                                 Err(SurfaceError::OutOfMemory) => elwt.exit(),
                                 Err(e) => eprintln!("Render error: {:?}", e),
+                            }
+
+                            // Handle graceful quit (triggered by File → Quit menu)
+                            if app.quit_requested {
+                                app.shutdown(elwt);
                             }
                         }
                         _ => {}
@@ -307,11 +310,14 @@ impl App {
         let palette_rotation = config.palette_rotation;  // Copy to avoid borrow issues
 
         let frame = self.gpu.surface.get_current_texture()?;
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
+
+        // Ensure fractal texture exists and is correct size (use viewport size, not window size)
+        let fractal_view = self.egui_layer.ensure_fractal_texture(&self.gpu.device, self.fractal_viewport_size.0, self.fractal_viewport_size.1);
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
@@ -368,11 +374,11 @@ impl App {
             }
 
             let t2 = Instant::now();
-            // 3. Update tonemap parameters and render to screen
+            // 3. Update tonemap parameters and render to fractal texture
             renderer.update_density_scale(&self.gpu.queue, config.density_scale);
             renderer.update_background_color(&self.gpu.queue, config.background_color);
             renderer.update_tonemap(&self.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, renderer.width, renderer.height, renderer.total_iterations(), config.max_iterations);
-            renderer.tonemap_pass(&mut encoder, &view);
+            renderer.tonemap_pass(&mut encoder, fractal_view);
             self.metrics.record_tonemap_time(t2.elapsed().as_secs_f64() * 1000.0);
 
             // DEBUG: Log scale statistics every 60 frames
@@ -389,7 +395,7 @@ impl App {
             &self.gpu.device,
             &self.gpu.queue,
             &mut encoder,
-            &view,
+            &surface_view,
             window,
             self.gpu.size,
             &self.metrics,
@@ -400,10 +406,43 @@ impl App {
             &self.preset_library,
             &mut self.current_preset_index,
             &mut self.paused,
+            &mut self.quit_requested,
             can_undo,
             can_redo,
+            &mut self.workspace,
         );
         self.metrics.record_ui_time(t3.elapsed().as_secs_f64() * 1000.0);
+
+        // Update fractal viewport size and resize renderer if changed
+        if let Some(viewport_size) = ui_response.fractal_viewport_size {
+            if viewport_size != self.fractal_viewport_size {
+                self.fractal_viewport_size = viewport_size;
+
+                // Resize renderer to match new viewport dimensions
+                if let Some(ref mut renderer) = self.flame_renderer {
+                    // Get config again to avoid borrow conflict
+                    let resize_config = self.config_manager.active_config();
+                    let mut resize_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                        label: Some("Viewport Resize Encoder"),
+                    });
+                    renderer.resize(&self.gpu.device, &mut resize_encoder, &self.gpu.queue, viewport_size.0, viewport_size.1,
+                        &self.flame, resize_config.iterations_per_thread, resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
+                        resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
+                    self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
+
+                    // Restore palette and color mode after buffer recreation
+                    // (FlameBuffers::new() resets to defaults: fire palette and transform colors)
+                    let palette = resize_config.palette.as_ref()
+                        .or_else(|| self.palette_library.get(resize_config.palette_index));
+                    if let Some(palette) = palette {
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, resize_config.palette_rotation);
+                    }
+                    renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, resize_config.iterations_per_thread,
+                        resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
+                        resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
+                }
+            }
+        }
 
         let t4 = Instant::now();
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -818,6 +857,16 @@ impl App {
             self.redo();
         }
 
+        // Handle panel open requests
+        if ui_response.open_palette_editor {
+            use crate::ui::workspace::PanelType;
+            self.workspace.open_floating_panel(PanelType::PaletteEditor);
+        }
+        if ui_response.open_config_dialog {
+            use crate::ui::workspace::PanelType;
+            self.workspace.open_floating_panel(PanelType::ConfigDialog);
+        }
+
         // Check for pending Apophysis import from WASM async file dialog
         #[cfg(target_arch = "wasm32")]
         {
@@ -904,8 +953,8 @@ impl App {
                     let iterations_per_thread = export_config.iterations_per_thread;
                     let speed_factor = export_config.speed_factor;
 
-                    let device: &'static wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
-                    let queue: &'static wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
+                    let device: &'static egui_wgpu::wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
+                    let queue: &'static egui_wgpu::wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
                     let renderer: &'static mut crate::renderer::compute_kernel::FlameRenderer =
                         unsafe { std::mem::transmute(renderer) };
                     let format = self.gpu.config.format;
@@ -970,7 +1019,7 @@ impl App {
                 // Get current config for updates
                 let update_config = self.config_manager.active_config();
 
-                let mut update_encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                let mut update_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                     label: Some("Update Encoder"),
                 });
 
@@ -1043,5 +1092,16 @@ impl App {
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
 
         Ok(())
+    }
+
+    /// Graceful shutdown - performs cleanup and exits
+    /// Called from: File → Quit, window close button (X), Alt+F4
+    fn shutdown(&mut self, event_loop: &ActiveEventLoop) {
+        // TODO: Check for unsaved changes
+        // TODO: Show confirmation dialog if needed
+        // TODO: Perform cleanup tasks
+
+        log::info!("Graceful shutdown initiated");
+        event_loop.exit();
     }
 }

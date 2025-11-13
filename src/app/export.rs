@@ -16,38 +16,39 @@ pub async fn export_headless(
     use std::time::Instant;
 
     // Create headless GPU instance
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::all(),
+    let instance = egui_wgpu::wgpu::Instance::new(&egui_wgpu::wgpu::InstanceDescriptor {
+        backends: egui_wgpu::wgpu::Backends::all(),
         ..Default::default()
     });
 
     let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
+        .request_adapter(&egui_wgpu::wgpu::RequestAdapterOptions {
+            power_preference: egui_wgpu::wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: None,
         })
         .await
-        .ok_or("Failed to find adapter")?;
+        .map_err(|e| format!("Failed to find adapter: {:?}", e))?;
 
     let (device, queue) = adapter
         .request_device(
-            &wgpu::DeviceDescriptor {
+            &egui_wgpu::wgpu::DeviceDescriptor {
                 label: Some("Headless Device"),
-                required_features: wgpu::Features::CLEAR_TEXTURE,
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::Performance,
+                required_features: egui_wgpu::wgpu::Features::CLEAR_TEXTURE,
+                required_limits: egui_wgpu::wgpu::Limits::default(),
+                memory_hints: egui_wgpu::wgpu::MemoryHints::Performance,
+                experimental_features: Default::default(),
+                trace: Default::default(),
             },
-            None,
         )
         .await?;
 
     // Create renderer
-    let surface_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let surface_format = egui_wgpu::wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut renderer = FlameRenderer::new(&device, &queue, surface_format, width, height, &config.flame);
 
     // Load config into renderer
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+    let mut encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
         label: Some("Headless Export Encoder"),
     });
 
@@ -76,7 +77,7 @@ pub async fn export_headless(
     while total_rendered < target {
         // Do multiple compute+accumulate cycles per "batch" (simulating higher frame rate)
         for _ in 0..speed_multiplier {
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            let mut encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                 label: Some("Render Frame"),
             });
 

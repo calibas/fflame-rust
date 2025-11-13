@@ -59,16 +59,76 @@ fractal_flame_wgpu/
 │                               - FPS tracking
 │                               - Frame time statistics
 │
-├── UI Layer (egui)
-│   └── ui/
-│       ├── mod.rs              EguiLayer + all UI panels
-│       │                       - Performance window
-│       │                       - Transforms editor
-│       │                       - Palette editor
-│       │                       - View controls
-│       │                       - Config import/export dialogs
-│       │
-│       └── panels.rs           (unused/empty)
+├── UI Layer (egui + egui_dock - Migrated 2025-11-13)
+│   ├── ui/
+│   │   ├── mod.rs              EguiLayer + main UI coordinator
+│   │   │                       - DockArea integration
+│   │   │                       - Fractal texture management
+│   │   │                       - Panel rendering dispatcher
+│   │   │
+│   │   ├── workspace.rs        Docking layout management
+│   │   │                       - Workspace struct with DockState
+│   │   │                       - Panel tabs (Settings, Transforms, View, etc.)
+│   │   │                       - Default layout configuration
+│   │   │                       - Future: Save/restore layouts
+│   │   │
+│   │   ├── settings.rs         Settings panel
+│   │   │                       - File & Project (presets, undo/redo)
+│   │   │                       - Rendering controls
+│   │   │                       - Export options
+│   │   │                       - Preferences (language selector)
+│   │   │
+│   │   ├── transforms.rs       Transform editor panel
+│   │   │                       - Transform list with controls
+│   │   │                       - Add/delete transforms
+│   │   │                       - Affine parameters
+│   │   │
+│   │   ├── triangle_editor.rs  Visual triangle editor panel
+│   │   │                       - Interactive affine editing
+│   │   │                       - Drag handles for pre/post triangles
+│   │   │                       - Batch updates via ConfigManager
+│   │   │
+│   │   ├── view.rs             View controls panel
+│   │   │                       - Zoom, pan, rotation
+│   │   │                       - 3D camera controls
+│   │   │                       - Projection settings
+│   │   │
+│   │   ├── tone_mapping.rs     Tone mapping & color panel
+│   │   │                       - Color mode selection
+│   │   │                       - Palette controls
+│   │   │                       - Tone curve settings
+│   │   │                       - Background color
+│   │   │
+│   │   ├── palette_editor.rs   Palette editor panel
+│   │   │                       - Color stop editing
+│   │   │                       - Palette import/export
+│   │   │                       - Gradient preview
+│   │   │
+│   │   ├── undo_history.rs     Undo history browser panel
+│   │   │                       - Visual state preview
+│   │   │                       - Jump to any config state
+│   │   │                       - ConfigManager integration
+│   │   │
+│   │   ├── menu_bar.rs         Top menu bar
+│   │   │                       - File, Edit, View, Fractal, Rendering, Window, Help
+│   │   │                       - Keyboard shortcuts documented
+│   │   │                       - Future: Full menu action implementation
+│   │   │
+│   │   ├── variation_controls.rs  Variation weight UI
+│   │   ├── variation_params.rs    Variation parameter UI
+│   │   ├── performance.rs         Performance metrics display
+│   │   ├── config_dialog.rs       Config import/export dialog
+│   │   ├── help.rs                Help/about dialogs
+│   │   ├── helpers.rs             UI utility functions
+│   │   ├── formatting.rs          Number formatting helpers
+│   │   ├── response.rs            UiResponse struct (legacy)
+│   │   └── lazy_undo.rs           Lazy undo helpers (experimental)
+│   │
+│   └── i18n.rs                 Internationalization (Added 2025-11-13)
+│                               - rust-i18n integration
+│                               - Locale management (current_locale, set_locale)
+│                               - LocaleInfo struct for UI display
+│                               - Translation macro re-exports
 │
 ├── Scene Layer
 │   └── scene/
@@ -510,13 +570,40 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 
 ---
 
-## 🖼️ UI Organization
+## 🖼️ UI Organization (egui_dock - Migrated 2025-11-13)
+
+**Docking System:**
+- Migrated from fixed side panel to flexible docking layout using egui_dock
+- All windows converted to dockable panels (1:1 mapping)
+- Users can rearrange, detach, and dock panels anywhere
+- Future: Save/restore workspace layouts
+
+**7 Main Panels:**
+1. **Fractal Viewport** - Main rendering display (center, always visible)
+2. **Settings** - File operations, rendering controls, preferences (with language selector)
+3. **Transforms** - Transform list, add/delete, affine parameters
+4. **Triangle Editor** - Visual affine editing with interactive triangles
+5. **View** - Camera controls, zoom, pan, rotation
+6. **Tone Mapping & Colors** - Color mode, palette, tone mapping settings
+7. **History** - Visual undo/redo browser with state preview
+
+**Menu Bar:**
+- Top-level menus: File, Edit, View, Fractal, Rendering, Window, Help
+- Professional menu structure for feature discoverability
+- Keyboard shortcuts documented in menus
+- Future: Implement all menu actions
+
+**Internationalization (Added 2025-11-13):**
+- rust-i18n v3.1 with YAML translation files
+- Language selector in Settings → Preferences
+- English (en) complete with 200+ strings
+- Ready for community translations (Spanish, French, German, Japanese, Chinese)
+- See [I18N.md](main/I18N.md) for translation guide
 
 **See [UI.md](main/UI.md)** for complete UI documentation including:
-- Window layout (5 windows + menu bar)
-- All panels and controls
+- Panel descriptions and controls
 - Input handling (keyboard, mouse, wheel)
-- UiResponse system
+- UiResponse system (legacy)
 - Common UI modification tasks
 
 ---

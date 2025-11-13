@@ -1,17 +1,14 @@
 use crate::util::PerformanceMetrics;
 use super::formatting::format_iterations;
 
-/// Render the Performance window showing stats and version info
-pub fn render_performance_window(
-    ctx: &egui::Context,
-    show_performance: &mut bool,
+/// Render the Performance panel content (used by both window and dockable panel)
+pub fn render_performance_content(
+    ui: &mut egui::Ui,
     metrics: &PerformanceMetrics,
     window_size: winit::dpi::PhysicalSize<u32>,
     flame_renderer: Option<&crate::renderer::compute_kernel::FlameRenderer>,
 ) {
-    egui::Window::new("Performance")
-        .open(show_performance)
-        .show(ctx, |ui| {
+    egui::ScrollArea::vertical().show(ui, |ui| {
             // Version info
             let version_info = crate::version::get_version_info();
             ui.heading("Fractal Flame Renderer");
@@ -64,5 +61,5 @@ pub fn render_performance_window(
                 ui.label(format!("Frames Accumulated: {}", renderer.samples_accumulated()));
                 ui.label(format!("Total Iterations: {}", format_iterations(renderer.total_iterations())));
             }
-        });
+    });
 }

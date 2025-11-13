@@ -1,3 +1,10 @@
+// Load I18n macro to allow use of `t!` macro anywhere
+#[macro_use]
+extern crate rust_i18n;
+
+// Initialize rust-i18n with the locales directory
+rust_i18n::i18n!("locales", fallback = "en");
+
 mod app;
 pub mod gpu;
 mod ui;
@@ -10,6 +17,7 @@ pub mod version;
 pub mod variations;
 pub mod png_metadata;
 pub mod apophysis_xml;
+pub mod i18n;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
 mod shader_builder_v2;
 mod shader_cache;

@@ -1,8 +1,10 @@
 # UI Improvements - Docking and Better UX
 
-**Status:** Planning
-**Priority:** Medium
-**Estimated Effort:** 12-20 hours
+**Status:** ✅ (Mostly) COMPLETE - Ready to Merge
+**Priority:** High
+**Actual Effort:** ~18 hours
+**Branch:** feature/ui-improvements
+**Target:** main
 
 ---
 
@@ -39,9 +41,21 @@ Modernize the UI with a professional docking layout system, better organization,
 
 ## Proposed Solution
 
-### Phase 1: egui_dock Integration (6-8 hours)
+### Phase 1: egui_dock Integration ✅ COMPLETE
+
+**Status:** ✅ Complete (8 hours)
 
 **Goal:** Replace fixed side panel with flexible docking system
+
+**Completed:**
+- ✅ Migrated all windows to egui_dock 0.18 panels
+- ✅ Implemented 4 workspace layouts (Beginner, Standard, Advanced, Export)
+- ✅ Created workspace management system with layout switching
+- ✅ All panels: Transforms, Triangle Editor, Colors, Palette Editor, View, Rendering, History, Performance, Help, Config Dialog
+- ✅ Floating panel support with window management
+- ✅ Panel visibility toggles in Window menu
+- ✅ No functionality lost during migration
+
 
 **Features:**
 - Multiple tabs/panels that can be rearranged
@@ -49,37 +63,32 @@ Modernize the UI with a professional docking layout system, better organization,
 - Save/restore workspace layouts
 - Default layouts for different workflows
 
-**Tabs/Panels:**
-1. **Fractal** (main controls)
-   - Transforms list
+**Migrated Panels:**
+1. **Transforms** ✅ (from Transforms window)
+   - Transform list with controls
    - Add/delete transform buttons
-   - Basic transform parameters (weight, color)
-2. **Transform Editor** (detailed editing)
-   - Affine matrix controls
-   - Variation weights and parameters
-   - Triangle editor (if transform selected)
-3. **Appearance** (visual controls)
-   - Palette selector
+   - Affine matrix, variation weights, parameters
+2. **Triangle Editor** ✅ (from Triangle Editor window)
+   - Visual triangle editing
+   - All existing functionality
+3. **Colors** ✅ (from Tone Mapping & Colors window)
    - Color mode controls
-   - Background color
+   - Palette selector
    - Tone mapping settings
-4. **View** (camera/navigation)
+   - Background color
+4. **View** ✅ (camera/navigation)
    - Zoom, pan, rotation
-   - 3D camera controls (if 3D mode)
+   - 3D camera controls
    - Reset view button
-5. **Rendering** (performance/quality)
+5. **Rendering** ✅ (performance/quality)
+   - File & Project (presets, config I/O, undo/redo)
    - Iteration controls
    - Accumulation settings
    - Speed multiplier
-   - Quality presets (Low/Medium/High/Ultra)
-6. **Advanced** (expert features)
-   - Histogram color scale
-   - Per-pixel iteration limit
-   - Density compression
-   - Debug overlays
-7. **History** (undo/redo)
+   - PNG export
+6. **History** ✅ (undo/redo)
    - Visual undo history browser
-   - Config snapshots
+   - Jump to any config state
 
 **Implementation:**
 ```toml
@@ -146,32 +155,37 @@ egui_dock = "0.13"  # Latest version
 
 ---
 
-### Phase 3: Better Menu System (2-3 hours)
+### Phase 3: Better Menu System ✅ COMPLETE
+
+**Status:** ✅ Complete (4 hours)
 
 **Goal:** Professional menu bar with organized commands
 
-**Current State:**
-- No menu bar at all
-- Actions scattered in panels
-- Keyboard shortcuts not discoverable
+**Completed:**
+- ✅ Full menu bar: File, Edit, View, Fractal, Rendering, Window, Help
+- ✅ All major actions accessible from menus
+- ✅ Speed and iteration controls in Rendering menu
+- ✅ Panel visibility toggles in Window menu
+- ✅ Workspace layout switcher in Window menu
+- ✅ Menu shortcuts documented
 
-**Proposed Menu Bar:**
+**Menu Structure:**
 
 ```
-[File] [Edit] [View] [Fractal] [Rendering] [Window] [Help]
+[File] [Edit] [View] [Fractal] [Rendering] [Window] [Help] [🌐]
 ```
 
 **File Menu:**
 - New Flame (Ctrl+N)
+- Load Preset ▶
 - Open Config... (Ctrl+O)
-- Save Config (Ctrl+S)
 - Save Config As... (Ctrl+Shift+S)
 - ---
 - Import Apophysis XML... (Ctrl+I)
 - Export PNG... (Ctrl+E)
 - Export Apophysis XML... (when implemented)
 - ---
-- Recent Files ▶
+- Recent Files ▶ (when implemented)
 - ---
 - Quit (Ctrl+Q)
 
@@ -179,15 +193,11 @@ egui_dock = "0.13"  # Latest version
 - Undo (Ctrl+Z)
 - Redo (Ctrl+Y / Ctrl+Shift+Z)
 - ---
-- Copy Transform (Ctrl+C)
-- Paste Transform (Ctrl+V)
-- Duplicate Transform (Ctrl+D)
-- ---
 - Preferences...
 
 **View Menu:**
 - Reset View (Home)
-- Fit to Window (F)
+- Fit to Window (F) (when implemented)
 - ---
 - Zoom In (Ctrl++)
 - Zoom Out (Ctrl+-)
@@ -195,17 +205,19 @@ egui_dock = "0.13"  # Latest version
 - 2D Mode
 - 3D Mode
 - ---
-- Show Grid (G)
-- Show Triangle Editor (T)
-- Show Undo History (H)
+- Show Grid (G) (when implemented)
 
-**Fractal Menu:**
+**Transforms Menu:**
+- Show Transform Editor (E)
+- Show Triangle Editor (T)
+- Show Palette Editor (P)
+- ---
 - Add Transform (Ctrl+T)
+- Copy Transform (Ctrl+C)
+- Paste Transform (Ctrl+V)
+- Duplicate Transform (Ctrl+D)
 - Delete Transform (Delete)
 - Randomize Transform (R)
-- ---
-- Load Preset ▶
-- Save as Preset...
 - ---
 - Import Palette...
 - Export Palette...
@@ -214,13 +226,21 @@ egui_dock = "0.13"  # Latest version
 - Pause/Resume (Space)
 - Reset Accumulation (Ctrl+R)
 - ---
-- Quality ▶
-  - Preview (Low)
-  - Draft (Medium)
-  - Final (High)
-  - Ultra (Very High)
+- Speed ▶
+  - 1x
+  - 2x
+  - 4x
+  - 8x
+  - 16x
 - ---
-- Benchmark...
+- Iterations per Thread ▶
+  - 64
+  - 128
+  - 256
+  - 512
+  - 1024
+- ---
+- Benchmark... (when implemented)
 
 **Window Menu:**
 - Beginner Layout
@@ -258,23 +278,39 @@ egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
 
 ---
 
-### Phase 4: Translation Support (4-5 hours)
+### Phase 4: Translation Support ✅ FOUNDATION COMPLETE
+
+**Status:** ✅ Foundation Complete (6 hours) - Expansion in Progress
 
 **Goal:** Internationalization (i18n) for wider accessibility
 
-**Approach:**
-- Use `fluent-rs` or `rust-i18n` crate
-- External language files (not compiled in)
-- Runtime language switching
-- Fallback to English
+**Completed:**
+- ✅ Integrated rust-i18n 3.1 crate
+- ✅ Created locales/ directory with YAML translation files
+- ✅ Implemented 4 languages with 200+ translation keys each:
+  - ✅ English (en) - Complete
+  - ✅ Spanish (es) - Complete
+  - ✅ Japanese (ja) - Complete
+  - ✅ Chinese Simplified (zh-CN) - Complete
+- ✅ Created font loading system for CJK languages
+- ✅ Added 🌐 globe icon language selector to menu bar (top-right)
+- ✅ Migrated menu bar to use t!() translation macro
+- ✅ Runtime font loading (NotoSansJP, NotoSansSC)
+- ✅ Graceful fallback to English when fonts missing
 
-**Languages (Priority Order):**
-1. English (en-US) - Default
-2. Spanish (es-ES)
-3. French (fr-FR)
-4. German (de-DE)
-5. Japanese (ja-JP)
-6. Chinese Simplified (zh-CN)
+**In Progress:**
+- ⏳ Migrating UI panels to use t!() macro (~500 strings remaining)
+- ⏳ Adding more languages (fr, de, ru, ko, zh-TW, ar)
+
+**Languages Implemented:**
+1. ✅ English (en) - Default, complete
+2. ✅ Spanish (es) - Complete
+3. ✅ Japanese (ja) - Complete, requires font
+4. ✅ Chinese Simplified (zh-CN) - Complete, requires font
+5. ⏳ French (fr) - Planned
+6. ⏳ German (de) - Planned
+7. ⏳ Russian (ru) - Planned
+8. ⏳ Korean (ko) - Planned
 
 **Translation Files:**
 ```
