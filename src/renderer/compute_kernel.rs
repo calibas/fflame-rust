@@ -608,7 +608,7 @@ impl FlameRenderer {
     }
 
     /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, and value scale
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, width: u32, height: u32, total_iterations: u64, max_iterations: u64) {
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match tonemap_mode {
@@ -809,7 +809,7 @@ impl FlameRenderer {
         buffer_slice.map_async(MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
 
         rx.await.map_err(|_| "Failed to map buffer".to_string())?
             .map_err(|e| format!("Buffer map error: {:?}", e))?;
@@ -884,7 +884,7 @@ impl FlameRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: surface_format,
+            format: TextureFormat::Rgba8Unorm,
             usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
             view_formats: &[],
         };
@@ -941,7 +941,7 @@ impl FlameRenderer {
         buffer_slice.map_async(MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
 
         rx.await.map_err(|_| "Failed to map buffer".to_string())?
             .map_err(|e| format!("Buffer map error: {:?}", e))?;
