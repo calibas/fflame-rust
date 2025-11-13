@@ -953,8 +953,8 @@ impl App {
                     let iterations_per_thread = export_config.iterations_per_thread;
                     let speed_factor = export_config.speed_factor;
 
-                    let device: &'static wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
-                    let queue: &'static wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
+                    let device: &'static egui_wgpu::wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
+                    let queue: &'static egui_wgpu::wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
                     let renderer: &'static mut crate::renderer::compute_kernel::FlameRenderer =
                         unsafe { std::mem::transmute(renderer) };
                     let format = self.gpu.config.format;
