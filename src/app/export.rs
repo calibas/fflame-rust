@@ -44,7 +44,7 @@ pub async fn export_headless(
         .await?;
 
     // Create renderer
-    let surface_format = egui_wgpu::wgpu::TextureFormat::Rgba8UnormSrgb;
+    let surface_format = egui_wgpu::wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = FlameRenderer::new(&device, &queue, surface_format, width, height, &config.flame);
 
     // Load config into renderer
