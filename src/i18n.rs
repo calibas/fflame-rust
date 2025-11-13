@@ -54,8 +54,8 @@ impl LocaleInfo {
 pub fn supported_locales() -> Vec<LocaleInfo> {
     vec![
         LocaleInfo::new("en", "English", "English"),
+        LocaleInfo::new("es", "Spanish", "Español"),
         // Add more as translation files are created:
-        // LocaleInfo::new("es", "Spanish", "Español"),
         // LocaleInfo::new("fr", "French", "Français"),
         // LocaleInfo::new("de", "German", "Deutsch"),
         // LocaleInfo::new("ja", "Japanese", "日本語"),
