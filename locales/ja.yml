@@ -1,0 +1,268 @@
+_version: 1
+# Application
+app:
+  title: "フラクタルフレームレンダラー"
+
+# Menu Bar
+menu:
+  file: "ファイル"
+  edit: "編集"
+  view: "表示"
+  fractal: "フラクタル"
+  rendering: "レンダリング"
+  window: "ウィンドウ"
+  help: "ヘルプ"
+
+  # File Menu
+  new_flame: "新規フレーム"
+  load_preset: "プリセット読込"
+  open_config: "設定を開く..."
+  save_config: "設定を保存..."
+  import_apophysis: "Apophysis XML読込..."
+  export_png: "PNG出力..."
+  export_apophysis: "Apophysis XML出力..."
+  recent_files: "最近使用したファイル"
+  quit: "終了"
+
+  # Edit Menu
+  undo: "元に戻す"
+  redo: "やり直す"
+  preferences: "環境設定..."
+
+  # View Menu
+  reset_view: "表示をリセット"
+  fit_to_window: "ウィンドウに合わせる"
+  zoom_in: "拡大"
+  zoom_out: "縮小"
+  mode_2d: "2Dモード"
+  mode_3d: "3Dモード"
+  show_grid: "グリッド表示"
+
+  # Fractal Menu
+  show_transform_editor: "変換エディタ表示"
+  show_triangle_editor: "三角形エディタ表示"
+  show_palette_editor: "パレットエディタ表示"
+  add_transform: "変換を追加"
+  copy_transform: "変換をコピー"
+  paste_transform: "変換を貼付"
+  duplicate_transform: "変換を複製"
+  delete_transform: "変換を削除"
+  randomize_transform: "変換をランダム化"
+  save_preset: "プリセットとして保存"
+  import_palette: "パレット読込..."
+  export_palette: "パレット出力..."
+
+  # Rendering Menu
+  reset_rendering: "レンダリングをリセット"
+  pause_rendering: "レンダリング一時停止"
+  resume_rendering: "レンダリング再開"
+  show_performance: "パフォーマンス表示"
+
+  # Window Menu
+  show_fractal_viewport: "フラクタル表示"
+  show_rendering_settings: "レンダリング設定"
+  show_transform_list: "変換リスト"
+  show_view_controls: "表示コントロール"
+  show_color_settings: "色設定"
+  show_tone_mapping: "トーンマッピング"
+  show_undo_history: "履歴"
+  layout_reset: "レイアウトをリセット"
+
+  # Help Menu
+  about: "Fractal Flame Renderer について"
+  documentation: "ドキュメント"
+  report_issue: "問題を報告"
+
+# Panels
+panels:
+  fractal_viewport: "フラクタル表示"
+  rendering_settings: "レンダリング設定"
+  transform_list: "変換"
+  view_controls: "表示"
+  color_settings: "色"
+  tone_mapping: "トーンマッピング"
+  undo_history: "履歴"
+  triangle_editor: "三角形エディタ"
+  palette_editor: "パレットエディタ"
+
+# Transform
+transform:
+  transform: "変換"
+  transforms: "変換"
+  add: "追加"
+  delete: "削除"
+  color: "色"
+  weight: "重み"
+  affine: "アフィン"
+  variations: "バリエーション"
+  parameters: "パラメータ"
+
+# Variations
+variations:
+  linear: "線形"
+  sinusoidal: "正弦波"
+  spherical: "球面"
+  swirl: "渦巻"
+  horseshoe: "馬蹄形"
+  polar: "極座標"
+  handkerchief: "ハンカチーフ"
+  heart: "ハート"
+  disc: "円盤"
+  spiral: "螺旋"
+  hyperbolic: "双曲線"
+  diamond: "ダイヤモンド"
+  ex: "Ex"
+  julia: "ジュリア"
+  bent: "屈曲"
+  waves: "波"
+  zcone: "Zコーン"
+  flatten: "平坦化"
+  hemisphere: "半球"
+  pre_rotate_x: "事前X回転"
+  pre_rotate_y: "事前Y回転"
+  post_rotate_x: "事後X回転"
+  post_rotate_y: "事後Y回転"
+  zscale: "Z拡大縮小"
+  julian: "ジュリアN"
+  blob: "ブロブ"
+
+# Color
+color:
+  mode: "色モード"
+  palette: "パレット"
+  speed: "速度"
+  offset: "オフセット"
+  background: "背景色"
+  transform_colors: "変換色"
+  palette_lookup: "パレット参照"
+  speed_based: "速度ベース"
+
+# Palette
+palette:
+  editor: "パレットエディタ"
+  select: "パレット選択"
+  custom: "カスタム"
+  import: "読込"
+  export: "出力"
+  add_stop: "停止点追加"
+  delete_stop: "停止点削除"
+  position: "位置"
+  color: "色"
+
+# View
+view:
+  zoom: "ズーム"
+  pan_x: "パンX"
+  pan_y: "パンY"
+  rotation: "回転"
+  camera_pitch: "カメラピッチ"
+  camera_yaw: "カメラヨー"
+  projection: "投影"
+  orthographic: "正投影"
+  perspective: "透視投影"
+  perspective_strength: "透視強度"
+
+# Rendering
+rendering:
+  workgroups: "ワークグループ"
+  iterations_per_thread: "スレッド毎反復"
+  speed_multiplier: "速度倍率"
+  density_scale: "密度スケール"
+  blend_rate: "ブレンド率"
+  dynamic_blend: "動的ブレンド"
+  low_density_smoothing: "低密度平滑化"
+  density_compression: "密度圧縮"
+  iteration_limit: "反復制限"
+  total_iterations: "総反復数"
+  reset: "リセット"
+
+# Tone Mapping
+tonemap:
+  mode: "モード"
+  log: "対数"
+  linear: "線形"
+  use_curve: "曲線使用"
+  curve: "曲線"
+  exposure: "露出"
+  gamma: "ガンマ"
+  gamma_threshold: "ガンマ閾値"
+  brightness: "明るさ"
+  vibrancy: "鮮やかさ"
+  saturation: "彩度"
+  hue_shift: "色相シフト"
+  value_scale: "明度スケール"
+
+# History
+history:
+  undo: "元に戻す"
+  redo: "やり直す"
+  clear: "クリア"
+  state: "状態"
+
+# Settings
+settings:
+  preferences: "環境設定"
+  language: "言語"
+  theme: "テーマ"
+  auto_save: "自動保存"
+  show_tooltips: "ツールチップ表示"
+
+# Performance
+performance:
+  fps: "FPS"
+  frame_time: "フレーム時間"
+  gpu_time: "GPU時間"
+  memory: "メモリ"
+
+# Common
+common:
+  ok: "OK"
+  cancel: "キャンセル"
+  apply: "適用"
+  close: "閉じる"
+  save: "保存"
+  load: "読込"
+  import: "読込"
+  export: "出力"
+  reset: "リセット"
+  default: "デフォルト"
+  custom: "カスタム"
+  none: "なし"
+  all: "すべて"
+  name: "名前"
+  value: "値"
+  enabled: "有効"
+  disabled: "無効"
+
+# Tooltips
+tooltips:
+  workgroups: "並列実行するGPUワークグループの数"
+  iterations_per_thread: "各スレッドが1フレーム毎に実行する反復数"
+  speed_multiplier: "レンダリング速度を上げるためのフレームレート倍率"
+  density_scale: "点の明るさを調整"
+  blend_rate: "各フレームで新しいサンプルをブレンドする速度"
+  dynamic_blend: "指数関数的収束（古いデフォルト）vs固定レート（新オプション）"
+  low_density_smoothing: "まばらな領域でのブレンドレートを減少してノイズを低減"
+  density_compression: "明るい領域での累積を遅くして詳細を明らかに"
+  iteration_limit: "ピクセル毎の最大ヒット数（0=無制限）"
+
+# Messages
+messages:
+  config_saved: "設定を保存しました"
+  config_loaded: "設定を読み込みました"
+  preset_loaded: "プリセットを読み込みました"
+  palette_imported: "パレットを読み込みました"
+  palette_exported: "パレットを出力しました"
+  png_exported: "PNGを出力しました"
+  rendering_reset: "レンダリングをリセットしました"
+
+# Errors
+errors:
+  config_load_failed: "設定の読み込みに失敗しました"
+  config_save_failed: "設定の保存に失敗しました"
+  palette_import_failed: "パレットの読み込みに失敗しました"
+  palette_export_failed: "パレットの出力に失敗しました"
+  png_export_failed: "PNGの出力に失敗しました"
+  invalid_file: "無効なファイル形式"
+  font_required: "フォントが必要です"
+  font_not_found: "選択した言語には追加のフォントが必要ですが、見つかりませんでした"

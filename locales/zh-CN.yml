@@ -1,0 +1,268 @@
+_version: 1
+# Application
+app:
+  title: "分形火焰渲染器"
+
+# Menu Bar
+menu:
+  file: "文件"
+  edit: "编辑"
+  view: "视图"
+  fractal: "分形"
+  rendering: "渲染"
+  window: "窗口"
+  help: "帮助"
+
+  # File Menu
+  new_flame: "新建火焰"
+  load_preset: "加载预设"
+  open_config: "打开配置..."
+  save_config: "保存配置为..."
+  import_apophysis: "导入 Apophysis XML..."
+  export_png: "导出 PNG..."
+  export_apophysis: "导出 Apophysis XML..."
+  recent_files: "最近文件"
+  quit: "退出"
+
+  # Edit Menu
+  undo: "撤销"
+  redo: "重做"
+  preferences: "首选项..."
+
+  # View Menu
+  reset_view: "重置视图"
+  fit_to_window: "适应窗口"
+  zoom_in: "放大"
+  zoom_out: "缩小"
+  mode_2d: "2D模式"
+  mode_3d: "3D模式"
+  show_grid: "显示网格"
+
+  # Fractal Menu
+  show_transform_editor: "显示变换编辑器"
+  show_triangle_editor: "显示三角形编辑器"
+  show_palette_editor: "显示调色板编辑器"
+  add_transform: "添加变换"
+  copy_transform: "复制变换"
+  paste_transform: "粘贴变换"
+  duplicate_transform: "复制变换"
+  delete_transform: "删除变换"
+  randomize_transform: "随机变换"
+  save_preset: "保存为预设"
+  import_palette: "导入调色板..."
+  export_palette: "导出调色板..."
+
+  # Rendering Menu
+  reset_rendering: "重置渲染"
+  pause_rendering: "暂停渲染"
+  resume_rendering: "继续渲染"
+  show_performance: "显示性能"
+
+  # Window Menu
+  show_fractal_viewport: "显示分形视口"
+  show_rendering_settings: "显示渲染设置"
+  show_transform_list: "显示变换列表"
+  show_view_controls: "显示视图控制"
+  show_color_settings: "显示颜色设置"
+  show_tone_mapping: "显示色调映射"
+  show_undo_history: "显示历史记录"
+  layout_reset: "重置布局"
+
+  # Help Menu
+  about: "关于分形火焰渲染器"
+  documentation: "文档"
+  report_issue: "报告问题"
+
+# Panels
+panels:
+  fractal_viewport: "分形视口"
+  rendering_settings: "渲染设置"
+  transform_list: "变换"
+  view_controls: "视图"
+  color_settings: "颜色"
+  tone_mapping: "色调映射"
+  undo_history: "历史"
+  triangle_editor: "三角形编辑器"
+  palette_editor: "调色板编辑器"
+
+# Transform
+transform:
+  transform: "变换"
+  transforms: "变换"
+  add: "添加"
+  delete: "删除"
+  color: "颜色"
+  weight: "权重"
+  affine: "仿射"
+  variations: "变体"
+  parameters: "参数"
+
+# Variations
+variations:
+  linear: "线性"
+  sinusoidal: "正弦"
+  spherical: "球面"
+  swirl: "漩涡"
+  horseshoe: "马蹄"
+  polar: "极坐标"
+  handkerchief: "手帕"
+  heart: "心形"
+  disc: "圆盘"
+  spiral: "螺旋"
+  hyperbolic: "双曲"
+  diamond: "钻石"
+  ex: "Ex"
+  julia: "茱莉亚"
+  bent: "弯曲"
+  waves: "波浪"
+  zcone: "Z锥"
+  flatten: "扁平化"
+  hemisphere: "半球"
+  pre_rotate_x: "前置X旋转"
+  pre_rotate_y: "前置Y旋转"
+  post_rotate_x: "后置X旋转"
+  post_rotate_y: "后置Y旋转"
+  zscale: "Z缩放"
+  julian: "茱莉亚N"
+  blob: "斑点"
+
+# Color
+color:
+  mode: "颜色模式"
+  palette: "调色板"
+  speed: "速度"
+  offset: "偏移"
+  background: "背景色"
+  transform_colors: "变换颜色"
+  palette_lookup: "调色板查找"
+  speed_based: "基于速度"
+
+# Palette
+palette:
+  editor: "调色板编辑器"
+  select: "选择调色板"
+  custom: "自定义"
+  import: "导入"
+  export: "导出"
+  add_stop: "添加色标"
+  delete_stop: "删除色标"
+  position: "位置"
+  color: "颜色"
+
+# View
+view:
+  zoom: "缩放"
+  pan_x: "平移X"
+  pan_y: "平移Y"
+  rotation: "旋转"
+  camera_pitch: "相机俯仰"
+  camera_yaw: "相机偏航"
+  projection: "投影"
+  orthographic: "正交"
+  perspective: "透视"
+  perspective_strength: "透视强度"
+
+# Rendering
+rendering:
+  workgroups: "工作组"
+  iterations_per_thread: "每线程迭代"
+  speed_multiplier: "速度倍增"
+  density_scale: "密度缩放"
+  blend_rate: "混合率"
+  dynamic_blend: "动态混合"
+  low_density_smoothing: "低密度平滑"
+  density_compression: "密度压缩"
+  iteration_limit: "迭代限制"
+  total_iterations: "总迭代数"
+  reset: "重置"
+
+# Tone Mapping
+tonemap:
+  mode: "模式"
+  log: "对数"
+  linear: "线性"
+  use_curve: "使用曲线"
+  curve: "曲线"
+  exposure: "曝光"
+  gamma: "伽马"
+  gamma_threshold: "伽马阈值"
+  brightness: "亮度"
+  vibrancy: "鲜艳度"
+  saturation: "饱和度"
+  hue_shift: "色相偏移"
+  value_scale: "明度缩放"
+
+# History
+history:
+  undo: "撤销"
+  redo: "重做"
+  clear: "清除"
+  state: "状态"
+
+# Settings
+settings:
+  preferences: "首选项"
+  language: "语言"
+  theme: "主题"
+  auto_save: "自动保存"
+  show_tooltips: "显示工具提示"
+
+# Performance
+performance:
+  fps: "帧率"
+  frame_time: "帧时间"
+  gpu_time: "GPU时间"
+  memory: "内存"
+
+# Common
+common:
+  ok: "确定"
+  cancel: "取消"
+  apply: "应用"
+  close: "关闭"
+  save: "保存"
+  load: "加载"
+  import: "导入"
+  export: "导出"
+  reset: "重置"
+  default: "默认"
+  custom: "自定义"
+  none: "无"
+  all: "全部"
+  name: "名称"
+  value: "值"
+  enabled: "启用"
+  disabled: "禁用"
+
+# Tooltips
+tooltips:
+  workgroups: "并行执行的GPU工作组数量"
+  iterations_per_thread: "每个线程每帧执行的迭代次数"
+  speed_multiplier: "帧率倍增以加快渲染速度"
+  density_scale: "调整点的亮度"
+  blend_rate: "每帧混合新样本的速度"
+  dynamic_blend: "指数收敛（旧默认）vs 固定速率（新选项）"
+  low_density_smoothing: "降低稀疏区域的混合率以减少噪点"
+  density_compression: "减慢明亮区域的累积以显示细节"
+  iteration_limit: "每像素最大命中次数（0=无限制）"
+
+# Messages
+messages:
+  config_saved: "配置已保存"
+  config_loaded: "配置已加载"
+  preset_loaded: "预设已加载"
+  palette_imported: "调色板已导入"
+  palette_exported: "调色板已导出"
+  png_exported: "PNG已导出"
+  rendering_reset: "渲染已重置"
+
+# Errors
+errors:
+  config_load_failed: "加载配置失败"
+  config_save_failed: "保存配置失败"
+  palette_import_failed: "导入调色板失败"
+  palette_export_failed: "导出调色板失败"
+  png_export_failed: "导出PNG失败"
+  invalid_file: "无效的文件格式"
+  font_required: "需要字体"
+  font_not_found: "所选语言需要额外的字体，但未找到"

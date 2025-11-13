@@ -1,0 +1,299 @@
+_version: 1
+# Application
+app:
+  title: "Fractal Flame Renderer"
+
+# Menu Bar
+menu:
+  file: "File"
+  edit: "Edit"
+  view: "View"
+  fractal: "Fractal"
+  rendering: "Rendering"
+  window: "Window"
+  help: "Help"
+
+  # File Menu
+  new_flame: "New Flame"
+  load_preset: "Load Preset"
+  open_config: "Open Config..."
+  save_config: "Save Config As..."
+  import_apophysis: "Import Apophysis XML..."
+  export_png: "Export PNG..."
+  export_apophysis: "Export Apophysis XML..."
+  recent_files: "Recent Files"
+  quit: "Quit"
+
+  # Edit Menu
+  undo: "Undo"
+  redo: "Redo"
+  preferences: "Preferences..."
+
+  # View Menu
+  reset_view: "Reset View"
+  fit_to_window: "Fit to Window"
+  zoom_in: "Zoom In"
+  zoom_out: "Zoom Out"
+  mode_2d: "2D Mode"
+  mode_3d: "3D Mode"
+  show_grid: "Show Grid"
+
+  # Fractal Menu
+  show_transform_editor: "Show Transform Editor"
+  show_triangle_editor: "Show Triangle Editor"
+  show_palette_editor: "Show Palette Editor"
+  add_transform: "Add Transform"
+  copy_transform: "Copy Transform"
+  paste_transform: "Paste Transform"
+  duplicate_transform: "Duplicate Transform"
+  delete_transform: "Delete Transform"
+  randomize_transform: "Randomize Transform"
+  import_palette: "Import Palette..."
+  export_palette: "Export Palette..."
+
+  # Rendering Menu
+  pause_resume: "Pause/Resume"
+  reset_accumulation: "Reset Accumulation"
+  speed: "Speed"
+  iterations_per_thread: "Iterations per Thread"
+  benchmark: "Benchmark..."
+
+  # Window Menu
+  beginner_layout: "Beginner Layout"
+  standard_layout: "Standard Layout"
+  advanced_layout: "Advanced Layout"
+  reset_layout: "Reset Layout"
+  save_layout: "Save Layout..."
+
+  # Help Menu
+  documentation: "Documentation"
+  keyboard_shortcuts: "Keyboard Shortcuts"
+  report_bug: "Report Bug..."
+  about: "About..."
+
+# Panel Titles
+panels:
+  transforms: "Transforms"
+  triangle_editor: "Triangle Editor"
+  colors: "Colors"
+  palette_editor: "Palette Editor"
+  view: "View"
+  rendering: "Rendering"
+  history: "History"
+  settings: "Settings"
+  tone_mapping: "Tone Mapping"
+  performance: "Performance"
+
+# Transform Controls
+transform:
+  label: "Transform"
+  weight: "Weight"
+  color: "Palette Position"
+  add: "Add Transform"
+  delete: "Delete"
+  edit: "Edit"
+  affine: "Affine Transform"
+  variations: "Variations"
+  parameters: "Parameters"
+
+  # Affine parameters
+  affine_a: "A (X scale)"
+  affine_b: "B (Y shear)"
+  affine_c: "C (X shear)"
+  affine_d: "D (Y scale)"
+  affine_e: "E (X offset)"
+  affine_f: "F (Y offset)"
+  affine_g: "G (Z offset)"
+
+# Variation Controls
+variations:
+  title: "Variations"
+  weight: "Weight"
+  add: "Add Variation"
+  remove: "Remove"
+  category: "Category"
+
+  # Categories
+  basic_2d: "Basic 2D"
+  advanced_2d: "Advanced 2D"
+  depth_3d: "3D Depth"
+  full_3d: "3D Full"
+  rotation_3d: "3D Rotation"
+  parameterized: "Parameterized"
+
+# Color Controls
+color:
+  mode: "Color Mode"
+  palette: "Palette"
+  background: "Background"
+  exposure: "Exposure"
+  gamma: "Gamma"
+
+  # Color Modes
+  mode_transform: "Transform Colors"
+  mode_palette: "Palette Lookup"
+  mode_speed: "Speed-Based"
+
+# Palette Editor
+palette:
+  title: "Palette Editor"
+  current: "Current Palette"
+  library: "Palette Library"
+  import: "Import..."
+  export: "Export..."
+  add_stop: "Add Stop"
+  remove_stop: "Remove Stop"
+  position: "Position"
+  color_picker: "Color"
+
+# View Controls
+view:
+  title: "View"
+  zoom: "Zoom"
+  pan_x: "Pan X"
+  pan_y: "Pan Y"
+  rotation: "Rotation"
+  camera_pitch: "Camera Pitch"
+  camera_yaw: "Camera Yaw"
+  camera_z: "Camera Z"
+  reset: "Reset View"
+
+  # Projection
+  projection: "Projection"
+  projection_orthographic: "Orthographic"
+  projection_perspective: "Perspective"
+  projection_strength: "Perspective Strength"
+
+# Rendering Controls
+rendering:
+  title: "Rendering"
+  quality: "Quality"
+  iterations: "Iterations"
+  workgroups: "Workgroups"
+  threads_per_group: "Threads per Group"
+  iterations_per_thread: "Iterations per Thread"
+  speed_multiplier: "Speed Multiplier"
+  max_iterations: "Max Iterations"
+
+  # Accumulation
+  accumulation: "Accumulation"
+  blend_rate: "Blend Rate"
+  dynamic_blend: "Dynamic Blend"
+  low_density_smoothing: "Low-Density Smoothing"
+  density_compression: "Density Compression"
+  per_pixel_limit: "Per-Pixel Iteration Limit"
+
+  # Render Mode
+  render_mode: "Render Mode"
+  mode_2d: "2D"
+  mode_3d: "3D"
+
+  # Actions
+  pause: "Pause"
+  resume: "Resume"
+  reset: "Reset"
+  export: "Export PNG..."
+
+# Tone Mapping
+tonemap:
+  title: "Tone Mapping"
+  mode: "Tonemap Mode"
+  mode_log: "Logarithmic"
+  mode_linear: "Linear"
+  mode_reinhard: "Reinhard"
+  curve: "Tone Curve"
+  use_curve: "Use S-Curve"
+  exposure: "Exposure"
+  gamma: "Gamma"
+  density_scale: "Density Scale"
+  histogram_color_scale: "Histogram Color Scale"
+
+# History Panel
+history:
+  title: "Undo History"
+  current: "Current"
+  jump_to: "Jump to this state"
+  clear: "Clear History"
+
+# Settings Panel
+settings:
+  title: "Settings"
+  preset: "Preset"
+  config: "Config"
+  import: "Import Config..."
+  export: "Export Config..."
+  save: "Save Config"
+  load: "Load Config"
+
+  # Preferences
+  preferences: "Preferences"
+  language: "Language"
+  theme: "Theme"
+  theme_dark: "Dark"
+  theme_light: "Light"
+  theme_high_contrast: "High Contrast"
+
+# Performance Metrics
+performance:
+  fps: "FPS"
+  frame_time: "Frame Time"
+  total_iterations: "Total Iterations"
+  iterations_per_second: "Iterations/sec"
+  gpu_time: "GPU Time"
+
+# Common UI Elements
+common:
+  ok: "OK"
+  cancel: "Cancel"
+  apply: "Apply"
+  close: "Close"
+  save: "Save"
+  load: "Load"
+  import: "Import"
+  export: "Export"
+  add: "Add"
+  remove: "Remove"
+  delete: "Delete"
+  edit: "Edit"
+  reset: "Reset"
+  default: "Default"
+  custom: "Custom"
+  enabled: "Enabled"
+  disabled: "Disabled"
+
+# Tooltips
+tooltips:
+  zoom: "Controls the magnification level.\nHigher = more zoomed in."
+  pan: "Move the fractal view left/right or up/down."
+  rotation: "Rotate the entire view.\nKeyboard: R key + drag"
+  camera_pitch: "3D camera rotation (up/down).\nOnly visible in 3D mode."
+  camera_yaw: "3D camera rotation (left/right).\nOnly visible in 3D mode."
+
+  transform_weight: "Probability of selecting this transform.\nHigher = more influence on final image."
+  transform_color: "Position in color palette (0.0-1.0).\nAffects color when using Transform Colors mode."
+
+  blend_rate: "How fast new samples blend with existing.\n0.01 = slow/smooth, 1.0 = fast/flickery"
+  dynamic_blend: "Exponential convergence (old) vs fixed rate (new).\nFixed rate gives more consistent results."
+  density_compression: "Slows accumulation in bright areas.\n0 = disabled, 100 = strong effect"
+
+  histogram_color_scale: "Scaling factor for color accumulation.\nHigher = more vibrant colors."
+
+# Messages
+messages:
+  config_imported: "Config imported successfully"
+  config_exported: "Config exported successfully"
+  palette_imported: "Palette imported successfully"
+  palette_exported: "Palette exported successfully"
+  png_exported: "PNG exported successfully"
+  error: "Error"
+  warning: "Warning"
+  info: "Info"
+
+# Errors
+errors:
+  file_not_found: "File not found"
+  invalid_format: "Invalid file format"
+  import_failed: "Import failed"
+  export_failed: "Export failed"
+  gpu_error: "GPU error"
+  shader_compilation_failed: "Shader compilation failed"

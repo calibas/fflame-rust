@@ -1,2 +1,2 @@
 # fflame-rust
-GPU-accelerated Fract Flame Renderer, using WebGPU and Rust
+GPU-accelerated Fractal Flame Renderer, using WebGPU and Rust

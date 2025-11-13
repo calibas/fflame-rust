@@ -291,5 +291,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     );
     let final_alpha = select(1.0, output_alpha, is_transparent_mode);
 
-    return vec4<f32>(final_color, final_alpha);
+    // Convert from linear to sRGB for display
+    // (Rgba8Unorm is linear, but monitors expect sRGB)
+    let srgb_color = pow(final_color, vec3<f32>(1.0 / 2.2));
+
+    return vec4<f32>(srgb_color, final_alpha);
 }

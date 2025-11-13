@@ -36,6 +36,13 @@ pub struct UiResponse {
     // Transform management (creates config deltas but needs special handling)
     pub add_transform: bool,
     pub delete_transform: Option<usize>,
+
+    // Panel open requests
+    pub open_palette_editor: bool,
+    pub open_config_dialog: bool,
+
+    // Fractal viewport size (for matching texture dimensions to panel)
+    pub fractal_viewport_size: Option<(u32, u32)>,
 }
 
 impl Default for UiResponse {
@@ -61,6 +68,9 @@ impl Default for UiResponse {
             preset_changed: false,
             add_transform: false,
             delete_transform: None,
+            open_palette_editor: false,
+            open_config_dialog: false,
+            fractal_viewport_size: None,
         }
     }
 }
