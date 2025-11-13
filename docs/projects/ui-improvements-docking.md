@@ -1,8 +1,10 @@
 # UI Improvements - Docking and Better UX
 
-**Status:** Planning
-**Priority:** Medium
-**Estimated Effort:** 12-20 hours
+**Status:** ✅ (Mostly) COMPLETE - Ready to Merge
+**Priority:** High
+**Actual Effort:** ~18 hours
+**Branch:** feature/ui-improvements
+**Target:** main
 
 ---
 
@@ -39,17 +41,20 @@ Modernize the UI with a professional docking layout system, better organization,
 
 ## Proposed Solution
 
-### Phase 1: egui_dock Integration (6-8 hours)
+### Phase 1: egui_dock Integration ✅ COMPLETE
 
-**Status:** Complete ✅
+**Status:** ✅ Complete (8 hours)
 
 **Goal:** Replace fixed side panel with flexible docking system
 
-**Implementation (Complete):**
-- Converted all 7 main windows → dockable panels (1:1 mapping)
-- All existing functionality preserved unchanged
-- No reorganization or refactoring - pure migration
-- **All panels migrated:** Transforms, Triangle Editor, Colors, Palette Editor, View, Rendering, History
+**Completed:**
+- ✅ Migrated all windows to egui_dock 0.18 panels
+- ✅ Implemented 4 workspace layouts (Beginner, Standard, Advanced, Export)
+- ✅ Created workspace management system with layout switching
+- ✅ All panels: Transforms, Triangle Editor, Colors, Palette Editor, View, Rendering, History, Performance, Help, Config Dialog
+- ✅ Floating panel support with window management
+- ✅ Panel visibility toggles in Window menu
+- ✅ No functionality lost during migration
 
 
 **Features:**
@@ -150,19 +155,24 @@ egui_dock = "0.13"  # Latest version
 
 ---
 
-### Phase 3: Better Menu System (2-3 hours)
+### Phase 3: Better Menu System ✅ COMPLETE
+
+**Status:** ✅ Complete (4 hours)
 
 **Goal:** Professional menu bar with organized commands
 
-**Current State:**
-- No menu bar at all
-- Actions scattered in panels
-- Keyboard shortcuts not discoverable
+**Completed:**
+- ✅ Full menu bar: File, Edit, View, Fractal, Rendering, Window, Help
+- ✅ All major actions accessible from menus
+- ✅ Speed and iteration controls in Rendering menu
+- ✅ Panel visibility toggles in Window menu
+- ✅ Workspace layout switcher in Window menu
+- ✅ Menu shortcuts documented
 
-**Proposed Menu Bar:**
+**Menu Structure:**
 
 ```
-[File] [Edit] [View] [Fractal] [Rendering] [Window] [Help]
+[File] [Edit] [View] [Fractal] [Rendering] [Window] [Help] [🌐]
 ```
 
 **File Menu:**
@@ -268,23 +278,39 @@ egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
 
 ---
 
-### Phase 4: Translation Support (4-5 hours)
+### Phase 4: Translation Support ✅ FOUNDATION COMPLETE
+
+**Status:** ✅ Foundation Complete (6 hours) - Expansion in Progress
 
 **Goal:** Internationalization (i18n) for wider accessibility
 
-**Approach:**
-- Use `fluent-rs` or `rust-i18n` crate
-- External language files (not compiled in)
-- Runtime language switching
-- Fallback to English
+**Completed:**
+- ✅ Integrated rust-i18n 3.1 crate
+- ✅ Created locales/ directory with YAML translation files
+- ✅ Implemented 4 languages with 200+ translation keys each:
+  - ✅ English (en) - Complete
+  - ✅ Spanish (es) - Complete
+  - ✅ Japanese (ja) - Complete
+  - ✅ Chinese Simplified (zh-CN) - Complete
+- ✅ Created font loading system for CJK languages
+- ✅ Added 🌐 globe icon language selector to menu bar (top-right)
+- ✅ Migrated menu bar to use t!() translation macro
+- ✅ Runtime font loading (NotoSansJP, NotoSansSC)
+- ✅ Graceful fallback to English when fonts missing
 
-**Languages (Priority Order):**
-1. English (en-US) - Default
-2. Spanish (es-ES)
-3. French (fr-FR)
-4. German (de-DE)
-5. Japanese (ja-JP)
-6. Chinese Simplified (zh-CN)
+**In Progress:**
+- ⏳ Migrating UI panels to use t!() macro (~500 strings remaining)
+- ⏳ Adding more languages (fr, de, ru, ko, zh-TW, ar)
+
+**Languages Implemented:**
+1. ✅ English (en) - Default, complete
+2. ✅ Spanish (es) - Complete
+3. ✅ Japanese (ja) - Complete, requires font
+4. ✅ Chinese Simplified (zh-CN) - Complete, requires font
+5. ⏳ French (fr) - Planned
+6. ⏳ German (de) - Planned
+7. ⏳ Russian (ru) - Planned
+8. ⏳ Korean (ko) - Planned
 
 **Translation Files:**
 ```
