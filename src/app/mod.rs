@@ -1096,9 +1096,8 @@ impl App {
                 final_config.vibrancy, final_config.saturation, final_config.hue_shift, final_config.value_scale,
                 renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations);
 
-            // Ensure fractal texture exists and get view (use viewport size, not window size)
-            let fractal_view = self.egui_layer.ensure_fractal_texture(&self.gpu.device, self.fractal_viewport_size.0, self.fractal_viewport_size.1);
-            renderer.tonemap_pass(&mut render_encoder, fractal_view);
+            // Render to internal fractal texture
+            renderer.tonemap_pass(&mut render_encoder);
             self.metrics.record_tonemap_time(t_tonemap.elapsed().as_secs_f64() * 1000.0);
         }
 

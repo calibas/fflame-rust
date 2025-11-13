@@ -296,12 +296,12 @@ impl FlameRenderer {
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
     }
 
-    /// Render the accumulation buffer to a texture view with tone mapping
-    pub fn tonemap_pass(&self, encoder: &mut CommandEncoder, target_view: &TextureView) {
+    /// Render the accumulation buffer to internal fractal texture with tone mapping
+    pub fn tonemap_pass(&self, encoder: &mut CommandEncoder) {
         let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Tonemap Pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: target_view,
+                view: &self.fractal_texture_view,
                 resolve_target: None,
                 ops: Operations {
                     load: LoadOp::Clear(Color::BLACK),
@@ -941,7 +941,7 @@ impl FlameRenderer {
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Screenshot Encoder"),
         });
-        self.tonemap_pass(&mut encoder, &view);
+        self.tonemap_pass(&mut encoder);
 
         // Create buffer to copy texture data to
         let bytes_per_pixel = 4; // RGBA8
