@@ -1,299 +1,299 @@
-es:
-  # Application
-  app:
-    title: "Renderizador de Llamas Fractales"
+_version: 1
+# Application
+app:
+  title: "Renderizador de Llamas Fractales"
 
-  # Menu Bar
-  menu:
-    file: "Archivo"
-    edit: "Editar"
-    view: "Ver"
-    fractal: "Fractal"
-    rendering: "Renderizado"
-    window: "Ventana"
-    help: "Ayuda"
+# Menu Bar
+menu:
+  file: "Archivo"
+  edit: "Editar"
+  view: "Ver"
+  fractal: "Fractal"
+  rendering: "Renderizado"
+  window: "Ventana"
+  help: "Ayuda"
 
-    # File Menu
-    new_flame: "Nueva Llama"
-    load_preset: "Cargar Ajuste Preestablecido"
-    open_config: "Abrir Configuración..."
-    save_config: "Guardar Configuración Como..."
-    import_apophysis: "Importar XML de Apophysis..."
-    export_png: "Exportar PNG..."
-    export_apophysis: "Exportar XML de Apophysis..."
-    recent_files: "Archivos Recientes"
-    quit: "Salir"
+  # File Menu
+  new_flame: "Nueva Llama"
+  load_preset: "Cargar Ajuste Preestablecido"
+  open_config: "Abrir Configuración..."
+  save_config: "Guardar Configuración Como..."
+  import_apophysis: "Importar XML de Apophysis..."
+  export_png: "Exportar PNG..."
+  export_apophysis: "Exportar XML de Apophysis..."
+  recent_files: "Archivos Recientes"
+  quit: "Salir"
 
-    # Edit Menu
-    undo: "Deshacer"
-    redo: "Rehacer"
-    preferences: "Preferencias..."
+  # Edit Menu
+  undo: "Deshacer"
+  redo: "Rehacer"
+  preferences: "Preferencias..."
 
-    # View Menu
-    reset_view: "Restablecer Vista"
-    fit_to_window: "Ajustar a Ventana"
-    zoom_in: "Acercar"
-    zoom_out: "Alejar"
-    mode_2d: "Modo 2D"
-    mode_3d: "Modo 3D"
-    show_grid: "Mostrar Cuadrícula"
+  # View Menu
+  reset_view: "Restablecer Vista"
+  fit_to_window: "Ajustar a Ventana"
+  zoom_in: "Acercar"
+  zoom_out: "Alejar"
+  mode_2d: "Modo 2D"
+  mode_3d: "Modo 3D"
+  show_grid: "Mostrar Cuadrícula"
 
-    # Fractal Menu
-    show_transform_editor: "Mostrar Editor de Transformaciones"
-    show_triangle_editor: "Mostrar Editor de Triángulos"
-    show_palette_editor: "Mostrar Editor de Paletas"
-    add_transform: "Añadir Transformación"
-    copy_transform: "Copiar Transformación"
-    paste_transform: "Pegar Transformación"
-    duplicate_transform: "Duplicar Transformación"
-    delete_transform: "Eliminar Transformación"
-    randomize_transform: "Aleatorizar Transformación"
-    import_palette: "Importar Paleta..."
-    export_palette: "Exportar Paleta..."
+  # Fractal Menu
+  show_transform_editor: "Mostrar Editor de Transformaciones"
+  show_triangle_editor: "Mostrar Editor de Triángulos"
+  show_palette_editor: "Mostrar Editor de Paletas"
+  add_transform: "Añadir Transformación"
+  copy_transform: "Copiar Transformación"
+  paste_transform: "Pegar Transformación"
+  duplicate_transform: "Duplicar Transformación"
+  delete_transform: "Eliminar Transformación"
+  randomize_transform: "Aleatorizar Transformación"
+  import_palette: "Importar Paleta..."
+  export_palette: "Exportar Paleta..."
 
-    # Rendering Menu
-    pause_resume: "Pausar/Reanudar"
-    reset_accumulation: "Restablecer Acumulación"
-    speed: "Velocidad"
-    iterations_per_thread: "Iteraciones por Hilo"
-    benchmark: "Prueba de Rendimiento..."
+  # Rendering Menu
+  pause_resume: "Pausar/Reanudar"
+  reset_accumulation: "Restablecer Acumulación"
+  speed: "Velocidad"
+  iterations_per_thread: "Iteraciones por Hilo"
+  benchmark: "Prueba de Rendimiento..."
 
-    # Window Menu
-    beginner_layout: "Diseño para Principiantes"
-    standard_layout: "Diseño Estándar"
-    advanced_layout: "Diseño Avanzado"
-    reset_layout: "Restablecer Diseño"
-    save_layout: "Guardar Diseño..."
+  # Window Menu
+  beginner_layout: "Diseño para Principiantes"
+  standard_layout: "Diseño Estándar"
+  advanced_layout: "Diseño Avanzado"
+  reset_layout: "Restablecer Diseño"
+  save_layout: "Guardar Diseño..."
 
-    # Help Menu
-    documentation: "Documentación"
-    keyboard_shortcuts: "Atajos de Teclado"
-    report_bug: "Reportar Error..."
-    about: "Acerca de..."
+  # Help Menu
+  documentation: "Documentación"
+  keyboard_shortcuts: "Atajos de Teclado"
+  report_bug: "Reportar Error..."
+  about: "Acerca de..."
 
-  # Panel Titles
-  panels:
-    transforms: "Transformaciones"
-    triangle_editor: "Editor de Triángulos"
-    colors: "Colores"
-    palette_editor: "Editor de Paletas"
-    view: "Vista"
-    rendering: "Renderizado"
-    history: "Historial"
-    settings: "Configuración"
-    tone_mapping: "Mapeo de Tonos"
-    performance: "Rendimiento"
+# Panel Titles
+panels:
+  transforms: "Transformaciones"
+  triangle_editor: "Editor de Triángulos"
+  colors: "Colores"
+  palette_editor: "Editor de Paletas"
+  view: "Vista"
+  rendering: "Renderizado"
+  history: "Historial"
+  settings: "Configuración"
+  tone_mapping: "Mapeo de Tonos"
+  performance: "Rendimiento"
 
-  # Transform Controls
-  transform:
-    label: "Transformación"
-    weight: "Peso"
-    color: "Posición de Paleta"
-    add: "Añadir Transformación"
-    delete: "Eliminar"
-    edit: "Editar"
-    affine: "Transformación Afín"
-    variations: "Variaciones"
-    parameters: "Parámetros"
+# Transform Controls
+transform:
+  label: "Transformación"
+  weight: "Peso"
+  color: "Posición de Paleta"
+  add: "Añadir Transformación"
+  delete: "Eliminar"
+  edit: "Editar"
+  affine: "Transformación Afín"
+  variations: "Variaciones"
+  parameters: "Parámetros"
 
-    # Affine parameters
-    affine_a: "A (escala X)"
-    affine_b: "B (cizallamiento Y)"
-    affine_c: "C (cizallamiento X)"
-    affine_d: "D (escala Y)"
-    affine_e: "E (desplazamiento X)"
-    affine_f: "F (desplazamiento Y)"
-    affine_g: "G (desplazamiento Z)"
+  # Affine parameters
+  affine_a: "A (escala X)"
+  affine_b: "B (cizallamiento Y)"
+  affine_c: "C (cizallamiento X)"
+  affine_d: "D (escala Y)"
+  affine_e: "E (desplazamiento X)"
+  affine_f: "F (desplazamiento Y)"
+  affine_g: "G (desplazamiento Z)"
 
-  # Variation Controls
-  variations:
-    title: "Variaciones"
-    weight: "Peso"
-    add: "Añadir Variación"
-    remove: "Quitar"
-    category: "Categoría"
+# Variation Controls
+variations:
+  title: "Variaciones"
+  weight: "Peso"
+  add: "Añadir Variación"
+  remove: "Quitar"
+  category: "Categoría"
 
-    # Categories
-    basic_2d: "2D Básico"
-    advanced_2d: "2D Avanzado"
-    depth_3d: "Profundidad 3D"
-    full_3d: "3D Completo"
-    rotation_3d: "Rotación 3D"
-    parameterized: "Parametrizado"
+  # Categories
+  basic_2d: "2D Básico"
+  advanced_2d: "2D Avanzado"
+  depth_3d: "Profundidad 3D"
+  full_3d: "3D Completo"
+  rotation_3d: "Rotación 3D"
+  parameterized: "Parametrizado"
 
-  # Color Controls
-  color:
-    mode: "Modo de Color"
-    palette: "Paleta"
-    background: "Fondo"
-    exposure: "Exposición"
-    gamma: "Gamma"
+# Color Controls
+color:
+  mode: "Modo de Color"
+  palette: "Paleta"
+  background: "Fondo"
+  exposure: "Exposición"
+  gamma: "Gamma"
 
-    # Color Modes
-    mode_transform: "Colores de Transformación"
-    mode_palette: "Búsqueda de Paleta"
-    mode_speed: "Basado en Velocidad"
+  # Color Modes
+  mode_transform: "Colores de Transformación"
+  mode_palette: "Búsqueda de Paleta"
+  mode_speed: "Basado en Velocidad"
 
-  # Palette Editor
-  palette:
-    title: "Editor de Paletas"
-    current: "Paleta Actual"
-    library: "Biblioteca de Paletas"
-    import: "Importar..."
-    export: "Exportar..."
-    add_stop: "Añadir Punto"
-    remove_stop: "Quitar Punto"
-    position: "Posición"
-    color_picker: "Color"
+# Palette Editor
+palette:
+  title: "Editor de Paletas"
+  current: "Paleta Actual"
+  library: "Biblioteca de Paletas"
+  import: "Importar..."
+  export: "Exportar..."
+  add_stop: "Añadir Punto"
+  remove_stop: "Quitar Punto"
+  position: "Posición"
+  color_picker: "Color"
 
-  # View Controls
-  view:
-    title: "Vista"
-    zoom: "Zoom"
-    pan_x: "Desplazamiento X"
-    pan_y: "Desplazamiento Y"
-    rotation: "Rotación"
-    camera_pitch: "Inclinación de Cámara"
-    camera_yaw: "Giro de Cámara"
-    camera_z: "Cámara Z"
-    reset: "Restablecer Vista"
+# View Controls
+view:
+  title: "Vista"
+  zoom: "Zoom"
+  pan_x: "Desplazamiento X"
+  pan_y: "Desplazamiento Y"
+  rotation: "Rotación"
+  camera_pitch: "Inclinación de Cámara"
+  camera_yaw: "Giro de Cámara"
+  camera_z: "Cámara Z"
+  reset: "Restablecer Vista"
 
-    # Projection
-    projection: "Proyección"
-    projection_orthographic: "Ortográfica"
-    projection_perspective: "Perspectiva"
-    projection_strength: "Fuerza de Perspectiva"
+  # Projection
+  projection: "Proyección"
+  projection_orthographic: "Ortográfica"
+  projection_perspective: "Perspectiva"
+  projection_strength: "Fuerza de Perspectiva"
 
-  # Rendering Controls
-  rendering:
-    title: "Renderizado"
-    quality: "Calidad"
-    iterations: "Iteraciones"
-    workgroups: "Grupos de Trabajo"
-    threads_per_group: "Hilos por Grupo"
-    iterations_per_thread: "Iteraciones por Hilo"
-    speed_multiplier: "Multiplicador de Velocidad"
-    max_iterations: "Iteraciones Máximas"
+# Rendering Controls
+rendering:
+  title: "Renderizado"
+  quality: "Calidad"
+  iterations: "Iteraciones"
+  workgroups: "Grupos de Trabajo"
+  threads_per_group: "Hilos por Grupo"
+  iterations_per_thread: "Iteraciones por Hilo"
+  speed_multiplier: "Multiplicador de Velocidad"
+  max_iterations: "Iteraciones Máximas"
 
-    # Accumulation
-    accumulation: "Acumulación"
-    blend_rate: "Tasa de Mezcla"
-    dynamic_blend: "Mezcla Dinámica"
-    low_density_smoothing: "Suavizado de Baja Densidad"
-    density_compression: "Compresión de Densidad"
-    per_pixel_limit: "Límite de Iteraciones por Píxel"
+  # Accumulation
+  accumulation: "Acumulación"
+  blend_rate: "Tasa de Mezcla"
+  dynamic_blend: "Mezcla Dinámica"
+  low_density_smoothing: "Suavizado de Baja Densidad"
+  density_compression: "Compresión de Densidad"
+  per_pixel_limit: "Límite de Iteraciones por Píxel"
 
-    # Render Mode
-    render_mode: "Modo de Renderizado"
-    mode_2d: "2D"
-    mode_3d: "3D"
+  # Render Mode
+  render_mode: "Modo de Renderizado"
+  mode_2d: "2D"
+  mode_3d: "3D"
 
-    # Actions
-    pause: "Pausar"
-    resume: "Reanudar"
-    reset: "Restablecer"
-    export: "Exportar PNG..."
+  # Actions
+  pause: "Pausar"
+  resume: "Reanudar"
+  reset: "Restablecer"
+  export: "Exportar PNG..."
 
-  # Tone Mapping
-  tonemap:
-    title: "Mapeo de Tonos"
-    mode: "Modo de Mapeo de Tonos"
-    mode_log: "Logarítmico"
-    mode_linear: "Lineal"
-    mode_reinhard: "Reinhard"
-    curve: "Curva de Tono"
-    use_curve: "Usar Curva S"
-    exposure: "Exposición"
-    gamma: "Gamma"
-    density_scale: "Escala de Densidad"
-    histogram_color_scale: "Escala de Color del Histograma"
+# Tone Mapping
+tonemap:
+  title: "Mapeo de Tonos"
+  mode: "Modo de Mapeo de Tonos"
+  mode_log: "Logarítmico"
+  mode_linear: "Lineal"
+  mode_reinhard: "Reinhard"
+  curve: "Curva de Tono"
+  use_curve: "Usar Curva S"
+  exposure: "Exposición"
+  gamma: "Gamma"
+  density_scale: "Escala de Densidad"
+  histogram_color_scale: "Escala de Color del Histograma"
 
-  # History Panel
-  history:
-    title: "Historial de Deshacer"
-    current: "Actual"
-    jump_to: "Saltar a este estado"
-    clear: "Limpiar Historial"
+# History Panel
+history:
+  title: "Historial de Deshacer"
+  current: "Actual"
+  jump_to: "Saltar a este estado"
+  clear: "Limpiar Historial"
 
-  # Settings Panel
-  settings:
-    title: "Configuración"
-    preset: "Ajuste Preestablecido"
-    config: "Configuración"
-    import: "Importar Configuración..."
-    export: "Exportar Configuración..."
-    save: "Guardar Configuración"
-    load: "Cargar Configuración"
+# Settings Panel
+settings:
+  title: "Configuración"
+  preset: "Ajuste Preestablecido"
+  config: "Configuración"
+  import: "Importar Configuración..."
+  export: "Exportar Configuración..."
+  save: "Guardar Configuración"
+  load: "Cargar Configuración"
 
-    # Preferences
-    preferences: "Preferencias"
-    language: "Idioma"
-    theme: "Tema"
-    theme_dark: "Oscuro"
-    theme_light: "Claro"
-    theme_high_contrast: "Alto Contraste"
+  # Preferences
+  preferences: "Preferencias"
+  language: "Idioma"
+  theme: "Tema"
+  theme_dark: "Oscuro"
+  theme_light: "Claro"
+  theme_high_contrast: "Alto Contraste"
 
-  # Performance Metrics
-  performance:
-    fps: "FPS"
-    frame_time: "Tiempo de Fotograma"
-    total_iterations: "Iteraciones Totales"
-    iterations_per_second: "Iteraciones/seg"
-    gpu_time: "Tiempo GPU"
+# Performance Metrics
+performance:
+  fps: "FPS"
+  frame_time: "Tiempo de Fotograma"
+  total_iterations: "Iteraciones Totales"
+  iterations_per_second: "Iteraciones/seg"
+  gpu_time: "Tiempo GPU"
 
-  # Common UI Elements
-  common:
-    ok: "Aceptar"
-    cancel: "Cancelar"
-    apply: "Aplicar"
-    close: "Cerrar"
-    save: "Guardar"
-    load: "Cargar"
-    import: "Importar"
-    export: "Exportar"
-    add: "Añadir"
-    remove: "Quitar"
-    delete: "Eliminar"
-    edit: "Editar"
-    reset: "Restablecer"
-    default: "Predeterminado"
-    custom: "Personalizado"
-    enabled: "Activado"
-    disabled: "Desactivado"
+# Common UI Elements
+common:
+  ok: "Aceptar"
+  cancel: "Cancelar"
+  apply: "Aplicar"
+  close: "Cerrar"
+  save: "Guardar"
+  load: "Cargar"
+  import: "Importar"
+  export: "Exportar"
+  add: "Añadir"
+  remove: "Quitar"
+  delete: "Eliminar"
+  edit: "Editar"
+  reset: "Restablecer"
+  default: "Predeterminado"
+  custom: "Personalizado"
+  enabled: "Activado"
+  disabled: "Desactivado"
 
-  # Tooltips
-  tooltips:
-    zoom: "Controla el nivel de ampliación.\nMayor = más acercado."
-    pan: "Mover la vista del fractal izquierda/derecha o arriba/abajo."
-    rotation: "Rotar toda la vista.\nTeclado: tecla R + arrastrar"
-    camera_pitch: "Rotación de cámara 3D (arriba/abajo).\nSolo visible en modo 3D."
-    camera_yaw: "Rotación de cámara 3D (izquierda/derecha).\nSolo visible en modo 3D."
+# Tooltips
+tooltips:
+  zoom: "Controla el nivel de ampliación.\nMayor = más acercado."
+  pan: "Mover la vista del fractal izquierda/derecha o arriba/abajo."
+  rotation: "Rotar toda la vista.\nTeclado: tecla R + arrastrar"
+  camera_pitch: "Rotación de cámara 3D (arriba/abajo).\nSolo visible en modo 3D."
+  camera_yaw: "Rotación de cámara 3D (izquierda/derecha).\nSolo visible en modo 3D."
 
-    transform_weight: "Probabilidad de seleccionar esta transformación.\nMayor = más influencia en la imagen final."
-    transform_color: "Posición en la paleta de colores (0.0-1.0).\nAfecta el color al usar modo Colores de Transformación."
+  transform_weight: "Probabilidad de seleccionar esta transformación.\nMayor = más influencia en la imagen final."
+  transform_color: "Posición en la paleta de colores (0.0-1.0).\nAfecta el color al usar modo Colores de Transformación."
 
-    blend_rate: "Qué tan rápido se mezclan las nuevas muestras con las existentes.\n0.01 = lento/suave, 1.0 = rápido/parpadeante"
-    dynamic_blend: "Convergencia exponencial (antiguo) vs tasa fija (nuevo).\nLa tasa fija da resultados más consistentes."
-    density_compression: "Ralentiza la acumulación en áreas brillantes.\n0 = desactivado, 100 = efecto fuerte"
+  blend_rate: "Qué tan rápido se mezclan las nuevas muestras con las existentes.\n0.01 = lento/suave, 1.0 = rápido/parpadeante"
+  dynamic_blend: "Convergencia exponencial (antiguo) vs tasa fija (nuevo).\nLa tasa fija da resultados más consistentes."
+  density_compression: "Ralentiza la acumulación en áreas brillantes.\n0 = desactivado, 100 = efecto fuerte"
 
-    histogram_color_scale: "Factor de escala para acumulación de color.\nMayor = colores más vibrantes."
+  histogram_color_scale: "Factor de escala para acumulación de color.\nMayor = colores más vibrantes."
 
-  # Messages
-  messages:
-    config_imported: "Configuración importada exitosamente"
-    config_exported: "Configuración exportada exitosamente"
-    palette_imported: "Paleta importada exitosamente"
-    palette_exported: "Paleta exportada exitosamente"
-    png_exported: "PNG exportado exitosamente"
-    error: "Error"
-    warning: "Advertencia"
-    info: "Información"
+# Messages
+messages:
+  config_imported: "Configuración importada exitosamente"
+  config_exported: "Configuración exportada exitosamente"
+  palette_imported: "Paleta importada exitosamente"
+  palette_exported: "Paleta exportada exitosamente"
+  png_exported: "PNG exportado exitosamente"
+  error: "Error"
+  warning: "Advertencia"
+  info: "Información"
 
-  # Errors
-  errors:
-    file_not_found: "Archivo no encontrado"
-    invalid_format: "Formato de archivo inválido"
-    import_failed: "Error al importar"
-    export_failed: "Error al exportar"
-    gpu_error: "Error de GPU"
-    shader_compilation_failed: "Error de compilación de shader"
+# Errors
+errors:
+  file_not_found: "Archivo no encontrado"
+  invalid_format: "Formato de archivo inválido"
+  import_failed: "Error al importar"
+  export_failed: "Error al exportar"
+  gpu_error: "Error de GPU"
+  shader_compilation_failed: "Error de compilación de shader"
