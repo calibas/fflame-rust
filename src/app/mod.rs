@@ -1116,28 +1116,6 @@ impl App {
         Ok(())
     }
 
-    /// Synchronize working flame copy with ConfigManager state
-    /// Called after any config changes to ensure flame is up-to-date before GPU rendering
-    fn sync_flame_from_config(&mut self) {
-        self.flame = self.config_manager.active_config().flame.clone();
-    }
-
-    /// Prepare frame state after all UI updates but before rendering
-    /// This ensures all state changes are committed and synchronized
-    fn prepare_frame_state(&mut self) {
-        // Force commit any uncommitted preview mode changes
-        if self.config_manager.is_in_preview_mode() {
-            // Check if preview should auto-commit (e.g., drag ended but commit not called)
-            // This is a safety net - proper commits should happen in UI handlers
-        }
-
-        // Sync working flame copy with ConfigManager
-        self.sync_flame_from_config();
-
-        // Clear frame-local flags
-        self.view_changed_by_keyboard = false;
-    }
-
     /// Graceful shutdown - performs cleanup and exits
     /// Called from: File → Quit, window close button (X), Alt+F4
     fn shutdown(&mut self, event_loop: &ActiveEventLoop) {
