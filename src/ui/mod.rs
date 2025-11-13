@@ -1,4 +1,5 @@
 mod config_dialog;
+mod font_loader;
 mod formatting;
 mod help;
 mod helpers;
@@ -19,6 +20,7 @@ mod variation_params;
 mod view;
 pub mod workspace;
 
+pub use font_loader::ensure_font_for_locale;
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;

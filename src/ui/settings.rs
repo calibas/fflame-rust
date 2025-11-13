@@ -375,8 +375,38 @@ pub fn render_settings_content(
                             current_locale == locale.code,
                             format!("{} ({})", locale.native_name, locale.name)
                         ).clicked() {
-                            crate::i18n::set_locale(locale.code);
-                            log::info!("Language changed to: {} ({})", locale.native_name, locale.code);
+                            // Try to load font for this locale
+                            let font_loaded = crate::ui::ensure_font_for_locale(ui.ctx(), locale.code);
+
+                            if font_loaded {
+                                // Font loaded or default font is sufficient
+                                crate::i18n::set_locale(locale.code);
+                                log::info!("Language changed to: {} ({})", locale.native_name, locale.code);
+                            } else {
+                                // Font required but not available - reset to English
+                                log::warn!("Font required for {} not found - resetting to English", locale.code);
+                                crate::i18n::set_locale("en");
+
+                                // Show error message to user
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    rfd::MessageDialog::new()
+                                        .set_title("Font Required")
+                                        .set_description(&format!(
+                                            "The {} language requires additional fonts that are not installed.\n\n\
+                                            Please download the required font file and place it in:\n\
+                                            assets/fonts/\n\n\
+                                            See docs/I18N.md for details.\n\n\
+                                            Falling back to English.",
+                                            locale.native_name
+                                        ))
+                                        .set_level(rfd::MessageLevel::Warning)
+                                        .show();
+                                }
+
+                                #[cfg(target_arch = "wasm32")]
+                                log::error!("CJK fonts not embedded in WASM build - use English");
+                            }
                         }
                     }
                 });
