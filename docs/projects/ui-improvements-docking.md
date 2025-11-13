@@ -682,3 +682,17 @@ serde = { version = "1.0", features = ["derive"] }  # Workspace persistence
 **Created:** 2025-11-08
 **Status:** Planning
 **Next Steps:** Review with stakeholders, prioritize phases, start with Phase 1 (egui_dock)
+
+---
+
+## Known Limitations (Post-Merge)
+
+### Menu Bar Hover Behavior
+- **Issue:** Adjacent menus don't auto-open on hover (Windows 10 standard behavior)
+- **Current:** Must click each menu separately to open
+- **Expected:** Click one menu, then hover others to open without clicking
+- **Status:** Investigated - not a simple egui config fix
+- **Impact:** Minor UX inconvenience, not blocking
+- **Workaround:** Users can click each menu (fully functional)
+- **Future:** May require custom menu implementation or wait for egui improvement
+
