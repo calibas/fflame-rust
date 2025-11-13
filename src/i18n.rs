@@ -18,10 +18,10 @@
 //! # Supported Languages
 //!
 //! - English (en) - Default
+//! - Spanish (es)
 //! - More languages can be added by creating .yml files in locales/
 
-// Initialize rust-i18n with the locales directory
-rust_i18n::i18n!("locales", fallback = "en");
+// Note: rust-i18n::i18n!() is initialized in lib.rs
 
 /// Get current locale
 pub fn current_locale() -> String {
