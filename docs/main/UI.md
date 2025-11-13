@@ -1,66 +1,91 @@
-# UI Architecture
+# UI Architecture (egui_dock - Migrated 2025-11-13)
 
-**Overview:** The fractal flame renderer uses egui for its immediate-mode GUI, organized into 5 independent windows with a menu bar for visibility control.
+**Overview:** The fractal flame renderer uses egui with egui_dock for its flexible docking panel system. All windows have been migrated to dockable panels that can be rearranged, detached, and docked anywhere.
 
 **See also:**
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design and module organization
+- [I18N.md](I18N.md) - Internationalization support
 - [RENDERER.md](RENDERER.md) - Rendering pipeline (not yet extracted)
 - [TRANSFORMS.md](TRANSFORMS.md) - Transform editing (not yet extracted)
 
 ---
 
-## Window Layout
+## Panel Layout (Docking System)
 
-The UI consists of a menu bar plus 6 collapsible windows:
+**Migration Status:** ✅ Complete (2025-11-13)
+- All windows converted to dockable panels (1:1 mapping)
+- egui_dock integration complete
+- Users can rearrange, detach, and dock panels anywhere
+- Future: Save/restore workspace layouts
+
+The UI consists of a menu bar plus 7 dockable panels:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ Menu Bar: View ▼                                        │
-│   ☑ Performance  ☑ Transforms  ☑ Settings              │
-│   ☑ Triangle Editor  ☑ Palette Editor  ☑ Undo History  │
-└─────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│ Menu Bar: File  Edit  View  Fractal  Rendering  Window  Help  │
+└────────────────────────────────────────────────────────────────┘
+                             │
+                             │  ┌─────────────────────┐
+                             │  │  Fractal Viewport   │
+                             │  │  (always visible)   │
+┌──────────────────┐        │  │                     │
+│    Settings      │◄───────┼─►│  Main rendering     │
+│                  │        │  │  display with live  │
+│ - File & Project │        │  │  fractal output     │
+│ - Rendering      │        │  │                     │
+│ - Export         │        │  └─────────────────────┘
+│ - Preferences 🆕 │        │
+│   └─ Language 🆕 │        │  ┌─────────────────────┐
+└──────────────────┘        │  │    Transforms       │
+                            └─►│                     │
+┌──────────────────┐           │ - Add/Delete        │
+│ Triangle Editor  │           │ - Affine params     │
+│                  │           │ - Variation weights │
+│ - Visual editing │           │ - Parameters        │
+│ - Drag handles   │           └─────────────────────┘
+│ - Real-time      │
+└──────────────────┘           ┌─────────────────────┐
+                               │    View             │
+┌──────────────────┐           │                     │
+│  Tone Mapping    │           │ - Zoom, Pan, Rot    │
+│  & Colors        │           │ - 3D Camera         │
+│                  │           │ - Projection        │
+│ - Color mode     │           └─────────────────────┘
+│ - Palette        │
+│ - Tone curve     │           ┌─────────────────────┐
+│ - Background     │           │  Palette Editor     │
+└──────────────────┘           │                     │
+                               │ - Gradient preview  │
+┌──────────────────┐           │ - Color stops       │
+│  Undo History    │           │ - Import/export     │
+│                  │           └─────────────────────┘
+│ - Visual browser │
+│ - Jump to state  │
+│ - Delta preview  │
+└──────────────────┘
 
-┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ Performance  │  │  Transforms  │  │   Settings   │
-│              │  │              │  │              │
-│ - FPS/timing │  │ - Add/Delete │  │ - View (zoom │
-│ - Iterations │  │ - Affine     │  │   pan, rot)  │
-│ - Resolution │  │ - Variations │  │ - Color mode │
-│ - Preset ▼   │  │ - Color      │  │ - Palette ▼  │
-│ - 3D mode    │  │ - Weight     │  │ - Global     │
-│ - Camera     │  │ - Z offset   │  │   params     │
-│ - Projection │  │ - Params 🆕  │  │ - Export PNG │
-└──────────────┘  └──────────────┘  └──────────────┘
-
-┌──────────────────────┐  ┌──────────────────────┐
-│   Triangle Editor    │  │   Palette Editor     │
-│                      │  │                      │
-│ - Visual transform   │  │ - Gradient preview   │
-│   editor with drag   │  │ - Color stops        │
-│ - Real-time updates  │  │ - Import/export      │
-│ - Bounding boxes     │  │ - Built-in library   │
-│ - Smart accumulation │  │ - Live preview mode  │
-└──────────────────────┘  └──────────────────────┘
-
-┌─────────────────────────────────┐
-│   Undo History (Added 2025-10-31) │
-│                                   │
-│ - Visual delta browser            │
-│ - Click to jump to any state      │
-│ - Current position indicator      │
-│ - Human-readable descriptions     │
-└───────────────────────────────────┘
+All panels can be:
+- Dragged to rearrange
+- Detached into floating windows
+- Docked to any edge
+- Closed/reopened via Window menu
 ```
 
-### Menu Bar (Added 2025-10-21)
+### Menu Bar (Enhanced 2025-11-13)
 **Location:** Top of screen
 
 **Contents:**
-- "View" dropdown menu
-- Checkboxes for each window (Performance, Transforms, Settings, Triangle Editor, Palette Editor)
-- Toggle visibility on/off
+- **File**: New, Open, Save, Import/Export, Recent Files, Quit
+- **Edit**: Undo, Redo, Preferences
+- **View**: Reset View, Fit to Window, Zoom, 2D/3D Mode
+- **Fractal**: Transform operations, Palette operations
+- **Rendering**: Pause/Resume, Reset, Speed, Iterations
+- **Window**: Panel visibility toggles, Layout presets
+- **Help**: Documentation, Keyboard Shortcuts, About
 
-**Code:** [src/ui/mod.rs](../../src/ui/mod.rs) - `render_menu_bar()`
+**Note:** Most menu actions are future work - currently shows structure
+
+**Code:** [src/ui/menu_bar.rs](../../src/ui/menu_bar.rs)
 
 ### Performance Window
 **Purpose:** Real-time performance monitoring and global render settings
@@ -634,8 +659,39 @@ for name in registry.ordered_names() {
 
 ---
 
-**Last Updated:** 2025-10-28
+## Internationalization (Added 2025-11-13)
+
+**Framework:** rust-i18n v3.1 with YAML translation files
+
+**Language Selector:** Settings → Preferences section
+- Dropdown with native language names (e.g., "English (English)")
+- Changes apply immediately (no restart required)
+- Persists via `set_locale()`
+
+**Current Support:**
+- English (en) - Complete with 200+ strings
+- Ready for community translations
+
+**Translation Coverage:**
+- All menu items and panel titles
+- Transform and variation controls
+- Color and rendering settings
+- Tooltips and help text
+- Error messages and notifications
+
+**Font Support (egui default):**
+- ✅ Full: Latin scripts, Cyrillic, Greek
+- ⚠️ Limited: CJK (Chinese, Japanese, Korean) - basic characters only
+- ❌ No support: Arabic/Hebrew (RTL languages)
+- For full CJK: Add Noto Sans CJK font via egui FontDefinitions
+
+**See:** [I18N.md](I18N.md) for complete translation guide
+
+---
+
+**Last Updated:** 2025-11-13
 **Related Documentation:**
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design
+- [I18N.md](I18N.md) - Internationalization guide
 - [RENDERER.md](RENDERER.md) - Rendering pipeline (not yet created)
 - [TRANSFORMS.md](TRANSFORMS.md) - Transform editing (not yet created)

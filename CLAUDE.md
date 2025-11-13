@@ -53,8 +53,21 @@
     - `defaults.rs` - Default value constants (single source of truth)
   - `src/renderer/compute_kernel.rs` - GPU rendering orchestration
   - `src/scene/transforms.rs` - Flame algorithm (CPU + GPU)
-  - `src/ui/mod.rs` - All UI panels and controls
-  - `src/ui/undo_history.rs` - Visual undo history browser
+  - `src/ui/` - **Dockable panel UI system** (Migrated to egui_dock 2025-11-13)
+    - `mod.rs` - Main UI coordinator, docking integration
+    - `workspace.rs` - Docking layout management and panel organization
+    - `settings.rs` - Settings panel (File, Rendering, Preferences)
+    - `transforms.rs` - Transform list and editing panel
+    - `triangle_editor.rs` - Visual triangle editor panel
+    - `view.rs` - Camera and navigation controls panel
+    - `tone_mapping.rs` - Color and tone mapping panel
+    - `palette_editor.rs` - Palette editing panel
+    - `undo_history.rs` - Visual undo history browser panel
+    - `menu_bar.rs` - Top menu bar (File, Edit, View, etc.)
+  - `src/i18n.rs` - **Internationalization support** (Added 2025-11-13)
+    - Uses rust-i18n for multi-language support
+    - Translation files in `locales/*.yml`
+    - Language switcher in Settings → Preferences
 
 ### Key Concepts
 - **Fractal Flames**: IFS (Iterated Function System) with variations
@@ -119,6 +132,50 @@
 - **Color Modes**: Transform colors, Palette lookup, Speed-based coloring
 - **Projection Types**: Orthographic (flat) and Perspective (depth-aware)
 - **Camera Control**: Full 3D camera rotation (pitch and yaw) for viewing from any angle
+
+### UI Architecture (egui_dock - Migrated 2025-11-13)
+- **Docking System**: Flexible panel-based UI using egui_dock
+  - All windows converted to dockable panels (1:1 mapping)
+  - Panels can be rearranged, detached, and docked anywhere
+  - Future: Save/restore workspace layouts
+- **7 Main Panels**:
+  1. **Fractal Viewport** - Main rendering display (always visible)
+  2. **Settings** - File operations, rendering controls, preferences
+  3. **Transforms** - Transform list, add/delete, affine parameters
+  4. **Triangle Editor** - Visual affine editing with interactive triangles
+  5. **View** - Camera controls, zoom, pan, rotation
+  6. **Tone Mapping & Colors** - Color mode, palette, tone mapping settings
+  7. **History** - Visual undo/redo browser with state preview
+- **Menu Bar**: Top-level menus (File, Edit, View, Fractal, Rendering, Window, Help)
+  - Professional menu structure for discoverability
+  - Keyboard shortcuts documented in menus
+  - Future: Implement all menu actions
+- **Benefits**:
+  - More flexible than fixed side panel layout
+  - Users can organize UI to match workflow
+  - Foundation for future workspace presets (Beginner/Standard/Advanced layouts)
+
+### Internationalization (i18n - Added 2025-11-13)
+- **Framework**: rust-i18n v3.1 with YAML translation files
+- **Architecture**:
+  - Translation files in `locales/*.yml` (compile-time embedding)
+  - `src/i18n.rs` module for locale management
+  - Language switcher in Settings → Preferences panel
+- **Current Support**:
+  - English (en) - Complete with 200+ strings
+  - Ready for community translations (Spanish, French, German, Japanese, Chinese)
+- **Coverage**:
+  - All menu items and panel titles
+  - Transform and variation controls
+  - Color and rendering settings
+  - Tooltips and help text
+  - Error messages and notifications
+- **Font Support** (egui default):
+  - ✅ Full: Latin scripts, Cyrillic, Greek
+  - ⚠️ Limited: CJK (Chinese, Japanese, Korean) - basic characters only
+  - ❌ No support: Arabic/Hebrew (RTL languages)
+  - For full CJK: Add Noto Sans CJK font via egui FontDefinitions
+- **See**: [docs/main/I18N.md](docs/main/I18N.md) for translation guide
 
 ### Important Implementation Details
 - Using **ping-pong accumulation** (not atomic) for better performance
@@ -500,7 +557,9 @@ See @Cargo.toml for full dependency list
 Key dependencies:
 - **wgpu 23.0** - WebGPU API
 - **winit 0.30** - Window management
-- **egui 0.30** - Immediate mode UI
+- **egui 0.33** - Immediate mode UI
+- **egui_dock 0.18** - Docking panel system (added 2025-11-13)
+- **rust-i18n 3.1** - Internationalization support (added 2025-11-13)
 - **serde + serde_json** - Serialization
 - **image** - PNG export
 - **bytemuck** - GPU data layout
