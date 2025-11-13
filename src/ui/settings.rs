@@ -354,10 +354,36 @@ pub fn render_settings_content(
 
     ui.separator();
 
-    // Section 4: Advanced
-    egui::CollapsingHeader::new("Advanced")
+    // Section 4: Preferences
+    egui::CollapsingHeader::new("Preferences")
         .default_open(false)
         .show(ui, |ui| {
+            // Language selector
+            ui.label("Language");
+            let current_locale = crate::i18n::current_locale();
+            let locales = crate::i18n::supported_locales();
+
+            let current_locale_info = locales.iter()
+                .find(|l| l.code == current_locale.as_str())
+                .unwrap_or(&locales[0]);
+
+            egui::ComboBox::from_label("Language")
+                .selected_text(format!("{} ({})", current_locale_info.native_name, current_locale_info.name))
+                .show_ui(ui, |ui| {
+                    for locale in &locales {
+                        if ui.selectable_label(
+                            current_locale == locale.code,
+                            format!("{} ({})", locale.native_name, locale.name)
+                        ).clicked() {
+                            crate::i18n::set_locale(locale.code);
+                            log::info!("Language changed to: {} ({})", locale.native_name, locale.code);
+                        }
+                    }
+                });
+
+            ui.separator();
+
+            // Advanced settings
             let mut temp_deterministic = config.deterministic_rng;
             if ui.checkbox(&mut temp_deterministic, "Deterministic RNG").on_hover_text(
                 "Use fixed random seed for reproducible rendering.\n\
