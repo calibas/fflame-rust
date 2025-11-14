@@ -197,6 +197,12 @@ impl App {
                                     renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
                                         config.zoom, config.pan_x, config.pan_y, config.rotation,
                                         config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor);
+
+                                    // Restore tonemap parameters after buffer recreation
+                                    renderer.update_tonemap(&app.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma,
+                                        config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale,
+                                        size.width, size.height, renderer.total_iterations(), config.max_iterations);
+                                    renderer.update_curve_lut(&app.gpu.queue, &config.tonemap_curve);
                                 }
                             }
                         },
@@ -225,6 +231,12 @@ impl App {
                                     renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
                                         config.zoom, config.pan_x, config.pan_y, config.rotation,
                                         config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor);
+
+                                    // Restore tonemap parameters after buffer recreation
+                                    renderer.update_tonemap(&app.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma,
+                                        config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale,
+                                        new_size.width, new_size.height, renderer.total_iterations(), config.max_iterations);
+                                    renderer.update_curve_lut(&app.gpu.queue, &config.tonemap_curve);
                                 }
                                 window.request_redraw();
                             }
@@ -398,6 +410,12 @@ impl App {
                     renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, resize_config.iterations_per_thread,
                         resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
+
+                    // Restore tonemap parameters after buffer recreation
+                    renderer.update_tonemap(&self.gpu.queue, resize_config.tonemap_mode, resize_config.use_curve, resize_config.exposure, resize_config.gamma,
+                        resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.saturation, resize_config.hue_shift, resize_config.value_scale,
+                        viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations);
+                    renderer.update_curve_lut(&self.gpu.queue, &resize_config.tonemap_curve);
                 }
             }
         }
