@@ -757,18 +757,8 @@ impl FlameRenderer {
         self.color_mode
     }
 
-    /// Capture raw RGBA pixel data from the current frame
-    /// Returns (width, height, rgba_bytes) where rgba_bytes is in standard RGBA format
-    ///
-    /// # Implementation Note
-    /// Uses two different paths based on transparency requirement:
-    /// - **Transparent**: Reads Rgba16Float accumulation buffer and applies CPU tone mapping
-    ///   to preserve true alpha values (density × density_scale)
-    /// - **Opaque**: Renders via tonemap shader which blends with background color
-    ///
-    /// Why? The tonemap shader performs `mix(background_color, fractal_color, alpha)` which
     /// Read pixels from the fractal_texture (after tonemap_pass has rendered to it)
-    /// This is the NEW, simpler method that reads what was actually displayed.
+    /// This is the unified method that reads what was actually displayed on screen.
     ///
     /// # Arguments
     /// * `transparent` - If true, preserve alpha channel; if false, blend with background and set alpha=255
@@ -877,6 +867,8 @@ impl FlameRenderer {
         Ok((self.width, self.height, rgba_data))
     }
 
+    #[allow(dead_code)]
+    /// OLD METHOD - DEPRECATED - Use read_fractal_pixels() instead
     /// blends RGB channels with the background before outputting. Even though it outputs
     /// the alpha channel, the RGB values are already pre-multiplied/blended, making the
     /// alpha useless for compositing. For transparency, we must read raw accumulation data.
@@ -907,6 +899,8 @@ impl FlameRenderer {
         }
     }
 
+    #[allow(dead_code)]
+    /// OLD METHOD - DEPRECATED - Use read_fractal_pixels() instead
     /// Capture pixels from accumulation buffer (for transparent PNG export)
     ///
     /// This preserves true alpha values by reading raw Rgba16Float accumulation data
@@ -1027,6 +1021,8 @@ impl FlameRenderer {
         Ok((self.width, self.height, rgba_data))
     }
 
+    #[allow(dead_code)]
+    /// OLD METHOD - DEPRECATED - Use read_fractal_pixels() instead
     /// Capture pixels from tonemapped render (for opaque PNG export)
     async fn capture_from_tonemap_render(&self, device: &Device, queue: &Queue, surface_format: TextureFormat) -> Result<(u32, u32, Vec<u8>), String> {
         // Create a temporary texture to render to (use same format as surface)
@@ -1127,15 +1123,6 @@ impl FlameRenderer {
 
         // Return raw pixel data (width, height, rgba_bytes)
         Ok((self.width, self.height, rgba_data))
-    }
-
-    /// Capture the current rendered frame as PNG data (convenience wrapper)
-    /// If transparent is true, renders without background blending (alpha channel preserved)
-    pub async fn capture_png(&mut self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<Vec<u8>, String> {
-        let (width, height, rgba_data) = self.capture_pixels(device, queue, transparent, surface_format).await?;
-
-        // Encode as PNG without metadata (use encode_png_with_full_metadata for metadata support)
-        encode_png_from_rgba(width, height, rgba_data, None)
     }
 }
 
