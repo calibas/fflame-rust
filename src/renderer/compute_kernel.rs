@@ -147,6 +147,9 @@ impl FlameRenderer {
 
         // Clear accumulation counter
         self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
+
+        // NOTE: Tonemap params need to be restored after buffer recreation
+        // The caller should call update_tonemap() with current config values after resize()
     }
 
     /// Reset accumulation buffer and sample count
@@ -674,10 +677,6 @@ impl FlameRenderer {
         } else {
             1.0
         };
-
-        // DEBUG: Print tonemap params
-        println!("update_tonemap: width={}, height={}, area={}, sample_density={}, brightness={}",
-            width, height, area, sample_density, brightness);
 
         let params = TonemapParams {
             exposure,
