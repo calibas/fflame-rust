@@ -231,6 +231,18 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Fractal Viewport (main fractal rendering area)
     fn render_fractal_viewport(&mut self, ui: &mut egui::Ui) {
+        // Set panel background to match fractal background color
+        // This allows the fractal texture to have transparent edges that blend naturally
+        let bg_color = self.context.config_manager.active_config().background_color;
+        let bg_color32 = egui::Color32::from_rgb(
+            (bg_color[0] * 255.0) as u8,
+            (bg_color[1] * 255.0) as u8,
+            (bg_color[2] * 255.0) as u8,
+        );
+
+        // Override the panel's background color
+        ui.visuals_mut().panel_fill = bg_color32;
+
         if let Some(texture_id) = self.context.fractal_texture_id {
             // Get the actual panel size and report it for texture sizing
             let available_size = ui.available_size();
