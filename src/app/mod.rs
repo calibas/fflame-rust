@@ -846,9 +846,9 @@ impl App {
                 let export_config = self.export_config();
                 let render_time_ms = self.metrics.render_time_ms;
 
-                if let Some(ref mut renderer) = self.flame_renderer {
+                if let Some(ref renderer) = self.flame_renderer {
                     let total_iterations = renderer.total_iterations();
-                    let pixels_future = renderer.capture_pixels(&self.gpu.device, &self.gpu.queue, transparent, self.gpu.config.format);
+                    let pixels_future = renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, export_config.background_color);
 
                     match pollster::block_on(pixels_future) {
                         Ok((width, height, rgba_data)) => {
@@ -893,29 +893,28 @@ impl App {
                 // SAFETY: The Device, Queue, and FlameRenderer live in App which persists
                 // for the entire program lifetime. The GPU resources won't be dropped
                 // until the app exits, so extending their lifetime to 'static is safe.
-                // We need mutable access for capture_pixels which may temporarily modify
-                // background_color, but this is safe since the async task completes before
-                // any other code runs (single-threaded WASM environment).
+                // read_fractal_pixels only needs immutable access since it reads from
+                // the renderer's internal fractal_texture without modification.
                 use wasm_bindgen_futures::spawn_local;
 
                 // Build metadata before borrowing renderer
                 let export_config = self.export_config();
 
-                if let Some(ref mut renderer) = self.flame_renderer {
+                if let Some(ref renderer) = self.flame_renderer {
                     let total_iterations = renderer.total_iterations();
                     let render_time_ms = self.metrics.render_time_ms;
                     let iterations_per_thread = export_config.iterations_per_thread;
                     let speed_factor = export_config.speed_factor;
+                    let background_color = export_config.background_color;
 
                     let device: &'static egui_wgpu::wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
                     let queue: &'static egui_wgpu::wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
-                    let renderer: &'static mut crate::renderer::compute_kernel::FlameRenderer =
+                    let renderer: &'static crate::renderer::compute_kernel::FlameRenderer =
                         unsafe { std::mem::transmute(renderer) };
-                    let format = self.gpu.config.format;
 
                     spawn_local(async move {
                         // Await pixel capture
-                        match renderer.capture_pixels(device, queue, transparent, format).await {
+                        match renderer.read_fractal_pixels(device, queue, transparent, background_color).await {
                             Ok((width, height, rgba_data)) => {
                                 // Build metadata with captured dimensions
                                 let metadata = crate::png_metadata::PngMetadata::from_app_state(

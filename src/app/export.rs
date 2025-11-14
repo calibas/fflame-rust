@@ -123,8 +123,8 @@ pub async fn export_headless(
 
     let render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
 
-    // Capture pixels
-    let (width, height, rgba_data) = renderer.capture_pixels(&device, &queue, false, surface_format).await?;
+    // Capture pixels from fractal_texture (what was actually rendered and displayed)
+    let (width, height, rgba_data) = renderer.read_fractal_pixels(&device, &queue, false, config.background_color).await?;
 
     // Build metadata
     let mut metadata = crate::png_metadata::PngMetadata::from_app_state(
