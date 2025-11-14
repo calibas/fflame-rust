@@ -52,6 +52,11 @@ pub struct App {
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
+
+    // PNG export settings (UI state only, not in config)
+    pub(super) export_width: u32,
+    pub(super) export_height: u32,
+    pub(super) use_custom_export_size: bool,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -151,6 +156,9 @@ impl App {
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
+            export_width: 1920,  // Default export resolution
+            export_height: 1080,
+            use_custom_export_size: false,  // Default to viewport size
         };
 
         #[allow(deprecated)]
@@ -358,6 +366,9 @@ impl App {
             can_undo,
             can_redo,
             &mut self.workspace,
+            &mut self.export_width,
+            &mut self.export_height,
+            &mut self.use_custom_export_size,
         );
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
 
