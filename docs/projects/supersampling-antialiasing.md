@@ -674,6 +674,48 @@ Use hardware MSAA instead of SSAA:
 
 ---
 
+## Integration with Tiled Export
+
+**See:** [tiled-high-res-export.md](tiled-high-res-export.md)
+
+### The Memory Problem
+
+Supersampling multiplies memory requirements:
+- 1920×1080 @ 4× SS = 7680×4320 internal = **497MB** histogram buffer
+- Many GPUs have 256MB buffer limit → **FAILS**
+
+### The Solution: Render in Tiles
+
+**With tiled rendering:**
+- Each tile stays small (e.g., 2048×2048)
+- Apply supersampling per-tile
+- Downsample before blitting to final image
+- Memory stays constant regardless of output size
+
+**Example:**
+```
+8K image (7680×4320) with 2× SS:
+- Without tiling: 15360×8640 = 2.0GB ❌ FAILS
+- With tiling (2048² tiles): 4096×4096 per tile = 256MB ✅ WORKS
+```
+
+### Implementation Order
+
+1. **First:** Implement supersampling for viewport (this document)
+   - Works for exports up to GPU buffer limit
+   - Example: 1920×1080 @ 2× SS = 124MB (safe)
+
+2. **Later:** Implement tiled export (separate feature)
+   - Unlocks unlimited resolution exports
+   - Example: 10000×10000 @ 1× = works via tiling
+
+3. **Final:** Combine both features
+   - Reuse downsample shader for each tile
+   - Unlocks unlimited resolution + quality
+   - Example: 10000×10000 @ 2× SS = works via tiling
+
+**Conclusion:** Supersampling and tiled export are complementary features that together solve all resolution and quality limitations.
+
 ## Open Questions
 
 1. **Default Setting:** Should 2× be default for export, or always require explicit enable?
@@ -681,6 +723,7 @@ Use hardware MSAA instead of SSAA:
 3. **Mobile:** Should we disable or limit to 1×/2× on mobile GPUs?
 4. **Auto-Detection:** Detect GPU VRAM and auto-select safe supersample factor?
 5. **Bilinear vs Box:** Which filter provides better quality? (test both and compare)
+6. **Tiled Integration:** Should we wait for tiled export before implementing SS, or do SS first?
 
 ---
 
