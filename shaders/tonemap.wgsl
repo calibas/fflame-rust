@@ -278,10 +278,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // density_scale controls transparency: higher = more opaque
     let output_alpha = clamp(bucket_count * 0.01 * tonemap_params.density_scale, 0.0, 1.0);
 
+    // Old Transparent Export (Doesn't currently work)
     // Check if background is black (transparent export mode)
     // let bg_sum = tonemap_params.background_color.r + tonemap_params.background_color.g + tonemap_params.background_color.b;
     // let is_transparent_mode = bg_sum < 0.001;
-    let is_transparent_mode = false;
+    // let is_transparent_mode = false;
 
     // Composite: background * (1 - alpha) + tone_curved_fractal * alpha
     // This ensures tone curve only affects the fractal layer, not the background
@@ -290,8 +291,12 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     //     fractal_color,                                                                             // Transparent mode: just fractal
     //     is_transparent_mode
     // );
-    let final_color = tonemap_params.background_color * (1.0 - output_alpha) + fractal_color * output_alpha;
+    // let final_color = tonemap_params.background_color * (1.0 - output_alpha) + fractal_color * output_alpha;
     // let final_alpha = select(1.0, output_alpha, is_transparent_mode);
+    
+    // Output fractal color with density-based alpha
+    // The panel background (set in panel_viewer.rs) will show through transparent areas
+    let final_color = fractal_color;
     let final_alpha = 1.0;
     // Convert from linear to sRGB for display
     // (Rgba8Unorm is linear, but monitors expect sRGB)
