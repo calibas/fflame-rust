@@ -52,8 +52,20 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=GIT_BRANCH={}", git_branch);
 
-    // Build timestamp (used to identify builds instead of build numbers)
-    let build_time = chrono::Utc::now().to_rfc3339();
+    // Build timestamp from git commit (stable - doesn't change unless you commit)
+    let build_time = std::process::Command::new("git")
+        .args(&["log", "-1", "--format=%cI"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()); // Fallback to current time if not in git
     println!("cargo:rustc-env=BUILD_TIME={}", build_time);
 
     // Rustc version
