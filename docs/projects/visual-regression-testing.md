@@ -14,6 +14,8 @@ We need automated testing to catch regressions in:
 
 **Recent near-miss:** PNG export brightness bug went undetected until manual testing.
 
+**Critical Constraint:** Fractal flames are fundamentally random - they won't render identically unless `deterministic_rng: true` is set in the config. All visual regression test configs MUST have deterministic RNG enabled.
+
 ## Goals
 
 1. **Detect visual regressions** - Any change in rendered output triggers test failure
@@ -186,12 +188,17 @@ class VisualTestRunner:
         )
 
     def hash_file(self, path: Path) -> str:
-        """Calculate SHA256 hash of file."""
-        sha256 = hashlib.sha256()
-        with open(path, 'rb') as f:
-            while chunk := f.read(8192):
-                sha256.update(chunk)
-        return sha256.hexdigest()
+        """
+        Calculate SHA256 hash of raw pixel data (not PNG file).
+
+        This ignores PNG compression differences and only compares
+        actual rendered pixels. Requires deterministic_rng: true in config.
+        """
+        from PIL import Image
+        import numpy as np
+
+        img = np.array(Image.open(path))
+        return hashlib.sha256(img.tobytes()).hexdigest()
 
     def read_png_metadata(self, path: Path) -> Optional[Dict]:
         """Extract metadata from PNG tEXt chunks."""
@@ -321,6 +328,8 @@ if __name__ == "__main__":
 - `multi-transform.fflame` - 5+ transforms
 - `high-variation-count.fflame` - 15+ active variations
 - `palette-test.fflame` - Palette color accuracy
+
+**IMPORTANT:** All test configs must have `"deterministic_rng": true` to ensure reproducible results.
 
 ### 2. 3D Rendering Tests
 **Directory:** `tests/visual/configs/3d/`
@@ -579,28 +588,55 @@ jobs:
 
 ## Pixel-Perfect Comparison
 
+**Prerequisites:**
+1. All test configs MUST have `"deterministic_rng": true` in the JSON
+2. This ensures the RNG seed is fixed and renders are reproducible
+3. Without this, random variation in iteration paths makes pixel-perfect comparison impossible
+
 **Challenge:** PNG exports may have minor compression differences across platforms.
 
-**Solution 1: Compare raw pixel data**
+**Solution 1: Compare raw pixel data (preferred)**
 ```python
 from PIL import Image
 import numpy as np
 
 def compare_images_exact(img1_path, img2_path):
+    """
+    Pixel-perfect comparison of two PNG images.
+
+    Requires deterministic_rng: true in config!
+    """
     img1 = np.array(Image.open(img1_path))
     img2 = np.array(Image.open(img2_path))
     return np.array_equal(img1, img2)
 ```
 
-**Solution 2: Perceptual hash (if exact match too strict)**
+**Solution 2: SHA256 hash of pixel data**
+```python
+def hash_image_pixels(img_path):
+    """
+    Hash the raw pixel data, not the PNG file.
+    This ignores compression differences.
+    """
+    img = np.array(Image.open(img_path))
+    return hashlib.sha256(img.tobytes()).hexdigest()
+```
+
+**Solution 3: Perceptual hash (fallback if exact match too strict)**
 ```python
 import imagehash
 
 def compare_images_perceptual(img1_path, img2_path, threshold=5):
+    """
+    Use perceptual hash if deterministic RNG still has minor differences.
+    Threshold of 5 allows very small variations.
+    """
     hash1 = imagehash.phash(Image.open(img1_path))
     hash2 = imagehash.phash(Image.open(img2_path))
     return hash1 - hash2 < threshold
 ```
+
+**Decision:** Start with pixel-perfect comparison (Solution 1). If we discover platform-specific floating-point differences, fall back to perceptual hashing.
 
 ## Detecting Rendering Changes
 
