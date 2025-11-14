@@ -143,42 +143,66 @@ impl App {
 
         const NUM_WORKGROUPS: u32 = 128;
         const THREADS_PER_WORKGROUP: u64 = 64;
-
-        let iterations_per_frame = config.iterations_per_thread / config.speed_multiplier;
+        const BATCH_SIZE: u32 = 4; // Match viewport's accumulation_batch_size
 
         let mut accumulation_count = 0;
+        let mut batch_frame_count = 0;
+
         while total_rendered < target {
-            for _ in 0..config.speed_multiplier {
+            let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                label: Some("Export Render Frame"),
+            });
+
+            // Clear histogram only on first frame of batch (match viewport behavior)
+            let clear_histogram = batch_frame_count == 0;
+
+            // Use FULL iterations_per_thread like viewport does (not divided by speed_multiplier)
+            temp_renderer.compute_pass(
+                &mut encoder,
+                &self.gpu.queue,
+                NUM_WORKGROUPS,
+                config.iterations_per_thread, // CHANGED: Use full value like viewport
+                config.zoom,
+                config.pan_x,
+                config.pan_y,
+                config.rotation,
+                config.camera_rotation_x,
+                config.camera_rotation_y,
+                config.camera_z,
+                config.speed_factor,
+                clear_histogram, // CHANGED: Conditional clear like viewport
+            );
+
+            let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * config.iterations_per_thread as u64;
+            total_rendered += samples_this_frame;
+            batch_frame_count += 1;
+
+            // Accumulate only when batch is complete (match viewport behavior)
+            let should_accumulate = batch_frame_count >= BATCH_SIZE;
+            if should_accumulate {
                 accumulation_count += 1;
-                let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                    label: Some("Export Render Frame"),
-                });
 
-                temp_renderer.compute_pass(
-                    &mut encoder,
-                    &self.gpu.queue,
-                    NUM_WORKGROUPS,
-                    iterations_per_frame,
-                    config.zoom,
-                    config.pan_x,
-                    config.pan_y,
-                    config.rotation,
-                    config.camera_rotation_x,
-                    config.camera_rotation_y,
-                    config.camera_z,
-                    config.speed_factor,
-                    true, // Clear histogram
-                );
+                // Pass total samples in batch like viewport does (multiply by batch size)
+                let total_samples_in_batch = samples_this_frame * BATCH_SIZE as u64;
+                temp_renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
 
-                let samples = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_frame as u64;
-                temp_renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, samples);
+                batch_frame_count = 0; // Reset batch counter
+            }
 
-                total_rendered += samples;
-                self.gpu.queue.submit(std::iter::once(encoder.finish()));
+            self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
-                if total_rendered >= target {
-                    break;
+            if total_rendered >= target {
+                // Final accumulation if we have partial batch
+                if batch_frame_count > 0 {
+                    let mut final_accum_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                        label: Some("Export Final Batch Accumulation"),
+                    });
+                    let total_samples_in_batch = samples_this_frame * batch_frame_count as u64;
+                    temp_renderer.accumulate_pass(&mut final_accum_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                    self.gpu.queue.submit(std::iter::once(final_accum_encoder.finish()));
+                    accumulation_count += 1;
                 }
+                break;
             }
         }
 
