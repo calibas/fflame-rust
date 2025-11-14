@@ -79,7 +79,6 @@ fn main() {
 }
 
 fn copy_assets_to_target() {
-    use std::fs;
     use std::path::PathBuf;
 
     // Get target directory
@@ -113,8 +112,6 @@ fn copy_assets_to_target() {
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    use std::fs;
-
     fs::create_dir_all(dst)?;
 
     for entry in fs::read_dir(src)? {
