@@ -123,6 +123,13 @@ pub async fn export_headless(
 
     let render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
 
+    // Render tonemap pass to fractal_texture before reading pixels
+    let mut final_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+        label: Some("Final Tonemap"),
+    });
+    renderer.tonemap_pass(&mut final_encoder);
+    queue.submit(std::iter::once(final_encoder.finish()));
+
     // Capture pixels from fractal_texture (what was actually rendered and displayed)
     let (width, height, rgba_data) = renderer.read_fractal_pixels(&device, &queue, false, config.background_color).await?;
 
