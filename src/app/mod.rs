@@ -329,6 +329,16 @@ impl App {
         let can_undo = self.can_undo();
         let can_redo = self.can_redo();
 
+        // Register renderer's fractal texture with egui for display
+        if let Some(ref renderer) = self.flame_renderer {
+            self.egui_layer.register_fractal_texture(
+                &self.gpu.device,
+                renderer.get_fractal_texture_view(),
+                self.fractal_viewport_size.0,
+                self.fractal_viewport_size.1,
+            );
+        }
+
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -836,9 +846,9 @@ impl App {
                 let export_config = self.export_config();
                 let render_time_ms = self.metrics.render_time_ms;
 
-                if let Some(ref mut renderer) = self.flame_renderer {
+                if let Some(ref renderer) = self.flame_renderer {
                     let total_iterations = renderer.total_iterations();
-                    let pixels_future = renderer.capture_pixels(&self.gpu.device, &self.gpu.queue, transparent, self.gpu.config.format);
+                    let pixels_future = renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, export_config.background_color);
 
                     match pollster::block_on(pixels_future) {
                         Ok((width, height, rgba_data)) => {
@@ -883,29 +893,28 @@ impl App {
                 // SAFETY: The Device, Queue, and FlameRenderer live in App which persists
                 // for the entire program lifetime. The GPU resources won't be dropped
                 // until the app exits, so extending their lifetime to 'static is safe.
-                // We need mutable access for capture_pixels which may temporarily modify
-                // background_color, but this is safe since the async task completes before
-                // any other code runs (single-threaded WASM environment).
+                // read_fractal_pixels only needs immutable access since it reads from
+                // the renderer's internal fractal_texture without modification.
                 use wasm_bindgen_futures::spawn_local;
 
                 // Build metadata before borrowing renderer
                 let export_config = self.export_config();
 
-                if let Some(ref mut renderer) = self.flame_renderer {
+                if let Some(ref renderer) = self.flame_renderer {
                     let total_iterations = renderer.total_iterations();
                     let render_time_ms = self.metrics.render_time_ms;
                     let iterations_per_thread = export_config.iterations_per_thread;
                     let speed_factor = export_config.speed_factor;
+                    let background_color = export_config.background_color;
 
                     let device: &'static egui_wgpu::wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
                     let queue: &'static egui_wgpu::wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
-                    let renderer: &'static mut crate::renderer::compute_kernel::FlameRenderer =
+                    let renderer: &'static crate::renderer::compute_kernel::FlameRenderer =
                         unsafe { std::mem::transmute(renderer) };
-                    let format = self.gpu.config.format;
 
                     spawn_local(async move {
                         // Await pixel capture
-                        match renderer.capture_pixels(device, queue, transparent, format).await {
+                        match renderer.read_fractal_pixels(device, queue, transparent, background_color).await {
                             Ok((width, height, rgba_data)) => {
                                 // Build metadata with captured dimensions
                                 let metadata = crate::png_metadata::PngMetadata::from_app_state(
@@ -1096,9 +1105,8 @@ impl App {
                 final_config.vibrancy, final_config.saturation, final_config.hue_shift, final_config.value_scale,
                 renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations);
 
-            // Ensure fractal texture exists and get view (use viewport size, not window size)
-            let fractal_view = self.egui_layer.ensure_fractal_texture(&self.gpu.device, self.fractal_viewport_size.0, self.fractal_viewport_size.1);
-            renderer.tonemap_pass(&mut render_encoder, fractal_view);
+            // Render to internal fractal texture
+            renderer.tonemap_pass(&mut render_encoder);
             self.metrics.record_tonemap_time(t_tonemap.elapsed().as_secs_f64() * 1000.0);
         }
 
