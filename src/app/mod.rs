@@ -329,6 +329,16 @@ impl App {
         let can_undo = self.can_undo();
         let can_redo = self.can_redo();
 
+        // Register renderer's fractal texture with egui for display
+        if let Some(ref renderer) = self.flame_renderer {
+            self.egui_layer.register_fractal_texture(
+                &self.gpu.device,
+                renderer.get_fractal_texture_view(),
+                self.fractal_viewport_size.0,
+                self.fractal_viewport_size.1,
+            );
+        }
+
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
