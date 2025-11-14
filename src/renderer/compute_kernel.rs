@@ -767,6 +767,116 @@ impl FlameRenderer {
     /// - **Opaque**: Renders via tonemap shader which blends with background color
     ///
     /// Why? The tonemap shader performs `mix(background_color, fractal_color, alpha)` which
+    /// Read pixels from the fractal_texture (after tonemap_pass has rendered to it)
+    /// This is the NEW, simpler method that reads what was actually displayed.
+    ///
+    /// # Arguments
+    /// * `transparent` - If true, preserve alpha channel; if false, blend with background and set alpha=255
+    /// * `background_color` - RGB background color for opaque mode (ignored in transparent mode)
+    pub async fn read_fractal_pixels(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        transparent: bool,
+        background_color: [f32; 3],
+    ) -> Result<(u32, u32, Vec<u8>), String> {
+        // Wait for any pending rendering to complete
+        let sync_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Pre-Read Sync"),
+        });
+        queue.submit(std::iter::once(sync_encoder.finish()));
+        device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+        // Create staging buffer
+        let bytes_per_pixel = 4; // RGBA8
+        let unpadded_bytes_per_row = self.width * bytes_per_pixel;
+        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * self.height) as u64;
+
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Fractal Read Buffer"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Copy texture to buffer
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Fractal Read Encoder"),
+        });
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: &self.fractal_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map and read
+        let buffer_slice = buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "Failed to map buffer".to_string())?
+            .map_err(|e| format!("Buffer map error: {:?}", e))?;
+
+        let data = buffer_slice.get_mapped_range();
+
+        // Copy data, optionally blend background
+        let mut rgba_data = Vec::with_capacity((self.width * self.height * 4) as usize);
+        for y in 0..self.height {
+            let row_start = (y * padded_bytes_per_row) as usize;
+            let row_end = row_start + (self.width * bytes_per_pixel) as usize;
+            let row_data = &data[row_start..row_end];
+
+            for x in 0..self.width {
+                let pixel_start = (x * bytes_per_pixel) as usize;
+                let r = row_data[pixel_start];
+                let g = row_data[pixel_start + 1];
+                let b = row_data[pixel_start + 2];
+                let a = row_data[pixel_start + 3];
+
+                if transparent {
+                    // Transparent mode: keep original RGBA
+                    rgba_data.extend_from_slice(&[r, g, b, a]);
+                } else {
+                    // Opaque mode: blend with background, set alpha=255
+                    let alpha = a as f32 / 255.0;
+                    let bg_r = (background_color[0] * 255.0) as u8;
+                    let bg_g = (background_color[1] * 255.0) as u8;
+                    let bg_b = (background_color[2] * 255.0) as u8;
+
+                    let out_r = ((r as f32 * alpha) + (bg_r as f32 * (1.0 - alpha))) as u8;
+                    let out_g = ((g as f32 * alpha) + (bg_g as f32 * (1.0 - alpha))) as u8;
+                    let out_b = ((b as f32 * alpha) + (bg_b as f32 * (1.0 - alpha))) as u8;
+
+                    rgba_data.extend_from_slice(&[out_r, out_g, out_b, 255]);
+                }
+            }
+        }
+
+        Ok((self.width, self.height, rgba_data))
+    }
+
     /// blends RGB channels with the background before outputting. Even though it outputs
     /// the alpha channel, the RGB values are already pre-multiplied/blended, making the
     /// alpha useless for compositing. For transparency, we must read raw accumulation data.
