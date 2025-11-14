@@ -675,6 +675,10 @@ impl FlameRenderer {
             1.0
         };
 
+        // DEBUG: Print tonemap params
+        println!("update_tonemap: width={}, height={}, area={}, sample_density={}, brightness={}",
+            width, height, area, sample_density, brightness);
+
         let params = TonemapParams {
             exposure,
             gamma,
