@@ -38,10 +38,11 @@ pub struct EguiLayer {
     config_json_buffer: String,
     palette_editor: PaletteEditor,
 
-    // Fractal rendering texture (for displaying fractal in panel)
-    fractal_texture: Option<Texture>,
-    fractal_texture_view: Option<TextureView>,
+    // Fractal texture ID (registered from renderer's texture)
     fractal_texture_id: Option<egui_dock::egui::TextureId>,
+    // Track registered texture dimensions to detect resize
+    fractal_texture_width: u32,
+    fractal_texture_height: u32,
 }
 
 impl EguiLayer {
@@ -72,9 +73,9 @@ impl EguiLayer {
             renderer,
             config_json_buffer: String::new(),
             palette_editor: PaletteEditor::new(),
-            fractal_texture: None,
-            fractal_texture_view: None,
             fractal_texture_id: None,
+            fractal_texture_width: 0,
+            fractal_texture_height: 0,
         }
     }
 
@@ -110,57 +111,31 @@ impl EguiLayer {
         self.palette_editor.current_palette = palette;
     }
 
-    /// Ensure fractal texture exists and is the correct size
-    /// Returns the texture view for rendering
-    pub fn ensure_fractal_texture(&mut self, device: &Device, width: u32, height: u32) -> &TextureView {
-        // Check if we need to create/recreate the texture
-        let needs_recreate = self.fractal_texture.is_none() || {
-            if let Some(ref tex) = self.fractal_texture {
-                tex.width() != width || tex.height() != height
-            } else {
-                true
-            }
-        };
+    /// Register the renderer's fractal texture with egui for display
+    /// Call this when the texture size changes or on first frame
+    pub fn register_fractal_texture(&mut self, device: &Device, texture_view: &TextureView, width: u32, height: u32) {
+        // Check if we need to re-register (size changed or first time)
+        let needs_reregister = self.fractal_texture_id.is_none()
+            || self.fractal_texture_width != width
+            || self.fractal_texture_height != height;
 
-        if needs_recreate {
+        if needs_reregister {
             // Unregister old texture if it exists
             if let Some(old_id) = self.fractal_texture_id.take() {
                 self.renderer.free_texture(&old_id);
             }
 
-            // Create new texture for fractal rendering
-            // Must be Rgba8Unorm for egui compatibility
-            let texture = device.create_texture(&TextureDescriptor {
-                label: Some("Fractal Render Texture"),
-                size: Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: TextureDimension::D2,
-                format: TextureFormat::Rgba8Unorm,
-                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-
-            let view = texture.create_view(&TextureViewDescriptor::default());
-
-            // Register with egui
+            // Register renderer's texture with egui
             let texture_id = self.renderer.register_native_texture(
                 device,
-                &view,
+                texture_view,
                 FilterMode::Linear,
             );
 
-            self.fractal_texture = Some(texture);
-            self.fractal_texture_view = Some(view);
             self.fractal_texture_id = Some(texture_id);
+            self.fractal_texture_width = width;
+            self.fractal_texture_height = height;
         }
-
-        // Safe to unwrap - we just ensured it exists
-        self.fractal_texture_view.as_ref().unwrap()
     }
 
     /// Get the egui TextureId for the fractal texture (for displaying in UI)

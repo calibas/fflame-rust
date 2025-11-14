@@ -12,6 +12,11 @@ pub struct FlameRenderer {
     accumulate_bind_group: BindGroup,
     // adjust_scale_bind_group removed - pipeline unused
     tonemap_bind_group: BindGroup,
+
+    // Output texture that tonemap_pass renders to (for both display and export)
+    fractal_texture: Texture,
+    fractal_texture_view: TextureView,
+
     pub width: u32,
     pub height: u32,
     samples_accumulated: u64,
@@ -51,6 +56,23 @@ impl FlameRenderer {
         // adjust_scale_bind_group removed - pipeline unused
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
 
+        // Create fractal output texture (Rgba8Unorm for compatibility with tonemap pipeline)
+        let fractal_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Fractal Output"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let fractal_texture_view = fractal_texture.create_view(&TextureViewDescriptor::default());
+
         // DEBUG: Log renderer initialization
         #[cfg(target_arch = "wasm32")]
         log::info!("=== FlameRenderer Created ===");
@@ -68,6 +90,8 @@ impl FlameRenderer {
             accumulate_bind_group,
             // adjust_scale_bind_group removed
             tonemap_bind_group,
+            fractal_texture,
+            fractal_texture_view,
             width,
             height,
             samples_accumulated: 0,
@@ -103,6 +127,23 @@ impl FlameRenderer {
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
+
+        // Recreate fractal output texture with new size
+        self.fractal_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Fractal Output"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        self.fractal_texture_view = self.fractal_texture.create_view(&TextureViewDescriptor::default());
 
         // Clear accumulation counter
         self.reset(encoder, queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
@@ -255,12 +296,12 @@ impl FlameRenderer {
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
     }
 
-    /// Render the accumulation buffer to a texture view with tone mapping
-    pub fn tonemap_pass(&self, encoder: &mut CommandEncoder, target_view: &TextureView) {
+    /// Render the accumulation buffer to internal fractal texture with tone mapping
+    pub fn tonemap_pass(&self, encoder: &mut CommandEncoder) {
         let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
             label: Some("Tonemap Pass"),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: target_view,
+                view: &self.fractal_texture_view,
                 resolve_target: None,
                 ops: Operations {
                     load: LoadOp::Clear(Color::BLACK),
@@ -465,6 +506,11 @@ impl FlameRenderer {
 
     pub fn total_iterations(&self) -> u64 {
         self.total_iterations
+    }
+
+    /// Get fractal output texture view for display
+    pub fn get_fractal_texture_view(&self) -> &TextureView {
+        &self.fractal_texture_view
     }
 
     /// Get RNG seed based on deterministic mode
@@ -711,16 +757,118 @@ impl FlameRenderer {
         self.color_mode
     }
 
-    /// Capture raw RGBA pixel data from the current frame
-    /// Returns (width, height, rgba_bytes) where rgba_bytes is in standard RGBA format
+    /// Read pixels from the fractal_texture (after tonemap_pass has rendered to it)
+    /// This is the unified method that reads what was actually displayed on screen.
     ///
-    /// # Implementation Note
-    /// Uses two different paths based on transparency requirement:
-    /// - **Transparent**: Reads Rgba16Float accumulation buffer and applies CPU tone mapping
-    ///   to preserve true alpha values (density × density_scale)
-    /// - **Opaque**: Renders via tonemap shader which blends with background color
-    ///
-    /// Why? The tonemap shader performs `mix(background_color, fractal_color, alpha)` which
+    /// # Arguments
+    /// * `transparent` - If true, preserve alpha channel; if false, blend with background and set alpha=255
+    /// * `background_color` - RGB background color for opaque mode (ignored in transparent mode)
+    pub async fn read_fractal_pixels(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        transparent: bool,
+        background_color: [f32; 3],
+    ) -> Result<(u32, u32, Vec<u8>), String> {
+        // Wait for any pending rendering to complete
+        let sync_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Pre-Read Sync"),
+        });
+        queue.submit(std::iter::once(sync_encoder.finish()));
+        device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+        // Create staging buffer
+        let bytes_per_pixel = 4; // RGBA8
+        let unpadded_bytes_per_row = self.width * bytes_per_pixel;
+        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * self.height) as u64;
+
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Fractal Read Buffer"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Copy texture to buffer
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Fractal Read Encoder"),
+        });
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: &self.fractal_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map and read
+        let buffer_slice = buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "Failed to map buffer".to_string())?
+            .map_err(|e| format!("Buffer map error: {:?}", e))?;
+
+        let data = buffer_slice.get_mapped_range();
+
+        // Copy data, optionally blend background
+        let mut rgba_data = Vec::with_capacity((self.width * self.height * 4) as usize);
+        for y in 0..self.height {
+            let row_start = (y * padded_bytes_per_row) as usize;
+            let row_end = row_start + (self.width * bytes_per_pixel) as usize;
+            let row_data = &data[row_start..row_end];
+
+            for x in 0..self.width {
+                let pixel_start = (x * bytes_per_pixel) as usize;
+                let r = row_data[pixel_start];
+                let g = row_data[pixel_start + 1];
+                let b = row_data[pixel_start + 2];
+                let a = row_data[pixel_start + 3];
+
+                if transparent {
+                    // Transparent mode: keep original RGBA
+                    rgba_data.extend_from_slice(&[r, g, b, a]);
+                } else {
+                    // Opaque mode: blend with background, set alpha=255
+                    let alpha = a as f32 / 255.0;
+                    let bg_r = (background_color[0] * 255.0) as u8;
+                    let bg_g = (background_color[1] * 255.0) as u8;
+                    let bg_b = (background_color[2] * 255.0) as u8;
+
+                    let out_r = ((r as f32 * alpha) + (bg_r as f32 * (1.0 - alpha))) as u8;
+                    let out_g = ((g as f32 * alpha) + (bg_g as f32 * (1.0 - alpha))) as u8;
+                    let out_b = ((b as f32 * alpha) + (bg_b as f32 * (1.0 - alpha))) as u8;
+
+                    rgba_data.extend_from_slice(&[out_r, out_g, out_b, 255]);
+                }
+            }
+        }
+
+        Ok((self.width, self.height, rgba_data))
+    }
+
+    #[allow(dead_code)]
+    /// OLD METHOD - DEPRECATED - Use read_fractal_pixels() instead
     /// blends RGB channels with the background before outputting. Even though it outputs
     /// the alpha channel, the RGB values are already pre-multiplied/blended, making the
     /// alpha useless for compositing. For transparency, we must read raw accumulation data.
@@ -751,6 +899,8 @@ impl FlameRenderer {
         }
     }
 
+    #[allow(dead_code)]
+    /// OLD METHOD - DEPRECATED - Use read_fractal_pixels() instead
     /// Capture pixels from accumulation buffer (for transparent PNG export)
     ///
     /// This preserves true alpha values by reading raw Rgba16Float accumulation data
@@ -871,6 +1021,8 @@ impl FlameRenderer {
         Ok((self.width, self.height, rgba_data))
     }
 
+    #[allow(dead_code)]
+    /// OLD METHOD - DEPRECATED - Use read_fractal_pixels() instead
     /// Capture pixels from tonemapped render (for opaque PNG export)
     async fn capture_from_tonemap_render(&self, device: &Device, queue: &Queue, surface_format: TextureFormat) -> Result<(u32, u32, Vec<u8>), String> {
         // Create a temporary texture to render to (use same format as surface)
@@ -895,7 +1047,7 @@ impl FlameRenderer {
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Screenshot Encoder"),
         });
-        self.tonemap_pass(&mut encoder, &view);
+        self.tonemap_pass(&mut encoder);
 
         // Create buffer to copy texture data to
         let bytes_per_pixel = 4; // RGBA8
@@ -971,15 +1123,6 @@ impl FlameRenderer {
 
         // Return raw pixel data (width, height, rgba_bytes)
         Ok((self.width, self.height, rgba_data))
-    }
-
-    /// Capture the current rendered frame as PNG data (convenience wrapper)
-    /// If transparent is true, renders without background blending (alpha channel preserved)
-    pub async fn capture_png(&mut self, device: &Device, queue: &Queue, transparent: bool, surface_format: TextureFormat) -> Result<Vec<u8>, String> {
-        let (width, height, rgba_data) = self.capture_pixels(device, queue, transparent, surface_format).await?;
-
-        // Encode as PNG without metadata (use encode_png_with_full_metadata for metadata support)
-        encode_png_from_rgba(width, height, rgba_data, None)
     }
 }
 
