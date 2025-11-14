@@ -857,7 +857,12 @@ impl App {
                 let export_config = self.export_config();
                 let render_time_ms = self.metrics.render_time_ms;
 
-                if let Some(ref renderer) = self.flame_renderer {
+                // Check if we need custom-size export
+                if self.use_custom_export_size {
+                    // Custom-size export: create temporary renderer at export dimensions
+                    self.export_custom_size(transparent, export_config, render_time_ms);
+                } else if let Some(ref renderer) = self.flame_renderer {
+                    // Viewport-size export: use current renderer
                     let total_iterations = renderer.total_iterations();
                     let pixels_future = renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, export_config.background_color);
 

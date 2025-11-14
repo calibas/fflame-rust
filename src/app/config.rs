@@ -94,4 +94,129 @@ impl App {
     pub fn can_redo(&self) -> bool {
         self.config_manager.can_redo()
     }
+
+    /// Export PNG at custom dimensions (creates temporary renderer)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn export_custom_size(&self, transparent: bool, config: FractalConfig, render_time_ms: f64) {
+        use crate::renderer::compute_kernel::FlameRenderer;
+        use std::time::Instant;
+
+        println!("Exporting at custom size: {}×{}", self.export_width, self.export_height);
+
+        // Create temporary renderer at export dimensions
+        let surface_format = egui_wgpu::wgpu::TextureFormat::Rgba8Unorm;
+        let mut temp_renderer = FlameRenderer::new(
+            &self.gpu.device,
+            &self.gpu.queue,
+            surface_format,
+            self.export_width,
+            self.export_height,
+            &config.flame,
+        );
+
+        // Load config into temp renderer
+        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+            label: Some("Custom Export Encoder"),
+        });
+
+        // Get palette
+        let palette = config.palette.as_ref()
+            .or_else(|| self.palette_library.get(config.palette_index))
+            .expect("No palette found");
+
+        temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, config.iterations_per_thread);
+        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+
+        // Render frames until we reach max_iterations
+        let render_start = Instant::now();
+        let mut total_rendered = 0u64;
+        let target = config.max_iterations;
+
+        const NUM_WORKGROUPS: u32 = 128;
+        const THREADS_PER_WORKGROUP: u64 = 64;
+
+        let iterations_per_frame = config.iterations_per_thread / config.speed_multiplier;
+
+        while total_rendered < target {
+            for _ in 0..config.speed_multiplier {
+                let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                    label: Some("Export Render Frame"),
+                });
+
+                temp_renderer.compute_pass(
+                    &mut encoder,
+                    &self.gpu.queue,
+                    NUM_WORKGROUPS,
+                    iterations_per_frame,
+                    config.zoom,
+                    config.pan_x,
+                    config.pan_y,
+                    config.rotation,
+                    config.camera_rotation_x,
+                    config.camera_rotation_y,
+                    config.camera_z,
+                    config.speed_factor,
+                    true, // Clear histogram
+                );
+
+                let samples = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_frame as u64;
+                temp_renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, samples);
+
+                total_rendered += samples;
+                self.gpu.queue.submit(std::iter::once(encoder.finish()));
+
+                if total_rendered >= target {
+                    break;
+                }
+            }
+        }
+
+        let export_render_time = render_start.elapsed().as_secs_f64() * 1000.0;
+
+        // Final tonemap pass
+        let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+            label: Some("Export Final Tonemap"),
+        });
+        temp_renderer.tonemap_pass(&mut final_encoder);
+        self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
+
+        // Read pixels
+        let pixels_future = temp_renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, config.background_color);
+
+        match pollster::block_on(pixels_future) {
+            Ok((width, height, rgba_data)) => {
+                // Build metadata
+                let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                    width,
+                    height,
+                    total_rendered,
+                    export_render_time,
+                    config.iterations_per_thread,
+                    config.speed_factor,
+                    &config,
+                );
+
+                // Encode PNG
+                match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
+                    Ok(png_data) => {
+                        // Open file dialog
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("PNG Image", &["png"])
+                            .set_file_name("fractal.png")
+                            .save_file()
+                        {
+                            if let Err(e) = std::fs::write(&path, png_data) {
+                                eprintln!("Failed to save PNG: {}", e);
+                            } else {
+                                println!("PNG exported to: {} ({}×{}, {:.2}s)",
+                                    path.display(), width, height, export_render_time / 1000.0);
+                            }
+                        }
+                    }
+                    Err(e) => eprintln!("Failed to encode PNG: {}", e),
+                }
+            }
+            Err(e) => eprintln!("Failed to capture pixels: {}", e),
+        }
+    }
 }
