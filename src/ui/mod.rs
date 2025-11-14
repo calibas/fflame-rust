@@ -163,6 +163,9 @@ impl EguiLayer {
         can_undo: bool,
         can_redo: bool,
         workspace: &mut workspace::Workspace,
+        export_width: &mut u32,
+        export_height: &mut u32,
+        use_custom_export_size: &mut bool,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -269,6 +272,9 @@ impl EguiLayer {
                         paused,
                         png_export_with_background: &mut png_export_with_background,
                         png_export_transparent: &mut png_export_transparent,
+                        export_width,
+                        export_height,
+                        use_custom_export_size,
                         custom_palette: &mut custom_palette,
                         palette_editor: &mut self.palette_editor,
                         palette_export_json: &mut palette_export_json,

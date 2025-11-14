@@ -13,6 +13,9 @@ pub fn render_settings_content(
     redo_requested: &mut bool,
     png_export_with_background: &mut bool,
     png_export_transparent: &mut bool,
+    export_width: &mut u32,
+    export_height: &mut u32,
+    use_custom_export_size: &mut bool,
     preset_library: &PresetLibrary,
     current_preset_index: &mut usize,
     preset_changed: &mut bool,
@@ -346,7 +349,27 @@ pub fn render_settings_content(
             ui.label("PNG Export Options");
 
             ui.checkbox(png_export_with_background, "Export with Background");
-            ui.checkbox(png_export_transparent, "Export Transparent");
+            // TODO: Transparent export currently broken, hiding for now
+            // ui.checkbox(png_export_transparent, "Export Transparent");
+
+            ui.separator();
+            ui.checkbox(use_custom_export_size, "Use Custom Export Size");
+
+            ui.add_enabled_ui(*use_custom_export_size, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Width:");
+                    ui.add(egui::DragValue::new(export_width).range(64..=8192).speed(10));
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Height:");
+                    ui.add(egui::DragValue::new(export_height).range(64..=8192).speed(10));
+                });
+                ui.label(format!("Export resolution: {}×{}", export_width, export_height));
+            });
+
+            if !*use_custom_export_size {
+                ui.label("Export will use current viewport size");
+            }
 
             ui.separator();
             ui.label("Use File → Export to save PNG");
