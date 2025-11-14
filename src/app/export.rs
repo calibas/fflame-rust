@@ -69,46 +69,62 @@ pub async fn export_headless(
 
     const NUM_WORKGROUPS: u32 = 128;
     const THREADS_PER_WORKGROUP: u64 = 64;
+    const BATCH_SIZE: u32 = 4; // Match viewport's accumulation_batch_size
 
-    // Calculate iterations per "frame" based on speed multiplier
-    // Higher speed multiplier = more accumulation passes = smaller chunks
-    let iterations_per_frame = iterations_per_thread / speed_multiplier;
+    let mut batch_frame_count = 0;
 
     while total_rendered < target {
-        // Do multiple compute+accumulate cycles per "batch" (simulating higher frame rate)
-        for _ in 0..speed_multiplier {
-            let mut encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                label: Some("Render Frame"),
-            });
+        let mut encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+            label: Some("Render Frame"),
+        });
 
-            renderer.compute_pass(
-                &mut encoder,
-                &queue,
-                NUM_WORKGROUPS,
-                iterations_per_frame,
-                config.zoom,
-                config.pan_x,
-                config.pan_y,
-                config.rotation,
-                config.camera_rotation_x,
-                config.camera_rotation_y,
-                config.camera_z,
-                config.speed_factor,
-                true, // Always clear histogram for export (no batching)
-            );
+        // Clear histogram only on first frame of batch (match viewport behavior)
+        let clear_histogram = batch_frame_count == 0;
 
-            let samples = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_frame as u64;
-            renderer.accumulate_pass(&mut encoder, &queue, &device, samples);
+        // Use FULL iterations_per_thread like viewport does (not divided by speed_multiplier)
+        renderer.compute_pass(
+            &mut encoder,
+            &queue,
+            NUM_WORKGROUPS,
+            iterations_per_thread, // CHANGED: Use full value like viewport
+            config.zoom,
+            config.pan_x,
+            config.pan_y,
+            config.rotation,
+            config.camera_rotation_x,
+            config.camera_rotation_y,
+            config.camera_z,
+            config.speed_factor,
+            clear_histogram, // CHANGED: Conditional clear like viewport
+        );
 
-            // Note: adjust_scale_pass() removed - using fixed global scale now
+        let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
+        total_rendered += samples_this_frame;
+        batch_frame_count += 1;
 
-            total_rendered += samples;
+        // Accumulate only when batch is complete (match viewport behavior)
+        let should_accumulate = batch_frame_count >= BATCH_SIZE;
+        if should_accumulate {
+            // Pass total samples in batch like viewport does (multiply by batch size)
+            let total_samples_in_batch = samples_this_frame * BATCH_SIZE as u64;
+            renderer.accumulate_pass(&mut encoder, &queue, &device, total_samples_in_batch);
 
-            queue.submit(std::iter::once(encoder.finish()));
+            batch_frame_count = 0; // Reset batch counter
+        }
 
-            if total_rendered >= target {
-                break;
+        queue.submit(std::iter::once(encoder.finish()));
+
+        if total_rendered >= target {
+            // Final accumulation if we have partial batch
+            if batch_frame_count > 0 {
+                let mut final_accum_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                    label: Some("Final Batch Accumulation"),
+                });
+                let total_samples_in_batch = samples_this_frame * batch_frame_count as u64;
+                renderer.accumulate_pass(&mut final_accum_encoder, &queue, &device, total_samples_in_batch);
+                queue.submit(std::iter::once(final_accum_encoder.finish()));
             }
+            break;
         }
 
         // Progress indicator every 10M iterations
