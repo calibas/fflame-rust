@@ -102,6 +102,15 @@ impl App {
         use std::time::Instant;
 
         println!("Exporting at custom size: {}×{}", self.export_width, self.export_height);
+        println!("  iterations_per_thread: {}", config.iterations_per_thread);
+        println!("  speed_multiplier: {}", config.speed_multiplier);
+        println!("  max_iterations: {}", config.max_iterations);
+        println!("  density_scale: {}", config.density_scale);
+        println!("  histogram_color_scale: {}", config.histogram_color_scale);
+        println!("  brightness: {}", config.brightness);
+        println!("  exposure: {}", config.exposure);
+        println!("  use_dynamic_blend: {}", config.use_dynamic_blend);
+        println!("  blend_factor: {}", config.blend_factor);
 
         // Create temporary renderer at export dimensions
         let surface_format = egui_wgpu::wgpu::TextureFormat::Rgba8Unorm;
@@ -137,8 +146,10 @@ impl App {
 
         let iterations_per_frame = config.iterations_per_thread / config.speed_multiplier;
 
+        let mut accumulation_count = 0;
         while total_rendered < target {
             for _ in 0..config.speed_multiplier {
+                accumulation_count += 1;
                 let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                     label: Some("Export Render Frame"),
                 });
@@ -172,6 +183,9 @@ impl App {
         }
 
         let export_render_time = render_start.elapsed().as_secs_f64() * 1000.0;
+
+        println!("Export stats: {} accumulation passes, {} total iterations",
+            accumulation_count, total_rendered);
 
         // Final tonemap pass
         let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
