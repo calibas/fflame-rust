@@ -65,9 +65,9 @@ class WasmTestRunner:
             )
 
             if result.returncode == 0:
-                print('WASM build complete ✓\n')
+                print('WASM build complete [OK]\n')
             else:
-                raise Exception(f'WASM build failed:\n{result.stderr}')
+                raise Exception(f'WASM build failed with exit code {result.returncode}:\n{result.stderr}')
 
         except FileNotFoundError:
             raise Exception('wasm-pack not found. Install with: cargo install wasm-pack')
@@ -114,7 +114,7 @@ class WasmTestRunner:
 
         try:
             self.driver = webdriver.Chrome(options=options)
-            print('Browser launched ✓\n')
+            print('Browser launched [OK]\n')
         except Exception as e:
             raise Exception(f'Failed to launch Chrome: {e}\n'
                           'Make sure Chrome and chromedriver are installed.')
