@@ -330,8 +330,8 @@ def main():
         print("Running tests and updating baselines...\n")
         success = runner.run_all_tests(args.category)
         runner.print_summary()
-        if success:
-            runner.update_baselines()
+        # Always update baselines when explicitly requested
+        runner.update_baselines()
     else:
         success = runner.run_all_tests(args.category)
         runner.print_summary()
