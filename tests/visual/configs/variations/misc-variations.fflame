@@ -3,25 +3,50 @@
     "name": "Simple",
     "transforms": [
       {
-        "a": 0.63,
-        "b": -0.8868201,
-        "c": 0.34,
-        "d": 1.0268201,
+        "a": 0.8,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 0.8,
         "e": 0.1,
         "f": 0.0,
         "g": 0.0,
         "weight": 1.0,
         "variations": {
+          "pre_spherical": 0.01,
+          "polar": 0.01,
+          "curl": 0.4,
+          "escher": 0.01,
+          "spherical": 0.01,
+          "heart": 0.01,
+          "ex": 0.01,
+          "horseshoe": 0.1,
+          "swirl": 0.1,
+          "bent": 0.01,
+          "bubble": 0.01,
+          "cylinder": 0.01,
+          "hyperbolic": 0.01,
+          "disc": 0.01,
+          "linear": 0.8,
+          "waves": 0.01,
+          "foci": 0.01,
+          "spiral": 0.01,
+          "eyefish": 0.01,
+          "diamond": 0.01,
           "sinusoidal": 0.2,
-          "linear": 0.8
+          "blob": 0.01,
+          "bipolar": 1.0,
+          "wedge": 0.01,
+          "handkerchief": 0.01,
+          "loonie": 0.01,
+          "elliptic": 0.01
         },
-        "variation_params": {},
-        "color": [
-          1.0,
-          0.2,
-          0.2
-        ],
-        "color_speed": 0.5
+        "variation_params": {
+          "curl.c1": 1.5,
+          "curl.c2": 3.0
+        },
+        "color": 0.0,
+        "color_speed": 0.0,
+        "opacity": 1.0
       },
       {
         "a": 0.6,
@@ -33,39 +58,40 @@
         "g": 0.0,
         "weight": 1.0,
         "variations": {
-          "linear": 0.6,
-          "swirl": 0.4
+          "swirl": 0.4,
+          "linear": 0.6
         },
         "variation_params": {},
-        "color": [
-          0.2,
-          0.2,
-          1.0
-        ],
-        "color_speed": 0.5
+        "color": 0.7,
+        "color_speed": 0.0,
+        "opacity": 1.0
       }
     ],
     "render_mode": "TwoD",
     "projection": "Orthographic"
   },
-  "zoom": 5.559919,
-  "pan_x": -0.011773027,
-  "pan_y": 0.10820345,
+  "zoom": 1.0,
+  "pan_x": 0.0,
+  "pan_y": 0.0,
   "rotation": 0.0,
   "camera_rotation_x": 0.0,
   "camera_rotation_y": 0.0,
+  "camera_z": 0.0,
   "density_scale": 1.0,
   "speed_factor": 0.5,
   "max_iterations": 1000000000,
-  "histogram_color_scale": 10.0,
+  "histogram_color_scale": 100.0,
   "low_density_smoothing": 0.5,
   "density_compression_strength": 0.0,
   "blend_factor": 0.1,
+  "use_dynamic_blend": true,
   "target_iterations_per_pixel": 0,
-  "color_mode": "Transform",
+  "iterations_per_thread": 256,
+  "speed_multiplier": 1,
+  "color_mode": "Palette",
   "palette_index": 1,
   "palette": {
-    "name": "Cool",
+    "name": "Cool (Custom)",
     "stops": [
       {
         "position": 0.0,
@@ -102,6 +128,7 @@
     ],
     "locked": false
   },
+  "palette_rotation": 0.0,
   "background_color": [
     0.0,
     0.0,
@@ -120,8 +147,14 @@
       }
     ]
   },
-  "use_curve": false,
+  "use_curve": true,
   "exposure": 1.0,
-  "gamma": 2.2,
-  "deterministic_rng": true
+  "gamma": 1.0,
+  "gamma_threshold": 0.0025,
+  "brightness": 1.0,
+  "vibrancy": 1.0,
+  "saturation": 1.0,
+  "hue_shift": 0.0,
+  "value_scale": 1.0,
+  "deterministic_rng": false
 }
