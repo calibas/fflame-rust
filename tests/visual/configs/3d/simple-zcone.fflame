@@ -12,8 +12,9 @@
         "g": 0.3,
         "weight": 1.0,
         "variations": {
-          "linear": 0.5,
-          "zcone": 0.5
+          "zcone": -5.0,
+          "zblur": 1.0,
+          "linear": 0.5
         },
         "variation_params": {},
         "color": 0.3,
@@ -21,7 +22,6 @@
         "opacity": 1.0
       }
     ],
-    "final_transform": null,
     "render_mode": "ThreeD",
     "projection": {
       "Perspective": {
@@ -29,16 +29,16 @@
       }
     }
   },
-  "zoom": 1.0,
-  "pan_x": 0.0,
-  "pan_y": 0.0,
+  "zoom": 0.31863052,
+  "pan_x": 0.09799698,
+  "pan_y": -0.23245138,
   "rotation": 0.0,
-  "camera_rotation_x": 0.3,
-  "camera_rotation_y": 0.5,
+  "camera_rotation_x": 1.5707964,
+  "camera_rotation_y": 0.0,
   "camera_z": 0.0,
   "density_scale": 1.0,
   "speed_factor": 0.5,
-  "max_iterations": 10000000,
+  "max_iterations": 30000000,
   "histogram_color_scale": 100.0,
   "low_density_smoothing": 0.5,
   "density_compression_strength": 0.0,
@@ -49,14 +49,95 @@
   "speed_multiplier": 4,
   "color_mode": "Palette",
   "palette_index": 0,
-  "palette": null,
+  "palette": {
+    "name": "Rainbow (Custom)",
+    "stops": [
+      {
+        "position": 0.4509804,
+        "color": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "position": 0.627451,
+        "color": [
+          1.0,
+          0.5,
+          0.0
+        ]
+      },
+      {
+        "position": 0.7254902,
+        "color": [
+          1.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "position": 0.77254903,
+        "color": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "position": 0.8627451,
+        "color": [
+          0.0,
+          0.5,
+          1.0
+        ]
+      },
+      {
+        "position": 0.8901961,
+        "color": [
+          0.5,
+          0.0,
+          1.0
+        ]
+      },
+      {
+        "position": 1.0,
+        "color": [
+          1.0,
+          0.0,
+          0.5
+        ]
+      }
+    ],
+    "locked": false
+  },
   "palette_rotation": 0.0,
-  "background_color": [0.0, 0.0, 0.0],
+  "background_color": [
+    0.0,
+    0.0,
+    0.0
+  ],
   "tonemap_mode": "Logarithmic",
-  "tonemap_curve": {"points": [{"x": 0.0, "y": 0.0}, {"x": 1.0, "y": 1.0}]},
+  "tonemap_curve": {
+    "points": [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ]
+  },
   "use_curve": false,
   "exposure": 1.0,
-  "gamma": 2.2,
+  "gamma": 1.1,
+  "gamma_threshold": 0.0025,
   "brightness": 4.0,
+  "vibrancy": 1.0,
+  "saturation": 1.0,
+  "hue_shift": 0.0,
+  "value_scale": 1.0,
   "deterministic_rng": true
 }
