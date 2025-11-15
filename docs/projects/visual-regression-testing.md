@@ -1,8 +1,27 @@
 # Visual Regression Testing System
 
-**Status:** Planning
+**Status:** Phase 1 Complete ✅ (2025-11-14)
 **Priority:** High
 **Created:** 2025-11-14
+
+## Current Status (2025-11-14)
+
+**✅ Phase 1 Complete - Core infrastructure working!**
+
+- Python test orchestrator with 8 passing tests
+- GPU warmup prevents first-render slowdown
+- Pixel-perfect comparison via deterministic RNG
+- Baseline management with --update-baseline
+- Performance metrics (iterations/second)
+- Ready to catch PNG export bugs automatically
+
+**Next Steps:**
+- Phase 2: Add more test configs (target: 40+)
+- Phase 3: WASM testing (Puppeteer)
+- Phase 4: GPU benchmarks (Criterion.rs)
+- Phase 5: CI/CD integration (GitHub Actions)
+
+See [tests/visual/README.md](../../tests/visual/README.md) for usage instructions.
 
 ## Problem Statement
 
@@ -544,43 +563,59 @@ jobs:
 
 ## Implementation Plan
 
-### Phase 1: Core Infrastructure (Week 1)
+### Phase 1: Core Infrastructure ✅ COMPLETE (2025-11-14)
 - [x] CLI export already exists ✓
-- [ ] Create `tests/visual/` directory structure
-- [ ] Write Python test orchestrator (`run_tests.py`)
-- [ ] Create initial test manifest with 5 configs
-- [ ] Generate baseline images
+- [x] Create `tests/visual/` directory structure ✓
+- [x] Write Python test orchestrator (`run_tests.py`) ✓
+- [x] Create initial test configs (8 configs) ✓
+- [x] Generate baseline images ✓
+- [x] **BONUS:** GPU warmup system implemented ✓
+- [x] **BONUS:** Deterministic RNG validation ✓
+- [x] **BONUS:** Pixel-perfect comparison via PIL/Pillow ✓
 
-### Phase 2: Test Coverage (Week 2)
-- [ ] Add 2D rendering tests (5 configs)
-- [ ] Add 3D rendering tests (5 configs)
-- [ ] Add tone mapping tests (5 configs)
-- [ ] Add variation tests (26 configs)
-- [ ] Add performance tests (3 configs)
+### Phase 2: Test Coverage (IN PROGRESS)
+- [x] Add 2D rendering tests (1 config - need 4 more)
+- [x] Add 3D rendering tests (2 configs - need 3 more)
+- [x] Add tone mapping tests (2 configs - need 3 more)
+- [x] Add variation tests (2 configs - need 24 more)
+- [x] Add warmup test (1 config)
+- [ ] Add performance comparison tests (need 3 configs)
+- [ ] Reach 40+ total test configs
 
-### Phase 3: WASM Testing (Week 3)
+### Phase 3: WASM Testing (FUTURE)
 - [ ] Set up Puppeteer/Playwright
 - [ ] Create Node.js test runner
 - [ ] Add WASM render capture
 - [ ] Compare WASM vs desktop hashes
 
-### Phase 4: Performance Benchmarking (Week 4)
-- [ ] Add GPU render benchmarks to `benches/`
-- [ ] Measure iterations/second for all test configs
-- [ ] Create performance baseline
+### Phase 4: Performance Benchmarking (FUTURE)
+- [x] Basic performance measurement in test script (iterations/second) ✓
+- [ ] Add GPU render benchmarks to `benches/` (Criterion.rs)
+- [ ] Create performance baseline tracking
 - [ ] Add regression detection (fail if >10% slower)
+- [ ] Track performance trends over time
 
-### Phase 5: CI/CD Integration (Week 5)
+### Phase 5: CI/CD Integration (FUTURE)
 - [ ] Create GitHub Actions workflow
 - [ ] Run on Linux, Windows, macOS
 - [ ] Upload failure artifacts
 - [ ] Add status badge to README
+- [ ] Auto-update baselines on approved PRs
 
 ## Success Criteria
 
+**Phase 1 (Current Status):**
+- [x] Python test orchestrator working ✓
+- [x] Pixel-perfect comparison (SHA256 of raw pixels) ✓
+- [x] Baseline management (--update-baseline) ✓
+- [x] GPU warmup for consistent timing ✓
+- [x] Deterministic RNG validation ✓
+- [x] 8 working test configs ✓
+- [x] All tests pass ✓
+- [x] Tests run in <15 seconds ✓
+
+**Future Goals:**
 - [ ] 40+ test configurations covering all rendering modes
-- [ ] Python script runs all tests in <5 minutes
-- [ ] Any visual regression detected immediately (pixel-perfect comparison)
 - [ ] Performance regression >10% triggers failure
 - [ ] WASM build tested automatically
 - [ ] CI runs on every commit
