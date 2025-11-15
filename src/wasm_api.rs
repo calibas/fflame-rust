@@ -16,9 +16,6 @@
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
-use web_sys::{HtmlCanvasElement, Url};
-
-#[cfg(target_arch = "wasm32")]
 use crate::config::FractalConfig;
 
 /// Global WASM API instance
@@ -68,7 +65,6 @@ impl WasmApi {
     ///
     /// Supports multiple formats:
     /// - `?config=<base64_json>` - Base64-encoded FractalConfig JSON
-    /// - `?config_url=<url>` - Fetch config from URL
     /// - `?preset=<name>` - Load built-in preset
     ///
     /// JavaScript usage:
@@ -78,13 +74,29 @@ impl WasmApi {
     /// ```
     #[wasm_bindgen]
     pub fn load_config_from_url(&mut self, url_str: &str) -> Result<(), JsValue> {
-        let url = Url::new(url_str)?;
-        let params = url.search_params();
+        // Parse URL manually to extract query params
+        let parts: Vec<&str> = url_str.split('?').collect();
+        if parts.len() < 2 {
+            return Err(JsValue::from_str("No query parameters in URL"));
+        }
+
+        let query = parts[1];
+        let params: Vec<(&str, &str)> = query
+            .split('&')
+            .filter_map(|param| {
+                let kv: Vec<&str> = param.split('=').collect();
+                if kv.len() == 2 {
+                    Some((kv[0], kv[1]))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         // Try ?config=<base64_json>
-        if let Some(config_b64) = params.get("config") {
+        if let Some((_, config_b64)) = params.iter().find(|(k, _)| *k == "config") {
             // Decode base64
-            let json_bytes = base64_decode(&config_b64)
+            let json_bytes = base64_decode(config_b64)
                 .map_err(|e| JsValue::from_str(&format!("Invalid base64: {}", e)))?;
 
             let json = String::from_utf8(json_bytes)
@@ -94,8 +106,8 @@ impl WasmApi {
         }
 
         // Try ?preset=<name>
-        if let Some(preset_name) = params.get("preset") {
-            return self.load_preset(&preset_name);
+        if let Some((_, preset_name)) = params.iter().find(|(k, _)| *k == "preset") {
+            return self.load_preset(preset_name);
         }
 
         Err(JsValue::from_str("No config parameter found in URL"))
