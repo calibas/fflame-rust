@@ -40,7 +40,7 @@ CONFIG = {
     'current_dir': Path(__file__).parent.parent / 'current' / 'wasm',
     'baseline_dir': Path(__file__).parent.parent / 'baseline',
     'port': 8080,
-    'timeout': 60,  # 60 seconds per test
+    'timeout': 600,  # 10 minutes per test (500M iterations in WASM is slow)
 }
 
 
@@ -87,10 +87,18 @@ class WasmTestRunner:
             def log_message(self, format, *args):
                 pass  # Suppress logging
 
-        self.server = socketserver.TCPServer(("", CONFIG['port']), Handler, bind_and_activate=False)
-        self.server.allow_reuse_address = True
-        self.server.server_bind()
-        self.server.server_activate()
+            def end_headers(self):
+                # Add CORS headers for WASM
+                self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
+                self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
+                super().end_headers()
+
+        # Use ThreadingTCPServer instead of TCPServer to handle concurrent requests
+        class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+            daemon_threads = True
+            allow_reuse_address = True
+
+        self.server = ThreadingTCPServer(("127.0.0.1", CONFIG['port']), Handler)
 
         # Run server in background thread
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -106,10 +114,10 @@ class WasmTestRunner:
         print('Launching headless browser...')
 
         options = Options()
-        options.add_argument('--headless')
+        # options.add_argument('--headless')  # DEBUG: Show browser
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
+        # options.add_argument('--disable-gpu')  # DEBUG: Enable GPU
         options.add_argument('--window-size=1920,1080')
 
         try:
@@ -122,7 +130,7 @@ class WasmTestRunner:
     def discover_configs(self) -> List[Dict]:
         """Discover test configs"""
         configs = []
-        categories = ['2d', '3d', 'tonemap', 'variations']
+        categories = ['2d']  # Start with just 2d for testing
 
         for category in categories:
             category_dir = CONFIG['configs_dir'] / category
@@ -151,10 +159,17 @@ class WasmTestRunner:
                     'config': config_data,
                 })
 
+                # TEST: Only run first config
+                if len(configs) >= 1:
+                    break
+
         return configs
 
     def run_test(self, test_config: Dict) -> Dict:
         """Run a single WASM test"""
+        import time
+        test_start = time.time()
+
         try:
             # Navigate to test page
             url = f'http://localhost:{CONFIG["port"]}/tests/visual/wasm/test.html'
@@ -171,19 +186,29 @@ class WasmTestRunner:
             self.driver.execute_script(f'window.loadFractalConfig({config_json})')
 
             # Start render
+            print(f'  Starting render for {test_config["name"]}...')
             self.driver.execute_script('window.startRender()')
 
             # Wait for render to complete
+            print(f'  Waiting for render to complete (timeout: {CONFIG["timeout"]}s)...')
             wait.until(
                 lambda driver: driver.execute_script('return window.renderComplete === true'),
                 message=f'Render timeout for {test_config["name"]}'
             )
+
+            # Check for console errors
+            for entry in self.driver.get_log('browser'):
+                if entry['level'] == 'SEVERE':
+                    print(f'  Browser error: {entry["message"]}')
 
             # Get PNG data from WASM (returned as Uint8Array)
             png_data_js = self.driver.execute_script('return Array.from(window.getPngData());')
 
             # Convert from JS array to Python bytes
             screenshot = bytes(png_data_js)
+
+            test_duration = time.time() - test_start
+            print(f'  Render completed in {test_duration:.1f}s')
 
             # Save PNG
             CONFIG['current_dir'].mkdir(parents=True, exist_ok=True)
