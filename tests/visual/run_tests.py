@@ -72,8 +72,59 @@ class VisualTestRunner:
         self.current_dir.mkdir(parents=True, exist_ok=True)
         self.baseline_dir.mkdir(parents=True, exist_ok=True)
 
-    def run_all_tests(self, category_filter: Optional[str] = None) -> bool:
+    def gpu_warmup(self):
+        """
+        Run a warmup render to avoid 20-40% slowdown on first GPU render.
+
+        The first GPU render is often significantly slower due to cold start effects:
+        - Shader compilation caching
+        - GPU driver initialization
+        - Memory allocation patterns
+
+        This warmup ensures consistent performance measurements across all tests.
+        """
+        warmup_config = self.configs_dir / "warmup.fflame"
+
+        if not warmup_config.exists():
+            print("Note: No warmup.fflame found - skipping GPU warmup")
+            return
+
+        print("GPU Warmup: Running warmup render...")
+
+        warmup_output = self.current_dir / "warmup.png"
+
+        cmd = [
+            str(self.binary),
+            "export",
+            "-i", str(warmup_config),
+            "-o", str(warmup_output),
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=Path.cwd()
+            )
+
+            if result.returncode == 0:
+                print("GPU Warmup: Complete [OK]\n")
+                # Delete warmup output - we don't need it
+                if warmup_output.exists():
+                    warmup_output.unlink()
+            else:
+                print(f"GPU Warmup: Failed (will continue anyway): {result.stderr[:100]}\n")
+        except Exception as e:
+            print(f"GPU Warmup: Error (will continue anyway): {str(e)}\n")
+
+    def run_all_tests(self, category_filter: Optional[str] = None, skip_warmup: bool = False) -> bool:
         """Run all test configurations and compare results."""
+        # GPU warmup to avoid 20-40% slowdown on first render
+        if not skip_warmup:
+            self.gpu_warmup()
+
         configs = self.discover_test_configs(category_filter)
 
         if not configs:
@@ -318,6 +369,11 @@ def main():
         action="store_true",
         help="Use debug build instead of release"
     )
+    parser.add_argument(
+        "--skip-warmup",
+        action="store_true",
+        help="Skip GPU warmup (may result in slower first test)"
+    )
     args = parser.parse_args()
 
     if not HAS_PILLOW:
@@ -328,12 +384,12 @@ def main():
 
     if args.update_baseline:
         print("Running tests and updating baselines...\n")
-        success = runner.run_all_tests(args.category)
+        success = runner.run_all_tests(args.category, skip_warmup=args.skip_warmup)
         runner.print_summary()
         # Always update baselines when explicitly requested
         runner.update_baselines()
     else:
-        success = runner.run_all_tests(args.category)
+        success = runner.run_all_tests(args.category, skip_warmup=args.skip_warmup)
         runner.print_summary()
 
     sys.exit(0 if success else 1)
