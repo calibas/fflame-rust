@@ -1,5 +1,154 @@
 use crate::config::FractalConfig;
 
+/// Headless PNG export - WASM version
+#[cfg(target_arch = "wasm32")]
+pub async fn export_headless_wasm(
+    config: &FractalConfig,
+    width: u32,
+    height: u32,
+    iterations_per_thread: u32,
+    speed_multiplier: u32,
+) -> Result<Vec<u8>, String> {
+    use crate::renderer::compute_kernel::FlameRenderer;
+    use crate::scene::palette::PaletteLibrary;
+
+    // Create headless GPU instance
+    let instance = egui_wgpu::wgpu::Instance::new(&egui_wgpu::wgpu::InstanceDescriptor {
+        backends: egui_wgpu::wgpu::Backends::all(),
+        ..Default::default()
+    });
+
+    let adapter = instance
+        .request_adapter(&egui_wgpu::wgpu::RequestAdapterOptions {
+            power_preference: egui_wgpu::wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        })
+        .await
+        .map_err(|e| format!("Failed to find GPU adapter: {:?}", e))?;
+
+    let (device, queue) = adapter
+        .request_device(
+            &egui_wgpu::wgpu::DeviceDescriptor {
+                label: Some("WASM Headless Device"),
+                required_features: egui_wgpu::wgpu::Features::CLEAR_TEXTURE,
+                required_limits: egui_wgpu::wgpu::Limits::default(),
+                memory_hints: egui_wgpu::wgpu::MemoryHints::Performance,
+                experimental_features: Default::default(),
+                trace: Default::default(),
+            },
+        )
+        .await
+        .map_err(|e| format!("Failed to create device: {:?}", e))?;
+
+    // Create renderer
+    let surface_format = egui_wgpu::wgpu::TextureFormat::Rgba8Unorm;
+    let mut renderer = FlameRenderer::new(&device, &queue, surface_format, width, height, &config.flame);
+
+    // Load config into renderer
+    let mut encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+        label: Some("WASM Export Encoder"),
+    });
+
+    // Get palette
+    let palette_library = PaletteLibrary::new();
+    let palette = config.palette.as_ref()
+        .or_else(|| palette_library.get(config.palette_index))
+        .ok_or("No palette found")?;
+
+    renderer.load_config(&device, &mut encoder, &queue, config, palette, iterations_per_thread);
+
+    queue.submit(std::iter::once(encoder.finish()));
+
+    // Render until max_iterations with chunked accumulation for consistent quality
+    let mut total_rendered = 0u64;
+    let target = config.max_iterations;
+
+    const NUM_WORKGROUPS: u32 = 128;
+    const THREADS_PER_WORKGROUP: u64 = 64;
+    const BATCH_SIZE: u32 = 4;
+
+    let mut batch_frame_count = 0;
+
+    while total_rendered < target {
+        let mut encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+            label: Some("Render Frame"),
+        });
+
+        let clear_histogram = batch_frame_count == 0;
+
+        renderer.compute_pass(
+            &mut encoder,
+            &queue,
+            NUM_WORKGROUPS,
+            iterations_per_thread,
+            config.zoom,
+            config.pan_x,
+            config.pan_y,
+            config.rotation,
+            config.camera_rotation_x,
+            config.camera_rotation_y,
+            config.camera_z,
+            config.speed_factor,
+            clear_histogram,
+        );
+
+        let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
+        total_rendered += samples_this_frame;
+        batch_frame_count += 1;
+
+        let should_accumulate = batch_frame_count >= BATCH_SIZE;
+        if should_accumulate {
+            let total_samples_in_batch = samples_this_frame * BATCH_SIZE as u64;
+            renderer.accumulate_pass(&mut encoder, &queue, &device, total_samples_in_batch);
+            batch_frame_count = 0;
+        }
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        if total_rendered >= target {
+            if batch_frame_count > 0 {
+                let mut final_accum_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                    label: Some("Final Batch Accumulation"),
+                });
+                let total_samples_in_batch = samples_this_frame * batch_frame_count as u64;
+                renderer.accumulate_pass(&mut final_accum_encoder, &queue, &device, total_samples_in_batch);
+                queue.submit(std::iter::once(final_accum_encoder.finish()));
+            }
+            break;
+        }
+    }
+
+    // Render tonemap pass
+    let mut final_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+        label: Some("Final Tonemap"),
+    });
+    renderer.tonemap_pass(&mut final_encoder);
+    queue.submit(std::iter::once(final_encoder.finish()));
+
+    // Capture pixels
+    let (width, height, rgba_data) = renderer.read_fractal_pixels(&device, &queue, false, config.background_color)
+        .await
+        .map_err(|e| format!("Failed to read pixels: {}", e))?;
+
+    // Build metadata
+    let metadata = crate::png_metadata::PngMetadata::from_app_state(
+        width,
+        height,
+        total_rendered,
+        0.0, // Don't track time in WASM
+        iterations_per_thread,
+        config.speed_factor,
+        config,
+    );
+
+    // Encode PNG
+    let png_data = crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata))
+        .map_err(|e| format!("Failed to encode PNG: {}", e))?;
+
+    Ok(png_data)
+}
+
 /// Headless PNG export for CLI mode
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn export_headless(

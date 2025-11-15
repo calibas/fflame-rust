@@ -179,13 +179,11 @@ class WasmTestRunner:
                 message=f'Render timeout for {test_config["name"]}'
             )
 
-            # Capture canvas as PNG
-            canvas = self.driver.find_element(By.ID, 'fractal-canvas')
-            canvas_base64 = self.driver.execute_script(
-                'return arguments[0].toDataURL("image/png").substring(22);',
-                canvas
-            )
-            screenshot = base64.b64decode(canvas_base64)
+            # Get PNG data from WASM (returned as Uint8Array)
+            png_data_js = self.driver.execute_script('return Array.from(window.getPngData());')
+
+            # Convert from JS array to Python bytes
+            screenshot = bytes(png_data_js)
 
             # Save PNG
             CONFIG['current_dir'].mkdir(parents=True, exist_ok=True)

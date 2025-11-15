@@ -23,6 +23,9 @@ pub mod animation;
 mod shader_builder_v2;
 mod shader_cache;
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_api;
+
 // Prelude for convenient imports
 pub mod prelude {
     pub use crate::scene::presets::PresetLibrary;
