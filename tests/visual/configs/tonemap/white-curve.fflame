@@ -211,5 +211,5 @@
   "saturation": 1.0,
   "hue_shift": 0.0,
   "value_scale": 1.0,
-  "deterministic_rng": false
+  "deterministic_rng": true
 }
