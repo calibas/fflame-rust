@@ -8,53 +8,46 @@
         body {
             margin: 0;
             padding: 0;
-            overflow: hidden;
             background-color: #000;
-        }
-        canvas {
-            display: block;
-            width: 100%;
-            height: 100%;
+            color: #fff;
+            font-family: monospace;
         }
         #status {
             position: absolute;
             top: 10px;
             left: 10px;
-            color: white;
-            font-family: monospace;
             background: rgba(0, 0, 0, 0.7);
             padding: 10px;
             border-radius: 5px;
+            z-index: 10;
+        }
+        canvas {
+            display: none; /* Hidden - we're using headless export */
         }
     </style>
 </head>
 <body>
     <div id="status">Loading WASM...</div>
-    <canvas id="fractal-canvas"></canvas>
 
     <script type="module">
-        import init, { WasmApp } from '../../../pkg/fractal_flame_wgpu.js';
+        import init, { WasmApi } from '../../../pkg/fractal_flame_wgpu.js';
 
-        let wasmApp = null;
-        let currentConfig = null;
-        let renderAnimationFrame = null;
+        let wasmApi = null;
 
         // Global flags for test runner
         window.wasmReady = false;
         window.renderComplete = false;
 
         /**
-         * Initialize WASM module and WebGPU
+         * Initialize WASM module
          */
         async function initWasm() {
             try {
                 // Initialize WASM module
                 await init();
 
-                const canvas = document.getElementById('fractal-canvas');
-
-                // Create WASM app instance
-                wasmApp = await WasmApp.new(canvas);
+                // Create API instance
+                wasmApi = new WasmApi();
 
                 document.getElementById('status').textContent = 'WASM Ready';
                 window.wasmReady = true;
@@ -70,16 +63,14 @@
          * Load fractal config (called by test runner)
          */
         window.loadFractalConfig = function(config) {
-            if (!wasmApp) {
+            if (!wasmApi) {
                 throw new Error('WASM not initialized');
             }
 
             try {
-                // Store config
-                currentConfig = config;
-
-                // Load config into WASM app
-                wasmApp.load_config(JSON.stringify(config));
+                // Load config from JSON
+                const configJson = JSON.stringify(config);
+                wasmApi.load_config_json(configJson);
 
                 // Reset render state
                 window.renderComplete = false;
@@ -94,74 +85,43 @@
 
         /**
          * Start rendering (called by test runner)
+         *
+         * This uses headless rendering - no canvas display
          */
-        window.startRender = function() {
-            if (!wasmApp || !currentConfig) {
+        window.startRender = async function() {
+            if (!wasmApi || !wasmApi.has_config()) {
                 throw new Error('WASM not initialized or no config loaded');
             }
 
             try {
-                // Get max iterations from config
-                const maxIterations = currentConfig.max_iterations || 1000000000;
+                // Get render parameters from config
+                const configJson = wasmApi.get_config_json();
+                const config = JSON.parse(configJson);
+                const maxIterations = config.max_iterations || 1000000000;
 
                 document.getElementById('status').textContent = `Rendering (target: ${maxIterations.toLocaleString()} iterations)`;
 
-                // Start render loop
-                let lastTime = performance.now();
-                let frameCount = 0;
+                // Export PNG using headless renderer
+                // This blocks until render completes
+                const pngBytes = await wasmApi.export_png(800, 600, 256);
 
-                function renderFrame() {
-                    // Render one frame
-                    wasmApp.render_frame();
+                // Store PNG data for test runner to capture
+                window.pngData = pngBytes;
+                window.renderComplete = true;
 
-                    frameCount++;
-                    const now = performance.now();
-                    const elapsed = now - lastTime;
-
-                    // Update status every 100ms
-                    if (elapsed > 100) {
-                        const currentIterations = wasmApp.get_current_iterations();
-                        const progress = (currentIterations / maxIterations * 100).toFixed(1);
-
-                        document.getElementById('status').textContent =
-                            `Rendering: ${currentIterations.toLocaleString()} / ${maxIterations.toLocaleString()} (${progress}%)`;
-
-                        lastTime = now;
-                    }
-
-                    // Check if render is complete
-                    const currentIterations = wasmApp.get_current_iterations();
-                    if (currentIterations >= maxIterations) {
-                        // Render complete
-                        document.getElementById('status').textContent =
-                            `Render Complete: ${currentIterations.toLocaleString()} iterations`;
-
-                        window.renderComplete = true;
-
-                        if (renderAnimationFrame) {
-                            cancelAnimationFrame(renderAnimationFrame);
-                            renderAnimationFrame = null;
-                        }
-                    } else {
-                        // Continue rendering
-                        renderAnimationFrame = requestAnimationFrame(renderFrame);
-                    }
-                }
-
-                // Start render loop
-                renderAnimationFrame = requestAnimationFrame(renderFrame);
+                document.getElementById('status').textContent = `Render Complete: ${maxIterations.toLocaleString()} iterations`;
 
             } catch (err) {
-                console.error('Failed to start render:', err);
+                console.error('Failed to render:', err);
                 throw err;
             }
         };
 
         /**
-         * Get canvas element (for screenshot capture)
+         * Get PNG data (called by test runner)
          */
-        window.getCanvas = function() {
-            return document.getElementById('fractal-canvas');
+        window.getPngData = function() {
+            return window.pngData;
         };
 
         // Initialize on page load
