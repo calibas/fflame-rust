@@ -28,13 +28,19 @@ python tests/visual/run_tests.py --update-baseline
 
 ```
 tests/visual/
-├── run_tests.py          # Test orchestrator script
+├── run_tests.py          # Desktop test orchestrator
+├── wasm/                 # WASM-specific tests
+│   ├── test_wasm.py     # WASM test orchestrator
+│   ├── test.html        # WASM test page
+│   └── README.md        # WASM test documentation
 ├── configs/              # Test configurations (.fflame files)
 │   ├── 2d/              # 2D rendering tests
 │   ├── 3d/              # 3D rendering tests
 │   ├── tonemap/         # Tone mapping tests
 │   └── variations/      # Individual variation tests
 ├── current/             # Latest test outputs (auto-generated)
+│   ├── desktop/         # Desktop build outputs
+│   └── wasm/            # WASM build outputs
 └── baseline/            # Reference images for comparison
 ```
 
@@ -186,12 +192,24 @@ This is normal - no baseline exists yet.
 
 If hardware varies (CI vs local), adjust `max_render_time_ms` threshold in the script.
 
+## WASM Testing
+
+**Status:** Not yet functional - requires wasm_bindgen export API.
+
+The WASM build currently runs as a full interactive app with UI, not a headless renderer. Automated testing requires:
+- Adding `#[wasm_bindgen]` exports for headless rendering
+- Config loading API
+- Deterministic render control
+- Canvas extraction
+
+See [wasm/IMPLEMENTATION_NOTES.md](wasm/IMPLEMENTATION_NOTES.md) for required changes.
+
 ## Future Enhancements
 
 - [ ] HTML report generation with visual diffs
 - [ ] PNG metadata extraction for render time verification
 - [ ] Parallel test execution
-- [ ] WASM testing via Puppeteer
+- [ ] WASM testing (blocked - requires code changes)
 - [ ] Cross-platform baseline comparison
 - [ ] Perceptual hash fallback for minor floating-point differences
 

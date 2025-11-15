@@ -1,10 +1,10 @@
 # Visual Regression Testing System
 
-**Status:** Phase 1 Complete ✅ (2025-11-14)
+**Status:** Phase 1 Complete, Phase 3 Blocked (2025-11-15)
 **Priority:** High
 **Created:** 2025-11-14
 
-## Current Status (2025-11-14)
+## Current Status (2025-11-15)
 
 **✅ Phase 1 Complete - Core infrastructure working!**
 
@@ -15,10 +15,18 @@
 - Performance metrics (iterations/second)
 - Ready to catch PNG export bugs automatically
 
+**⏸️ Phase 3 Blocked - WASM Testing**
+
+- **Blocker**: WASM build doesn't expose test APIs (runs full UI app, not headless renderer)
+- Created scaffolding (`test_wasm.py`, `test.html`, `IMPLEMENTATION_NOTES.md`)
+- Requires wasm_bindgen exports for headless rendering
+- See `tests/visual/wasm/IMPLEMENTATION_NOTES.md` for required changes
+- **Recommendation**: Defer to later phase after expanding desktop test coverage
+
 **Next Steps:**
-- Phase 2: Add more test configs (target: 40+)
-- Phase 3: WASM testing (Puppeteer)
+- Phase 2: Add more test configs (target: 40+) - prioritize this
 - Phase 4: GPU benchmarks (Criterion.rs)
+- Phase 3 (deferred): WASM testing (requires code changes)
 - Phase 5: CI/CD integration (GitHub Actions)
 
 See [tests/visual/README.md](../../tests/visual/README.md) for usage instructions.
@@ -56,8 +64,8 @@ We need automated testing to catch regressions in:
 
 ### 3. WASM Build
 - **Method**: Browser-based rendering with headless browser
-- **Test**: Playwright/Puppeteer to capture canvas → PNG
-- **Challenge**: Requires node.js environment
+- **Test**: Selenium to capture canvas → PNG
+- **Implementation**: Python-based (no Node.js) to keep dependencies consistent
 
 ### 4. Benchmarks
 - **Method**: Criterion.rs for CPU code, custom GPU timing
