@@ -141,7 +141,14 @@
 
         async function run() {
             try {
+                // Pre-check WebGPU availability
+                // if (!navigator.gpu) {
+                //     throw new Error('WebGPU not supported in this browser');
+                // }
+                console.log('navigator.gpu available, WebGPU supported');
+
                 // Initialize the WASM module
+                // NOTE: Do NOT call canvas.getContext() here - let wgpu claim it
                 await init();
 
                 // Hide loading screen

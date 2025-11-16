@@ -48,17 +48,37 @@ impl GpuContext {
         // until the application exits.
         log::info!("Creating surface from window...");
 
-        let surface_result = instance.create_surface(window);
-        let surface: Surface<'static> = match surface_result {
-            Ok(s) => {
-                log::info!("✓ Surface created successfully");
-                unsafe { std::mem::transmute(s) }
-            }
-            Err(e) => {
-                log::error!("Failed to create surface: {:?}", e);
-                log::error!("This may indicate a WebGPU configuration issue on macOS");
-                log::error!("Please check: chrome://gpu for WebGPU status");
-                return Err(anyhow::anyhow!("Surface creation failed: {:?}", e));
+        #[cfg(target_arch = "wasm32")]
+        let surface: Surface<'static> = {
+            use wasm_bindgen::JsCast;
+            use winit::platform::web::WindowExtWebSys;
+
+            // Get the canvas element directly (bypasses winit's canvas handling)
+            let canvas = window.canvas()
+                .ok_or_else(|| anyhow::anyhow!("Failed to get canvas from window"))?;
+
+            log::info!("Got canvas element, creating WebGPU surface target...");
+
+            // Create surface from canvas using raw web_sys element
+            let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+                .map_err(|e| anyhow::anyhow!("Failed to create surface from canvas: {:?}", e))?;
+
+            log::info!("✓ Surface created successfully from canvas");
+            unsafe { std::mem::transmute(surface) }
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let surface: Surface<'static> = {
+            let surface_result = instance.create_surface(window);
+            match surface_result {
+                Ok(s) => {
+                    log::info!("✓ Surface created successfully");
+                    unsafe { std::mem::transmute(s) }
+                }
+                Err(e) => {
+                    log::error!("Failed to create surface: {:?}", e);
+                    return Err(anyhow::anyhow!("Surface creation failed: {:?}", e));
+                }
             }
         };
 
