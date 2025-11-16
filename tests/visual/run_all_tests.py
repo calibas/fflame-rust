@@ -57,8 +57,8 @@ class UnifiedTestRunner:
         self.root = Path("tests/visual")
         self.baseline_dir = self.root / "baseline"
         self.current_dir = self.root / "current"
-        self.wasm_baseline = self.root / "wasm/baseline"
-        self.wasm_current = self.root / "wasm/current"
+        self.wasm_baseline = self.root / "baseline/wasm"
+        self.wasm_current = self.root / "current/wasm"
 
         self.results: List[PerformanceComparison] = []
 

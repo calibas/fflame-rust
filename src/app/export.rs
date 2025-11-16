@@ -187,6 +187,9 @@ pub async fn export_headless(
     use crate::scene::palette::PaletteLibrary;
     use std::time::Instant;
 
+    // Start timing from the very beginning (includes all overhead)
+    let export_start = Instant::now();
+
     // Create headless GPU instance
     let instance = egui_wgpu::wgpu::Instance::new(&egui_wgpu::wgpu::InstanceDescriptor {
         backends: egui_wgpu::wgpu::Backends::all(),
@@ -235,7 +238,6 @@ pub async fn export_headless(
     queue.submit(std::iter::once(encoder.finish()));
 
     // Render until max_iterations with chunked accumulation for consistent quality
-    let render_start = Instant::now();
     let mut total_rendered = 0u64;
     let target = config.max_iterations;
 
@@ -309,8 +311,6 @@ pub async fn export_headless(
 
     println!("\r  Progress: {}/{} (100.0%)", total_rendered, target);
 
-    let render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
-
     // Render tonemap pass to fractal_texture before reading pixels
     let mut final_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
         label: Some("Final Tonemap"),
@@ -321,23 +321,32 @@ pub async fn export_headless(
     // Capture pixels from fractal_texture (what was actually rendered and displayed)
     let (width, height, rgba_data) = renderer.read_fractal_pixels(&device, &queue, false, config.background_color).await?;
 
-    // Build metadata
+    // Encode PNG
+    let png_data = crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data.clone(), None)?;
+
+    // Save to file
+    std::fs::write(output_path, &png_data)?;
+
+    // Calculate total export time (includes device creation, rendering, tonemap, pixel readback, PNG encoding, file write)
+    let total_export_time_ms = export_start.elapsed().as_secs_f64() * 1000.0;
+
+    // Build metadata with total export time
     let mut metadata = crate::png_metadata::PngMetadata::from_app_state(
         width,
         height,
         total_rendered,
-        render_time_ms,
+        total_export_time_ms,
         iterations_per_thread,
         config.speed_factor,
         config,
     );
     metadata.test_category = test_category;
 
-    // Encode PNG
-    let png_data = crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata))?;
+    // Re-encode PNG with metadata
+    let png_data_with_metadata = crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata))?;
 
-    // Save to file
-    std::fs::write(output_path, png_data)?;
+    // Overwrite file with metadata version
+    std::fs::write(output_path, png_data_with_metadata)?;
 
     Ok(true)
 }
