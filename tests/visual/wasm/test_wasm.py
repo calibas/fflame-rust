@@ -252,33 +252,37 @@ class WasmTestRunner:
         return hashlib.sha256(pixels.tobytes()).hexdigest()
 
     def extract_performance_metadata(self, png_data: bytes) -> Dict:
-        """Extract performance statistics from PNG metadata"""
+        """Extract performance statistics from PNG tEXt chunks"""
         try:
             img = Image.open(io.BytesIO(png_data))
 
-            # Extract tEXt chunks
+            # Extract PNG tEXt chunks (individual text metadata)
             metadata = img.info
 
-            # Parse the embedded JSON metadata
-            if 'metadata' in metadata:
-                meta_json = json.loads(metadata['metadata'])
+            # Parse individual text chunks
+            # RenderTime format: "123.45ms"
+            render_time_str = metadata.get('RenderTime', '0ms')
+            render_time_ms = float(render_time_str.replace('ms', '').strip())
 
-                # Extract performance metrics
-                return {
-                    'render_time_ms': meta_json.get('render_time_ms', 0),
-                    'total_iterations': meta_json.get('total_iterations', 0),
-                    'iterations_per_second': meta_json.get('total_iterations', 0) / (meta_json.get('render_time_ms', 1) / 1000.0) if meta_json.get('render_time_ms', 0) > 0 else 0,
-                    'width': meta_json.get('width', 0),
-                    'height': meta_json.get('height', 0),
-                }
-            else:
-                return {
-                    'render_time_ms': 0,
-                    'total_iterations': 0,
-                    'iterations_per_second': 0,
-                    'width': 0,
-                    'height': 0,
-                }
+            # Iterations is a plain number string
+            total_iterations = int(metadata.get('Iterations', '0'))
+
+            # Resolution format: "800x600"
+            resolution = metadata.get('Resolution', '0x0')
+            width, height = map(int, resolution.split('x'))
+
+            # Calculate iterations per second
+            iterations_per_second = 0
+            if render_time_ms > 0:
+                iterations_per_second = total_iterations / (render_time_ms / 1000.0)
+
+            return {
+                'render_time_ms': render_time_ms,
+                'total_iterations': total_iterations,
+                'iterations_per_second': iterations_per_second,
+                'width': width,
+                'height': height,
+            }
         except Exception as e:
             print(f'    Warning: Failed to extract performance metadata: {e}')
             return {
