@@ -16,9 +16,6 @@ import subprocess
 import time
 import hashlib
 import json
-import http.server
-import socketserver
-import threading
 from pathlib import Path
 from typing import Dict, List, Optional
 from PIL import Image
@@ -38,7 +35,7 @@ CONFIG = {
     'wasm_pkg': Path(__file__).parent.parent.parent.parent / 'pkg',
     'configs_dir': Path(__file__).parent.parent / 'configs',
     'current_dir': Path(__file__).parent.parent / 'current' / 'wasm',
-    'baseline_dir': Path(__file__).parent.parent / 'baseline',
+    'baseline_dir': Path(__file__).parent.parent / 'baseline' / 'wasm',  # WASM has different hashes than desktop
     'port': 8080,
     'timeout': 600,  # 10 minutes per test (500M iterations in WASM is slow)
 }
@@ -47,77 +44,50 @@ CONFIG = {
 class WasmTestRunner:
     def __init__(self):
         self.results = []
-        self.server = None
-        self.server_thread = None
+        self.server_process = None
         self.driver = None
 
     def build_wasm(self):
-        """Build WASM package with wasm-pack"""
-        print('Building WASM package...')
+        """Build WASM package using build-wasm.bat"""
+        print('Building WASM...')
 
-        try:
-            result = subprocess.run(
-                ['wasm-pack', 'build', '--target', 'web', '--release'],
-                cwd=CONFIG['build_dir'],
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5 minutes max
-            )
+        result = subprocess.run(
+            ['build-wasm.bat'],
+            cwd=CONFIG['build_dir'],
+            capture_output=True,
+            text=True,
+            shell=True,
+        )
 
-            if result.returncode == 0:
-                print('WASM build complete [OK]\n')
-            else:
-                raise Exception(f'WASM build failed with exit code {result.returncode}:\n{result.stderr}')
-
-        except FileNotFoundError:
-            raise Exception('wasm-pack not found. Install with: cargo install wasm-pack')
-        except subprocess.TimeoutExpired:
-            raise Exception('WASM build timed out after 5 minutes')
+        if result.returncode == 0:
+            print('WASM build complete [OK]\n')
+        else:
+            raise Exception(f'build-wasm.bat failed:\n{result.stderr}')
 
     def start_server(self):
-        """Start local HTTP server in background thread"""
+        """Start HTTP server using python -m http.server"""
         print(f'Starting HTTP server on port {CONFIG["port"]}...')
 
-        build_dir = str(CONFIG['build_dir'])
-
-        class Handler(http.server.SimpleHTTPRequestHandler):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, directory=build_dir, **kwargs)
-
-            def log_message(self, format, *args):
-                pass  # Suppress logging
-
-            def end_headers(self):
-                # Add CORS headers for WASM
-                self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
-                self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
-                super().end_headers()
-
-        # Use ThreadingTCPServer instead of TCPServer to handle concurrent requests
-        class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-            daemon_threads = True
-            allow_reuse_address = True
-
-        self.server = ThreadingTCPServer(("127.0.0.1", CONFIG['port']), Handler)
-
-        # Run server in background thread
-        self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.server_thread.start()
+        # Start server in background
+        self.server_process = subprocess.Popen(
+            ['python', '-m', 'http.server', str(CONFIG['port'])],
+            cwd=CONFIG['build_dir'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
         print(f'Server running at http://localhost:{CONFIG["port"]}/\n')
-
-        # Wait a moment for server to fully start
-        time.sleep(0.5)
+        time.sleep(1)  # Wait for server to start
 
     def launch_browser(self):
         """Launch headless Chrome browser with Selenium"""
         print('Launching headless browser...')
 
         options = Options()
-        # options.add_argument('--headless')  # DEBUG: Show browser
+        options.add_argument('--headless')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
-        # options.add_argument('--disable-gpu')  # DEBUG: Enable GPU
+        options.add_argument('--disable-gpu')
         options.add_argument('--window-size=1920,1080')
 
         try:
@@ -130,7 +100,7 @@ class WasmTestRunner:
     def discover_configs(self) -> List[Dict]:
         """Discover test configs"""
         configs = []
-        categories = ['2d']  # Start with just 2d for testing
+        categories = ['2d', '3d', 'tonemap', 'variations']
 
         for category in categories:
             category_dir = CONFIG['configs_dir'] / category
@@ -159,17 +129,10 @@ class WasmTestRunner:
                     'config': config_data,
                 })
 
-                # TEST: Only run first config
-                if len(configs) >= 1:
-                    break
-
         return configs
 
     def run_test(self, test_config: Dict) -> Dict:
         """Run a single WASM test"""
-        import time
-        test_start = time.time()
-
         try:
             # Navigate to test page
             url = f'http://localhost:{CONFIG["port"]}/tests/visual/wasm/test.html'
@@ -186,29 +149,19 @@ class WasmTestRunner:
             self.driver.execute_script(f'window.loadFractalConfig({config_json})')
 
             # Start render
-            print(f'  Starting render for {test_config["name"]}...')
             self.driver.execute_script('window.startRender()')
 
             # Wait for render to complete
-            print(f'  Waiting for render to complete (timeout: {CONFIG["timeout"]}s)...')
             wait.until(
                 lambda driver: driver.execute_script('return window.renderComplete === true'),
                 message=f'Render timeout for {test_config["name"]}'
             )
-
-            # Check for console errors
-            for entry in self.driver.get_log('browser'):
-                if entry['level'] == 'SEVERE':
-                    print(f'  Browser error: {entry["message"]}')
 
             # Get PNG data from WASM (returned as Uint8Array)
             png_data_js = self.driver.execute_script('return Array.from(window.getPngData());')
 
             # Convert from JS array to Python bytes
             screenshot = bytes(png_data_js)
-
-            test_duration = time.time() - test_start
-            print(f'  Render completed in {test_duration:.1f}s')
 
             # Save PNG
             CONFIG['current_dir'].mkdir(parents=True, exist_ok=True)
@@ -305,11 +258,19 @@ class WasmTestRunner:
         """Cleanup resources"""
         if self.driver:
             self.driver.quit()
-        if self.server:
-            self.server.shutdown()
+        if self.server_process:
+            self.server_process.terminate()
+            self.server_process.wait()
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description='WASM Visual Regression Tests')
+    parser.add_argument('--update-baseline', action='store_true',
+                        help='Update baseline images with current outputs')
+    args = parser.parse_args()
+
     runner = WasmTestRunner()
 
     try:
@@ -324,6 +285,19 @@ def main():
 
         # Run tests
         success = runner.run_all_tests()
+
+        # Update baselines if requested
+        if args.update_baseline:
+            print('\nUpdating WASM baselines...')
+            CONFIG['baseline_dir'].mkdir(parents=True, exist_ok=True)
+            for result in runner.results:
+                current = CONFIG['current_dir'] / f'{result["name"]}.png'
+                baseline = CONFIG['baseline_dir'] / f'{result["name"]}.png'
+                if current.exists():
+                    import shutil
+                    shutil.copy(current, baseline)
+                    print(f'  Updated baseline: {result["name"]}.png')
+            print('Baselines updated!')
 
         # Cleanup
         runner.cleanup()
