@@ -47,7 +47,8 @@ console_error_panic_hook = "0.1"
 console_log = "1.0"
 getrandom = { version = "0.2", features = ["js"] }
 egui-wgpu = "0.33"
-wgpu = { version = "27.0", features = ["webgpu", "webgl"]}
+# WebGPU only - WebGL doesn't support compute shaders (required for fractal generation)
+wgpu = { version = "27.0", features = ["webgpu"]}
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 egui-winit = { version = "0.33", default-features = true }

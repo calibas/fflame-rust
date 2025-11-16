@@ -13,6 +13,7 @@ pub async fn export_headless_wasm(
     use crate::scene::palette::PaletteLibrary;
 
     // Create headless GPU instance
+    // WebGL not supported - compute shaders required for fractal generation
     let instance = egui_wgpu::wgpu::Instance::new(&egui_wgpu::wgpu::InstanceDescriptor {
         backends: egui_wgpu::wgpu::Backends::BROWSER_WEBGPU,
         ..Default::default()
