@@ -47,7 +47,8 @@ pub async fn export_headless_wasm(
             &egui_wgpu::wgpu::DeviceDescriptor {
                 label: Some("WASM Headless Device"),
                 required_features: egui_wgpu::wgpu::Features::CLEAR_TEXTURE,
-                required_limits: egui_wgpu::wgpu::Limits::default(),
+                // Use WebGL2-compatible limits for WASM/WebGPU compatibility
+                required_limits: egui_wgpu::wgpu::Limits::downlevel_webgl2_defaults(),
                 memory_hints: egui_wgpu::wgpu::MemoryHints::Performance,
                 experimental_features: Default::default(),
                 trace: Default::default(),

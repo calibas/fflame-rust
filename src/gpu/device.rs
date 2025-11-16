@@ -90,11 +90,19 @@ impl GpuContext {
         log::info!("  Driver: {}", adapter_info.driver);
         log::info!("  Driver Info: {}", adapter_info.driver_info);
 
+        // Use WebGL2-compatible limits for WASM, full limits for desktop
+        #[cfg(target_arch = "wasm32")]
+        let limits = Limits::downlevel_webgl2_defaults();
+        #[cfg(not(target_arch = "wasm32"))]
+        let limits = Limits::default();
+
+        log::info!("Requesting device with limits: {:?}", limits);
+
         let (device, queue) = adapter.request_device(
             &DeviceDescriptor {
                 label: Some("Main GPU Device"),
                 required_features: Features::CLEAR_TEXTURE,
-                required_limits: Limits::default(),
+                required_limits: limits,
                 memory_hints: Default::default(),
                 experimental_features: Default::default(),
                 trace: Default::default(),
