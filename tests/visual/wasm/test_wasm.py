@@ -88,11 +88,18 @@ class WasmTestRunner:
         options = Options()
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
-        # Enable WebGPU support
-        options.add_argument('--enable-unsafe-webgpu')
-        options.add_argument('--enable-features=Vulkan')
-        options.add_argument('--use-angle=vulkan')
         options.add_argument('--window-size=1920,1080')
+
+        # Enable WebGPU - use experimental flag that allows WebGPU
+        options.add_argument('--enable-unsafe-webgpu')
+        options.add_argument('--enable-features=Vulkan,UseSkiaRenderer')
+
+        # Use D3D11 backend on Windows (more reliable than Vulkan for WebGPU)
+        options.add_argument('--use-angle=d3d11')
+        options.add_argument('--use-cmd-decoder=passthrough')
+
+        # Disable GPU blocklist to allow WebGPU even if GPU is "unsupported"
+        options.add_argument('--ignore-gpu-blocklist')
 
         try:
             self.driver = webdriver.Chrome(options=options)
