@@ -152,6 +152,8 @@ class VisualTestRunner:
             "export",
             "-i", str(config.config_file),
             "-o", str(output_path),
+            "--width", "800",
+            "--height", "600",
         ]
 
         # Run CLI export
