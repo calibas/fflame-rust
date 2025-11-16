@@ -87,6 +87,9 @@ pub async fn export_headless_wasm(
 
     let mut batch_frame_count = 0;
 
+    // Track render time
+    let start_time = web_time::Instant::now();
+
     while total_rendered < target {
         let mut encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Frame"),
@@ -148,12 +151,15 @@ pub async fn export_headless_wasm(
         .await
         .map_err(|e| format!("Failed to read pixels: {}", e))?;
 
+    // Calculate render time
+    let render_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+
     // Build metadata
     let metadata = crate::png_metadata::PngMetadata::from_app_state(
         width,
         height,
         total_rendered,
-        0.0, // Don't track time in WASM
+        render_time_ms,
         iterations_per_thread,
         config.speed_factor,
         config,
