@@ -109,8 +109,8 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
-  readonly __wbg_wasmapi_free: (a: number, b: number) => void;
   readonly wasm_main: () => void;
+  readonly __wbg_wasmapi_free: (a: number, b: number) => void;
   readonly wasmapi_export_png: (a: number, b: number, c: number, d: number) => any;
   readonly wasmapi_get_config_json: (a: number) => [number, number, number, number];
   readonly wasmapi_get_current_iterations: (a: number) => number;
@@ -131,12 +131,12 @@ export interface InitOutput {
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __wbindgen_export_6: WebAssembly.Table;
   readonly __externref_table_dealloc: (a: number) => void;
+  readonly closure1708_externref_shim: (a: number, b: number, c: any) => void;
   readonly wasm_bindgen__convert__closures_____invoke__h9a2448dc224ec97f: (a: number, b: number) => void;
-  readonly closure1750_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure1837_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure1755_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly wasm_bindgen__convert__closures_____invoke__h309c7dbcb81e1cf7: (a: number, b: number) => void;
-  readonly closure1850_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly closure1713_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly closure1795_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure1808_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
 

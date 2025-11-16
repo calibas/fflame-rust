@@ -1,8 +1,8 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
-export const __wbg_wasmapi_free: (a: number, b: number) => void;
 export const wasm_main: () => void;
+export const __wbg_wasmapi_free: (a: number, b: number) => void;
 export const wasmapi_export_png: (a: number, b: number, c: number, d: number) => any;
 export const wasmapi_get_config_json: (a: number) => [number, number, number, number];
 export const wasmapi_get_current_iterations: (a: number) => number;
@@ -23,10 +23,10 @@ export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) =>
 export const __wbindgen_free: (a: number, b: number, c: number) => void;
 export const __wbindgen_export_6: WebAssembly.Table;
 export const __externref_table_dealloc: (a: number) => void;
+export const closure1708_externref_shim: (a: number, b: number, c: any) => void;
 export const wasm_bindgen__convert__closures_____invoke__h9a2448dc224ec97f: (a: number, b: number) => void;
-export const closure1750_externref_shim: (a: number, b: number, c: any) => void;
-export const closure1837_externref_shim: (a: number, b: number, c: any) => void;
-export const closure1755_externref_shim: (a: number, b: number, c: any, d: any) => void;
 export const wasm_bindgen__convert__closures_____invoke__h309c7dbcb81e1cf7: (a: number, b: number) => void;
-export const closure1850_externref_shim: (a: number, b: number, c: any, d: any) => void;
+export const closure1713_externref_shim: (a: number, b: number, c: any, d: any) => void;
+export const closure1795_externref_shim: (a: number, b: number, c: any) => void;
+export const closure1808_externref_shim: (a: number, b: number, c: any, d: any) => void;
 export const __wbindgen_start: () => void;

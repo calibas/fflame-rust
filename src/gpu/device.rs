@@ -46,8 +46,20 @@ impl GpuContext {
         // This is safe because the window will outlive the GpuContext in our usage.
         // The window is moved into the event loop closure and won't be dropped
         // until the application exits.
-        let surface: Surface<'static> = unsafe {
-            std::mem::transmute(instance.create_surface(window)?)
+        log::info!("Creating surface from window...");
+
+        let surface_result = instance.create_surface(window);
+        let surface: Surface<'static> = match surface_result {
+            Ok(s) => {
+                log::info!("✓ Surface created successfully");
+                unsafe { std::mem::transmute(s) }
+            }
+            Err(e) => {
+                log::error!("Failed to create surface: {:?}", e);
+                log::error!("This may indicate a WebGPU configuration issue on macOS");
+                log::error!("Please check: chrome://gpu for WebGPU status");
+                return Err(anyhow::anyhow!("Surface creation failed: {:?}", e));
+            }
         };
 
         // Try to get adapter with high performance preference first
@@ -112,7 +124,13 @@ impl GpuContext {
         log::info!("✓ GPU device created successfully");
 
         let surface_caps = surface.get_capabilities(&adapter);
+        log::info!("Surface capabilities:");
+        log::info!("  Formats: {:?}", surface_caps.formats);
+        log::info!("  Present modes: {:?}", surface_caps.present_modes);
+        log::info!("  Alpha modes: {:?}", surface_caps.alpha_modes);
+
         let format = surface_caps.formats[0];
+        log::info!("Selected format: {:?}", format);
 
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
@@ -131,7 +149,12 @@ impl GpuContext {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
+
+        log::info!("Configuring surface with: {:?}x{:?}, format: {:?}, present_mode: {:?}",
+            config.width, config.height, config.format, config.present_mode);
+
         surface.configure(&device, &config);
+        log::info!("✓ Surface configured successfully");
 
         Ok(Self { instance, surface, device, queue, config, size })
     }
