@@ -95,7 +95,7 @@
   "camera_z": 0.0,
   "density_scale": 1.0,
   "speed_factor": 1.0,
-  "max_iterations": 50000000,
+  "max_iterations": 500000000,
   "histogram_color_scale": 100.0,
   "low_density_smoothing": 0.5,
   "density_compression_strength": 0.0,
