@@ -51,8 +51,10 @@ class WasmTestRunner:
         """Build WASM package using build-wasm.bat"""
         print('Building WASM...')
 
+        # Run build-wasm.bat from project root
+        build_script = CONFIG['build_dir'] / 'build-wasm.bat'
         result = subprocess.run(
-            ['build-wasm.bat'],
+            [str(build_script)],
             cwd=CONFIG['build_dir'],
             capture_output=True,
             text=True,
@@ -80,14 +82,16 @@ class WasmTestRunner:
         time.sleep(1)  # Wait for server to start
 
     def launch_browser(self):
-        """Launch headless Chrome browser with Selenium"""
-        print('Launching headless browser...')
+        """Launch Chrome browser with WebGPU support"""
+        print('Launching browser...')
 
         options = Options()
-        options.add_argument('--headless')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--disable-gpu')
+        # Enable WebGPU support
+        options.add_argument('--enable-unsafe-webgpu')
+        options.add_argument('--enable-features=Vulkan')
+        options.add_argument('--use-angle=vulkan')
         options.add_argument('--window-size=1920,1080')
 
         try:
@@ -158,18 +162,30 @@ class WasmTestRunner:
             # Start render and wait for completion (async)
             print(f'    Starting render...')
             self.driver.set_script_timeout(CONFIG['timeout'])
-            self.driver.execute_async_script('''
+            result = self.driver.execute_async_script('''
                 const callback = arguments[arguments.length - 1];
                 window.startRender().then(() => {
-                    callback();
+                    callback({success: true});
                 }).catch(err => {
-                    callback(err.message);
+                    console.error('Render error:', err);
+                    callback({success: false, error: String(err), message: err.message, stack: err.stack});
                 });
             ''')
+
+            # Check if render succeeded
+            if not result.get('success'):
+                raise Exception(f'Render failed: {result.get("error")}')
+
             print(f'    Render complete')
 
             # Get PNG data from WASM (returned as Uint8Array)
-            png_data_js = self.driver.execute_script('return Array.from(window.getPngData());')
+            png_data_js = self.driver.execute_script('''
+                const pngData = window.getPngData();
+                if (!pngData) {
+                    throw new Error('PNG data is null or undefined - render may have failed silently');
+                }
+                return Array.from(pngData);
+            ''')
 
             # Convert from JS array to Python bytes
             screenshot = bytes(png_data_js)
