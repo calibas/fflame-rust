@@ -42,10 +42,30 @@
         window.renderComplete = false;
 
         /**
+         * Check WebGPU support
+         */
+        async function checkWebGPU() {
+            if (!navigator.gpu) {
+                throw new Error('WebGPU not supported - enable chrome://flags/#enable-unsafe-webgpu');
+            }
+
+            const adapter = await navigator.gpu.requestAdapter();
+            if (!adapter) {
+                throw new Error('WebGPU adapter not found - GPU may not be available or drivers are outdated');
+            }
+
+            console.log('WebGPU adapter found');
+            return adapter;
+        }
+
+        /**
          * Initialize WASM module
          */
         async function initWasm() {
             try {
+                // Check WebGPU availability first
+                await checkWebGPU();
+
                 // Initialize WASM module
                 await init();
 
