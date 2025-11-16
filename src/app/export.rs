@@ -14,40 +14,33 @@ pub async fn export_headless_wasm(
 
     // Create headless GPU instance
     let instance = egui_wgpu::wgpu::Instance::new(&egui_wgpu::wgpu::InstanceDescriptor {
-        backends: egui_wgpu::wgpu::Backends::all(),
+        backends: egui_wgpu::wgpu::Backends::BROWSER_WEBGPU,
         ..Default::default()
     });
 
-    let adapter = instance
-        .request_adapter(&egui_wgpu::wgpu::RequestAdapterOptions {
-            power_preference: egui_wgpu::wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-        })
-        .await
-        .map_err(|e| format!("Failed to find GPU adapter: {:?}", e))?;
-        // Try high-performance adapter first, fallback to any available adapter
-    // let adapter_options = egui_wgpu::wgpu::RequestAdapterOptions {
-    //     power_preference: egui_wgpu::wgpu::PowerPreference::HighPerformance,
-    //     force_fallback_adapter: false,
-    //     compatible_surface: None,
-    // };
+    // Try high-performance adapter first, then fallback
+    let adapter_options = egui_wgpu::wgpu::RequestAdapterOptions {
+        power_preference: egui_wgpu::wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: false,
+        compatible_surface: None,
+    };
 
-    // let adapter_result = instance.request_adapter(&adapter_options).await;
+    let adapter = instance.request_adapter(&adapter_options).await;
 
-    // let adapter = match adapter_result {
-    //     Ok(_) => adapter_result.unwrap(),
-    //     Err(_) => {
-    //         // Try again with fallback adapter
-    //         let fallback_options = egui_wgpu::wgpu::RequestAdapterOptions {
-    //             power_preference: egui_wgpu::wgpu::PowerPreference::default(),
-    //             force_fallback_adapter: true,
-    //             compatible_surface: None,
-    //         };
-    //         instance.request_adapter(&fallback_options)
-    //             .await.unwrap()
-    //     }
-    // };
+    let adapter = match adapter {
+        Ok(a) => a,
+        Err(_) => {
+            // Try again with fallback adapter
+            let fallback_options = egui_wgpu::wgpu::RequestAdapterOptions {
+                power_preference: egui_wgpu::wgpu::PowerPreference::default(),
+                force_fallback_adapter: true,
+                compatible_surface: None,
+            };
+            instance.request_adapter(&fallback_options)
+                .await
+                .map_err(|e| format!("Failed to find GPU adapter: {:?}", e))?
+        }
+    };
 
     let (device, queue) = adapter
         .request_device(
