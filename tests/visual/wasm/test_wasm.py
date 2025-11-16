@@ -92,6 +92,7 @@ class WasmTestRunner:
 
         try:
             self.driver = webdriver.Chrome(options=options)
+            self.driver.set_page_load_timeout(30)  # 30 second page load timeout
             print('Browser launched [OK]\n')
         except Exception as e:
             raise Exception(f'Failed to launch Chrome: {e}\n'
@@ -135,27 +136,37 @@ class WasmTestRunner:
         """Run a single WASM test"""
         try:
             # Navigate to test page
+            print(f'  Testing: {test_config["name"]}')
             url = f'http://localhost:{CONFIG["port"]}/tests/visual/wasm/test.html'
+            print(f'    Loading {url}...')
             self.driver.get(url)
+            print(f'    Page loaded')
 
             # Wait for WASM to initialize (wait for window.wasmReady === true)
+            print(f'    Waiting for WASM to initialize...')
             wait = WebDriverWait(self.driver, CONFIG['timeout'])
             wait.until(
                 lambda driver: driver.execute_script('return window.wasmReady === true')
             )
+            print(f'    WASM initialized')
 
             # Load fractal config
+            print(f'    Loading config...')
             config_json = json.dumps(test_config['config'])
             self.driver.execute_script(f'window.loadFractalConfig({config_json})')
 
-            # Start render
-            self.driver.execute_script('window.startRender()')
-
-            # Wait for render to complete
-            wait.until(
-                lambda driver: driver.execute_script('return window.renderComplete === true'),
-                message=f'Render timeout for {test_config["name"]}'
-            )
+            # Start render and wait for completion (async)
+            print(f'    Starting render...')
+            self.driver.set_script_timeout(CONFIG['timeout'])
+            self.driver.execute_async_script('''
+                const callback = arguments[arguments.length - 1];
+                window.startRender().then(() => {
+                    callback();
+                }).catch(err => {
+                    callback(err.message);
+                });
+            ''')
+            print(f'    Render complete')
 
             # Get PNG data from WASM (returned as Uint8Array)
             png_data_js = self.driver.execute_script('return Array.from(window.getPngData());')
