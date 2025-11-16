@@ -30,13 +30,13 @@ impl GpuContext {
 
         // Create instance with appropriate backend for platform
         #[cfg(target_arch = "wasm32")]
-        log::info!("Creating GPU instance with BROWSER_WEBGPU backend");
+        log::info!("Creating GPU instance with BROWSER_WEBGPU backend (WebGL not supported - requires compute shaders)");
         #[cfg(not(target_arch = "wasm32"))]
         log::info!("Creating GPU instance with all backends");
 
         let instance = Instance::new(&InstanceDescriptor {
             #[cfg(target_arch = "wasm32")]
-            backends: Backends::BROWSER_WEBGPU,
+            backends: Backends::BROWSER_WEBGPU,  // WebGL doesn't support compute shaders
             #[cfg(not(target_arch = "wasm32"))]
             backends: Backends::all(),
             ..Default::default()
