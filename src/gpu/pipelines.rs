@@ -61,13 +61,13 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Palette texture (1D)
+                // Palette texture (2D with height=1)
                 BindGroupLayoutEntry {
                     binding: 3,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D1,
+                        view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
                     count: None,
@@ -136,13 +136,13 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
-                // Curve LUT texture (1D, sampled)
+                // Curve LUT texture (2D with height=1, sampled)
                 BindGroupLayoutEntry {
                     binding: 3,
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Texture {
                         sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D1,
+                        view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
                     count: None,

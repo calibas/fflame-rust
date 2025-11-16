@@ -30,7 +30,7 @@ struct TonemapParams {
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
 @group(0) @binding(1) var accumulation_sampler: sampler;
 @group(0) @binding(2) var<uniform> tonemap_params: TonemapParams;
-@group(0) @binding(3) var curve_lut_texture: texture_1d<f32>;
+@group(0) @binding(3) var curve_lut_texture: texture_2d<f32>;
 @group(0) @binding(4) var curve_lut_sampler: sampler;
 
 // Vertex shader for fullscreen quad
@@ -267,9 +267,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Apply tone curve to fractal color only (not background)
     // Sample curve LUT unconditionally (WebGPU requires textureSample in uniform control flow)
-    let curve_r = textureSample(curve_lut_texture, curve_lut_sampler, color.r).r;
-    let curve_g = textureSample(curve_lut_texture, curve_lut_sampler, color.g).r;
-    let curve_b = textureSample(curve_lut_texture, curve_lut_sampler, color.b).r;
+    let curve_r = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(color.r, 0.5)).r;
+    let curve_g = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(color.g, 0.5)).r;
+    let curve_b = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(color.b, 0.5)).r;
 
     // Only apply curve where there's significant fractal density
     let should_apply_curve = tonemap_params.use_curve != 0u && bucket_count > 0.001;
