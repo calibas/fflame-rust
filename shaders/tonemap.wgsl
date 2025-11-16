@@ -264,14 +264,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
 
     // Apply tone curve to fractal color only (not background)
-    // Only apply where there's significant fractal density to avoid affecting background
-    var fractal_color = color;
-    if (tonemap_params.use_curve != 0u && bucket_count > 0.001) {
-        let r = textureSample(curve_lut_texture, curve_lut_sampler, color.r).r;
-        let g = textureSample(curve_lut_texture, curve_lut_sampler, color.g).r;
-        let b = textureSample(curve_lut_texture, curve_lut_sampler, color.b).r;
-        fractal_color = vec3<f32>(r, g, b);
-    }
+    // Sample curve LUT unconditionally (WebGPU requires textureSample in uniform control flow)
+    let curve_r = textureSample(curve_lut_texture, curve_lut_sampler, color.r).r;
+    let curve_g = textureSample(curve_lut_texture, curve_lut_sampler, color.g).r;
+    let curve_b = textureSample(curve_lut_texture, curve_lut_sampler, color.b).r;
+
+    // Only apply curve where there's significant fractal density
+    let should_apply_curve = tonemap_params.use_curve != 0u && bucket_count > 0.001;
+    var fractal_color = select(color, vec3<f32>(curve_r, curve_g, curve_b), should_apply_curve);
 
     // Map density to alpha using density_scale
     // The density represents how many samples hit this pixel
