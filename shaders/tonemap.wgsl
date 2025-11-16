@@ -19,7 +19,7 @@ struct TonemapParams {
     white_level: f32,  // Apophysis white_level constant (default 200.0)
     prefilter_white: f32,  // Apophysis PREFILTER_WHITE constant (67108864.0)
     bright_adjust: f32,  // Apophysis BRIGHT_ADJUST constant (2.3)
-    area: f32,  // Render area (width * height)
+    area: f32,  // Render area (width * height) 
     sample_density: f32,  // Iterations per pixel
     saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
     hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
@@ -139,6 +139,10 @@ fn hsv_to_rgb(hsv: vec3<f32>) -> vec3<f32> {
 // Fragment shader with Apophysis-compatible tone mapping
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    // ===== ALL TEXTURE SAMPLING MUST HAPPEN FIRST =====
+    // Chrome WebGPU requires textureSample to be in uniform control flow
+    // Any branching on texture data makes subsequent textureSample calls non-uniform
+
     // Sample accumulation buffer
     let accum = textureSample(accumulation_texture, accumulation_sampler, input.uv);
 
@@ -147,10 +151,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // So we need to multiply back by count to get the raw accumulated values
     let bucket_count = accum.a * 100.0;  // Scale back from 0.01 per hit
 
-    // Early exit for empty pixels
-    if (bucket_count < 0.001) {
-        return vec4<f32>(tonemap_params.background_color, 1.0);
-    }
+    // Check if pixel is empty (Chrome WebGPU: avoid early return to keep uniform control flow for textureSample)
+    let is_empty = bucket_count < 0.001;
 
     // Convert averaged colors back to raw accumulated sums (Apophysis bucket format)
     let bucket_red = accum.r * bucket_count;
@@ -296,8 +298,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     
     // Output fractal color with density-based alpha
     // The panel background (set in panel_viewer.rs) will show through transparent areas
-    let final_color = fractal_color;
+    // Use select() to choose between background and fractal based on is_empty flag
+    // This avoids early return which breaks uniform control flow for Chrome WebGPU
+    let final_color = select(fractal_color, tonemap_params.background_color, is_empty);
     let final_alpha = 1.0;
+
     // Convert from linear to sRGB for display
     // (Rgba8Unorm is linear, but monitors expect sRGB)
     let srgb_color = pow(final_color, vec3<f32>(1.0 / 2.2));
