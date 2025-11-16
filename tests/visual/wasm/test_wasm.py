@@ -206,6 +206,9 @@ class WasmTestRunner:
             # Calculate hash
             img_hash = self.hash_image_data(screenshot)
 
+            # Extract performance metadata from PNG
+            perf_stats = self.extract_performance_metadata(screenshot)
+
             # Compare with desktop baseline
             baseline_path = CONFIG['baseline_dir'] / f'{test_config["name"]}.png'
             baseline_hash = None
@@ -228,6 +231,7 @@ class WasmTestRunner:
                 'hash': img_hash,
                 'baseline_hash': baseline_hash,
                 'error': error,
+                'perf_stats': perf_stats,
             }
 
         except Exception as e:
@@ -237,6 +241,7 @@ class WasmTestRunner:
                 'hash': '',
                 'baseline_hash': None,
                 'error': f'Test failed: {str(e)}',
+                'perf_stats': None,
             }
 
     def hash_image_data(self, png_data: bytes) -> str:
@@ -245,6 +250,44 @@ class WasmTestRunner:
         import numpy as np
         pixels = np.array(img)
         return hashlib.sha256(pixels.tobytes()).hexdigest()
+
+    def extract_performance_metadata(self, png_data: bytes) -> Dict:
+        """Extract performance statistics from PNG metadata"""
+        try:
+            img = Image.open(io.BytesIO(png_data))
+
+            # Extract tEXt chunks
+            metadata = img.info
+
+            # Parse the embedded JSON metadata
+            if 'metadata' in metadata:
+                meta_json = json.loads(metadata['metadata'])
+
+                # Extract performance metrics
+                return {
+                    'render_time_ms': meta_json.get('render_time_ms', 0),
+                    'total_iterations': meta_json.get('total_iterations', 0),
+                    'iterations_per_second': meta_json.get('total_iterations', 0) / (meta_json.get('render_time_ms', 1) / 1000.0) if meta_json.get('render_time_ms', 0) > 0 else 0,
+                    'width': meta_json.get('width', 0),
+                    'height': meta_json.get('height', 0),
+                }
+            else:
+                return {
+                    'render_time_ms': 0,
+                    'total_iterations': 0,
+                    'iterations_per_second': 0,
+                    'width': 0,
+                    'height': 0,
+                }
+        except Exception as e:
+            print(f'    Warning: Failed to extract performance metadata: {e}')
+            return {
+                'render_time_ms': 0,
+                'total_iterations': 0,
+                'iterations_per_second': 0,
+                'width': 0,
+                'height': 0,
+            }
 
     def run_all_tests(self) -> bool:
         """Run all tests"""
@@ -267,7 +310,18 @@ class WasmTestRunner:
     def print_result(self, result: Dict):
         """Print single test result"""
         status = '[PASS]' if result['passed'] else '[FAIL]'
-        print(f'{status:<8} {result["name"]:<30}')
+
+        # Format performance stats if available
+        perf_str = ''
+        if 'perf_stats' in result and result['perf_stats']:
+            stats = result['perf_stats']
+            if stats['render_time_ms'] > 0:
+                time_sec = stats['render_time_ms'] / 1000.0
+                iters_mil = stats['total_iterations'] / 1_000_000.0
+                iters_per_sec_mil = stats['iterations_per_second'] / 1_000_000.0
+                perf_str = f' ({time_sec:.2f}s, {iters_mil:.1f}M iters, {iters_per_sec_mil:.1f}M/s)'
+
+        print(f'{status:<8} {result["name"]:<30}{perf_str}')
 
         if result['error']:
             print(f'         {result["error"]}')
@@ -279,6 +333,28 @@ class WasmTestRunner:
 
         print('\n' + '=' * 60)
         print(f'WASM Tests: {passed} passed, {failed} failed, {len(self.results)} total')
+
+        # Performance summary
+        total_render_time = 0
+        total_iterations = 0
+        test_count = 0
+
+        for r in self.results:
+            if 'perf_stats' in r and r['perf_stats']:
+                stats = r['perf_stats']
+                if stats['render_time_ms'] > 0:
+                    total_render_time += stats['render_time_ms']
+                    total_iterations += stats['total_iterations']
+                    test_count += 1
+
+        if test_count > 0:
+            avg_time = total_render_time / test_count / 1000.0
+            avg_iters_per_sec = (total_iterations / test_count) / (total_render_time / test_count / 1000.0)
+            print(f'\nPerformance Summary:')
+            print(f'  Total render time: {total_render_time / 1000.0:.2f}s')
+            print(f'  Total iterations:  {total_iterations / 1_000_000.0:.1f}M')
+            print(f'  Avg time/test:     {avg_time:.2f}s')
+            print(f'  Avg throughput:    {avg_iters_per_sec / 1_000_000.0:.1f}M iterations/sec')
 
         if failed > 0:
             print('\nFailed tests:')
