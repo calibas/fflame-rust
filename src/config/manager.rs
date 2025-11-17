@@ -1769,6 +1769,10 @@ impl ConfigManager {
         let session = self.modify_session.take()
             .ok_or(ConfigError::InvalidOperation)?;
 
+        // Clear preview state (session is ending)
+        self.preview = None;
+        self.preview_needs_overwrite = false;
+
         let index = session.transform_index;
         let before = session.initial_transform;
         let after = self.current.flame.transforms[index].clone();
@@ -1802,6 +1806,10 @@ impl ConfigManager {
     pub fn cancel_modify_transform(&mut self) -> Result<(), ConfigError> {
         let session = self.modify_session.take()
             .ok_or(ConfigError::InvalidOperation)?;
+
+        // Clear preview state (session is ending)
+        self.preview = None;
+        self.preview_needs_overwrite = false;
 
         // Restore initial state
         let index = session.transform_index;
