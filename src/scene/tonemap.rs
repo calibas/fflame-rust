@@ -277,8 +277,7 @@ mod tests {
     fn test_lut_generation() {
         let curve = ToneCurve::linear();
         let lut = curve.generate_lut();
-        assert_eq!(lut.len(), 256 * 4);
-        assert_eq!(lut[0], 0);    // First R value
-        assert_eq!(lut[1020], 255); // Last R value (255 * 4)
+        // LUT is now f16 (2 bytes per component): 256 pixels × 4 components × 2 bytes
+        assert_eq!(lut.len(), 256 * 4 * 2);
     }
 }

@@ -19,7 +19,7 @@ struct TonemapParams {
     white_level: f32,  // Apophysis white_level constant (default 200.0)
     prefilter_white: f32,  // Apophysis PREFILTER_WHITE constant (67108864.0)
     bright_adjust: f32,  // Apophysis BRIGHT_ADJUST constant (2.3)
-    area: f32,  // Render area (width * height)
+    area: f32,  // Render area (width * height) 
     sample_density: f32,  // Iterations per pixel
     saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
     hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
@@ -30,7 +30,7 @@ struct TonemapParams {
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
 @group(0) @binding(1) var accumulation_sampler: sampler;
 @group(0) @binding(2) var<uniform> tonemap_params: TonemapParams;
-@group(0) @binding(3) var curve_lut_texture: texture_1d<f32>;
+@group(0) @binding(3) var curve_lut_texture: texture_2d<f32>;
 @group(0) @binding(4) var curve_lut_sampler: sampler;
 
 // Vertex shader for fullscreen quad
@@ -139,6 +139,10 @@ fn hsv_to_rgb(hsv: vec3<f32>) -> vec3<f32> {
 // Fragment shader with Apophysis-compatible tone mapping
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    // ===== ALL TEXTURE SAMPLING MUST HAPPEN FIRST =====
+    // Chrome WebGPU requires textureSample to be in uniform control flow
+    // Any branching on texture data makes subsequent textureSample calls non-uniform
+
     // Sample accumulation buffer
     let accum = textureSample(accumulation_texture, accumulation_sampler, input.uv);
 
@@ -147,10 +151,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // So we need to multiply back by count to get the raw accumulated values
     let bucket_count = accum.a * 100.0;  // Scale back from 0.01 per hit
 
-    // Early exit for empty pixels
-    if (bucket_count < 0.001) {
-        return vec4<f32>(tonemap_params.background_color, 1.0);
-    }
+    // Check if pixel is empty (Chrome WebGPU: avoid early return to keep uniform control flow for textureSample)
+    let is_empty = bucket_count < 0.001;
 
     // Convert averaged colors back to raw accumulated sums (Apophysis bucket format)
     let bucket_red = accum.r * bucket_count;
@@ -264,14 +266,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
 
     // Apply tone curve to fractal color only (not background)
-    // Only apply where there's significant fractal density to avoid affecting background
-    var fractal_color = color;
-    if (tonemap_params.use_curve != 0u && bucket_count > 0.001) {
-        let r = textureSample(curve_lut_texture, curve_lut_sampler, color.r).r;
-        let g = textureSample(curve_lut_texture, curve_lut_sampler, color.g).r;
-        let b = textureSample(curve_lut_texture, curve_lut_sampler, color.b).r;
-        fractal_color = vec3<f32>(r, g, b);
-    }
+    // Sample curve LUT unconditionally (WebGPU requires textureSample in uniform control flow)
+    let curve_r = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(color.r, 0.5)).r;
+    let curve_g = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(color.g, 0.5)).r;
+    let curve_b = textureSample(curve_lut_texture, curve_lut_sampler, vec2<f32>(color.b, 0.5)).r;
+
+    // Only apply curve where there's significant fractal density
+    let should_apply_curve = tonemap_params.use_curve != 0u && bucket_count > 0.001;
+    var fractal_color = select(color, vec3<f32>(curve_r, curve_g, curve_b), should_apply_curve);
 
     // Map density to alpha using density_scale
     // The density represents how many samples hit this pixel
@@ -296,8 +298,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     
     // Output fractal color with density-based alpha
     // The panel background (set in panel_viewer.rs) will show through transparent areas
-    let final_color = fractal_color;
+    // Use select() to choose between background and fractal based on is_empty flag
+    // This avoids early return which breaks uniform control flow for Chrome WebGPU
+    let final_color = select(fractal_color, tonemap_params.background_color, is_empty);
     let final_alpha = 1.0;
+
     // Convert from linear to sRGB for display
     // (Rgba8Unorm is linear, but monitors expect sRGB)
     let srgb_color = pow(final_color, vec3<f32>(1.0 / 2.2));

@@ -143,11 +143,11 @@ fn parse_flame_element(
             Ok(Event::Start(e) | Event::Empty(e)) => {
                 match e.name().as_ref() {
                     b"xform" => {
-                        let (transform, color_index) = parse_xform_element(reader, &e)?;
+                        let (transform, color_index) = parse_xform_element(&e)?;
                         transforms_with_indices.push((transform, color_index));
                     }
                     b"finalxform" => {
-                        let (transform, color_index) = parse_finalxform_element(reader, &e)?;
+                        let (transform, color_index) = parse_finalxform_element(&e)?;
                         final_transform_with_index = Some((transform, color_index));
                     }
                     b"palette" => {
@@ -299,7 +299,6 @@ fn parse_flame_element(
 /// Parse a single <xform> element (transform)
 /// Returns (Transform, color_index) where color_index is the palette position
 fn parse_xform_element(
-    reader: &mut Reader<&[u8]>,
     element: &quick_xml::events::BytesStart,
 ) -> Result<(Transform, Option<usize>)> {
     let mut transform = Transform::new();
@@ -375,7 +374,6 @@ fn parse_xform_element(
 
 /// Parse a <finalxform> element (same as xform but without weight/opacity)
 fn parse_finalxform_element(
-    reader: &mut Reader<&[u8]>,
     element: &quick_xml::events::BytesStart,
 ) -> Result<(Transform, Option<usize>)> {
     let mut transform = Transform::new();

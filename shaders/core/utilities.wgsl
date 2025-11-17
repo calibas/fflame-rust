@@ -36,8 +36,8 @@ fn speed_to_color(speed: f32) -> vec3<f32> {
     // Use logarithmic scale for better visualization
     let normalized_speed = clamp(log(speed * 10.0 + 1.0) / 3.0, 0.0, 1.0);
 
-    // Sample from palette texture
-    return textureSampleLevel(palette_texture, palette_sampler, normalized_speed, 0.0).rgb;
+    // Sample from palette texture (2D texture with height=1, so y=0.5)
+    return textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(normalized_speed, 0.5), 0.0).rgb;
 }
 
 // Build Apophysis camera matrix (ZXY Euler rotation: yaw around Z, then pitch around X)

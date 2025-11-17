@@ -23,6 +23,9 @@ pub mod animation;
 mod shader_builder_v2;
 mod shader_cache;
 
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_api;
+
 // Prelude for convenient imports
 pub mod prelude {
     pub use crate::scene::presets::PresetLibrary;
@@ -57,13 +60,13 @@ pub fn desktop_main() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: u32, speed_multiplier: u32) {
+pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>, speed_multiplier: u32) {
     env_logger::init();
     pollster::block_on(export_async(input, output, width, height, category, iterations_per_thread, speed_multiplier)).expect("Export failed");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn export_async(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: u32, speed_multiplier: u32) -> Result<(), Box<dyn std::error::Error>> {
+async fn export_async(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>, speed_multiplier: u32) -> Result<(), Box<dyn std::error::Error>> {
     use std::path::Path;
 
     println!("Fractal Flame Batch Export");
@@ -111,9 +114,12 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
             height.unwrap_or(1080),
         );
 
+        // Use config's iterations_per_thread or CLI override
+        let ipt = iterations_per_thread.unwrap_or(config.iterations_per_thread);
+
         // Call the existing PNG export logic from app
         // We'll need to add a headless export helper
-        let success = app::export_headless(config, &output_file, w, h, category.clone(), iterations_per_thread, speed_multiplier).await?;
+        let success = app::export_headless(config, &output_file, w, h, category.clone(), ipt, speed_multiplier).await?;
 
         if success {
             println!("  ✓ Saved to {}", output_file.display());

@@ -228,7 +228,7 @@ impl ShaderBuilder {
         code.push_str("    // Phase 3: Normal variations (weighted sum from modified input)\n");
         code.push_str("    var result = vec2<f32>(0.0, 0.0);\n\n");
 
-        for (name, idx, info) in &normal_variations {
+        for (_name, idx, info) in &normal_variations {
             let call = if !info.parameters.is_empty() {
                 if info.needs_rng {
                     format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
@@ -256,7 +256,7 @@ impl ShaderBuilder {
         if !post_variations.is_empty() {
             code.push_str("    // Phase 4: Post-variations (modify output)\n\n");
 
-            for (name, idx, info) in &post_variations {
+            for (_name, idx, info) in &post_variations {
                 // Post-variations directly modify result (NOT weighted sum!)
                 let needs_rng = info.needs_rng;
                 let has_params = !info.parameters.is_empty();
@@ -505,8 +505,4 @@ impl ShaderBuilder {
         code
     }
 
-    /// Get the registry
-    pub fn registry(&self) -> &VariationRegistry {
-        &self.registry
-    }
 }

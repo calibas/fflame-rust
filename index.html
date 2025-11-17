@@ -51,6 +51,8 @@
             width: 100%;
             height: 100%;
             object-fit: contain;
+            /* Ensure canvas is ready for WebGPU context */
+            image-rendering: pixelated;
         }
 
         #loading {
@@ -139,7 +141,18 @@
 
         async function run() {
             try {
+                // Log WebGPU availability (informational only)
+                // NOTE: navigator.gpu can be undefined on some browsers/platforms even when WebGPU works
+                // Let wgpu's initialization handle actual capability detection
+                console.log('navigator.gpu available:', !!navigator.gpu);
+                if (navigator.gpu) {
+                    console.log('navigator.gpu detected, WebGPU likely supported');
+                } else {
+                    console.warn('navigator.gpu not detected - will attempt initialization anyway (may work on some platforms)');
+                }
+
                 // Initialize the WASM module
+                // NOTE: Do NOT call canvas.getContext() here - let wgpu claim it
                 await init();
 
                 // Hide loading screen

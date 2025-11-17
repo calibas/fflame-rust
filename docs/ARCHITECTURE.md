@@ -248,9 +248,17 @@ fractal_flame_wgpu/
 │                               - Global singleton via get_version_info()
 │
 ├── Testing & Benchmarking - **See [TESTING-GUIDE.md](TESTING-GUIDE.md)** for complete guide
-│   ├── tests/regression.rs    12 regression tests (CPU determinism, variations, presets)
-│   ├── benches/flame_bench.rs Criterion benchmarks (statistical microbenchmarking)
-│   └── bin/simple_benchmark.rs CLI benchmark tool (human-readable performance)
+│   ├── tests/regression.rs         12 regression tests (CPU determinism, variations, presets)
+│   ├── tests/visual/               Visual regression testing (desktop + WASM)
+│   │   ├── run_all_tests.py        Unified test runner (desktop + WASM + performance tracking)
+│   │   ├── run_tests.py            Desktop CLI visual tests (pixel-perfect comparison)
+│   │   ├── wasm/test_wasm.py       WASM browser tests (Playwright automation)
+│   │   ├── configs/                Test configurations (.fflame files)
+│   │   ├── baseline/               Reference images (desktop + wasm/)
+│   │   ├── current/                Test outputs (desktop + wasm/)
+│   │   └── performance_history.csv Performance tracking over time
+│   ├── benches/flame_bench.rs      Criterion benchmarks (statistical microbenchmarking)
+│   └── bin/simple_benchmark.rs     CLI benchmark tool (human-readable performance)
 │
 └── Shaders (WGSL) - **See [SHADERS.md](main/SHADERS.md)** for complete shader documentation
     ├── core/                   Modular components (dynamically assembled)
@@ -938,7 +946,79 @@ config_manager.update_batch(changes, "Description", response.dragged())?;
 
 ---
 
-**Last Updated:** 2025-10-31
+## 🌐 WebAssembly (WASM) Support
+
+### Overview
+The project has **full WASM support** including interactive rendering and headless PNG export in browsers.
+
+**See [WASM.md](WASM.md)** for complete WASM build documentation.
+
+### Architecture
+
+**Entry Points:**
+- **Interactive App** ([src/lib.rs](../src/lib.rs):run()) - Full GUI in browser via egui
+- **Headless Export** ([src/app/export.rs](../src/app/export.rs):export_headless_wasm()) - PNG generation without window
+- **WASM Bindings** ([src/wasm_api.rs](../src/wasm_api.rs)) - JavaScript API via wasm-bindgen
+
+**JavaScript API:**
+```javascript
+// Exposed function: export_headless_wasm(config, width, height, ipt, speed)
+const pngData = await export_headless_wasm(config, 800, 600, 256, 4);
+```
+
+**Browser Compatibility:**
+- ✅ Chrome/Chromium 113+ (fully tested)
+- ✅ Firefox 121+ (fully tested)
+- ⚠️ Safari (experimental WebGPU support)
+- ❌ Mobile (limited WebGPU support)
+
+**Key Differences from Desktop:**
+
+1. **GPU Limits** - Uses `downlevel_webgl2_defaults()` instead of desktop defaults
+   - Reduced buffer sizes and texture dimensions
+   - Ensures compatibility with browser WebGPU implementations
+
+2. **Texture Format** - 1D textures → 2D with height=1
+   - Browser WebGPU doesn't support `textureSampleLevel` on 1D textures
+   - Palette and curve LUTs use 2D textures with `vec2(x, 0.5)` sampling
+
+3. **Surface Creation** - Direct canvas approach on macOS
+   - Uses `SurfaceTarget::Canvas(canvas)` instead of window-based surface
+   - Fixes compatibility issues with macOS Safari/Chrome
+
+4. **Timing** - Uses `web_time` crate instead of `std::time`
+   - Provides accurate timestamps in WASM environment
+
+### Visual Regression Testing
+
+**Test Infrastructure:**
+- **Desktop Tests** ([tests/visual/run_tests.py](../tests/visual/run_tests.py)) - CLI headless export
+- **WASM Tests** ([tests/visual/wasm/test_wasm.py](../tests/visual/wasm/test_wasm.py)) - Browser automation via Playwright
+- **Unified Runner** ([tests/visual/run_all_tests.py](../tests/visual/run_all_tests.py)) - Runs both + performance comparison
+
+**Test Process:**
+1. Playwright launches headless Chrome/Firefox
+2. Loads WASM module and test configs
+3. Calls `export_headless_wasm()` for each config
+4. Downloads PNG via blob URL
+5. Compares pixel data (SHA256 hash) against baseline
+6. Extracts performance metrics from PNG metadata
+7. Saves results to `performance_history.csv`
+
+**Coverage:**
+- 8 desktop visual tests (800x600, pixel-perfect comparison)
+- 7 WASM visual tests (800x600, pixel-perfect comparison)
+- Performance tracking: render time, throughput (M iter/sec)
+- Baseline comparison: time delta, throughput delta
+
+**Performance:**
+- Desktop: ~500-3500ms total export time (device + render + encode)
+- WASM: ~500-3500ms total export time (same as desktop)
+- PNG metadata: Stores total export time (user-facing performance)
+
+---
+
+**Last Updated:** 2025-11-16
 **Project:** fflame-rust
 
 **Major Recent Changes:**

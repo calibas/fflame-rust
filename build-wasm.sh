@@ -4,20 +4,25 @@ set -e
 echo "Building for WASM..."
 
 # Build the WASM module
-RUSTFLAGS=--cfg=web_sys_unstable_apis cargo build --lib --target wasm32-unknown-unknown --release
+echo "Building WASM module..."
+export RUSTFLAGS=--cfg=web_sys_unstable_apis
+cargo build --lib --target wasm32-unknown-unknown --release
+
+if [ $? -ne 0 ]; then
+    echo "❌ Cargo build failed"
+    exit 1
+fi
 
 # Generate bindings with wasm-bindgen
 echo "Generating JavaScript bindings..."
 wasm-bindgen --out-dir ./pkg --target web ./target/wasm32-unknown-unknown/release/fractal_flame_wgpu.wasm
 
-# Optimize the WASM binary (optional, requires wasm-opt)
-if command -v wasm-opt &> /dev/null; then
-    echo "Optimizing WASM binary..."
-    wasm-opt -Oz -o ./pkg/fractal_flame_wgpu_bg.wasm ./pkg/fractal_flame_wgpu_bg.wasm
-else
-    echo "wasm-opt not found, skipping optimization (install with: cargo install wasm-opt)"
+if [ $? -ne 0 ]; then
+    echo "❌ wasm-bindgen failed"
+    exit 1
 fi
 
+echo ""
 echo "✅ Build complete! Output in ./pkg"
 echo ""
 echo "To run locally:"

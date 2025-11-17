@@ -443,7 +443,7 @@ impl FlameBuffers {
             },
             mip_level_count: 1,
             sample_count: 1,
-            dimension: TextureDimension::D1,
+            dimension: TextureDimension::D2,
             format: TextureFormat::Rgba8Unorm,
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
@@ -485,7 +485,7 @@ impl FlameBuffers {
             },
             mip_level_count: 1,
             sample_count: 1,
-            dimension: TextureDimension::D1,
+            dimension: TextureDimension::D2,
             format: TextureFormat::Rgba16Float,  // Use 16-bit float for precision (filterable)
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],

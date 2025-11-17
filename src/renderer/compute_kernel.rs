@@ -778,7 +778,7 @@ impl FlameRenderer {
             label: Some("Pre-Read Sync"),
         });
         queue.submit(std::iter::once(sync_encoder.finish()));
-        device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
 
         // Create staging buffer
         let bytes_per_pixel = 4; // RGBA8
@@ -827,7 +827,7 @@ impl FlameRenderer {
         buffer_slice.map_async(MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        device.poll(PollType::Wait { submission_index: None, timeout: None });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
         rx.await
             .map_err(|_| "Failed to map buffer".to_string())?
             .map_err(|e| format!("Buffer map error: {:?}", e))?;
@@ -1044,7 +1044,6 @@ impl FlameRenderer {
             view_formats: &[],
         };
         let texture = device.create_texture(&texture_desc);
-        let view = texture.create_view(&TextureViewDescriptor::default());
 
         // Render to the texture
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {

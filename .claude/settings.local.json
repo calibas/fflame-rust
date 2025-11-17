@@ -9,9 +9,9 @@
       "Bash(tasklist)",
       "Bash(findstr:*)",
       "Bash(cargo doc:*)",
-      "Bash(wasm-pack build:*)",
       "Bash(git log:*)",
-      "Bash(Select-Object -Last 30)"
+      "Bash(Select-Object -Last 30)",
+      "Bash(./build-wasm.bat)"
     ],
     "deny": [],
     "ask": []

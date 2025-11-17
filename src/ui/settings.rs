@@ -6,7 +6,6 @@ use super::formatting::format_iterations;
 /// Same as render_settings_window (removed) but without the Window wrapper
 pub fn render_settings_content(
     ui: &mut egui::Ui,
-    show_config_window: &mut bool,
     can_undo: bool,
     can_redo: bool,
     undo_requested: &mut bool,
