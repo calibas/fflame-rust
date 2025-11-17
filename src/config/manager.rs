@@ -311,9 +311,6 @@ impl ConfigManager {
                 self.push_undo(change);
                 log::debug!("  -> Captured to history, len: {}", self.history.len());
 
-                // Clear overwrite flag after capture (end of lazy sequence)
-                self.preview_needs_overwrite = false;
-
                 // Record action for GPU updates
                 self.record_action(update_type);
 
@@ -1864,6 +1861,12 @@ impl ConfigManager {
     /// Call this after handling the UpdateAction from get_pending_actions()
     pub fn clear_pending_actions(&mut self) {
         self.pending_actions = UpdateAction::none();
+    }
+
+    /// Clear overwrite flag at the start of each frame
+    /// Will be set again during the frame if there are lazy updates
+    pub fn clear_overwrite_flag(&mut self) {
+        self.preview_needs_overwrite = false;
     }
 
     /// Request an explicit accumulation reset (e.g., from Reset button)
