@@ -403,16 +403,42 @@ impl ConfigDelta {
     }
 }
 
+/// Specialized snapshot data for structural changes
+/// Stores only what's needed (before/after states) for efficient undo/redo
+#[derive(Debug, Clone)]
+pub enum SnapshotData {
+    /// Full config replacement (preset loading, file import)
+    /// Stores both before and after states for bidirectional undo/redo
+    FullConfig {
+        before: Box<super::fractal_config::FractalConfig>,
+        after: Box<super::fractal_config::FractalConfig>,
+    },
+
+    /// Transform added
+    /// Undo: remove at index, Redo: insert at index
+    AddTransform {
+        index: usize,
+        transform: crate::scene::transforms::Transform,
+    },
+
+    /// Transform deleted
+    /// Undo: re-insert at index, Redo: remove at index
+    DeleteTransform {
+        index: usize,
+        transform: crate::scene::transforms::Transform,
+    },
+}
+
 /// A batch of related changes (single undo point)
 #[derive(Debug, Clone)]
 pub struct ConfigChange {
     pub deltas: Vec<ConfigDelta>,
     pub timestamp: Instant,
     pub description: String,
-    /// Full config snapshot (used for preset loading)
-    /// When Some: this is a full config replacement, ignore deltas for undo
+    /// Snapshot data for structural changes
+    /// When Some: use snapshot logic for undo/redo (bidirectional or specialized)
     /// When None: use deltas for undo/redo
-    pub snapshot: Option<Box<super::fractal_config::FractalConfig>>,
+    pub snapshot: Option<SnapshotData>,
 }
 
 impl ConfigChange {
@@ -442,14 +468,51 @@ impl ConfigChange {
         }
     }
 
-    /// Create snapshot undo point (for preset loading)
-    /// This stores the full config state before replacement
-    pub fn snapshot(config: super::fractal_config::FractalConfig, description: String) -> Self {
+    /// Create full config snapshot (preset loading, file import)
+    /// Stores both before and after states for bidirectional undo/redo
+    pub fn full_config_snapshot(
+        before: super::fractal_config::FractalConfig,
+        after: super::fractal_config::FractalConfig,
+        description: String,
+    ) -> Self {
         Self {
             deltas: vec![],
             timestamp: Instant::now(),
             description,
-            snapshot: Some(Box::new(config)),
+            snapshot: Some(SnapshotData::FullConfig {
+                before: Box::new(before),
+                after: Box::new(after),
+            }),
+        }
+    }
+
+    /// Create add transform snapshot
+    /// Stores the added transform for efficient undo/redo
+    pub fn add_transform_snapshot(
+        index: usize,
+        transform: crate::scene::transforms::Transform,
+        description: String,
+    ) -> Self {
+        Self {
+            deltas: vec![],
+            timestamp: Instant::now(),
+            description,
+            snapshot: Some(SnapshotData::AddTransform { index, transform }),
+        }
+    }
+
+    /// Create delete transform snapshot
+    /// Stores the deleted transform for efficient undo/redo
+    pub fn delete_transform_snapshot(
+        index: usize,
+        transform: crate::scene::transforms::Transform,
+        description: String,
+    ) -> Self {
+        Self {
+            deltas: vec![],
+            timestamp: Instant::now(),
+            description,
+            snapshot: Some(SnapshotData::DeleteTransform { index, transform }),
         }
     }
 
