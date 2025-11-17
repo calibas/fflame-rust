@@ -89,6 +89,21 @@ use super::fractal_config::FractalConfig;
 use std::time::Duration;
 use web_time::Instant;
 
+/// Coalescing window - merge rapid changes to same parameter within this duration
+const COALESCE_WINDOW: Duration = Duration::from_millis(2000);
+
+/// Check if a config path supports undo point coalescing
+/// Only paths in this whitelist will have rapid changes merged into single undo point
+fn supports_coalescing(path: &ConfigPath) -> bool {
+    match path {
+        ConfigPath::Palette => true,  // Color picker changes (main use case)
+        // Add more paths here as needed:
+        // ConfigPath::Exposure => true,
+        // ConfigPath::Gamma => true,
+        _ => false,
+    }
+}
+
 /// Actions needed after configuration changes
 ///
 /// ConfigManager tracks changes and provides this struct to tell the App layer
@@ -219,7 +234,7 @@ impl ConfigManager {
             position: 0,  // Start at beginning (no history yet)
             max_undo_depth: 500,  // ~5MB max memory (500 states × ~10KB each)
             last_lazy_undo: None,
-            lazy_throttle: Duration::from_millis(500),
+            lazy_throttle: Duration::from_millis(5000),
             pending_actions: UpdateAction::none(),
             preview_needs_overwrite: false,
         }
@@ -584,23 +599,80 @@ impl ConfigManager {
             0
         };
 
-        // Add new change at current position
-        self.history.push(change);
-        self.position = self.history.len();
+        // Check if we should coalesce with the last change
+        let should_coalesce = self.should_coalesce(&change);
 
-        // Trim if over limit (remove oldest)
-        if self.history.len() > self.max_undo_depth {
-            self.history.remove(0);
-            self.position = self.position.saturating_sub(1);
-        }
+        if should_coalesce {
+            // Replace last change instead of adding new one
+            let last_idx = self.history.len() - 1;
+            log::debug!("  COALESCING with previous change (within {}ms window)", COALESCE_WINDOW.as_millis());
 
-        if future_cleared > 0 {
-            log::debug!("  History: {} items, Position: {}, Future cleared: {} items",
-                self.history.len(), self.position, future_cleared);
-        } else {
-            log::debug!("  History: {} items, Position: {}",
+            // Update the last change's new_value and timestamp
+            // Keep the original old_value from the first change in the sequence
+            for (i, new_delta) in change.deltas.iter().enumerate() {
+                if let Some(old_delta) = self.history[last_idx].deltas.get_mut(i) {
+                    old_delta.new_value = new_delta.new_value.clone();
+                    old_delta.timestamp = new_delta.timestamp;
+                }
+            }
+
+            log::debug!("  History: {} items (coalesced), Position: {}",
                 self.history.len(), self.position);
+        } else {
+            // Add new change at current position
+            self.history.push(change);
+            self.position = self.history.len();
+
+            // Trim if over limit (remove oldest)
+            if self.history.len() > self.max_undo_depth {
+                self.history.remove(0);
+                self.position = self.position.saturating_sub(1);
+            }
+
+            if future_cleared > 0 {
+                log::debug!("  History: {} items, Position: {}, Future cleared: {} items",
+                    self.history.len(), self.position, future_cleared);
+            } else {
+                log::debug!("  History: {} items, Position: {}",
+                    self.history.len(), self.position);
+            }
         }
+    }
+
+    /// Check if new change should be coalesced with last history entry
+    fn should_coalesce(&self, new_change: &ConfigChange) -> bool {
+        // Only coalesce if at head of history
+        if self.position == 0 || self.position != self.history.len() {
+            return false;
+        }
+
+        let last_change = &self.history[self.position - 1];
+
+        // Must have same number of deltas (same parameters being changed)
+        if last_change.deltas.len() != new_change.deltas.len() {
+            return false;
+        }
+
+        // Check each delta
+        for (old_delta, new_delta) in last_change.deltas.iter().zip(new_change.deltas.iter()) {
+            // Must be same path
+            if old_delta.path != new_delta.path {
+                return false;
+            }
+
+            // Path must support coalescing
+            if !supports_coalescing(&new_delta.path) {
+                return false;
+            }
+
+            // Must be within time window
+            let time_since = new_delta.timestamp.duration_since(old_delta.timestamp);
+            if time_since > COALESCE_WINDOW {
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Extract value from any FractalConfig by path (helper for undo/redo)
