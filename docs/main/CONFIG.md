@@ -2,50 +2,50 @@
 
 Complete guide to the delta-based configuration system, ConfigManager, undo/redo, and serialization.
 
-## ✅ Migration Status: COMPLETE (2025-11-01)
+## ✅ Migration Status: COMPLETE (2025-11-17)
 
-**All UI controls now use ConfigManager with delta-based undo/redo:**
-- ✅ View controls (zoom, pan, rotation, camera)
-- ✅ Settings sliders (iterations, blend, compression)
-- ✅ Tone mapping (exposure, gamma, curves)
-- ✅ Variation weights and parameters
-- ✅ Color controls (palette, background)
-- ✅ **Triangle Editor** (coordinates, quick actions, affine coefficients, reset)
-- ✅ **Preview mode fixes** - All sliders use `lazy=response.dragged()` pattern
-- ✅ Palette editor with live preview mode
+**All UI controls now use ConfigManager with simplified immediate updates:**
+- ✅ View controls (zoom, pan, rotation, camera) - Real-time with 100ms overwrite window
+- ✅ Settings sliders (iterations, blend, compression) - Coalescing within 2s window
+- ✅ Tone mapping (exposure, gamma, curves) - Immediate updates, no accumulation reset
+- ✅ Variation weights and parameters - Real-time with overwrite mode
+- ✅ Color controls (palette, background) - Real-time with overwrite mode
+- ✅ **Triangle Editor** - Batch updates for multi-param changes
+- ✅ Palette editor - Direct updates, no separate preview mode
 
-**Key Achievement**: Preview mode now works correctly for both mouse drag (live preview) and keyboard input (discrete undo points).
+**Key Achievement**: Eliminated blank frames and preview mode complexity. All updates are immediate with automatic coalescing for undo history.
 
 **See also:**
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Overview and module organization
 - [TRANSFORMS.md](TRANSFORMS.md) - Transform structure details
 - [UI.md](UI.md) - Config import/export UI controls and delta-based UI patterns
 - [EXPORT.md](EXPORT.md) - PNG metadata embedding
-- [dragvalue-keyboard-preview-mode.md](../projects/dragvalue-keyboard-preview-mode.md) - Preview mode issue analysis
 
 **Archived Migration Documentation:**
 All delta migration planning docs have been archived to [archive/delta-migration/](../archive/delta-migration/):
 - [delta-system-completed.md](../archive/delta-migration/delta-system-completed.md) - Summary of completed work (Phases 1-10)
 - [complete-delta-migration.md](../archive/delta-migration/complete-delta-migration.md) - Final migration phases (11-16)
 - [MIGRATION-STATUS.md](../archive/delta-migration/MIGRATION-STATUS.md) - Detailed migration tracking
+- [remove-preview-mode.md](../archive/remove-preview-mode.md) - Removal of preview mode system (PR #23)
 
 ---
 
 ## Overview
 
-The application uses a **delta-based state management system** centered around `ConfigManager`. This replaces the previous flag-based approach with:
+The application uses a **simplified delta-based state management system** centered around `ConfigManager`. This system provides:
 - Type-safe parameter identification (`ConfigPath`)
-- Automatic undo/redo with delta tracking
+- Automatic undo/redo with delta tracking and coalescing (2 second window)
 - Selective GPU updates via `UpdateType` classification
-- Lazy undo helpers for continuous controls (sliders, mouse)
-- Live preview mode for temporary changes (palette editor)
+- Real-time rendering with 100ms overwrite window (no blank frames)
+- Immediate updates for all parameters (no lazy/preview distinction)
 
 **Key Files:**
-- [src/config/manager.rs](../../src/config/manager.rs) - ConfigManager implementation (1,237 lines)
+- [src/config/manager.rs](../../src/config/manager.rs) - ConfigManager implementation (~800 lines)
 - [src/config/delta.rs](../../src/config/delta.rs) - ConfigPath, ConfigValue, ConfigDelta enums (568 lines)
 - [src/config/fractal_config.rs](../../src/config/fractal_config.rs) - FractalConfig struct
-- [src/config/slider.rs](../../src/config/slider.rs) - UI helpers (config_slider, lazy_slider) (299 lines)
+- [src/config/slider.rs](../../src/config/slider.rs) - UI helper (config_slider) (299 lines)
 - [src/config/defaults.rs](../../src/config/defaults.rs) - Default value constants
+- [src/app/mod.rs](../../src/app/mod.rs) - 100ms overwrite window implementation
 
 ---
 
@@ -394,69 +394,77 @@ pub fn load_config(&mut self, config: &FractalConfig) {
 
 ## ConfigManager - Delta-Based State Management
 
-The `ConfigManager` is the central gateway for all configuration changes. It replaces the old flag-based system with type-safe delta tracking and automatic undo/redo.
+The `ConfigManager` is the central gateway for all configuration changes. It provides type-safe delta tracking, automatic undo/redo with coalescing, and selective GPU updates.
 
 **Location:** [src/config/manager.rs](../../src/config/manager.rs)
 
 ### Architecture
 
 **Key Components:**
-1. **active_config** - Current state (visible to user)
-2. **preview_config** - Temporary state during live editing (e.g., palette editor)
-3. **undo_stack** - Vec<FractalConfig> (max 50 states)
-4. **redo_stack** - Vec<FractalConfig> (cleared on new changes)
-5. **lazy_undo_helper** - Smart throttling for continuous controls
+1. **current** - Current configuration state
+2. **undo_history** - Vector of ConfigChange entries (max 50)
+3. **redo_history** - Vector of ConfigChange entries
+4. **coalescing_window** - Automatic merging of rapid changes (2 second window)
+5. **modify_session** - Batch update tracking for multi-param changes
 
 ### Core Structure
 
 ```rust
 pub struct ConfigManager {
-    active_config: FractalConfig,        // Current state
-    preview_config: Option<FractalConfig>, // Live preview mode
-    undo_stack: Vec<FractalConfig>,      // Undo history (max 50)
-    redo_stack: Vec<FractalConfig>,      // Redo history
-    lazy_undo_helper: LazyUndoHelper,    // Throttled undo for sliders/mouse
+    current: FractalConfig,              // Current state
+    undo_history: Vec<ConfigChange>,     // Undo history (max 50)
+    redo_history: Vec<ConfigChange>,     // Redo history
+    last_change_time: Option<Instant>,   // For coalescing window
+    modify_session: Option<ModifySession>, // Batch update tracking
 }
 
 impl ConfigManager {
     pub fn new(initial_config: FractalConfig) -> Self {
         Self {
-            active_config: initial_config,
-            preview_config: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            lazy_undo_helper: LazyUndoHelper::new(),
+            current: initial_config,
+            undo_history: Vec::new(),
+            redo_history: Vec::new(),
+            last_change_time: None,
+            modify_session: None,
         }
     }
 
     // Main entry point for parameter updates
-    pub fn update_config(&mut self, path: ConfigPath, value: ConfigValue) -> UpdateType {
-        // 1. Compute delta
-        let old_value = self.get_value(&path);
-        if old_value == value {
-            return UpdateType::None; // No change
+    pub fn update_param(
+        &mut self,
+        path: ConfigPath,
+        new_value: ConfigValue,
+    ) -> Result<UpdateType, ConfigError> {
+        // 1. Check for actual change
+        let old_value = self.get_value(&path)?;
+        if old_value.approx_eq(&new_value) {
+            return Ok(UpdateType::None);
         }
 
-        // 2. Capture undo state (if not throttled)
-        if self.should_capture_for_path(&path) {
-            self.push_undo();
-        }
+        // 2. Create delta and push to undo (coalescing happens automatically)
+        let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
+        let change = ConfigChange::single(delta);
+        let update_type = change.update_type();
+
+        self.push_undo(change);  // Automatic coalescing within 2s window
 
         // 3. Apply change
-        self.set_value(&path, value);
+        self.set_value(&path, new_value)?;
+        self.record_action(update_type);
 
-        // 4. Classify update type for selective GPU updates
-        self.classify_update(&path)
+        Ok(update_type)
     }
 
-    // Undo/redo operations
-    pub fn undo(&mut self) -> Option<ConfigDelta> { /* ... */ }
-    pub fn redo(&mut self) -> Option<ConfigDelta> { /* ... */ }
+    // Batch updates for multi-param changes
+    pub fn update_batch(
+        &mut self,
+        changes: Vec<(ConfigPath, ConfigValue)>,
+        description: &str,
+    ) -> Result<UpdateType, ConfigError> { /* ... */ }
 
-    // Live preview mode (palette editor)
-    pub fn enter_preview_mode(&mut self) { /* ... */ }
-    pub fn commit_preview(&mut self) { /* ... */ }
-    pub fn revert_preview(&mut self) { /* ... */ }
+    // Undo/redo operations
+    pub fn undo(&mut self) -> Option<ConfigChange> { /* ... */ }
+    pub fn redo(&mut self) -> Option<ConfigChange> { /* ... */ }
 }
 ```
 
@@ -561,36 +569,50 @@ pub enum ConfigValue {
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpdateType {
-    None,       // No GPU update
-    View,       // Camera/zoom → reset accumulation
-    Color,      // Palette → reset accumulation
-    Flame,      // Transform/variation → reset accumulation
-    ToneMap,    // Tone mapping → no reset
-    Rendering,  // Speed/quality settings
+    None,             // No GPU update
+    ViewOnly,         // Camera/zoom → use overwrite mode
+    ColorOnly,        // Palette → use overwrite mode
+    IterationReset,   // Transform/variation → use overwrite mode + iteration reset after 100ms
+    ToneMappingOnly,  // Tone mapping → no accumulation buffer changes
 }
 ```
+
+**How Updates Work:**
+
+1. **ViewOnly / ColorOnly / IterationReset** - Trigger 100ms overwrite window:
+   - `blend_factor = 1.0` replaces accumulation buffer (no blending)
+   - `batch_size = 1` accumulates every frame (smooth 60fps updates)
+   - Window keeps overwrite ON for 100ms after last change (~6 frames)
+   - After window expires: return to normal accumulation (`blend_factor = 0.1`, `batch_size = 4`)
+
+2. **IterationReset Additional Behavior**:
+   - When 100ms window expires, reset iteration counter to 0
+   - Provides clean rebuild after transform/variation changes
+   - No blank frames (overwrite mode prevents buffer clear)
+
+3. **ToneMappingOnly**:
+   - No overwrite mode (excluded from had_changes check)
+   - Continues accumulating while tone mapping parameters update
+   - No performance impact on sample generation
 
 **Mapping:**
 ```rust
 fn classify_update(path: &ConfigPath) -> UpdateType {
     match path {
         ConfigPath::Zoom | ConfigPath::PanX | ConfigPath::PanY | ConfigPath::Rotation
-        | ConfigPath::CameraRotationX | ConfigPath::CameraRotationY => UpdateType::View,
+        | ConfigPath::CameraRotationX | ConfigPath::CameraRotationY => UpdateType::ViewOnly,
 
         ConfigPath::ColorMode | ConfigPath::PaletteIndex | ConfigPath::Palette(_)
-        | ConfigPath::SpeedFactor | ConfigPath::BackgroundColor => UpdateType::Color,
+        | ConfigPath::SpeedFactor | ConfigPath::BackgroundColor => UpdateType::ColorOnly,
 
         ConfigPath::TransformAffine { .. } | ConfigPath::TransformVariation { .. }
         | ConfigPath::TransformVariationParam { .. } | ConfigPath::TransformWeight { .. }
         | ConfigPath::TransformColor { .. } | ConfigPath::TransformColorSpeed { .. }
         | ConfigPath::TransformCount | ConfigPath::RenderMode | ConfigPath::ProjectionType
-            => UpdateType::Flame,
+            => UpdateType::IterationReset,
 
         ConfigPath::Exposure | ConfigPath::Gamma | ConfigPath::TonemapMode
-        | ConfigPath::TonemapCurve | ConfigPath::UseCurve => UpdateType::ToneMap,
-
-        ConfigPath::IterationsPerThread | ConfigPath::SpeedMultiplier
-        | ConfigPath::HistogramColorScale | /* ... */ => UpdateType::Rendering,
+        | ConfigPath::TonemapCurve | ConfigPath::UseCurve => UpdateType::ToneMappingOnly,
 
         _ => UpdateType::None,
     }
@@ -645,88 +667,38 @@ pub fn redo(&mut self) -> Option<ConfigDelta> {
 }
 ```
 
-### LazyUndoHelper - Smart Throttling
+### Coalescing - Automatic Undo Merging
 
-**Purpose:** Prevent undo stack bloat during continuous slider drags or mouse panning.
+**Purpose:** Prevent undo stack bloat during rapid parameter changes (e.g., slider drags, mouse panning).
 
-**Location:** [src/config/slider.rs](../../src/config/slider.rs)
+**How It Works:**
+- ConfigManager tracks `last_change_time` for each update
+- Changes to the **same ConfigPath** within 2 seconds are merged into single undo entry
+- Changes to **different ConfigPath** always create separate undo entries
+- No explicit lazy/throttling logic needed - coalescing is automatic
 
-**Behavior:**
+**Example:**
 ```rust
-pub struct LazyUndoHelper {
-    last_capture_time: Option<Instant>,
-    throttle_duration: Duration,  // Default: 500ms
-}
+// User drags Exposure slider for 1 second (100 changes)
+config_manager.update_param(ConfigPath::Exposure, 1.0.into())?;
+config_manager.update_param(ConfigPath::Exposure, 1.1.into())?;  // Merged with previous
+config_manager.update_param(ConfigPath::Exposure, 1.2.into())?;  // Merged with previous
+// ... 97 more updates ...
+// Result: 1 undo entry (1.0 → 1.2)
 
-impl LazyUndoHelper {
-    // Should we capture undo state now?
-    pub fn should_capture(&mut self) -> bool {
-        let now = Instant::now();
-        if let Some(last) = self.last_capture_time {
-            if now.duration_since(last) < self.throttle_duration {
-                return false; // Too soon, skip capture
-            }
-        }
-        self.last_capture_time = Some(now);
-        true
-    }
+// User changes Gamma (different path)
+config_manager.update_param(ConfigPath::Gamma, 2.2.into())?;  // New undo entry
 
-    // Force commit on mouse release / slider drag end
-    pub fn force_commit_now(&mut self) -> bool {
-        self.last_capture_time = Some(Instant::now());
-        true // Always capture final state
-    }
-}
+// Wait 2+ seconds, then change Exposure again
+thread::sleep(Duration::from_secs(2));
+config_manager.update_param(ConfigPath::Exposure, 1.5.into())?;  // New undo entry (window expired)
 ```
 
-**Usage Pattern:**
-- Drag start: Capture initial state
-- During drag: Skip captures (throttled)
-- Drag end: Capture final state (forced commit)
-- Result: 2 undo entries per slider drag (initial + final)
-
-### Live Preview Mode
-
-**Use Case:** Palette editor - allow temporary color changes with instant revert.
-
-**Flow:**
-```rust
-// Enter preview mode (save current state)
-config_manager.enter_preview_mode();
-
-// Make temporary changes
-config_manager.update_config(ConfigPath::PaletteIndex, ConfigValue::UInt(5));
-// User sees immediate visual update
-
-// Option 1: Commit changes (keep modifications)
-config_manager.commit_preview();
-
-// Option 2: Revert changes (restore saved state)
-config_manager.revert_preview();
-```
-
-**Implementation:**
-```rust
-pub fn enter_preview_mode(&mut self) {
-    // Save current state
-    self.preview_config = Some(self.active_config.clone());
-}
-
-pub fn commit_preview(&mut self) {
-    // Capture undo for the entire preview session
-    if self.preview_config.is_some() {
-        self.push_undo();
-        self.preview_config = None;
-    }
-}
-
-pub fn revert_preview(&mut self) {
-    // Restore saved state (no undo entry)
-    if let Some(saved) = self.preview_config.take() {
-        self.active_config = saved;
-    }
-}
-```
+**Benefits:**
+- Slider drags create 1 undo entry (not 100+)
+- Mouse panning creates 1 undo entry per drag session
+- Multi-parameter changes (different paths) properly tracked
+- No manual commit logic needed in UI code
 
 ### Keyboard Shortcuts
 
@@ -1024,9 +996,9 @@ self.renderer.update_view(config.zoom, config.pan_x, config.pan_y, config.rotati
 
 **Location:** [src/config/slider.rs](../../src/config/slider.rs)
 
-### config_slider() - Immediate Undo
+### config_slider() - Simple Slider Helper
 
-Basic slider with automatic undo capture on every change:
+Basic slider with automatic coalescing (no manual commit logic needed):
 
 ```rust
 use crate::config::slider::config_slider;
@@ -1038,94 +1010,59 @@ config_slider(ui, &mut config_manager, ConfigPath::Exposure, 0.1..=5.0)
 ```
 
 **Behavior:**
-- Captures undo state on first change
-- No throttling - every value change creates undo entry
-- Best for: Discrete controls, toggles, dropdowns
-- NOT recommended for: Continuous sliders, mouse drags
+- Every change calls `config_manager.update_param()`
+- Coalescing automatically merges rapid changes to same parameter
+- Result: 1 undo entry per drag session (automatic 2s window)
+- Works for all controls: sliders, drag values, checkboxes, etc.
 
-### lazy_slider() - Throttled Undo
+### Standard UI Pattern
 
-Slider with intelligent undo throttling (500ms minimum between captures):
-
-```rust
-use crate::config::slider::lazy_slider;
-
-lazy_slider(ui, &mut config_manager, ConfigPath::PanX, -5.0..=5.0)
-    .text("Pan X")
-    .show();
-```
-
-**Behavior:**
-- Drag start: Captures initial state
-- During drag: Skips undo captures (throttled)
-- Drag end: Captures final state (forced commit)
-- Result: 2 undo entries per drag session (initial + final)
-- Best for: Continuous sliders, view controls
-
-### config_drag_value() - DragValue with Undo
-
-Similar to config_slider but uses egui's DragValue widget:
+All UI controls follow the same simple pattern:
 
 ```rust
-use crate::config::slider::config_drag_value;
+// Read current value
+let mut value = config_manager.current().exposure;
 
-config_drag_value(ui, &mut config_manager, ConfigPath::SpeedMultiplier, 1..=16)
-    .prefix("Speed: ")
-    .suffix("x")
-    .show();
+// Show UI control
+let response = ui.add(egui::Slider::new(&mut value, 0.1..=5.0).text("Exposure"));
+
+// Update if changed
+if response.changed() {
+    config_manager.update_param(ConfigPath::Exposure, value.into())?;
+}
 ```
+
+**That's it!** No lazy parameters, no force_commit calls, no preview mode logic.
 
 ### Handling UpdateType
 
-All helpers return `UpdateType` - handle in App:
+Update actions are tracked automatically by App via `config_manager.consume_actions()`:
 
 ```rust
-// In UI window
-let update_type = lazy_slider(ui, config_manager, ConfigPath::Zoom, 0.1..=10.0)
-    .text("Zoom")
-    .show();
+// In App::render() after UI updates
+let actions = self.config_manager.consume_actions();
 
-// In App::render()
-match update_type {
-    UpdateType::View => {
-        let config = self.config_manager.active_config();
-        self.flame_renderer.update_view(
-            config.zoom, config.pan_x, config.pan_y, config.rotation
-        );
-        self.flame_renderer.reset();
-    }
-    UpdateType::Flame => {
-        let config = self.config_manager.active_config();
-        self.flame_renderer.update_flame(&config.flame, true);
-        self.flame_renderer.reset();
-    }
-    UpdateType::ToneMap => {
-        let config = self.config_manager.active_config();
-        self.flame_renderer.update_tonemap(
-            config.tonemap_mode, config.tonemap_curve,
-            config.use_curve, config.exposure, config.gamma
-        );
-        // No reset needed for tone mapping
-    }
-    _ => {}
+// Handle GPU updates based on what changed
+if actions.update_view {
+    let config = self.config_manager.current();
+    self.flame_renderer.update_view(/* ... */);
 }
+if actions.update_flame {
+    let config = self.config_manager.current();
+    self.flame_renderer.update_flame(/* ... */);
+}
+if actions.update_tone_curve {
+    let config = self.config_manager.current();
+    self.flame_renderer.update_tonemap(/* ... */);
+}
+// etc.
 ```
 
-### Custom Controls Pattern
-
-For custom UI controls (not using helpers):
-
-```rust
-// Manual ConfigManager integration
-let mut value = config_manager.active_config().exposure;
-if ui.add(egui::Slider::new(&mut value, 0.1..=5.0).text("Exposure")).changed() {
-    let update_type = config_manager.update_config(
-        ConfigPath::Exposure,
-        ConfigValue::Float(value)
-    );
-    // Handle update_type...
-}
-```
+**100ms Overwrite Window** (automatic in [src/app/mod.rs](../../src/app/mod.rs)):
+- Triggered by `actions.update_view`, `actions.update_palette`, or `actions.update_flame`
+- Keeps overwrite mode ON for 100ms after last change (~6 frames at 60fps)
+- Provides smooth real-time updates with no blank frames
+- No UI code needs to know about this - it's handled automatically
 
 ---
 
@@ -1169,14 +1106,21 @@ pub fn import_config(&mut self, config: FractalConfig) {
 
 ---
 
-**Last Updated:** 2025-10-31
+**Last Updated:** 2025-11-17
 **Related Docs:** [ARCHITECTURE.md](../ARCHITECTURE.md), [TRANSFORMS.md](TRANSFORMS.md), [UI.md](UI.md), [EXPORT.md](EXPORT.md)
 
-**Major Changes (2025-10-31):**
+**Major Changes:**
+
+**2025-10-31 (PR #22 - Undo/Redo Improvements):**
 - Replaced UndoHistory with ConfigManager delta-based system
 - Added ConfigPath, ConfigValue, ConfigDelta documentation
 - Added UpdateType classification for selective GPU updates
-- Documented LazyUndoHelper for smart undo throttling
-- Added Live Preview Mode documentation
-- Added UI helper functions (config_slider, lazy_slider, etc.)
 - All 100+ parameters now have type-safe ConfigPath variants
+
+**2025-11-17 (PR #23 - Remove Preview Mode):**
+- Removed preview mode system and lazy parameter complexity
+- Simplified all UI controls to immediate updates with automatic coalescing
+- Implemented 100ms overwrite window for real-time rendering without blank frames
+- Removed LazyUndoHelper - replaced with automatic coalescing (2s window)
+- Removed live preview mode - palette editor uses direct updates
+- Simplified UpdateType enum (ViewOnly, ColorOnly, IterationReset, ToneMappingOnly)

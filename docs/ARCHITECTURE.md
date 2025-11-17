@@ -121,8 +121,7 @@ fractal_flame_wgpu/
 │   │   ├── help.rs                Help/about dialogs
 │   │   ├── helpers.rs             UI utility functions
 │   │   ├── formatting.rs          Number formatting helpers
-│   │   ├── response.rs            UiResponse struct (legacy)
-│   │   └── lazy_undo.rs           Lazy undo helpers (experimental)
+│   │   └── response.rs            UiResponse struct (legacy)
 │   │
 │   └── i18n.rs                 Internationalization (Added 2025-11-13)
 │                               - rust-i18n integration
@@ -229,8 +228,8 @@ fractal_flame_wgpu/
 │       ├── defaults.rs         Default value constants (single source of truth)
 │       ├── fractal_config.rs   FractalConfig (complete state), JSON serialization
 │       ├── delta.rs            ConfigPath, ConfigValue, ConfigDelta enums
-│       ├── manager.rs          ConfigManager (delta-based state management, undo/redo)
-│       └── slider.rs           Slider/DragValue helpers with lazy undo support
+│       ├── manager.rs          ConfigManager (delta-based state, undo/redo, coalescing)
+│       └── slider.rs           Slider/DragValue UI helpers
 │   └── png_metadata.rs         PNG metadata embedding, tEXt chunks
 │
 ├── Profiling & Version Tracking
@@ -802,12 +801,12 @@ Result: Variable throughput based on motion, but constant visual quality.
 
 ---
 
-## 🔄 Delta-Based State Management System (Completed 2025-11-01)
+## 🔄 Delta-Based State Management System (Completed 2025-11-17)
 
 ### Overview
-The application uses a **delta-based state management system** (ConfigManager) that has **completely replaced** the previous flag-based approach. All configuration changes flow through a single centralized gateway that tracks deltas, manages undo/redo, and determines selective GPU updates.
+The application uses a **simplified delta-based state management system** (ConfigManager) that has **completely replaced** the previous flag-based approach. All configuration changes flow through a single centralized gateway that tracks deltas, manages undo/redo with automatic coalescing, and determines selective GPU updates.
 
-**Status**: ✅ **COMPLETE** - All UI controls migrated, preview mode working, Triangle Editor integrated
+**Status**: ✅ **COMPLETE** - All UI controls simplified, preview mode removed, real-time rendering with 100ms overwrite window
 
 **See [CONFIG.md](main/CONFIG.md)** for complete ConfigManager documentation.
 
@@ -815,9 +814,9 @@ The application uses a **delta-based state management system** (ConfigManager) t
 
 **Core Components:**
 - **ConfigManager** ([src/config/manager.rs](../src/config/manager.rs)) - Central state manager
-  - Stores active_config (current state)
-  - Stores preview_config (temporary state during live editing)
-  - Maintains undo/redo stack (50 states)
+  - Stores current (current state)
+  - Maintains undo_history (50 ConfigChange entries)
+  - Automatic coalescing (2 second window for same parameter)
   - Computes deltas on every change
   - Returns UpdateType for selective GPU updates
 
@@ -836,26 +835,35 @@ The application uses a **delta-based state management system** (ConfigManager) t
 
 - **UpdateType** - Selective update classification
   - `None` - No GPU update needed
-  - `View` - Camera/zoom changed, reset accumulation
-  - `Color` - Palette changed, reset accumulation
-  - `Flame` - Transform/variation changed, reset accumulation
-  - `ToneMap` - Tone mapping changed, no reset needed
-  - `Rendering` - Speed/quality settings changed
+  - `ViewOnly` - Camera/zoom changed, use overwrite mode
+  - `ColorOnly` - Palette changed, use overwrite mode
+  - `IterationReset` - Transform/variation changed, use overwrite + reset iteration counter after 100ms
+  - `ToneMappingOnly` - Tone mapping changed, no accumulation buffer changes
+
+- **100ms Overwrite Window** ([src/app/mod.rs](../src/app/mod.rs)) - Real-time rendering without blank frames
+  - Triggered by ViewOnly, ColorOnly, or IterationReset updates
+  - Sets `blend_factor=1.0` (replace buffer instead of blend)
+  - Sets `batch_size=1` (accumulate every frame, not every 4th)
+  - Keeps overwrite ON for 100ms after last change (~6 frames at 60fps)
+  - After window expires: return to normal accumulation and optionally reset iteration counter
 
 ### UI Integration
 
-**Standard Pattern** (preview mode for mouse drag, discrete for keyboard):
+**Standard Pattern** (simple immediate updates with automatic coalescing):
 ```rust
-let response = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).text("Parameter"));
+// Read current value
+let mut value = config_manager.current().exposure;
+
+// Show UI control
+let response = ui.add(egui::Slider::new(&mut value, 0.1..=5.0).text("Exposure"));
+
+// Update if changed
 if response.changed() {
-    // lazy=response.dragged() distinguishes mouse drag from keyboard input
-    config_manager.update_param(path, value.into(), response.dragged())?;
-}
-// Commit preview when drag ends
-if response.drag_stopped() && config_manager.is_in_preview_mode() {
-    config_manager.force_commit_preview(&path)?;
+    config_manager.update_param(ConfigPath::Exposure, value.into())?;
 }
 ```
+
+**That's it!** No lazy parameters, no force_commit calls, no preview mode logic.
 
 **Batch Updates** (multiple related parameters):
 ```rust
@@ -864,13 +872,14 @@ let changes = vec![
     (ConfigPath::TransformAffine { index, param: B }, b.into()),
     // ... more params
 ];
-config_manager.update_batch(changes, "Description", response.dragged())?;
+config_manager.update_batch(changes, "Transform affine update")?;
 ```
 
-**Key Insight**: Using `lazy=response.dragged()` ensures:
-- Mouse drag → `dragged()=true` → preview mode → single undo point on release
-- Keyboard input → `dragged()=false` → discrete undo point immediately
-- No preview mode stuck issues
+**How It Works**:
+- Every `update_param()` call creates a ConfigChange
+- Coalescing automatically merges changes to **same ConfigPath** within 2 seconds
+- Changes to **different ConfigPath** always create separate undo entries
+- Result: Slider drags create 1 undo entry (not 100+)
 
 ### Key Benefits
 
@@ -880,26 +889,26 @@ config_manager.update_batch(changes, "Description", response.dragged())?;
 3. **Selective Updates** - UpdateType determines minimal GPU work
 4. **Human-Readable History** - ConfigPath::Display shows "Transform 2 → Affine a"
 5. **Type Safety** - Compile-time verification of parameter types
-6. **Live Preview Mode** - Temporary changes (e.g., palette editor) with instant revert
-7. **Lazy Undo** - Intelligent throttling prevents undo stack bloat
+6. **Automatic Coalescing** - Merges rapid changes (2s window) prevents undo stack bloat
+7. **Real-Time Rendering** - 100ms overwrite window eliminates blank frames
 
 ### Migration Status: ✅ COMPLETE
 
-**All UI Controls Migrated:**
-- ✅ View controls (zoom, pan, rotation, camera)
-- ✅ Settings sliders (iterations, blend, compression, etc.)
-- ✅ Tone mapping controls (exposure, gamma, curves)
-- ✅ Variation weights and parameters
-- ✅ Color controls (palette, background, color mode)
-- ✅ **Triangle Editor** (coordinates, quick actions, affine coefficients)
-- ✅ Palette editor (live preview mode)
-- ✅ All preview mode issues resolved
+**All UI Controls Simplified (2025-11-17):**
+- ✅ View controls (zoom, pan, rotation, camera) - Real-time updates
+- ✅ Settings sliders (iterations, blend, compression, etc.) - Coalescing
+- ✅ Tone mapping controls (exposure, gamma, curves) - No accumulation reset
+- ✅ Variation weights and parameters - Real-time updates
+- ✅ Color controls (palette, background, color mode) - Real-time updates
+- ✅ **Triangle Editor** - Batch updates for multi-param changes
+- ✅ Palette editor - Direct updates (no separate preview mode)
 
-**Preview Mode Fixes (2025-11-01):**
-- Changed all sliders from `lazy=true` to `lazy=response.dragged()`
-- Fixed keyboard input getting stuck in preview mode
-- All sliders now distinguish mouse drag from keyboard input
-- Added `drag_stopped()` commit logic to all sliders
+**Simplification (PR #23 - 2025-11-17):**
+- Removed preview mode system and lazy parameter complexity
+- All updates now immediate with automatic coalescing
+- 100ms overwrite window provides smooth real-time updates
+- No blank frames during any parameter changes
+- UI code dramatically simplified (no lazy/force_commit logic)
 
 **Non-Config Actions** (intentionally separate):
 - Transform add/delete (structural changes)
@@ -910,23 +919,16 @@ config_manager.update_batch(changes, "Description", response.dragged())?;
 
 **COMPLETED - All documentation archived to [docs/archive/delta-migration/](archive/delta-migration/)**
 
-**Historical Reference:**
-- [delta-based-state-management.md](archive/delta-migration/delta-based-state-management.md) - Original 2,600-line plan (RETIRED)
+**Historical Reference (Archived):**
+- [delta-based-state-management.md](archive/delta-migration/delta-based-state-management.md) - Original 2,600-line plan
 - [delta-system-completed.md](archive/delta-migration/delta-system-completed.md) - Completed work summary (Phases 1-10)
 - [complete-delta-migration.md](archive/delta-migration/complete-delta-migration.md) - Final migration phases (11-16)
 - [MIGRATION-STATUS.md](archive/delta-migration/MIGRATION-STATUS.md) - Detailed migration tracking
-- [lazy-undo-implementation.md](archive/delta-migration/lazy-undo-implementation.md) - LazyUndoHelper design
-- [live-mode-accumulation-problem.md](archive/delta-migration/live-mode-accumulation-problem.md) - Preview mode solution
-- [palette-editor-live-undo.md](archive/delta-migration/palette-editor-live-undo.md) - Palette editor integration
+- [remove-preview-mode.md](archive/remove-preview-mode.md) - Preview mode removal plan (PR #23)
 
 **Current Documentation:**
 - [CONFIG.md](main/CONFIG.md) - Complete ConfigManager reference
-- [dragvalue-keyboard-preview-mode.md](projects/dragvalue-keyboard-preview-mode.md) - Preview mode issue analysis
 - [palette-system-redesign.md](projects/palette-system-redesign.md) - Palette architecture
-- [undo-redo-issues.md](projects/undo-redo-issues.md) - Future improvements
-
-**Archived Work:**
-- [centralized-update-logic.md](projects/centralized-update-logic.md) - Future work: Centralize UpdateType handling
 
 ### Performance Characteristics
 
@@ -1018,14 +1020,16 @@ const pngData = await export_headless_wasm(config, 800, 600, 256, 4);
 
 ---
 
-**Last Updated:** 2025-11-16
+**Last Updated:** 2025-11-17
 **Project:** fflame-rust
 
 **Major Recent Changes:**
-- **Delta-based state management system** for type-safe config changes (2025-10-31)
-  - ConfigManager with automatic undo/redo and delta tracking
-  - LazyUndoHelper for intelligent undo throttling (500ms minimum)
-  - Live preview mode for palette editor (instant revert)
+- **Simplified state management system** (2025-11-17, PR #23)
+  - Removed preview mode and lazy parameter complexity
+  - 100ms overwrite window for real-time rendering without blank frames
+  - Automatic coalescing (2 second window) for undo history
+  - All UI controls simplified to immediate updates
+  - ConfigManager with automatic undo/redo and delta tracking (2025-10-31, PR #22)
   - Selective GPU updates via UpdateType classification
   - 100+ type-safe ConfigPath variants for all parameters
   - Visual undo history window with human-readable descriptions
