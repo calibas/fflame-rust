@@ -1,5 +1,4 @@
 use fractal_flame_wgpu::scene::presets::*;
-use fractal_flame_wgpu::scene::palette::ColorMode;
 use fractal_flame_wgpu::config::FractalConfig;
 use std::fs;
 
