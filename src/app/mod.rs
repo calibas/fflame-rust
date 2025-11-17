@@ -1064,13 +1064,14 @@ impl App {
                     // For now, this would require recreating the compute pipeline
                 }
 
-                // Reset accumulation if UpdateAction indicates (or keyboard view change)
+                // Reset accumulation only for structural changes (IterationReset)
+                // View/color changes use overwrite mode instead for smooth updates
                 let should_reset = actions.reset_accumulation || view_changed_by_keyboard;
                 if should_reset {
                     renderer.reset(&mut update_encoder, &self.gpu.queue, update_config.iterations_per_thread,
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
-                    self.frames_since_accumulation = 0;  // Reset batch counter
+                    self.frames_since_accumulation = 0;
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
@@ -1096,9 +1097,9 @@ impl App {
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
-            // Live mode: Enable overwrite mode during preview, reset when exiting
-            let in_preview_mode = self.config_manager.is_in_preview_mode();
-            renderer.set_overwrite_mode(in_preview_mode);
+            // Always use overwrite mode - this eliminates blank frames
+            // The accumulation blend will smoothly replace the old image with the new one
+            renderer.set_overwrite_mode(true);
 
             // Check if we should continue iterating
             let max_iterations = Some(final_config.max_iterations);
