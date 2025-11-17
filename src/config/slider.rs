@@ -3,7 +3,7 @@
 /// Provides a builder pattern for creating sliders that automatically wire to
 /// ConfigManager for delta-based undo/redo.
 
-use super::delta::{ConfigPath, ConfigValue, UpdateType};
+use super::delta::{ConfigPath, UpdateType};
 use super::manager::{ConfigError, ConfigManager};
 
 /// Result from a config slider operation
