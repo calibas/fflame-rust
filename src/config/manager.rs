@@ -212,7 +212,7 @@ pub struct ConfigManager {
     /// Last time we created a lazy undo point
     last_lazy_undo: Option<Instant>,
 
-    /// Lazy undo throttle duration (500ms for now, will increase to 5000ms)
+    /// Lazy undo throttle duration (5000ms = 5 seconds)
     lazy_throttle: Duration,
 
     /// Pending actions accumulated since last get_pending_actions() call
