@@ -124,20 +124,15 @@ fn render_curve_editor(
             modified_curve.move_point(idx, new_x, new_y);
 
             // Update via ConfigManager with lazy mode (throttled)
-            if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, modified_curve.into(), true) {
+            if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, modified_curve.into()) {
                 max_update = max_update.max(update);
             }
         }
     }
 
-    // Clear drag on mouse release and force commit preview
+    // Clear drag on mouse release
     if !mouse_down && dragging_point.is_some() {
         dragging_point = None;
-
-        // Exit preview mode immediately on drag end
-        if config_manager.is_in_preview_mode() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TonemapCurve);
-        }
     }
 
     // Persist drag state
@@ -155,7 +150,7 @@ fn render_curve_editor(
             modified_curve.add_point(crate::scene::tonemap::CurvePoint::new(x, y));
 
             // Update via ConfigManager (not lazy - immediate capture for discrete action)
-            if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, modified_curve.into(), false) {
+            if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, modified_curve.into()) {
                 max_update = max_update.max(update);
             }
         }
@@ -190,17 +185,17 @@ pub fn render_colors_content(
             let current_tonemap_mode = config_manager.active_config().tonemap_mode;
             ui.horizontal(|ui| {
                 if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Linear), "Linear").clicked() {
-                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Linear.into(), false) {
+                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Linear.into()) {
                         max_update = max_update.max(update);
                     }
                 }
                 if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::Logarithmic), "Logarithmic").clicked() {
-                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into(), false) {
+                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into()) {
                         max_update = max_update.max(update);
                     }
                 }
                 if ui.selectable_label(matches!(current_tonemap_mode, ToneMapMode::DensityVisualization), "Density").clicked() {
-                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::DensityVisualization.into(), false) {
+                    if let Ok(update) = config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::DensityVisualization.into()) {
                         max_update = max_update.max(update);
                     }
                 }
@@ -251,7 +246,7 @@ pub fn render_colors_content(
         .show(ui, |ui| {
             let mut temp_use_curve = config_manager.active_config().use_curve;
             if ui.checkbox(&mut temp_use_curve, "Enable Tone Curve").changed() {
-                if let Ok(update) = config_manager.update_param(ConfigPath::UseCurve, temp_use_curve.into(), false) {
+                if let Ok(update) = config_manager.update_param(ConfigPath::UseCurve, temp_use_curve.into()) {
                     max_update = max_update.max(update);
                 }
             }
@@ -261,24 +256,24 @@ pub fn render_colors_content(
                 ui.label("Presets");
                 ui.horizontal(|ui| {
                     if ui.button("Linear").clicked() {
-                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::linear().into(), false) {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::linear().into()) {
                             max_update = max_update.max(update);
                         }
                     }
                     if ui.button("S-Curve").clicked() {
-                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::s_curve().into(), false) {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::s_curve().into()) {
                             max_update = max_update.max(update);
                         }
                     }
                     if ui.button("Brighten Shadows").clicked() {
-                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::brighten_shadows().into(), false) {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::brighten_shadows().into()) {
                             max_update = max_update.max(update);
                         }
                     }
                 });
                 ui.horizontal(|ui| {
                     if ui.button("Darken Highlights").clicked() {
-                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::darken_highlights().into(), false) {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::TonemapCurve, ToneCurve::darken_highlights().into()) {
                             max_update = max_update.max(update);
                         }
                     }
@@ -306,12 +301,12 @@ pub fn render_colors_content(
                 .selected_text(selected_text)
                 .show_ui(ui, |ui| {
                     if ui.selectable_value(&mut temp_color_mode, ColorMode::Palette, "Palette").changed() {
-                        if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
                             max_update = max_update.max(update);
                         }
                     }
                     if ui.selectable_value(&mut temp_color_mode, ColorMode::Speed, "Speed").changed() {
-                        if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into(), false) {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
                             max_update = max_update.max(update);
                         }
                     }
@@ -355,8 +350,7 @@ pub fn render_colors_content(
 
                                 if let Ok(update) = config_manager.update_param(
                                     ConfigPath::Palette,
-                                    palette_copy.clone().into(),
-                                    false
+                                    palette_copy.clone().into()
                                 ) {
                                     max_update = max_update.max(update);
                                 }
@@ -389,8 +383,7 @@ pub fn render_colors_content(
 
                             if let Ok(update) = config_manager.update_param(
                                 ConfigPath::Palette,
-                                cloned_palette.clone().into(),
-                                false
+                                cloned_palette.clone().into()
                             ) {
                                 max_update = max_update.max(update);
                             }
@@ -418,8 +411,7 @@ pub fn render_colors_content(
             if ui.color_edit_button_rgb(&mut bg_array).changed() {
                 if let Ok(update) = config_manager.update_param(
                     ConfigPath::BackgroundColor,
-                    [bg_array[0], bg_array[1], bg_array[2]].into(),
-                    false
+                    [bg_array[0], bg_array[1], bg_array[2]].into()
                 ) {
                     max_update = max_update.max(update);
                 }

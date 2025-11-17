@@ -144,13 +144,13 @@ impl UpdateAction {
     }
 
     /// Create from UpdateType (used when building from delta changes)
-    pub fn from_update_type(update_type: UpdateType, in_preview_mode: bool) -> Self {
+    pub fn from_update_type(update_type: UpdateType) -> Self {
         match update_type {
             UpdateType::None => Self::none(),
 
             UpdateType::ViewOnly => Self {
                 update_view: true,
-                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                reset_accumulation: false, // Never reset - use overwrite mode for smooth updates
                 ..Default::default()
             },
 
@@ -162,13 +162,13 @@ impl UpdateAction {
 
             UpdateType::ColorOnly => Self {
                 update_palette: true,
-                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                reset_accumulation: false, // Never reset - use overwrite mode for smooth updates
                 ..Default::default()
             },
 
             UpdateType::IterationReset => Self {
                 update_flame: true,
-                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                reset_accumulation: false, // Don't reset - use overwrite mode for smooth transition
                 rebuild_shader: false, // TODO: detect variation changes
                 ..Default::default()
             },
@@ -219,11 +219,6 @@ pub struct ConfigManager {
     /// This tracks what GPU updates are needed based on recent changes
     pending_actions: UpdateAction,
 
-    /// Whether the current preview requires overwrite rendering
-    /// True for iteration-affecting parameters (view, flame, color)
-    /// False for post-processing parameters (tone mapping)
-    preview_needs_overwrite: bool,
-
     /// Active modify session (for transform editing with snapshot on commit)
     /// When Some: transform edits don't create history entries
     /// When None: normal operation
@@ -249,262 +244,94 @@ impl ConfigManager {
             last_lazy_undo: None,
             lazy_throttle: Duration::from_millis(5000),
             pending_actions: UpdateAction::none(),
-            preview_needs_overwrite: false,
             modify_session: None,
         }
     }
 
     /// Apply a single parameter change
+    ///
+    /// All changes apply immediately and create history entries.
+    /// Coalescing (in push_undo) automatically merges rapid changes to same parameter.
     pub fn update_param(
         &mut self,
         path: ConfigPath,
         new_value: ConfigValue,
-        lazy: bool,
     ) -> Result<UpdateType, ConfigError> {
-        // If in modify session, skip history creation (will create snapshot on commit)
-        let in_modify_session = self.modify_session.is_some();
-
-        if lazy {
-            // Lazy mode: Update preview, capture on throttle
-
-            // Determine if this parameter type needs overwrite rendering
-            let update_type = path.update_type();
-            let needs_overwrite = matches!(update_type,
-                UpdateType::ViewOnly | UpdateType::IterationReset | UpdateType::ColorOnly
-            );
-
-            // Create preview if it doesn't exist (first update in drag sequence)
-            if self.preview.is_none() {
-                self.preview = Some(self.current.clone());
-                self.preview_needs_overwrite = needs_overwrite;
-                log::trace!("Created preview from current (overwrite={})", needs_overwrite);
-            }
-
-            // Get preview value (will exist now)
-            let preview_value = self.get_value(&path)?;
-
-            // Check if actually changed from preview
-            if preview_value.approx_eq(&new_value) {
-                return Ok(UpdateType::None);
-            }
-
-            // Update preview with new value
-            self.set_value_in_preview(&path, new_value.clone())?;
-            log::trace!("Updated preview: {} = {}", path, new_value);
-
-            // In modify session: always commit preview to current (no history capture)
-            if in_modify_session {
-                self.current = self.preview.clone().unwrap();
-                log::trace!("Modify session: committed preview to current (no history)");
-                let update_type = path.update_type();
-                self.record_action(update_type);
-                return Ok(update_type);
-            }
-
-            // Normal mode: check if we should capture this change
-            let should_capture = self.should_capture_lazy_undo();
-
-            if should_capture {
-                // Capture delta from current → preview
-                let old_value_in_current = {
-                    let temp_preview = self.preview.take();
-                    let val = self.get_value(&path)?;
-                    self.preview = temp_preview;
-                    val
-                };
-
-                log::debug!("Lazy capture: {} = {} → {}", path, old_value_in_current, new_value);
-
-                let delta = ConfigDelta::new(path.clone(), old_value_in_current, new_value.clone());
-                let change = ConfigChange::single(delta);
-                let update_type = change.update_type();
-
-                self.push_undo(change);
-
-                // Commit preview to current (clone to keep preview active - prevents blink)
-                self.current = self.preview.clone().unwrap();
-                log::debug!("  -> Committed preview to current, history len: {}", self.history.len());
-
-                // Record action for GPU updates
-                self.record_action(update_type);
-
-                return Ok(update_type);
-            }
-
-            // No capture yet, but still record action for GPU updates during preview
-            let update_type = path.update_type();
-            self.record_action(update_type);
-            Ok(update_type)
-
-        } else {
-            // Non-lazy mode: Update current directly and capture immediately
-
-            let old_value = self.get_value(&path)?;
-
-            // Check if actually changed
-            if old_value.approx_eq(&new_value) {
-                return Ok(UpdateType::None);
-            }
-
-            // Skip history if in modify session
-            if !in_modify_session {
-                log::debug!("Immediate capture: {} = {} → {}", path, old_value, new_value);
-
-                // Create delta and capture
-                let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
-                let change = ConfigChange::single(delta);
-                let update_type = change.update_type();
-
-                self.push_undo(change);
-            } else {
-                log::trace!("Modify session active: updating {} without history", path);
-            }
-
-            // Apply change to current
+        // Special case: modify session (skip history, commit on session end)
+        if self.modify_session.is_some() {
             self.set_value(&path, new_value)?;
-
-            // Record action for GPU updates
             let update_type = path.update_type();
             self.record_action(update_type);
-
-            Ok(update_type)
+            return Ok(update_type);
         }
+
+        // Normal mode: update current and capture
+        let old_value = self.get_value(&path)?;
+
+        if old_value.approx_eq(&new_value) {
+            return Ok(UpdateType::None);
+        }
+
+        let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
+        let change = ConfigChange::single(delta);
+        let update_type = change.update_type();
+
+        self.push_undo(change);  // Coalescing happens here automatically
+        self.set_value(&path, new_value)?;
+        self.record_action(update_type);
+
+        Ok(update_type)
     }
 
     /// Apply a batch of changes (single undo point)
+    ///
+    /// Batch changes always create immediate history entries (no coalescing).
+    /// Use this for grouped parameter changes like triangle editor affine updates.
     pub fn update_batch(
         &mut self,
         changes: Vec<(ConfigPath, ConfigValue)>,
         description: String,
-        lazy: bool,
     ) -> Result<UpdateType, ConfigError> {
-        // If in modify session, skip history creation (will create snapshot on commit)
-        let in_modify_session = self.modify_session.is_some();
-
-        if lazy {
-            // Lazy mode: Update preview, capture on throttle (same logic as update_param)
-
-            // Determine if this batch needs overwrite rendering (check first path's update type)
-            let needs_overwrite = if !changes.is_empty() {
-                let first_update_type = changes[0].0.update_type();
-                matches!(first_update_type,
-                    UpdateType::ViewOnly | UpdateType::IterationReset | UpdateType::ColorOnly
-                )
-            } else {
-                false
-            };
-
-            // Create preview if it doesn't exist (first update in drag sequence)
-            if self.preview.is_none() {
-                self.preview = Some(self.current.clone());
-                self.preview_needs_overwrite = needs_overwrite;
-                log::trace!("Created preview from current (batch, overwrite={})", needs_overwrite);
+        // Special case: modify session (skip history, commit on session end)
+        if self.modify_session.is_some() {
+            for (path, value) in changes {
+                self.set_value(&path, value)?;
             }
-
-            // Create deltas from preview to new values
-            let mut deltas = Vec::new();
-            for (path, new_value) in changes {
-                let preview_value = self.get_value(&path)?; // Gets from preview
-                if !preview_value.approx_eq(&new_value) {
-                    deltas.push(ConfigDelta::new(path.clone(), preview_value, new_value.clone()));
-                    // Update preview with new value
-                    self.set_value_in_preview(&path, new_value)?;
-                }
-            }
-
-            if deltas.is_empty() {
-                return Ok(UpdateType::None);
-            }
-
-            let change = ConfigChange::batch(deltas, description);
-            let update_type = change.update_type();
-
-            // In modify session: always commit preview to current (no history capture)
-            if in_modify_session {
-                self.current = self.preview.clone().unwrap();
-                log::trace!("Modify session: committed batch preview to current (no history)");
-                self.record_action(update_type);
-                return Ok(update_type);
-            }
-
-            // Normal mode: check if we should capture this change
-            let should_capture = self.should_capture_lazy_undo();
-
-            if should_capture {
-                // Capture delta from current → preview
-                let deltas_from_current: Vec<ConfigDelta> = change.deltas.iter().map(|delta| {
-                    // Get old value from current (not preview)
-                    let old_val_in_current = {
-                        let temp_preview = self.preview.take();
-                        let val = self.get_value(&delta.path).unwrap();
-                        self.preview = temp_preview;
-                        val
-                    };
-                    ConfigDelta::new(delta.path.clone(), old_val_in_current, delta.new_value.clone())
-                }).collect();
-
-                let change_from_current = ConfigChange::batch(deltas_from_current, change.description.clone());
-                self.push_undo(change_from_current);
-
-                // Commit preview to current (clone to keep preview active - prevents blink)
-                self.current = self.preview.clone().unwrap();
-                log::debug!("  -> Committed batch preview to current, history len: {}", self.history.len());
-
-                // Record action for GPU updates
-                self.record_action(update_type);
-
-                return Ok(update_type);
-            }
-
-            // No capture yet, but still record action for GPU updates during preview
+            let update_type = UpdateType::IterationReset;  // Assume worst case for modify session
             self.record_action(update_type);
-            Ok(update_type)
-
-        } else {
-            // Non-lazy mode: Update current directly and capture immediately
-            let mut deltas = Vec::new();
-
-            // Create deltas for all changes
-            for (path, new_value) in changes {
-                let old_value = self.get_value(&path)?;
-                if !old_value.approx_eq(&new_value) {
-                    deltas.push(ConfigDelta::new(path, old_value, new_value));
-                }
-            }
-
-            if deltas.is_empty() {
-                return Ok(UpdateType::None);
-            }
-
-            let change = ConfigChange::batch(deltas, description);
-
-            // Skip history if in modify session
-            if !in_modify_session {
-                // Capture undo point
-                self.push_undo(change.clone());
-            } else {
-                log::trace!("Modify session active: batch update without history");
-            }
-
-            // Apply all changes
-            for delta in &change.deltas {
-                self.set_value(&delta.path, delta.new_value.clone())?;
-            }
-
-            let update_type = change.update_type();
-
-            // Record action for GPU updates
-            self.record_action(update_type);
-
-            Ok(update_type)
+            return Ok(update_type);
         }
+
+        // Normal mode: create deltas and capture
+        let mut deltas = Vec::new();
+        for (path, new_value) in changes {
+            let old_value = self.get_value(&path)?;
+            if !old_value.approx_eq(&new_value) {
+                deltas.push(ConfigDelta::new(path, old_value, new_value));
+            }
+        }
+
+        if deltas.is_empty() {
+            return Ok(UpdateType::None);
+        }
+
+        let change = ConfigChange::batch(deltas, description);
+        let update_type = change.update_type();
+
+        self.push_undo(change.clone());  // Batch changes skip coalescing
+
+        for delta in &change.deltas {
+            self.set_value(&delta.path, delta.new_value.clone())?;
+        }
+
+        self.record_action(update_type);
+        Ok(update_type)
     }
 
     /// Undo last change
     pub fn undo(&mut self) -> Result<UpdateType, ConfigError> {
         // Clear preview mode before undo (if active)
         self.preview = None;
-        self.preview_needs_overwrite = false;
 
         if self.position == 0 {
             return Err(ConfigError::EmptyUndoStack);
@@ -579,7 +406,6 @@ impl ConfigManager {
     pub fn redo(&mut self) -> Result<UpdateType, ConfigError> {
         // Clear preview mode before redo (if active)
         self.preview = None;
-        self.preview_needs_overwrite = false;
 
         if self.position >= self.history.len() {
             return Err(ConfigError::EmptyRedoStack);
@@ -676,18 +502,6 @@ impl ConfigManager {
     /// Reset lazy undo timer (call on drag end to ensure final state is captured)
     pub fn reset_lazy_undo(&mut self) {
         self.last_lazy_undo = None;
-    }
-
-    /// Check if ConfigManager is in preview mode (during lazy drag)
-    ///
-    /// This returns true only if:
-    /// 1. A preview is active (lazy drag in progress), AND
-    /// 2. The parameter being previewed requires overwrite rendering
-    ///
-    /// Tone mapping parameters use lazy undo but NOT preview mode since
-    /// they're post-processing and don't need overwrite rendering.
-    pub fn is_in_preview_mode(&self) -> bool {
-        self.preview.is_some() && self.preview_needs_overwrite
     }
 
     /// Push change to history, maintaining depth limit and truncating future
@@ -1606,7 +1420,6 @@ impl ConfigManager {
     /// This ensures changes are captured even if drag ended before throttle fired
     pub fn force_commit_preview(&mut self, path: &ConfigPath) -> Result<UpdateType, ConfigError> {
         if let Some(preview) = self.preview.take() {
-            self.preview_needs_overwrite = false;  // Clear overwrite flag
             log::debug!("Force commit for path: {:?}", path);
 
             // Check if preview actually differs from current
@@ -1665,7 +1478,6 @@ impl ConfigManager {
     pub fn load_config(&mut self, new_config: FractalConfig, description: String) -> Result<(), ConfigError> {
         // Clear any preview state
         self.preview = None;
-        self.preview_needs_overwrite = false;
 
         // Create single bidirectional snapshot
         let change = ConfigChange::full_config_snapshot(
@@ -1771,7 +1583,6 @@ impl ConfigManager {
 
         // Clear preview state (session is ending)
         self.preview = None;
-        self.preview_needs_overwrite = false;
 
         let index = session.transform_index;
         let before = session.initial_transform;
@@ -1809,7 +1620,6 @@ impl ConfigManager {
 
         // Clear preview state (session is ending)
         self.preview = None;
-        self.preview_needs_overwrite = false;
 
         // Restore initial state
         let index = session.transform_index;
@@ -1887,8 +1697,7 @@ impl ConfigManager {
     ///
     /// Called internally when config changes occur
     fn record_action(&mut self, update_type: UpdateType) {
-        let in_preview = self.is_in_preview_mode();
-        let action = UpdateAction::from_update_type(update_type, in_preview);
+        let action = UpdateAction::from_update_type(update_type);
         self.pending_actions.merge(&action);
     }
 }
@@ -2129,7 +1938,7 @@ mod tests {
 
         // Make change
         manager
-            .update_param(ConfigPath::Exposure, 2.0.into(), false)
+            .update_param(ConfigPath::Exposure, 2.0.into())
             .unwrap();
         assert_eq!(manager.current.exposure, 2.0);
 
@@ -2154,7 +1963,7 @@ mod tests {
         ];
 
         let update = manager
-            .update_batch(changes, "Reset View".to_string(), false)
+            .update_batch(changes, "Reset View".to_string())
             .unwrap();
 
         assert_eq!(update, UpdateType::ViewOnly);

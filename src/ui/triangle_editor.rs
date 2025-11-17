@@ -271,7 +271,7 @@ fn render_triangle_editor_core(
                                 // Apply triangle changes via update_batch
                                 transform.from_triangle(o, x, y);
                                 let changes = make_affine_changes(transform);
-                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Move Points)".to_string(), true) {
+                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Move Points)".to_string()) {
                                     // Sync transform from active_config for live preview
                                     sync_transform(transform, config_manager);
                                     max_update = max_update.max(update_type);
@@ -309,7 +309,7 @@ fn render_triangle_editor_core(
                                 // Apply triangle changes via update_batch
                                 transform.from_triangle(o, x, y);
                                 let changes = make_affine_changes(transform);
-                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Translate)".to_string(), true) {
+                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Translate)".to_string()) {
                                     sync_transform(transform, config_manager);
                                     max_update = max_update.max(update_type);
                                 }
@@ -362,7 +362,7 @@ fn render_triangle_editor_core(
                                 // Apply triangle changes via update_batch
                                 transform.from_triangle(o, x, y);
                                 let changes = make_affine_changes(transform);
-                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Rotate)".to_string(), true) {
+                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Rotate)".to_string()) {
                                     sync_transform(transform, config_manager);
                                     max_update = max_update.max(update_type);
                                 }
@@ -423,7 +423,7 @@ fn render_triangle_editor_core(
                                         // Apply triangle changes via update_batch
                                         transform.from_triangle(o, x, y);
                                         let changes = make_affine_changes(transform);
-                                        if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Scale)".to_string(), true) {
+                                        if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Scale)".to_string()) {
                                             sync_transform(transform, config_manager);
                                             max_update = max_update.max(update_type);
                                         }
@@ -694,7 +694,7 @@ fn render_triangle_editor_core(
                                     (ConfigPath::FinalTransformAffine { param: AffineParam::F }, temp.f.into()),
                                 ],
                             };
-                            config_manager.update_batch(changes, description.to_string(), false)
+                            config_manager.update_batch(changes, description.to_string())
                         };
 
                         // Translate arrow keys layout (matching View panel)
@@ -833,24 +833,10 @@ fn render_triangle_editor_core(
                     // Use lazy=true while dragging
                     if let Ok(update) = config_manager.update_batch(
                         changes,
-                        format!("Edit triangle coordinates ({})", transform_name),
-                        dragging && !drag_stopped // lazy while dragging
+                        format!("Edit triangle coordinates ({})", transform_name)
                     ) {
                         max_update = max_update.max(update);
                     }
-                }
-
-                // Force commit preview when drag stops
-                if drag_stopped && config_manager.is_in_preview_mode() {
-                    // Use first affine parameter as representative for batch
-                    let commit_path = match selected_transform {
-                        Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::A },
-                        None => ConfigPath::FinalTransformAffine { param: AffineParam::A },
-                    };
-                    if let Ok(update) = config_manager.force_commit_preview(&commit_path) {
-                        max_update = max_update.max(update);
-                    }
-                    config_manager.reset_lazy_undo();
                 }
 
                 ui.separator();
@@ -870,8 +856,7 @@ fn render_triangle_editor_core(
                         };
                         if let Ok(update) = config_manager.update_param(
                             path,
-                            transform.a.into(),
-                            a_resp.dragged()
+                            transform.a.into()
                         ) {
                             max_update = max_update.max(update);
                         }
@@ -887,8 +872,7 @@ fn render_triangle_editor_core(
                         };
                         if let Ok(update) = config_manager.update_param(
                             path,
-                            transform.b.into(),
-                            b_resp.dragged()
+                            transform.b.into()
                         ) {
                             max_update = max_update.max(update);
                         }
@@ -904,8 +888,7 @@ fn render_triangle_editor_core(
                         };
                         if let Ok(update) = config_manager.update_param(
                             path,
-                            transform.e.into(),
-                            e_resp.dragged()
+                            transform.e.into()
                         ) {
                             max_update = max_update.max(update);
                         }
@@ -922,8 +905,7 @@ fn render_triangle_editor_core(
                         };
                         if let Ok(update) = config_manager.update_param(
                             path,
-                            transform.c.into(),
-                            c_resp.dragged()
+                            transform.c.into()
                         ) {
                             max_update = max_update.max(update);
                         }
@@ -939,8 +921,7 @@ fn render_triangle_editor_core(
                         };
                         if let Ok(update) = config_manager.update_param(
                             path,
-                            transform.d.into(),
-                            d_resp.dragged()
+                            transform.d.into()
                         ) {
                             max_update = max_update.max(update);
                         }
@@ -956,8 +937,7 @@ fn render_triangle_editor_core(
                         };
                         if let Ok(update) = config_manager.update_param(
                             path,
-                            transform.f.into(),
-                            f_resp.dragged()
+                            transform.f.into()
                         ) {
                             max_update = max_update.max(update);
                         }
@@ -965,18 +945,6 @@ fn render_triangle_editor_core(
                     dragging |= f_resp.dragged();
                     drag_stopped |= f_resp.drag_stopped();
                 });
-
-                // Force commit preview when drag stops
-                if drag_stopped && config_manager.is_in_preview_mode() {
-                    let commit_path = match selected_transform {
-                        Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::A },
-                        None => ConfigPath::FinalTransformAffine { param: AffineParam::A },
-                    };
-                    if let Ok(update) = config_manager.force_commit_preview(&commit_path) {
-                        max_update = max_update.max(update);
-                    }
-                    config_manager.reset_lazy_undo();
-                }
 
                 ui.separator();
 
@@ -989,8 +957,7 @@ fn render_triangle_editor_core(
                         let changes = make_affine_changes(&identity_transform);
                         if let Ok(update) = config_manager.update_batch(
                             changes,
-                            format!("Reset to identity ({})", transform_name),
-                            false
+                            format!("Reset to identity ({})", transform_name)
                         ) {
                             max_update = max_update.max(update);
                         }

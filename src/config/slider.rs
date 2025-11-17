@@ -101,9 +101,7 @@ impl<'a> ConfigSlider<'a> {
         if changed {
             update_type = self.manager.update_param(
                 self.path.clone(),
-                self.current_value.into(),
-                self.lazy,  // Use normal lazy throttling
-            )?;
+                self.current_value.into())?;
             should_capture = true;
         }
 
@@ -237,14 +235,8 @@ impl ConfigSliderUi for egui::Ui {
 
         if changed {
             // Value changed - update config with lazy undo
-            update_type = manager.update_param(path.clone(), current_value.into(), true)?;
+            update_type = manager.update_param(path.clone(), current_value.into())?;
             should_capture = true;
-        }
-
-        // Force commit preview when drag ends
-        if response.drag_stopped() && manager.is_in_preview_mode() {
-            update_type = update_type.merge(manager.force_commit_preview(&path)?);
-            manager.reset_lazy_undo();
         }
 
         Ok(ConfigSliderResult {

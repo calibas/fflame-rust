@@ -264,11 +264,6 @@ impl<'a> PanelViewer<'a> {
                 self.handle_fractal_drag(drag_delta, available_size);
             }
 
-            // Commit preview when drag ends
-            if response.drag_stopped() && self.context.config_manager.is_in_preview_mode() {
-                let _ = self.context.config_manager.force_commit_preview(&crate::config::ConfigPath::Pan);
-            }
-
             // Handle mouse wheel for zooming
             if response.hovered() {
                 let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
@@ -307,8 +302,7 @@ impl<'a> PanelViewer<'a> {
 
         let _ = self.context.config_manager.update_param(
             crate::config::ConfigPath::Pan,
-            (new_pan_x, new_pan_y).into(),
-            true  // Preview mode while dragging
+            (new_pan_x, new_pan_y).into()
         );
     }
 
@@ -365,16 +359,14 @@ impl<'a> PanelViewer<'a> {
                             (crate::config::ConfigPath::Zoom, new_zoom.into()),
                             (crate::config::ConfigPath::Pan, (new_pan_x, new_pan_y).into()),
                         ],
-                        "Zoom In (Wheel)".to_string(),
-                        false, // Discrete action for scroll
+                        "Zoom In (Wheel)".to_string()
                     );
                 } else {
                     // No mouse position, zoom to center
                     let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
                     let _ = self.context.config_manager.update_param(
                         crate::config::ConfigPath::Zoom,
-                        new_zoom.into(),
-                        false, // Discrete action for scroll
+                        new_zoom.into()
                     );
                 }
             } else {
@@ -382,8 +374,7 @@ impl<'a> PanelViewer<'a> {
                 let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
                 let _ = self.context.config_manager.update_param(
                     crate::config::ConfigPath::Zoom,
-                    new_zoom.into(),
-                    false, // Discrete action for scroll
+                    new_zoom.into()
                 );
             }
         }
