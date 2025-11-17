@@ -251,7 +251,73 @@ if button.clicked() {
 
 **Testing:** Should compile (UI calls still have wrong signature)
 
-### Phase 4: Update All UI Call Sites ✅
+### Phase 4: Fix Renderer - Remove Blank Frames ✅
+**Files:** `src/config/manager.rs`
+
+**Problem:**
+Currently `UpdateAction::from_update_type()` only skips reset when `in_preview_mode = true`:
+```rust
+reset_accumulation: !in_preview_mode, // Lines 153, 165, 171
+```
+
+After removing preview mode, this will ALWAYS reset, causing blank frames on every update.
+
+**Solution:**
+Change logic to be smarter about when to reset accumulation:
+
+```rust
+pub fn from_update_type(update_type: UpdateType) -> Self {  // Remove in_preview_mode param
+    match update_type {
+        UpdateType::None => Self::none(),
+
+        UpdateType::ViewOnly => Self {
+            update_view: true,
+            reset_accumulation: false,  // Continue accumulation, renderer handles transition
+            ..Default::default()
+        },
+
+        UpdateType::ToneMappingOnly => Self {
+            update_tone_curve: true,
+            reset_accumulation: false,  // Post-processing only, never reset
+            ..Default::default()
+        },
+
+        UpdateType::ColorOnly => Self {
+            update_palette: true,
+            reset_accumulation: false,  // Re-run color pass without clearing samples
+            ..Default::default()
+        },
+
+        UpdateType::IterationReset => Self {
+            update_flame: true,
+            reset_accumulation: true,  // Structure changed, must reset
+            rebuild_shader: false,
+            ..Default::default()
+        },
+    }
+}
+```
+
+**Rationale:**
+- `ViewOnly`: Camera moved → samples still valid, continue accumulation
+- `ColorOnly`: Palette changed → re-run color accumulation pass without clearing
+- `ToneMappingOnly`: Post-processing → never affects accumulation
+- `IterationReset`: Flame structure changed → must clear and restart
+
+**Update call site:**
+```rust
+fn record_action(&mut self, update_type: UpdateType) {
+    let action = UpdateAction::from_update_type(update_type);  // Remove in_preview arg
+    self.pending_actions.merge(&action);
+}
+```
+
+**Testing:** Verify smooth transitions (no blank frames) when:
+- Moving sliders (zoom, pan, rotation, exposure, gamma)
+- Changing palette
+- Changing tone mapping parameters
+
+### Phase 5: Update All UI Call Sites ✅
 **Files:** All UI modules
 
 1. Remove `lazy` parameter from all `update_param()` calls
