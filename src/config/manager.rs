@@ -683,8 +683,7 @@ impl ConfigManager {
         match path {
             // View
             ConfigPath::Zoom => Ok(config.zoom.into()),
-            ConfigPath::PanX => Ok(config.pan_x.into()),
-            ConfigPath::PanY => Ok(config.pan_y.into()),
+            ConfigPath::Pan => Ok((config.pan_x, config.pan_y).into()),
             ConfigPath::Rotation => Ok(config.rotation.into()),
             ConfigPath::CameraRotationX => Ok(config.camera_rotation_x.into()),
             ConfigPath::CameraRotationY => Ok(config.camera_rotation_y.into()),
@@ -897,11 +896,10 @@ impl ConfigManager {
             ConfigPath::Zoom => {
                 self.current.zoom = value.try_into()?;
             }
-            ConfigPath::PanX => {
-                self.current.pan_x = value.try_into()?;
-            }
-            ConfigPath::PanY => {
-                self.current.pan_y = value.try_into()?;
+            ConfigPath::Pan => {
+                let (x, y): (f32, f32) = value.try_into()?;
+                self.current.pan_x = x;
+                self.current.pan_y = y;
             }
             ConfigPath::Rotation => {
                 self.current.rotation = value.try_into()?;
@@ -1205,11 +1203,10 @@ impl ConfigManager {
             ConfigPath::Zoom => {
                 preview.zoom = value.try_into()?;
             }
-            ConfigPath::PanX => {
-                preview.pan_x = value.try_into()?;
-            }
-            ConfigPath::PanY => {
-                preview.pan_y = value.try_into()?;
+            ConfigPath::Pan => {
+                let (x, y): (f32, f32) = value.try_into()?;
+                preview.pan_x = x;
+                preview.pan_y = y;
             }
             ConfigPath::Rotation => {
                 preview.rotation = value.try_into()?;
@@ -1719,6 +1716,16 @@ impl TryFrom<ConfigValue> for bool {
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {
             ConfigValue::Bool(b) => Ok(b),
+            _ => Err(ConfigError::TypeMismatch),
+        }
+    }
+}
+
+impl TryFrom<ConfigValue> for (f32, f32) {
+    type Error = ConfigError;
+    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
+        match v {
+            ConfigValue::Vec2(x, y) => Ok((x, y)),
             _ => Err(ConfigError::TypeMismatch),
         }
     }

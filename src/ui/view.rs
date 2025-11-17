@@ -40,12 +40,8 @@ pub fn render_view_content(
 
     ui.label("Pan");
     ui.horizontal(|ui| {
-        ui.label("X:");
-        let _ = ui.lazy_drag(config_manager, ConfigPath::PanX, 0.01, "");
-    });
-    ui.horizontal(|ui| {
-        ui.label("Y:");
-        let _ = ui.lazy_drag(config_manager, ConfigPath::PanY, 0.01, "");
+        ui.label(format!("({:.3}, {:.3})", config.pan_x, config.pan_y));
+        ui.label("(use mouse drag or arrow keys/buttons)");
     });
 
     // Pan step size depends on zoom
@@ -66,12 +62,9 @@ pub fn render_view_content(
             let screen_dy = -pan_step;
             let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
             let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
-            let _ = config_manager.update_batch(
-                vec![
-                    (ConfigPath::PanX, new_pan_x.into()),
-                    (ConfigPath::PanY, new_pan_y.into()),
-                ],
-                "Pan Up".to_string(),
+            let _ = config_manager.update_param(
+                ConfigPath::Pan,
+                (new_pan_x, new_pan_y).into(),
                 false
             );
         }
@@ -82,12 +75,9 @@ pub fn render_view_content(
             let screen_dy = 0.0;
             let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
             let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
-            let _ = config_manager.update_batch(
-                vec![
-                    (ConfigPath::PanX, new_pan_x.into()),
-                    (ConfigPath::PanY, new_pan_y.into()),
-                ],
-                "Pan Left".to_string(),
+            let _ = config_manager.update_param(
+                ConfigPath::Pan,
+                (new_pan_x, new_pan_y).into(),
                 false
             );
         }
@@ -96,12 +86,9 @@ pub fn render_view_content(
             let screen_dy = pan_step;
             let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
             let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
-            let _ = config_manager.update_batch(
-                vec![
-                    (ConfigPath::PanX, new_pan_x.into()),
-                    (ConfigPath::PanY, new_pan_y.into()),
-                ],
-                "Pan Down".to_string(),
+            let _ = config_manager.update_param(
+                ConfigPath::Pan,
+                (new_pan_x, new_pan_y).into(),
                 false
             );
         }
@@ -110,12 +97,9 @@ pub fn render_view_content(
             let screen_dy = 0.0;
             let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
             let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
-            let _ = config_manager.update_batch(
-                vec![
-                    (ConfigPath::PanX, new_pan_x.into()),
-                    (ConfigPath::PanY, new_pan_y.into()),
-                ],
-                "Pan Right".to_string(),
+            let _ = config_manager.update_param(
+                ConfigPath::Pan,
+                (new_pan_x, new_pan_y).into(),
                 false
             );
         }
@@ -264,8 +248,7 @@ pub fn render_view_content(
         let _ = config_manager.update_batch(
             vec![
                 (ConfigPath::Zoom, 1.0.into()),
-                (ConfigPath::PanX, 0.0.into()),
-                (ConfigPath::PanY, 0.0.into()),
+                (ConfigPath::Pan, (0.0, 0.0).into()),
                 (ConfigPath::Rotation, 0.0.into()),
                 (ConfigPath::CameraRotationX, 0.0.into()),
                 (ConfigPath::CameraRotationY, 0.0.into()),
