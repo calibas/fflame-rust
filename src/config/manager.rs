@@ -144,7 +144,7 @@ impl UpdateAction {
     }
 
     /// Create from UpdateType (used when building from delta changes)
-    pub fn from_update_type(update_type: UpdateType, in_preview_mode: bool) -> Self {
+    pub fn from_update_type(update_type: UpdateType) -> Self {
         match update_type {
             UpdateType::None => Self::none(),
 
@@ -219,11 +219,6 @@ pub struct ConfigManager {
     /// This tracks what GPU updates are needed based on recent changes
     pending_actions: UpdateAction,
 
-    /// Whether the current preview requires overwrite rendering
-    /// True for iteration-affecting parameters (view, flame, color)
-    /// False for post-processing parameters (tone mapping)
-    preview_needs_overwrite: bool,
-
     /// Active modify session (for transform editing with snapshot on commit)
     /// When Some: transform edits don't create history entries
     /// When None: normal operation
@@ -249,7 +244,6 @@ impl ConfigManager {
             last_lazy_undo: None,
             lazy_throttle: Duration::from_millis(5000),
             pending_actions: UpdateAction::none(),
-            preview_needs_overwrite: false,
             modify_session: None,
         }
     }
@@ -265,18 +259,8 @@ impl ConfigManager {
         let in_modify_session = self.modify_session.is_some();
 
         if lazy {
-            // Lazy mode: Update current directly, capture on throttle (NO PREVIEW MODE)
-            // This enables coalescing without the complexity of shadow config
-            // Still sets preview_needs_overwrite flag to enable overwrite mode during drag
-
-            // Determine if this parameter type needs overwrite rendering
-            let update_type = path.update_type();
-            let needs_overwrite = matches!(update_type,
-                UpdateType::ViewOnly | UpdateType::IterationReset | UpdateType::ColorOnly
-            );
-
-            // Set overwrite flag for the duration of the lazy update sequence
-            self.preview_needs_overwrite = needs_overwrite;
+            // Lazy mode: Update current directly, capture on throttle (coalescing)
+            // Overwrite mode is now controlled directly by UpdateAction.reset_accumulation
 
             // Get old value before updating
             let old_value = self.get_value(&path)?;
@@ -288,7 +272,7 @@ impl ConfigManager {
 
             // Update current directly (no preview shadow config)
             self.set_value(&path, new_value.clone())?;
-            log::trace!("Lazy update: {} = {} (overwrite={})", path, new_value, needs_overwrite);
+            log::trace!("Lazy update: {} = {}", path, new_value);
 
             // In modify session: no history capture (handled by modify session commit)
             if in_modify_session {
@@ -368,33 +352,17 @@ impl ConfigManager {
         let in_modify_session = self.modify_session.is_some();
 
         if lazy {
-            // Lazy mode: Update preview, capture on throttle (same logic as update_param)
+            // Lazy mode: Update current directly, capture on throttle (coalescing)
+            // Overwrite mode is now controlled directly by UpdateAction.reset_accumulation
 
-            // Determine if this batch needs overwrite rendering (check first path's update type)
-            let needs_overwrite = if !changes.is_empty() {
-                let first_update_type = changes[0].0.update_type();
-                matches!(first_update_type,
-                    UpdateType::ViewOnly | UpdateType::IterationReset | UpdateType::ColorOnly
-                )
-            } else {
-                false
-            };
-
-            // Create preview if it doesn't exist (first update in drag sequence)
-            if self.preview.is_none() {
-                self.preview = Some(self.current.clone());
-                self.preview_needs_overwrite = needs_overwrite;
-                log::trace!("Created preview from current (batch, overwrite={})", needs_overwrite);
-            }
-
-            // Create deltas from preview to new values
+            // Create deltas for all changes
             let mut deltas = Vec::new();
             for (path, new_value) in changes {
-                let preview_value = self.get_value(&path)?; // Gets from preview
-                if !preview_value.approx_eq(&new_value) {
-                    deltas.push(ConfigDelta::new(path.clone(), preview_value, new_value.clone()));
-                    // Update preview with new value
-                    self.set_value_in_preview(&path, new_value)?;
+                let old_value = self.get_value(&path)?;
+                if !old_value.approx_eq(&new_value) {
+                    deltas.push(ConfigDelta::new(path.clone(), old_value, new_value.clone()));
+                    // Update current directly
+                    self.set_value(&path, new_value)?;
                 }
             }
 
@@ -402,39 +370,25 @@ impl ConfigManager {
                 return Ok(UpdateType::None);
             }
 
+            log::trace!("Lazy batch update: {} changes", deltas.len());
+
             let change = ConfigChange::batch(deltas, description);
             let update_type = change.update_type();
 
-            // In modify session: always commit preview to current (no history capture)
+            // In modify session: no history capture (handled by modify session commit)
             if in_modify_session {
-                self.current = self.preview.clone().unwrap();
-                log::trace!("Modify session: committed batch preview to current (no history)");
+                log::trace!("Modify session: updated current (no history)");
                 self.record_action(update_type);
                 return Ok(update_type);
             }
 
-            // Normal mode: check if we should capture this change
+            // Normal mode: check if we should capture this change (coalescing logic)
             let should_capture = self.should_capture_lazy_undo();
 
             if should_capture {
-                // Capture delta from current → preview
-                let deltas_from_current: Vec<ConfigDelta> = change.deltas.iter().map(|delta| {
-                    // Get old value from current (not preview)
-                    let old_val_in_current = {
-                        let temp_preview = self.preview.take();
-                        let val = self.get_value(&delta.path).unwrap();
-                        self.preview = temp_preview;
-                        val
-                    };
-                    ConfigDelta::new(delta.path.clone(), old_val_in_current, delta.new_value.clone())
-                }).collect();
-
-                let change_from_current = ConfigChange::batch(deltas_from_current, change.description.clone());
-                self.push_undo(change_from_current);
-
-                // Commit preview to current (clone to keep preview active - prevents blink)
-                self.current = self.preview.clone().unwrap();
-                log::debug!("  -> Committed batch preview to current, history len: {}", self.history.len());
+                log::debug!("Lazy batch capture: {} deltas", change.deltas.len());
+                self.push_undo(change);
+                log::debug!("  -> Captured to history, len: {}", self.history.len());
 
                 // Record action for GPU updates
                 self.record_action(update_type);
@@ -442,7 +396,7 @@ impl ConfigManager {
                 return Ok(update_type);
             }
 
-            // No capture yet, but still record action for GPU updates during preview
+            // No capture yet, but still record action for GPU updates
             self.record_action(update_type);
             Ok(update_type)
 
@@ -490,7 +444,6 @@ impl ConfigManager {
     pub fn undo(&mut self) -> Result<UpdateType, ConfigError> {
         // Clear preview mode before undo (if active)
         self.preview = None;
-        self.preview_needs_overwrite = false;
 
         if self.position == 0 {
             return Err(ConfigError::EmptyUndoStack);
@@ -565,7 +518,6 @@ impl ConfigManager {
     pub fn redo(&mut self) -> Result<UpdateType, ConfigError> {
         // Clear preview mode before redo (if active)
         self.preview = None;
-        self.preview_needs_overwrite = false;
 
         if self.position >= self.history.len() {
             return Err(ConfigError::EmptyRedoStack);
@@ -662,20 +614,6 @@ impl ConfigManager {
     /// Reset lazy undo timer (call on drag end to ensure final state is captured)
     pub fn reset_lazy_undo(&mut self) {
         self.last_lazy_undo = None;
-    }
-
-    /// Check if ConfigManager is in preview mode (during lazy drag)
-    ///
-    /// This returns true only if:
-    /// 1. A preview is active (lazy drag in progress), AND
-    /// 2. The parameter being previewed requires overwrite rendering
-    ///
-    /// Tone mapping parameters use lazy undo but NOT preview mode since
-    /// they're post-processing and don't need overwrite rendering.
-    pub fn is_in_preview_mode(&self) -> bool {
-        // During lazy updates, this flag indicates we need overwrite mode
-        // Even though we no longer use preview shadow config
-        self.preview_needs_overwrite
     }
 
     /// Push change to history, maintaining depth limit and truncating future
@@ -1594,7 +1532,6 @@ impl ConfigManager {
     /// This ensures changes are captured even if drag ended before throttle fired
     pub fn force_commit_preview(&mut self, path: &ConfigPath) -> Result<UpdateType, ConfigError> {
         if let Some(preview) = self.preview.take() {
-            self.preview_needs_overwrite = false;  // Clear overwrite flag
             log::debug!("Force commit for path: {:?}", path);
 
             // Check if preview actually differs from current
@@ -1653,7 +1590,6 @@ impl ConfigManager {
     pub fn load_config(&mut self, new_config: FractalConfig, description: String) -> Result<(), ConfigError> {
         // Clear any preview state
         self.preview = None;
-        self.preview_needs_overwrite = false;
 
         // Create single bidirectional snapshot
         let change = ConfigChange::full_config_snapshot(
@@ -1759,7 +1695,6 @@ impl ConfigManager {
 
         // Clear preview state (session is ending)
         self.preview = None;
-        self.preview_needs_overwrite = false;
 
         let index = session.transform_index;
         let before = session.initial_transform;
@@ -1797,7 +1732,6 @@ impl ConfigManager {
 
         // Clear preview state (session is ending)
         self.preview = None;
-        self.preview_needs_overwrite = false;
 
         // Restore initial state
         let index = session.transform_index;
@@ -1863,12 +1797,6 @@ impl ConfigManager {
         self.pending_actions = UpdateAction::none();
     }
 
-    /// Clear overwrite flag at the start of each frame
-    /// Will be set again during the frame if there are lazy updates
-    pub fn clear_overwrite_flag(&mut self) {
-        self.preview_needs_overwrite = false;
-    }
-
     /// Request an explicit accumulation reset (e.g., from Reset button)
     ///
     /// This sets the reset_accumulation flag without modifying any config state.
@@ -1881,8 +1809,7 @@ impl ConfigManager {
     ///
     /// Called internally when config changes occur
     fn record_action(&mut self, update_type: UpdateType) {
-        let in_preview = self.is_in_preview_mode();
-        let action = UpdateAction::from_update_type(update_type, in_preview);
+        let action = UpdateAction::from_update_type(update_type);
         self.pending_actions.merge(&action);
     }
 }

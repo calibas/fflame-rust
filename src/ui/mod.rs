@@ -392,8 +392,7 @@ impl EguiLayer {
             );
         }
 
-        // Sync flame from ConfigManager AFTER UI updates (for live preview during drag)
-        // This ensures app.rs gets the latest preview state when checking is_in_preview_mode()
+        // Sync flame from ConfigManager AFTER UI updates
         *flame = config_manager.active_config().flame.clone();
 
         // Extract menu actions into individual flags for backward compatibility

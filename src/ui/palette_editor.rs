@@ -174,11 +174,6 @@ fn render_palette_editor_core_impl(
                 );
             }
 
-            // Commit final change when drag ends or color picker closes
-            if force_commit && config_manager.is_in_preview_mode() {
-                let _ = config_manager.force_commit_preview(&crate::config::ConfigPath::Palette);
-            }
-
             // Remove stop if requested
             if let Some(idx) = stop_to_remove {
                 palette.stops.remove(idx);

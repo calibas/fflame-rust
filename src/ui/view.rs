@@ -119,9 +119,6 @@ pub fn render_view_content(
                 response.dragged()
             );
         }
-        if response.drag_stopped() && config_manager.is_in_preview_mode() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::Rotation);
-        }
     });
 
     ui.separator();
@@ -187,11 +184,6 @@ pub fn render_view_content(
                     log::error!("Failed to update perspective strength: {}", e);
                 }
             }
-            if response.drag_stopped() && config_manager.is_in_preview_mode() {
-                if let Err(e) = config_manager.force_commit_preview(&ConfigPath::ProjectionType) {
-                    log::error!("Failed to commit perspective strength preview: {}", e);
-                }
-            }
         }
     }
 
@@ -214,9 +206,6 @@ pub fn render_view_content(
                     true
                 );
             }
-            if response.drag_stopped() && config_manager.is_in_preview_mode() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::CameraRotationX);
-            }
         });
 
         ui.horizontal(|ui| {
@@ -230,9 +219,6 @@ pub fn render_view_content(
                     new_camera_y.into(),
                     true
                 );
-            }
-            if response.drag_stopped() && config_manager.is_in_preview_mode() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::CameraRotationY);
             }
         });
 

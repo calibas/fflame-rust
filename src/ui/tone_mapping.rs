@@ -130,14 +130,9 @@ fn render_curve_editor(
         }
     }
 
-    // Clear drag on mouse release and force commit preview
+    // Clear drag on mouse release
     if !mouse_down && dragging_point.is_some() {
         dragging_point = None;
-
-        // Exit preview mode immediately on drag end
-        if config_manager.is_in_preview_mode() {
-            let _ = config_manager.force_commit_preview(&ConfigPath::TonemapCurve);
-        }
     }
 
     // Persist drag state
