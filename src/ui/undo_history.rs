@@ -13,14 +13,34 @@ pub fn render_undo_history_content(
     let history = config_manager.history();
     let position = config_manager.position();
 
-    // Show unified timeline with current position highlighted
+    // Show unified timeline with #1 (initial state) at top, growing downward
     egui::ScrollArea::vertical()
         .id_salt("history_scroll_area")
         .auto_shrink([false, true])
+        .stick_to_bottom(true)  // Auto-scroll to bottom (most recent)
         .show(ui, |ui| {
-            // Show in reverse order (most recent at top)
-            // Start with actual history entries
-            for (i, change) in history.iter().enumerate().rev() {
+            // Show initial state as entry #1 (pinned at top)
+            ui.horizontal(|ui| {
+                // Mark if we're at initial state
+                if position == 0 {
+                    ui.label("▶");
+                } else {
+                    ui.label(" ");
+                }
+
+                // Initial state is always "past" unless we're at position 0
+                let text_color = ui.style().visuals.text_color();
+
+                if ui.selectable_label(false, egui::RichText::new("1. Initial state").color(text_color)).clicked() {
+                    // Undo back to initial state
+                    if position > 0 {
+                        *undo_requested = true;
+                    }
+                }
+            });
+
+            // Show history entries in forward order (oldest to newest, #2, #3, #4...)
+            for (i, change) in history.iter().enumerate() {
                 ui.horizontal(|ui| {
                     // Current position marker (position points to next change to undo)
                     // So if position == i+1, this change is the current state
@@ -52,26 +72,6 @@ pub fn render_undo_history_content(
                     }
                 });
             }
-
-            // Show initial state as entry #1
-            ui.horizontal(|ui| {
-                // Mark if we're at initial state
-                if position == 0 {
-                    ui.label("▶");
-                } else {
-                    ui.label(" ");
-                }
-
-                // Initial state is always "past" unless we're at position 0
-                let text_color = ui.style().visuals.text_color();
-
-                if ui.selectable_label(false, egui::RichText::new("1. Initial state").color(text_color)).clicked() {
-                    // Undo back to initial state
-                    if position > 0 {
-                        *undo_requested = true;
-                    }
-                }
-            });
         });
 
     ui.separator();
