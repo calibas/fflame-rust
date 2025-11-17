@@ -1064,14 +1064,26 @@ impl App {
                     // For now, this would require recreating the compute pipeline
                 }
 
-                // Reset accumulation only for structural changes (IterationReset)
-                // View/color changes use overwrite mode instead for smooth updates
-                let should_reset = actions.reset_accumulation || view_changed_by_keyboard;
-                if should_reset {
+                // Handle accumulation reset based on change type
+                let should_full_reset = actions.reset_accumulation || view_changed_by_keyboard;
+                let has_view_or_color_change = actions.update_view || actions.update_palette;
+
+                if should_full_reset {
+                    // Structural changes: Clear buffer and reset counters (blank frame expected)
                     renderer.reset(&mut update_encoder, &self.gpu.queue, update_config.iterations_per_thread,
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                     self.frames_since_accumulation = 0;
+                } else if has_view_or_color_change && renderer.total_iterations() >= update_config.max_iterations {
+                    // View/color changes when fractal has stopped iterating:
+                    // Reset counter to restart iteration (smooth transition via overwrite mode)
+                    renderer.reset_iteration_counter();
+                    self.frames_since_accumulation = 0;
+                }
+
+                // Force immediate accumulation on view/color changes for real-time updates
+                if has_view_or_color_change {
+                    self.frames_since_accumulation = self.accumulation_batch_size - 1;
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
