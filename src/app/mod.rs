@@ -328,6 +328,10 @@ impl App {
         let render_start = Instant::now();
         self.last_frame_time = Some(render_start);
 
+        // Clear overwrite flag at start of each frame
+        // Will be set again during this frame if there are lazy updates
+        self.config_manager.clear_overwrite_flag();
+
         // ============================================================================
         // NEW FRAME ORDER (Fixed race conditions):
         // 1. Render UI (reads current state, shows previous frame's fractal)
