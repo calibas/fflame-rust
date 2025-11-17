@@ -96,10 +96,10 @@ impl EguiLayer {
                 let consumed = response.consumed && (is_using || wants_pointer || is_pointer_over_area);
 
                 // DEBUG: Log pointer state for cursor moves (only when dragging might be active)
-                if matches!(event, WindowEvent::CursorMoved { .. }) && consumed {
-                    log::debug!("CursorMoved over UI: consumed={}, is_using={}, wants_pointer={}, is_over_area={}",
-                        response.consumed, is_using, wants_pointer, is_pointer_over_area);
-                }
+                // if matches!(event, WindowEvent::CursorMoved { .. }) && consumed {
+                //     log::debug!("CursorMoved over UI: consumed={}, is_using={}, wants_pointer={}, is_over_area={}",
+                //         response.consumed, is_using, wants_pointer, is_pointer_over_area);
+                // }
 
                 consumed
             }

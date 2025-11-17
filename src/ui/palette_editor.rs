@@ -95,7 +95,11 @@ fn render_palette_editor_core_impl(
                     if palette.locked {
                         // Free mode: just unlock (no data loss, no warning needed)
                         palette.convert_to_free();
-                        // Auto-apply the palette when converting to free mode
+                        let _ = config_manager.update_param(
+                            crate::config::ConfigPath::Palette,
+                            palette.clone().into(),
+                            false, // immediate undo for discrete action
+                        );
                     } else {
                         // Fixed mode: show warning dialog
                         palette_editor.show_fixed_mode_warning = true;
@@ -145,6 +149,7 @@ fn render_palette_editor_core_impl(
                                 palette_updated = true;
                             }
 
+                            // This doesn't actually work!
                             // Force commit when color picker closes (loses focus)
                             if color_response.lost_focus() {
                                 force_commit = true;
