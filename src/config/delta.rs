@@ -19,8 +19,7 @@ use web_time::Instant;
 pub enum ConfigPath {
     // ===== View parameters (no fractal recalc needed) =====
     Zoom,
-    PanX,
-    PanY,
+    Pan,  // Combined PanX and PanY into single Vec2 value
     Rotation,
     CameraRotationX,
     CameraRotationY,
@@ -107,8 +106,7 @@ impl Display for ConfigPath {
         match self {
             // View
             ConfigPath::Zoom => write!(f, "Zoom"),
-            ConfigPath::PanX => write!(f, "Pan X"),
-            ConfigPath::PanY => write!(f, "Pan Y"),
+            ConfigPath::Pan => write!(f, "Pan"),
             ConfigPath::Rotation => write!(f, "Rotation"),
             ConfigPath::CameraRotationX => write!(f, "Camera Pitch"),
             ConfigPath::CameraRotationY => write!(f, "Camera Yaw"),
@@ -212,6 +210,7 @@ pub enum ConfigValue {
     UInt64(u64),
     Bool(bool),
     String(String),
+    Vec2(f32, f32),  // For pan coordinates and other 2D values
     ColorRgb([f32; 3]),
     ToneMapMode(ToneMapMode),
     ColorMode(ColorMode),
@@ -228,6 +227,9 @@ impl ConfigValue {
 
         match (self, other) {
             (ConfigValue::Float(a), ConfigValue::Float(b)) => (a - b).abs() < EPSILON,
+            (ConfigValue::Vec2(x1, y1), ConfigValue::Vec2(x2, y2)) => {
+                (x1 - x2).abs() < EPSILON && (y1 - y2).abs() < EPSILON
+            }
             (ConfigValue::ColorRgb(a), ConfigValue::ColorRgb(b)) => a
                 .iter()
                 .zip(b.iter())
@@ -256,6 +258,7 @@ impl Display for ConfigValue {
             ConfigValue::UInt64(v) => write!(f, "{}", v),
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
+            ConfigValue::Vec2(x, y) => write!(f, "({:.3}, {:.3})", x, y),
             ConfigValue::ColorRgb([r, g, b]) => {
                 write!(f, "RGB({:.2}, {:.2}, {:.2})", r, g, b)
             }
@@ -313,6 +316,12 @@ impl From<String> for ConfigValue {
 impl From<&str> for ConfigValue {
     fn from(v: &str) -> Self {
         ConfigValue::String(v.to_string())
+    }
+}
+
+impl From<(f32, f32)> for ConfigValue {
+    fn from((x, y): (f32, f32)) -> Self {
+        ConfigValue::Vec2(x, y)
     }
 }
 
@@ -487,8 +496,7 @@ impl ConfigPath {
         match self {
             // View parameters - just math, no GPU work
             ConfigPath::Zoom
-            | ConfigPath::PanX
-            | ConfigPath::PanY
+            | ConfigPath::Pan
             | ConfigPath::Rotation
             | ConfigPath::CameraRotationX
             | ConfigPath::CameraRotationY
