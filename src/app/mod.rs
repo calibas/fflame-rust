@@ -1081,11 +1081,6 @@ impl App {
                     self.frames_since_accumulation = 0;
                 }
 
-                // Force immediate accumulation on view/color changes for real-time updates
-                if has_view_or_color_change {
-                    self.frames_since_accumulation = self.accumulation_batch_size - 1;
-                }
-
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
             }
         }
@@ -1109,9 +1104,10 @@ impl App {
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
-            // Always use overwrite mode - this eliminates blank frames
-            // The accumulation blend will smoothly replace the old image with the new one
-            renderer.set_overwrite_mode(true);
+            // Use overwrite mode in preview or when fractal has stopped (to enable updates)
+            let in_preview_mode = self.config_manager.is_in_preview_mode();
+            let has_stopped = renderer.total_iterations() >= final_config.max_iterations;
+            renderer.set_overwrite_mode(in_preview_mode || has_stopped);
 
             // Check if we should continue iterating
             let max_iterations = Some(final_config.max_iterations);
