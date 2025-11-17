@@ -90,20 +90,21 @@ use std::time::Duration;
 use web_time::Instant;
 
 /// Maximum duration for coalescing - total span from first to last change
-const MAX_COALESCE_SPAN: Duration = Duration::from_millis(2000);
+const MAX_COALESCE_SPAN: Duration = Duration::from_millis(3000);
 
 /// Inactivity threshold - pausing longer than this creates a new undo point
-const COALESCE_INACTIVITY_THRESHOLD: Duration = Duration::from_millis(500);
+const COALESCE_INACTIVITY_THRESHOLD: Duration = Duration::from_millis(1000);
 
 /// Check if a config path supports undo point coalescing
-/// Only paths in this whitelist will have rapid changes merged into single undo point
+/// By default, all paths support coalescing (enabled for continuous controls)
+/// Only paths in this exclusion list will create immediate undo points
 fn supports_coalescing(path: &ConfigPath) -> bool {
     match path {
-        ConfigPath::Palette => true,  // Color picker changes (main use case)
-        // Add more paths here as needed:
-        // ConfigPath::Exposure => true,
-        // ConfigPath::Gamma => true,
-        _ => false,
+        // Add paths here that should NOT coalesce (discrete actions):
+        // ConfigPath::RenderMode => false,
+        // ConfigPath::ProjectionType => false,
+        // ConfigPath::ColorMode => false,
+        _ => true,  // Default: all parameters support coalescing
     }
 }
 
