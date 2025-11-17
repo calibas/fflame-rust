@@ -48,7 +48,7 @@
   - `src/config/` - **Delta-based state management system** (Added 2025-10-31)
     - `manager.rs` - ConfigManager with undo/redo (1,237 lines)
     - `delta.rs` - ConfigPath, ConfigValue, ConfigDelta enums (568 lines)
-    - `slider.rs` - UI helpers: config_slider, lazy_slider (299 lines)
+    - `slider.rs` - UI helpers: config_slider (299 lines)
     - `fractal_config.rs` - FractalConfig struct (complete state)
     - `defaults.rs` - Default value constants (single source of truth)
   - `src/renderer/compute_kernel.rs` - GPU rendering orchestration
@@ -395,64 +395,55 @@ a.click();
 - Prefer `&Queue::write_buffer()` over buffer mapping for updates
 - Use `CommandEncoder` for GPU operations, submit once per frame
 
-### State Management (Delta-Based System - Completed 2025-11-01)
+### State Management (Simplified System - Completed 2025-11-17)
 **All configuration changes now flow through ConfigManager** - see [docs/main/CONFIG.md](docs/main/CONFIG.md) for complete documentation.
 
 **Core Principles:**
 - ConfigManager automatically handles undo/redo with delta tracking
 - Type-safe `ConfigPath` enum identifies all parameters (100+ variants)
-- `UpdateType` return value determines selective GPU updates (View/Color/Flame/ToneMap/Rendering)
-- **Preview mode**: Use `lazy=response.dragged()` for live updates during mouse drag
-- **Discrete mode**: Use `lazy=false` for keyboard input and discrete actions
+- `UpdateType` return value determines selective GPU updates (View/Color/Flame/ToneMap)
+- **All updates are immediate** - no lazy/preview distinction needed
+- **Coalescing** automatically merges rapid changes within 2-second window
+- **100ms overwrite window** provides smooth real-time updates for all parameter types
 - Batch updates group multiple parameter changes into single undo point
 
 **UI Patterns:**
 
-**1. Slider with Preview Mode** (mouse drag = preview, keyboard = discrete):
+**1. Single Parameter Change** (slider, drag, button, checkbox):
 ```rust
 let response = ui.add(egui::Slider::new(&mut value, 0.0..=1.0).text("Parameter"));
 if response.changed() {
-    // Use response.dragged() to distinguish mouse drag from keyboard input
-    config_manager.update_param(path, value.into(), response.dragged())?;
+    config_manager.update_param(path, value.into())?;
 }
-// Commit preview when drag ends
-if response.drag_stopped() && config_manager.is_in_preview_mode() {
-    config_manager.force_commit_preview(&path)?;
-}
+// That's it! Coalescing and overwrite mode handle the rest automatically.
 ```
 
-**2. Discrete Action** (button, checkbox):
-```rust
-if ui.button("Action").clicked() {
-    config_manager.update_param(path, value.into(), false)?; // lazy=false
-}
-```
-
-**3. Batch Update** (multiple related parameters):
+**2. Batch Update** (multiple related parameters):
 ```rust
 let changes = vec![
     (ConfigPath::TransformAffine { index, param: A }, a.into()),
     (ConfigPath::TransformAffine { index, param: B }, b.into()),
     // ... more params
 ];
-config_manager.update_batch(changes, "Description", response.dragged())?;
+config_manager.update_batch(changes, "Description")?;
 ```
 
-**Architecture (Complete - 2025-11-01):**
-- **Phase 1-3**: Created ConfigManager with delta-based undo/redo
-- **Phase 4**: Migrated all UI modules to use ConfigManager (settings, view, tone_mapping, transforms)
-- **Phase 5**: Removed 21 obsolete UiResponse flags, replaced with UpdateType pattern
-- **Triangle Editor**: Complete migration with batch updates and preview mode
-- **Preview Mode Fixes**: Changed `lazy=true` to `lazy=response.dragged()` across all sliders
-- **Result**: Single source of truth, automatic tracking, preview mode works correctly for both drag and keyboard
+**How It Works:**
+- **Any change** → GPU updates immediately, coalescing tracks for undo/redo
+- **Rapid changes** (within 2s) → Merged into single undo point
+- **Overwrite mode** → Enabled for 100ms after parameter changes for smooth transitions
+- **Iteration reset** → Triggered when overwrite window expires for clean rebuild
+
+**Architecture Evolution:**
+- **2025-10**: Created ConfigManager with delta-based undo/redo (PR #22)
+- **2025-11**: Removed preview mode system, simplified to direct updates (PR #23)
+- **Result**: 800+ lines removed, real-time updates for all controls, no blank frames
 
 **Key Files:**
-- `src/config/manager.rs` - ConfigManager with preview mode support (1,400+ lines)
+- `src/config/manager.rs` - ConfigManager with simplified update system (~1,100 lines)
 - `src/config/delta.rs` - ConfigPath, ConfigValue, ConfigDelta enums (568 lines)
-- `src/ui/triangle_editor.rs` - Full ConfigManager integration with batch updates
-- `src/ui/variation_params.rs` - Parameter sliders with preview mode
-- `src/ui/variation_controls.rs` - Variation weight sliders with preview mode
-- See [docs/projects/dragvalue-keyboard-preview-mode.md](docs/projects/dragvalue-keyboard-preview-mode.md) for preview mode analysis
+- `src/app/mod.rs` - 100ms overwrite window + iteration counter reset logic
+- `src/ui/triangle_editor.rs` - Batch updates for grouped parameter changes
 
 ### Variation Registry Architecture
 - **Global Singleton**: `global_registry()` returns `&'static VariationRegistry` (initialized once via `once_cell::Lazy`)
@@ -763,13 +754,13 @@ Thread-safe atomic color accumulation using u32 histogram buffer:
   - This is necessary because tonemap shader blends RGB with background before alpha is applied
   - Accumulation buffer stores raw fractal colors with separate density channel
 
-## State Centralization Complete ✅
+## State Management System Complete ✅
 
-The delta-based state centralization migration is **complete** as of 2025-11-01:
-- ✅ All UI controls now use ConfigManager
-- ✅ Preview mode works correctly for both mouse drag and keyboard input
-- ✅ Triangle Editor fully migrated with batch updates
-- ✅ All sliders use `lazy=response.dragged()` pattern
+The simplified state management system is **complete** as of 2025-11-17:
+- ✅ All UI controls use ConfigManager with immediate updates
+- ✅ Real-time rendering with 100ms overwrite window (no blank frames)
+- ✅ Automatic coalescing merges rapid changes (2 second window)
+- ✅ Triangle Editor with batch updates for multi-param changes
 - ✅ Automatic change tracking with 50-state undo/redo history
 - ✅ Selective GPU updates via UpdateType enum
 
@@ -778,7 +769,7 @@ The delta-based state centralization migration is **complete** as of 2025-11-01:
 - Config import/export (file I/O operations)
 - Preset loading (bulk config replacement)
 
-These operations are intentionally separate from ConfigManager as they represent discrete actions, not incremental parameter changes. See [docs/archive/delta-migration/](docs/archive/delta-migration/) for migration history.
+These operations are intentionally separate from ConfigManager as they represent discrete actions, not incremental parameter changes. See [docs/archive/delta-migration/](docs/archive/delta-migration/) and [docs/archive/remove-preview-mode.md](docs/archive/remove-preview-mode.md) for evolution history.
 
 ## Mobile Platform Support (Experimental)
 
