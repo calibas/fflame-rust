@@ -52,7 +52,8 @@ pub struct App {
     pub(super) last_frame_time: Option<web_time::Instant>,
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
-    pub(super) use_overwrite_next_frame: bool,  // Persist overwrite mode for one frame after changes
+    pub(super) use_overwrite_next_frame: bool,  // Persist overwrite mode for brief period after changes
+    pub(super) last_param_change_time: Option<web_time::Instant>,  // Track when params last changed
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
@@ -160,6 +161,7 @@ impl App {
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
             use_overwrite_next_frame: false,
+            last_param_change_time: None,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             export_width: 1920,  // Default export resolution
             export_height: 1080,
@@ -1085,18 +1087,27 @@ impl App {
             }
         }
 
-        // Set overwrite flag based on whether we had changes this frame
-        // Keep it ON as long as changes keep happening (continuous drag)
-        // Turn it OFF when we have a frame with no changes (idle)
+        // Set overwrite flag based on whether we had changes recently
+        // Keep it ON for brief period (100ms ~6 frames) after last change for smooth transitions
+        // This handles both continuous drag and discrete scroll events
         let had_changes = actions.update_view || actions.update_palette || actions.update_tone_curve || actions.update_flame;
+        let now = web_time::Instant::now();
+
         if had_changes && !actions.reset_accumulation {
-            // Changes happened → enable overwrite mode
+            // Changes happened → enable overwrite mode and update timestamp
             self.use_overwrite_next_frame = true;
+            self.last_param_change_time = Some(now);
         } else if !had_changes {
-            // No changes this frame → disable overwrite mode (back to accumulation)
-            self.use_overwrite_next_frame = false;
+            // No changes this frame → check if we're still within the smooth transition window
+            if let Some(last_change) = self.last_param_change_time {
+                let time_since_change = now.duration_since(last_change);
+                // Keep overwrite ON for 100ms after last change (~6 frames at 60fps)
+                self.use_overwrite_next_frame = time_since_change.as_millis() < 100;
+            } else {
+                self.use_overwrite_next_frame = false;
+            }
         }
-        // If reset_accumulation=true, keep previous state (let normal accumulation work)
+        // If reset_accumulation=true, disable overwrite (let normal accumulation work after reset)
 
         // Clear pending actions after executing them
         self.config_manager.clear_pending_actions();
