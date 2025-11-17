@@ -15,7 +15,7 @@ use std::fmt::{self, Display, Formatter};
 use web_time::Instant;
 
 /// Identifies a specific parameter in the configuration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConfigPath {
     // ===== View parameters (no fractal recalc needed) =====
     Zoom,
