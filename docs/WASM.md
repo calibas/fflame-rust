@@ -69,14 +69,17 @@ npx serve
 
 ### Browser Support:
 
-**Full WebGPU (Best Performance):**
-- Chrome/Edge 113+
-- Safari 18+ (macOS Ventura+)
-- Firefox 121+ (with flag enabled)
+**✅ Fully Tested & Working:**
+- **Chrome/Chromium 113+** - All features confirmed working (Windows, macOS)
+- **Firefox 121+** - All features confirmed working (Windows, macOS)
 
-**WebGL Fallback:**
-- Most modern browsers with WebGL2
-- Performance may be reduced
+**⚠️ Experimental / Not Tested:**
+- **Safari 18+** (macOS Ventura+) - WebGPU support experimental, requires flags
+- **Edge 113+** - Should work (Chromium-based), not explicitly tested
+
+**❌ Not Supported:**
+- **Mobile browsers** - WebGPU support limited/experimental
+- **WebGL fallback** - Not possible (compute shaders required for fractal generation)
 
 ### Features Available in WASM:
 
@@ -144,16 +147,109 @@ To deploy, just copy 3 files to your web server:
 
 Total size: ~2-3 MB (uncompressed WASM)
 
+### JavaScript API (Headless PNG Export)
+
+In addition to the interactive app, WASM exposes a JavaScript API for programmatic PNG generation:
+
+```javascript
+import init, { export_headless_wasm } from './pkg/fractal_flame_wgpu.js';
+
+// Initialize WASM module
+await init();
+
+// Load fractal config (FractalConfig JSON)
+const config = await fetch('config.fflame').then(r => r.json());
+
+// Export to PNG (returns Uint8Array)
+const pngData = await export_headless_wasm(
+    config,              // FractalConfig object
+    800,                 // width
+    600,                 // height
+    256,                 // iterations_per_thread
+    4                    // speed_multiplier
+);
+
+// Download PNG
+const blob = new Blob([pngData], { type: 'image/png' });
+const url = URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = 'fractal.png';
+a.click();
+```
+
+**Use Cases:**
+- Automated testing (visual regression tests)
+- Batch fractal generation in browser
+- Server-side rendering via Node.js (with WebGPU support)
+- Integration with web applications
+
+### Browser-Specific Compatibility Notes
+
+**Chrome/Chromium (Windows, macOS):**
+- ✅ Full WebGPU support
+- ✅ All features working
+- ✅ Headless PNG export working
+- No special configuration required
+
+**Firefox (Windows, macOS):**
+- ✅ Full WebGPU support
+- ✅ All features working
+- ✅ Headless PNG export working
+- No special configuration required (WebGPU enabled by default in 121+)
+
+**Safari (macOS):**
+- ⚠️ WebGPU support experimental
+- May require enabling flags in Develop menu
+- Not tested for this project
+- 1D texture → 2D texture conversion implemented for compatibility
+
+**Key Implementation Fixes:**
+- **1D Textures → 2D**: Browser WebGPU doesn't support `textureSampleLevel` on 1D textures
+  - Palette LUT: `texture_2d` with height=1, sampled with `vec2(x, 0.5)`
+  - Curve LUT: Same approach
+- **Surface Creation (macOS)**: Direct canvas approach using `SurfaceTarget::Canvas(canvas)`
+  - Bypasses winit's window-based surface creation
+- **GPU Limits**: Uses `downlevel_webgl2_defaults()` for broader compatibility
+
+### Visual Regression Testing
+
+Automated visual regression tests run in headless browsers via Playwright:
+
+```bash
+# Install Python dependencies
+pip install playwright Pillow numpy
+
+# Install Playwright browsers
+playwright install chromium firefox
+
+# Run WASM visual tests
+python tests/visual/wasm/test_wasm.py
+
+# Run all tests (desktop + WASM)
+python tests/visual/run_all_tests.py
+```
+
+**Test Process:**
+1. Launches headless Chrome/Firefox
+2. Loads WASM module and test configs
+3. Calls `export_headless_wasm()` for each config
+4. Downloads PNG via blob URL
+5. Compares pixel-perfect SHA256 hash against baseline
+6. Extracts performance metrics from PNG metadata
+
+**Coverage:**
+- 7 WASM visual tests (800x600 resolution)
+- Pixel-perfect comparison (SHA256 hash of pixel data)
+- Performance tracking (render time, throughput in M iter/sec)
+- Tested on Chrome and Firefox
+
 ### Testing Status:
 
-✅ Code compiles successfully for wasm32 target
-✅ Dependencies properly configured
-✅ Build scripts created
-✅ HTML/JS interface ready
+✅ Interactive app fully tested (Chrome, Firefox on Windows/macOS)
+✅ Headless PNG export API tested (Playwright automation)
+✅ Visual regression tests passing (7 test cases)
+✅ Performance tracking enabled (PNG metadata)
+✅ Browser compatibility confirmed (Chrome 113+, Firefox 121+)
 
-⚠️ **Note**: Actual browser testing requires:
-1. Running the build script
-2. Serving via local web server
-3. Opening in WebGPU-compatible browser
-
-The implementation is complete and ready for testing! The architecture follows the outline (Section 2 mentions "optional Web via WASM") and uses the recommended tech stack (wasm-bindgen, wasm-pack workflow).
+The implementation is **production-ready** with comprehensive test coverage!
