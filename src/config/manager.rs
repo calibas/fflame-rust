@@ -470,9 +470,29 @@ impl ConfigManager {
 
         // Check if this is a snapshot-based undo
         if let Some(snapshot) = &change.snapshot {
-            log::debug!("  Restoring full config snapshot");
-            self.current = (**snapshot).clone();
-            return Ok(UpdateType::IterationReset); // Full config change
+            match snapshot {
+                crate::config::SnapshotData::FullConfig { before, .. } => {
+                    log::debug!("  Restoring full config snapshot (before)");
+                    self.current = (**before).clone();
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::AddTransform { index, .. } => {
+                    log::debug!("  Undoing add transform at index {}", index);
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms.remove(*index);
+                    }
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::DeleteTransform { index, transform } => {
+                    log::debug!("  Undoing delete transform (re-insert at index {})", index);
+                    if *index <= self.current.flame.transforms.len() {
+                        self.current.flame.transforms.insert(*index, transform.clone());
+                    }
+                    return Ok(UpdateType::IterationReset);
+                }
+            }
         }
 
         // Delta-based undo - apply inverted deltas
@@ -515,10 +535,32 @@ impl ConfigManager {
 
         // Check if this is a snapshot-based redo
         if let Some(snapshot) = &change.snapshot {
-            log::debug!("  Restoring full config snapshot");
-            self.current = (**snapshot).clone();
-            self.position += 1;
-            return Ok(UpdateType::IterationReset); // Full config change
+            match snapshot {
+                crate::config::SnapshotData::FullConfig { after, .. } => {
+                    log::debug!("  Restoring full config snapshot (after)");
+                    self.current = (**after).clone();
+                    self.position += 1;
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::AddTransform { index, transform } => {
+                    log::debug!("  Redoing add transform at index {}", index);
+                    if *index <= self.current.flame.transforms.len() {
+                        self.current.flame.transforms.insert(*index, transform.clone());
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::DeleteTransform { index, .. } => {
+                    log::debug!("  Redoing delete transform (remove at index {})", index);
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms.remove(*index);
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::IterationReset);
+                }
+            }
         }
 
         // Delta-based redo - apply deltas forward
@@ -1548,31 +1590,24 @@ impl ConfigManager {
     }
 
     /// Load a complete config (e.g., preset, imported file)
-    /// This creates two undo entries:
-    /// 1. Snapshot of old state (for undo)
-    /// 2. Snapshot of new state (for redo after undo)
+    /// Creates single bidirectional snapshot for efficient undo/redo
     /// Use this for atomic operations like loading presets
     pub fn load_config(&mut self, new_config: FractalConfig, description: String) -> Result<(), ConfigError> {
         // Clear any preview state
         self.preview = None;
         self.preview_needs_overwrite = false;
 
-        // Create snapshot of current state (for undo)
-        let old_snapshot = ConfigChange::snapshot(
-            self.current.clone(),
-            format!("Before: {}", description),
+        // Create single bidirectional snapshot
+        let change = ConfigChange::full_config_snapshot(
+            self.current.clone(),  // before
+            new_config.clone(),    // after
+            description,
         );
-        self.push_undo(old_snapshot);
+
+        self.push_undo(change);
 
         // Replace current config
-        self.current = new_config.clone();
-
-        // Create snapshot of new state (for redo after undo)
-        let new_snapshot = ConfigChange::snapshot(
-            new_config,
-            format!("After: {}", description),
-        );
-        self.push_undo(new_snapshot);
+        self.current = new_config;
 
         // Record full config import action
         let mut action = UpdateAction::none();
