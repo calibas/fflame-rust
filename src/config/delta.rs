@@ -427,6 +427,15 @@ pub enum SnapshotData {
         index: usize,
         transform: crate::scene::transforms::Transform,
     },
+
+    /// Transform modified (affine edit, triangle editor, etc.)
+    /// Stores before/after states for complete restoration
+    /// Undo: restore before, Redo: restore after
+    ModifyTransform {
+        index: usize,
+        before: crate::scene::transforms::Transform,
+        after: crate::scene::transforms::Transform,
+    },
 }
 
 /// A batch of related changes (single undo point)
@@ -513,6 +522,22 @@ impl ConfigChange {
             timestamp: Instant::now(),
             description,
             snapshot: Some(SnapshotData::DeleteTransform { index, transform }),
+        }
+    }
+
+    /// Create modify transform snapshot
+    /// Stores before/after transform states for complete restoration
+    pub fn modify_transform_snapshot(
+        index: usize,
+        before: crate::scene::transforms::Transform,
+        after: crate::scene::transforms::Transform,
+        description: String,
+    ) -> Self {
+        Self {
+            deltas: vec![],
+            timestamp: Instant::now(),
+            description,
+            snapshot: Some(SnapshotData::ModifyTransform { index, before, after }),
         }
     }
 

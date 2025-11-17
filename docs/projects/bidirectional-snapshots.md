@@ -1,5 +1,26 @@
 # Bidirectional Snapshot System
 
+## Implementation Status
+
+**✅ COMPLETE** (2025-11-17)
+
+All 6 phases implemented and tested:
+- ✅ Phase 1: SnapshotData enum with 4 variants
+- ✅ Phase 2: Undo/redo logic updated
+- ✅ Phase 3: load_config() using single bidirectional snapshot
+- ✅ Phase 4: Add Transform using AddTransform snapshot
+- ✅ Phase 5: Delete Transform using DeleteTransform snapshot
+- ✅ Phase 6: Triangle Editor using ModifyTransform snapshot
+
+**Key Changes:**
+- Triangle editor canvas drag now uses ModifyTransform snapshots (captures complete before/after states)
+- Coordinate DragValues use ModifyTransform snapshots (separate from canvas drag)
+- Affine coefficient DragValues use ModifyTransform snapshots (separate from coords)
+- All three modes properly capture initial state on drag start and create snapshot on drag end
+- Fixes issue where "original state can be lost when undoing/redoing" triangle edits
+
+---
+
 ## Current State
 
 The undo/redo system uses two strategies:

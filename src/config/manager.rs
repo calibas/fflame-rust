@@ -223,6 +223,19 @@ pub struct ConfigManager {
     /// True for iteration-affecting parameters (view, flame, color)
     /// False for post-processing parameters (tone mapping)
     preview_needs_overwrite: bool,
+
+    /// Active modify session (for transform editing with snapshot on commit)
+    /// When Some: transform edits don't create history entries
+    /// When None: normal operation
+    modify_session: Option<ModifySession>,
+}
+
+/// Session state for transform modification (triangle editor, etc.)
+struct ModifySession {
+    /// Index of transform being modified
+    transform_index: usize,
+    /// Initial state captured at session start
+    initial_transform: crate::scene::transforms::Transform,
 }
 
 impl ConfigManager {
@@ -237,6 +250,7 @@ impl ConfigManager {
             lazy_throttle: Duration::from_millis(5000),
             pending_actions: UpdateAction::none(),
             preview_needs_overwrite: false,
+            modify_session: None,
         }
     }
 
@@ -247,6 +261,9 @@ impl ConfigManager {
         new_value: ConfigValue,
         lazy: bool,
     ) -> Result<UpdateType, ConfigError> {
+        // If in modify session, skip history creation (will create snapshot on commit)
+        let in_modify_session = self.modify_session.is_some();
+
         if lazy {
             // Lazy mode: Update preview, capture on throttle
 
@@ -275,7 +292,16 @@ impl ConfigManager {
             self.set_value_in_preview(&path, new_value.clone())?;
             log::trace!("Updated preview: {} = {}", path, new_value);
 
-            // Check if we should capture this change
+            // In modify session: always commit preview to current (no history capture)
+            if in_modify_session {
+                self.current = self.preview.clone().unwrap();
+                log::trace!("Modify session: committed preview to current (no history)");
+                let update_type = path.update_type();
+                self.record_action(update_type);
+                return Ok(update_type);
+            }
+
+            // Normal mode: check if we should capture this change
             let should_capture = self.should_capture_lazy_undo();
 
             if should_capture {
@@ -320,19 +346,25 @@ impl ConfigManager {
                 return Ok(UpdateType::None);
             }
 
-            log::debug!("Immediate capture: {} = {} → {}", path, old_value, new_value);
+            // Skip history if in modify session
+            if !in_modify_session {
+                log::debug!("Immediate capture: {} = {} → {}", path, old_value, new_value);
 
-            // Create delta and capture
-            let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
-            let change = ConfigChange::single(delta);
-            let update_type = change.update_type();
+                // Create delta and capture
+                let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
+                let change = ConfigChange::single(delta);
+                let update_type = change.update_type();
 
-            self.push_undo(change);
+                self.push_undo(change);
+            } else {
+                log::trace!("Modify session active: updating {} without history", path);
+            }
 
             // Apply change to current
             self.set_value(&path, new_value)?;
 
             // Record action for GPU updates
+            let update_type = path.update_type();
             self.record_action(update_type);
 
             Ok(update_type)
@@ -346,6 +378,9 @@ impl ConfigManager {
         description: String,
         lazy: bool,
     ) -> Result<UpdateType, ConfigError> {
+        // If in modify session, skip history creation (will create snapshot on commit)
+        let in_modify_session = self.modify_session.is_some();
+
         if lazy {
             // Lazy mode: Update preview, capture on throttle (same logic as update_param)
 
@@ -384,7 +419,15 @@ impl ConfigManager {
             let change = ConfigChange::batch(deltas, description);
             let update_type = change.update_type();
 
-            // Check if we should capture this change
+            // In modify session: always commit preview to current (no history capture)
+            if in_modify_session {
+                self.current = self.preview.clone().unwrap();
+                log::trace!("Modify session: committed batch preview to current (no history)");
+                self.record_action(update_type);
+                return Ok(update_type);
+            }
+
+            // Normal mode: check if we should capture this change
             let should_capture = self.should_capture_lazy_undo();
 
             if should_capture {
@@ -435,8 +478,13 @@ impl ConfigManager {
 
             let change = ConfigChange::batch(deltas, description);
 
-            // Capture undo point
-            self.push_undo(change.clone());
+            // Skip history if in modify session
+            if !in_modify_session {
+                // Capture undo point
+                self.push_undo(change.clone());
+            } else {
+                log::trace!("Modify session active: batch update without history");
+            }
 
             // Apply all changes
             for delta in &change.deltas {
@@ -489,6 +537,14 @@ impl ConfigManager {
                     log::debug!("  Undoing delete transform (re-insert at index {})", index);
                     if *index <= self.current.flame.transforms.len() {
                         self.current.flame.transforms.insert(*index, transform.clone());
+                    }
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::ModifyTransform { index, before, .. } => {
+                    log::debug!("  Undoing modify transform (restore before state at index {})", index);
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms[*index] = before.clone();
                     }
                     return Ok(UpdateType::IterationReset);
                 }
@@ -556,6 +612,15 @@ impl ConfigManager {
                     log::debug!("  Redoing delete transform (remove at index {})", index);
                     if *index < self.current.flame.transforms.len() {
                         self.current.flame.transforms.remove(*index);
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::ModifyTransform { index, after, .. } => {
+                    log::debug!("  Redoing modify transform (restore after state at index {})", index);
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms[*index] = after.clone();
                     }
                     self.position += 1;
                     return Ok(UpdateType::IterationReset);
@@ -1646,6 +1711,13 @@ impl ConfigManager {
                         return Err(ConfigError::InvalidIndex);
                     }
                 }
+                crate::config::SnapshotData::ModifyTransform { index, after, .. } => {
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms[*index] = after.clone();
+                    } else {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                }
                 crate::config::SnapshotData::FullConfig { after, .. } => {
                     self.current = (**after).clone();
                 }
@@ -1661,6 +1733,90 @@ impl ConfigManager {
         self.record_action(UpdateType::IterationReset);
 
         Ok(())
+    }
+
+    /// Start a modify session for a transform
+    /// Captures initial state but doesn't create history entry yet
+    /// All updates during session will apply to config but not create history
+    /// Call commit_modify_transform() to create ModifyTransform snapshot
+    pub fn start_modify_transform(&mut self, index: usize) -> Result<(), ConfigError> {
+        // Can't start a new session if one is already active
+        if self.modify_session.is_some() {
+            return Err(ConfigError::InvalidOperation);
+        }
+
+        // Validate index
+        if index >= self.current.flame.transforms.len() {
+            return Err(ConfigError::InvalidIndex);
+        }
+
+        // Capture initial state
+        let initial_transform = self.current.flame.transforms[index].clone();
+
+        self.modify_session = Some(ModifySession {
+            transform_index: index,
+            initial_transform,
+        });
+
+        log::debug!("Started modify session for transform {}", index);
+        Ok(())
+    }
+
+    /// Commit the active modify session
+    /// Creates ModifyTransform snapshot with before/after states
+    /// Returns error if no session is active
+    pub fn commit_modify_transform(&mut self, description: String) -> Result<UpdateType, ConfigError> {
+        let session = self.modify_session.take()
+            .ok_or(ConfigError::InvalidOperation)?;
+
+        let index = session.transform_index;
+        let before = session.initial_transform;
+        let after = self.current.flame.transforms[index].clone();
+
+        // Check if transform actually changed (avoid no-op snapshots)
+        let changed = before.a != after.a || before.b != after.b || before.c != after.c
+            || before.d != after.d || before.e != after.e || before.f != after.f
+            || before.g != after.g;
+
+        if !changed {
+            log::debug!("Modify session commit: no changes detected, skipping snapshot");
+            return Ok(UpdateType::None);
+        }
+
+        // Create ModifyTransform snapshot
+        let change = ConfigChange::modify_transform_snapshot(index, before, after, description);
+
+        // Record in history
+        self.push_undo(change);
+
+        // Record GPU update action
+        self.record_action(UpdateType::IterationReset);
+
+        log::debug!("Committed modify session for transform {}", index);
+        Ok(UpdateType::IterationReset)
+    }
+
+    /// Cancel the active modify session
+    /// Restores transform to initial state and discards changes
+    /// Returns error if no session is active
+    pub fn cancel_modify_transform(&mut self) -> Result<(), ConfigError> {
+        let session = self.modify_session.take()
+            .ok_or(ConfigError::InvalidOperation)?;
+
+        // Restore initial state
+        let index = session.transform_index;
+        self.current.flame.transforms[index] = session.initial_transform;
+
+        // Record GPU update action (need to restore visual state)
+        self.record_action(UpdateType::IterationReset);
+
+        log::debug!("Cancelled modify session for transform {}", index);
+        Ok(())
+    }
+
+    /// Check if a modify session is currently active
+    pub fn is_in_modify_session(&self) -> bool {
+        self.modify_session.is_some()
     }
 
     /// Get full history (unified timeline)
