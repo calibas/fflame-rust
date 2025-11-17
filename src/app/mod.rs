@@ -1093,6 +1093,9 @@ impl App {
         let had_changes = actions.update_view || actions.update_palette || actions.update_tone_curve || actions.update_flame;
         let now = web_time::Instant::now();
 
+        // Track previous overwrite state to detect transitions
+        let was_overwrite = self.use_overwrite_next_frame;
+
         if had_changes && !actions.reset_accumulation {
             // Changes happened → enable overwrite mode and update timestamp
             self.use_overwrite_next_frame = true;
@@ -1103,6 +1106,14 @@ impl App {
                 let time_since_change = now.duration_since(last_change);
                 // Keep overwrite ON for 100ms after last change (~6 frames at 60fps)
                 self.use_overwrite_next_frame = time_since_change.as_millis() < 100;
+
+                // When overwrite window expires, reset iteration counter for clean rebuild
+                if was_overwrite && !self.use_overwrite_next_frame {
+                    if let Some(ref mut renderer) = self.flame_renderer {
+                        renderer.reset_iteration_counter();
+                        log::debug!("Overwrite window expired → reset iteration counter for clean rebuild");
+                    }
+                }
             } else {
                 self.use_overwrite_next_frame = false;
             }

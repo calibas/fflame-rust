@@ -168,7 +168,7 @@ impl UpdateAction {
 
             UpdateType::IterationReset => Self {
                 update_flame: true,
-                reset_accumulation: true, // Always reset - fractal structure changed
+                reset_accumulation: false, // Don't reset - use overwrite mode for smooth transition
                 rebuild_shader: false, // TODO: detect variation changes
                 ..Default::default()
             },
