@@ -641,6 +641,11 @@ impl ConfigManager {
 
     /// Check if new change should be coalesced with last history entry
     fn should_coalesce(&self, new_change: &ConfigChange) -> bool {
+        // Never coalesce snapshots (they have no deltas)
+        if new_change.deltas.is_empty() {
+            return false;
+        }
+
         // Only coalesce if at head of history
         if self.position == 0 || self.position != self.history.len() {
             return false;
@@ -1565,7 +1570,7 @@ impl ConfigManager {
         // Create snapshot of new state (for redo after undo)
         let new_snapshot = ConfigChange::snapshot(
             new_config,
-            description,
+            format!("After: {}", description),
         );
         self.push_undo(new_snapshot);
 
