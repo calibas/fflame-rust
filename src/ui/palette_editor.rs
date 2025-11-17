@@ -141,18 +141,17 @@ fn render_palette_editor_core_impl(
                                 force_commit = true;
                             }
 
-                            // Color picker
+                            // Color picker - no preview mode (immediate commits)
                             let mut color = [stop.color[0], stop.color[1], stop.color[2]];
                             let color_response = ui.color_edit_button_rgb(&mut color);
                             if color_response.changed() {
                                 stop.color = color;
-                                palette_updated = true;
-                            }
-
-                            // This doesn't actually work!
-                            // Force commit when color picker closes (loses focus)
-                            if color_response.lost_focus() {
-                                force_commit = true;
+                                // Immediate commit (no preview mode) since we can't detect popup close
+                                let _ = config_manager.update_param(
+                                    crate::config::ConfigPath::Palette,
+                                    palette.clone().into(),
+                                    false, // immediate undo for each color change
+                                );
                             }
 
                             // Remove button (disabled in fixed mode, keep at least 2 stops)
