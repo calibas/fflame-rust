@@ -112,7 +112,7 @@ pub fn render_settings_content(
                     .changed()
                 {
                     let new_max_iterations = 10f64.powf(log_value) as u64;
-                    let _ = config_manager.update_param(ConfigPath::MaxIterations, new_max_iterations.into(), false);
+                    let _ = config_manager.update_param(ConfigPath::MaxIterations, new_max_iterations.into());
                 }
             }
 
@@ -131,8 +131,7 @@ pub fn render_settings_content(
             if response.changed() {
                 let _ = config_manager.update_param(
                     ConfigPath::IterationsPerThread,
-                    temp_iterations.into(),
-                    response.dragged()
+                    temp_iterations.into()
                 );
             }
 
@@ -158,8 +157,7 @@ pub fn render_settings_content(
             if response.changed() {
                 let _ = config_manager.update_param(
                     ConfigPath::HistogramColorScale,
-                    temp_histogram.into(),
-                    response.dragged()
+                    temp_histogram.into()
                 );
             }
 
@@ -181,8 +179,7 @@ pub fn render_settings_content(
             if response.changed() {
                 let _ = config_manager.update_param(
                     ConfigPath::LowDensitySmoothing,
-                    temp_smoothing.into(),
-                    response.dragged()
+                    temp_smoothing.into()
                 );
             }
 
@@ -205,8 +202,7 @@ pub fn render_settings_content(
             if response.changed() {
                 let _ = config_manager.update_param(
                     ConfigPath::DensityCompressionStrength,
-                    temp_compression.into(),
-                    response.dragged()
+                    temp_compression.into()
                 );
             }
 
@@ -229,8 +225,7 @@ pub fn render_settings_content(
             if response.changed() {
                 let _ = config_manager.update_param(
                     ConfigPath::TargetIterationsPerPixel,
-                    temp_limit.into(),
-                    response.dragged()
+                    temp_limit.into()
                 );
             }
 
@@ -250,8 +245,7 @@ pub fn render_settings_content(
             {
                 let _ = config_manager.update_param(
                     ConfigPath::UseDynamicBlend,
-                    temp_dynamic.into(),
-                    false
+                    temp_dynamic.into()
                 );
             }
 
@@ -272,8 +266,7 @@ pub fn render_settings_content(
             if response.changed() {
                 let _ = config_manager.update_param(
                     ConfigPath::BlendFactor,
-                    temp_blend.into(),
-                    response.dragged()
+                    temp_blend.into()
                 );
             }
 
@@ -289,36 +282,31 @@ pub fn render_settings_content(
                 if ui.selectable_label(config.speed_multiplier == 1, "1x").clicked() {
                     let _ = config_manager.update_param(
                         ConfigPath::SpeedMultiplier,
-                        1u32.into(),
-                        false
+                        1u32.into()
                     );
                 }
                 if ui.selectable_label(config.speed_multiplier == 2, "2x").clicked() {
                     let _ = config_manager.update_param(
                         ConfigPath::SpeedMultiplier,
-                        2u32.into(),
-                        false
+                        2u32.into()
                     );
                 }
                 if ui.selectable_label(config.speed_multiplier == 4, "4x").clicked() {
                     let _ = config_manager.update_param(
                         ConfigPath::SpeedMultiplier,
-                        4u32.into(),
-                        false
+                        4u32.into()
                     );
                 }
                 if ui.selectable_label(config.speed_multiplier == 8, "8x").clicked() {
                     let _ = config_manager.update_param(
                         ConfigPath::SpeedMultiplier,
-                        8u32.into(),
-                        false
+                        8u32.into()
                     );
                 }
                 if ui.selectable_label(config.speed_multiplier == 16, "16x").clicked() {
                     let _ = config_manager.update_param(
                         ConfigPath::SpeedMultiplier,
-                        16u32.into(),
-                        false
+                        16u32.into()
                     );
                 }
             });
@@ -378,8 +366,7 @@ pub fn render_settings_content(
             ).changed() {
                 let _ = config_manager.update_param(
                     ConfigPath::DeterministicRng,
-                    temp_deterministic.into(),
-                    false  // Immediate
+                    temp_deterministic.into()
                 );
             }
         });

@@ -761,8 +761,7 @@ impl App {
                     let new_idx = self.palette_library.palettes().len() - 1;
                     let _ = self.config_manager.update_param(
                         crate::config::ConfigPath::PaletteIndex,
-                        (new_idx as u32).into(),
-                        false
+                        (new_idx as u32).into()
                     );
 
                     // Update renderer
@@ -799,8 +798,7 @@ impl App {
                                     let new_idx = self.palette_library.palettes().len() - 1;
                                     let _ = self.config_manager.update_param(
                                         crate::config::ConfigPath::PaletteIndex,
-                                        (new_idx as u32).into(),
-                                        false
+                                        (new_idx as u32).into()
                                     );
 
                                     // Update renderer

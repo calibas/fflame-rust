@@ -76,7 +76,7 @@ pub fn render_variation_category(
                 variation: var_info.name.clone(),
             };
 
-            if let Ok(update_type) = config_manager.update_param(path, value.into(), response.dragged()) {
+            if let Ok(update_type) = config_manager.update_param(path, value.into()) {
                 max_update = max_update.max(update_type);
             }
         }
@@ -158,7 +158,7 @@ pub fn render_variation_category_final(
                 variation: var_info.name.clone(),
             };
 
-            if let Ok(update_type) = config_manager.update_param(path, value.into(), response.dragged()) {
+            if let Ok(update_type) = config_manager.update_param(path, value.into()) {
                 max_update = max_update.max(update_type);
             }
         }

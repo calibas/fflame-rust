@@ -36,7 +36,6 @@ fn render_palette_editor_core_impl(
             let _ = config_manager.update_param(
                 crate::config::ConfigPath::Palette,
                 palette.clone().into(),
-                false,
             );
         }
     });
@@ -97,8 +96,7 @@ fn render_palette_editor_core_impl(
                         palette.convert_to_free();
                         let _ = config_manager.update_param(
                             crate::config::ConfigPath::Palette,
-                            palette.clone().into(),
-                            false, // immediate undo for discrete action
+                            palette.clone().into()
                         );
                     } else {
                         // Fixed mode: show warning dialog
@@ -149,8 +147,7 @@ fn render_palette_editor_core_impl(
                                 // Immediate commit (no preview mode) since we can't detect popup close
                                 let _ = config_manager.update_param(
                                     crate::config::ConfigPath::Palette,
-                                    palette.clone().into(),
-                                    false, // immediate undo for each color change
+                                    palette.clone().into()
                                 );
                             }
 
@@ -169,8 +166,7 @@ fn render_palette_editor_core_impl(
                 // Enter preview mode for live rendering
                 let _ = config_manager.update_param(
                     crate::config::ConfigPath::Palette,
-                    palette.clone().into(),
-                    true, // lazy mode = preview mode
+                    palette.clone().into()
                 );
             }
 
@@ -181,8 +177,7 @@ fn render_palette_editor_core_impl(
                 // Update library and create undo point
                 let _ = config_manager.update_param(
                     crate::config::ConfigPath::Palette,
-                    palette.clone().into(),
-                    false, // immediate undo for discrete action
+                    palette.clone().into()
                 );
             }
 
@@ -209,8 +204,7 @@ fn render_palette_editor_core_impl(
                 // Update library and create undo point
                 let _ = config_manager.update_param(
                     crate::config::ConfigPath::Palette,
-                    palette.clone().into(),
-                    false, // immediate undo for discrete action
+                    palette.clone().into()
                 );
             }
 
@@ -284,8 +278,7 @@ pub fn render_fixed_mode_warning(
                             palette.convert_to_fixed();
                             let _ = config_manager.update_param(
                                 crate::config::ConfigPath::Palette,
-                                palette.into(),
-                                false,
+                                palette.into()
                             );
                         }
                         palette_editor.show_fixed_mode_warning = false;

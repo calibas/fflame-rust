@@ -302,8 +302,7 @@ impl<'a> PanelViewer<'a> {
 
         let _ = self.context.config_manager.update_param(
             crate::config::ConfigPath::Pan,
-            (new_pan_x, new_pan_y).into(),
-            true  // Preview mode while dragging
+            (new_pan_x, new_pan_y).into()
         );
     }
 
@@ -360,16 +359,14 @@ impl<'a> PanelViewer<'a> {
                             (crate::config::ConfigPath::Zoom, new_zoom.into()),
                             (crate::config::ConfigPath::Pan, (new_pan_x, new_pan_y).into()),
                         ],
-                        "Zoom In (Wheel)".to_string(),
-                        false, // Discrete action for scroll
+                        "Zoom In (Wheel)".to_string()
                     );
                 } else {
                     // No mouse position, zoom to center
                     let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
                     let _ = self.context.config_manager.update_param(
                         crate::config::ConfigPath::Zoom,
-                        new_zoom.into(),
-                        false, // Discrete action for scroll
+                        new_zoom.into()
                     );
                 }
             } else {
@@ -377,8 +374,7 @@ impl<'a> PanelViewer<'a> {
                 let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
                 let _ = self.context.config_manager.update_param(
                     crate::config::ConfigPath::Zoom,
-                    new_zoom.into(),
-                    false, // Discrete action for scroll
+                    new_zoom.into()
                 );
             }
         }
