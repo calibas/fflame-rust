@@ -89,8 +89,11 @@ use super::fractal_config::FractalConfig;
 use std::time::Duration;
 use web_time::Instant;
 
-/// Coalescing window - merge rapid changes to same parameter within this duration
-const COALESCE_WINDOW: Duration = Duration::from_millis(2000);
+/// Maximum duration for coalescing - total span from first to last change
+const MAX_COALESCE_SPAN: Duration = Duration::from_millis(2000);
+
+/// Inactivity threshold - pausing longer than this creates a new undo point
+const COALESCE_INACTIVITY_THRESHOLD: Duration = Duration::from_millis(500);
 
 /// Check if a config path supports undo point coalescing
 /// Only paths in this whitelist will have rapid changes merged into single undo point
@@ -526,16 +529,23 @@ impl ConfigManager {
         if should_coalesce {
             // Replace last change instead of adding new one
             let last_idx = self.history.len() - 1;
-            log::debug!("  COALESCING with previous change (within {}ms window)", COALESCE_WINDOW.as_millis());
+            log::debug!("  COALESCING with previous change (within {}ms inactivity, {}ms total span)",
+                COALESCE_INACTIVITY_THRESHOLD.as_millis(), MAX_COALESCE_SPAN.as_millis());
 
-            // Update the last change's new_value and timestamp
-            // Keep the original old_value from the first change in the sequence
+            // Update the last change's new_value and last_update_time
+            // Keep the original old_value and timestamp from the first change in the sequence
             for (i, new_delta) in change.deltas.iter().enumerate() {
                 if let Some(old_delta) = self.history[last_idx].deltas.get_mut(i) {
                     old_delta.new_value = new_delta.new_value.clone();
-                    old_delta.timestamp = new_delta.timestamp;
+                    // NOTE: We do NOT update timestamp - it preserves when the sequence started
                 }
             }
+
+            // Update last_update_time to track when the most recent change occurred
+            self.history[last_idx].last_update_time = change.deltas
+                .first()
+                .map(|d| d.timestamp)
+                .unwrap_or_else(web_time::Instant::now);
 
             log::debug!("  History: {} items (coalesced), Position: {}",
                 self.history.len(), self.position);
@@ -595,12 +605,20 @@ impl ConfigManager {
             if !supports_coalescing(&new_delta.path) {
                 return false;
             }
+        }
 
-            // Must be within time window
-            let time_since = new_delta.timestamp.duration_since(old_delta.timestamp);
-            if time_since > COALESCE_WINDOW {
-                return false;
-            }
+        // Check inactivity threshold: pausing for 500ms+ creates new undo point
+        // Use last_update_time (most recent change) not timestamp (first change)
+        let time_since_last = new_change.timestamp.duration_since(last_change.last_update_time);
+        if time_since_last > COALESCE_INACTIVITY_THRESHOLD {
+            return false;
+        }
+
+        // Check maximum coalesce span: total duration from first to last change
+        // timestamp = first change, new timestamp = current change
+        let total_span = new_change.timestamp.duration_since(last_change.timestamp);
+        if total_span > MAX_COALESCE_SPAN {
+            return false;
         }
 
         true

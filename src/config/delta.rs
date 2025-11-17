@@ -448,6 +448,10 @@ pub struct ConfigChange {
     /// When Some: use snapshot logic for undo/redo (bidirectional or specialized)
     /// When None: use deltas for undo/redo
     pub snapshot: Option<SnapshotData>,
+    /// Last update time for coalescing sequence
+    /// When coalescing: timestamp = first change, last_update_time = most recent change
+    /// This allows checking both inactivity (time since last update) and total span (time since first)
+    pub last_update_time: Instant,
 }
 
 impl ConfigChange {
@@ -460,6 +464,7 @@ impl ConfigChange {
             timestamp,
             description,
             snapshot: None,
+            last_update_time: timestamp,  // Initially same as timestamp
         }
     }
 
@@ -474,6 +479,7 @@ impl ConfigChange {
             timestamp,
             description,
             snapshot: None,
+            last_update_time: timestamp,  // Initially same as timestamp
         }
     }
 
@@ -484,14 +490,16 @@ impl ConfigChange {
         after: super::fractal_config::FractalConfig,
         description: String,
     ) -> Self {
+        let now = Instant::now();
         Self {
             deltas: vec![],
-            timestamp: Instant::now(),
+            timestamp: now,
             description,
             snapshot: Some(SnapshotData::FullConfig {
                 before: Box::new(before),
                 after: Box::new(after),
             }),
+            last_update_time: now,
         }
     }
 
@@ -502,11 +510,13 @@ impl ConfigChange {
         transform: crate::scene::transforms::Transform,
         description: String,
     ) -> Self {
+        let now = Instant::now();
         Self {
             deltas: vec![],
-            timestamp: Instant::now(),
+            timestamp: now,
             description,
             snapshot: Some(SnapshotData::AddTransform { index, transform }),
+            last_update_time: now,
         }
     }
 
@@ -517,11 +527,13 @@ impl ConfigChange {
         transform: crate::scene::transforms::Transform,
         description: String,
     ) -> Self {
+        let now = Instant::now();
         Self {
             deltas: vec![],
-            timestamp: Instant::now(),
+            timestamp: now,
             description,
             snapshot: Some(SnapshotData::DeleteTransform { index, transform }),
+            last_update_time: now,
         }
     }
 
@@ -533,21 +545,25 @@ impl ConfigChange {
         after: crate::scene::transforms::Transform,
         description: String,
     ) -> Self {
+        let now = Instant::now();
         Self {
             deltas: vec![],
-            timestamp: Instant::now(),
+            timestamp: now,
             description,
             snapshot: Some(SnapshotData::ModifyTransform { index, before, after }),
+            last_update_time: now,
         }
     }
 
     /// Invert change (for undo)
     pub fn invert(&self) -> Self {
+        let now = Instant::now();
         Self {
             deltas: self.deltas.iter().rev().map(|d| d.invert()).collect(),
-            timestamp: Instant::now(),
+            timestamp: now,
             description: format!("Undo: {}", self.description),
             snapshot: self.snapshot.clone(),
+            last_update_time: now,
         }
     }
 
