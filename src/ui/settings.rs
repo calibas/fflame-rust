@@ -45,7 +45,7 @@ pub fn render_settings_content(
                     for (idx, preset) in presets.iter().enumerate() {
                         if ui.selectable_value(current_preset_index, idx, &preset.flame.name).changed() {
                             println!("UI: Loading preset: {} ({})", preset.flame.name, idx);
-                            // Load preset via ConfigManager (creates two undo points)
+                            // Load preset via ConfigManager (creates single bidirectional snapshot)
                             if let Err(e) = config_manager.load_config(
                                 preset.clone(),
                                 format!("Load Preset: {}", preset.flame.name),
