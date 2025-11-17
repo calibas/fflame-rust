@@ -171,10 +171,6 @@ impl<'a> PanelViewer<'a> {
     fn render_rendering_panel(&mut self, ui: &mut egui::Ui) {
         super::settings::render_settings_content(
             ui,
-            self.context.config_manager.can_undo(),
-            self.context.config_manager.can_redo(),
-            self.context.undo_requested,
-            self.context.redo_requested,
             self.context.png_export_with_background,
             self.context.png_export_transparent,
             self.context.export_width,
