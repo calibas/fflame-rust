@@ -181,11 +181,15 @@ pub struct ConfigManager {
     /// When None: not in preview mode
     preview: Option<FractalConfig>,
 
-    /// Undo stack (deltas, not full configs)
-    undo_stack: Vec<ConfigChange>,
+    /// Full history (unified undo/redo timeline)
+    /// Position points to "current state" in history
+    /// Items before position = past states (can undo)
+    /// Items at/after position = future states (can redo)
+    history: Vec<ConfigChange>,
 
-    /// Redo stack
-    redo_stack: Vec<ConfigChange>,
+    /// Current position in history (0 = initial state, history.len() = head)
+    /// Invariant: 0 <= position <= history.len()
+    position: usize,
 
     /// Maximum undo history
     max_undo_depth: usize,
@@ -193,7 +197,7 @@ pub struct ConfigManager {
     /// Last time we created a lazy undo point
     last_lazy_undo: Option<Instant>,
 
-    /// Lazy undo throttle duration (500ms)
+    /// Lazy undo throttle duration (500ms for now, will increase to 5000ms)
     lazy_throttle: Duration,
 
     /// Pending actions accumulated since last get_pending_actions() call
@@ -211,8 +215,8 @@ impl ConfigManager {
         Self {
             current: config,
             preview: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            history: Vec::new(),
+            position: 0,  // Start at beginning (no history yet)
             max_undo_depth: 500,  // ~5MB max memory (500 states × ~10KB each)
             last_lazy_undo: None,
             lazy_throttle: Duration::from_millis(500),
@@ -278,7 +282,7 @@ impl ConfigManager {
 
                 // Commit preview to current (clone to keep preview active - prevents blink)
                 self.current = self.preview.clone().unwrap();
-                log::debug!("  -> Committed preview to current, undo stack len: {}", self.undo_stack.len());
+                log::debug!("  -> Committed preview to current, history len: {}", self.history.len());
 
                 // Record action for GPU updates
                 self.record_action(update_type);
@@ -386,7 +390,7 @@ impl ConfigManager {
 
                 // Commit preview to current (clone to keep preview active - prevents blink)
                 self.current = self.preview.clone().unwrap();
-                log::debug!("  -> Committed batch preview to current, undo stack len: {}", self.undo_stack.len());
+                log::debug!("  -> Committed batch preview to current, history len: {}", self.history.len());
 
                 // Record action for GPU updates
                 self.record_action(update_type);
@@ -439,22 +443,24 @@ impl ConfigManager {
         self.preview = None;
         self.preview_needs_overwrite = false;
 
-        let change = self
-            .undo_stack
-            .pop()
-            .ok_or(ConfigError::EmptyUndoStack)?;
+        if self.position == 0 {
+            return Err(ConfigError::EmptyUndoStack);
+        }
 
-        log::debug!("Undo: {}", change.description);
+        // Move position back
+        self.position -= 1;
+
+        let change = &self.history[self.position];
+        log::debug!("Undo: {} (position now: {})", change.description, self.position);
 
         // Check if this is a snapshot-based undo
         if let Some(snapshot) = &change.snapshot {
             log::debug!("  Restoring full config snapshot");
             self.current = (**snapshot).clone();
-            self.redo_stack.push(change);
             return Ok(UpdateType::IterationReset); // Full config change
         }
 
-        // Delta-based undo (original behavior)
+        // Delta-based undo - apply inverted deltas
         for delta in &change.deltas {
             log::debug!("  Original delta: {} → {}", delta.old_value, delta.new_value);
         }
@@ -467,11 +473,8 @@ impl ConfigManager {
             self.set_value(&delta.path, delta.new_value.clone())?;
         }
 
-        // Push to redo stack
-        self.redo_stack.push(change);
-
-        log::debug!("  Undo stack now: {} items, Redo stack now: {} items",
-            self.undo_stack.len(), self.redo_stack.len());
+        log::debug!("  History: {} items, Position: {}",
+            self.history.len(), self.position);
 
         let update_type = inverted.update_type();
 
@@ -487,38 +490,34 @@ impl ConfigManager {
         self.preview = None;
         self.preview_needs_overwrite = false;
 
-        let change = self
-            .redo_stack
-            .pop()
-            .ok_or(ConfigError::EmptyRedoStack)?;
+        if self.position >= self.history.len() {
+            return Err(ConfigError::EmptyRedoStack);
+        }
 
+        // Clone the change to avoid borrow issues
+        let change = self.history[self.position].clone();
         log::debug!("Redo: {}", change.description);
 
         // Check if this is a snapshot-based redo
         if let Some(snapshot) = &change.snapshot {
             log::debug!("  Restoring full config snapshot");
             self.current = (**snapshot).clone();
-            self.undo_stack.push(change);
+            self.position += 1;
             return Ok(UpdateType::IterationReset); // Full config change
         }
 
-        // Delta-based redo (original behavior)
+        // Delta-based redo - apply deltas forward
         for delta in &change.deltas {
             log::debug!("  Delta: {} → {}", delta.old_value, delta.new_value);
             log::debug!("  Applying: {} → {}", delta.path, delta.new_value);
             self.set_value(&delta.path, delta.new_value.clone())?;
         }
 
-        // Push back to undo stack (WITHOUT clearing redo stack!)
-        self.undo_stack.push(change.clone());
+        // Move position forward
+        self.position += 1;
 
-        // Trim undo stack if needed
-        if self.undo_stack.len() > self.max_undo_depth {
-            self.undo_stack.remove(0);
-        }
-
-        log::debug!("  Undo stack now: {} items, Redo stack now: {} items",
-            self.undo_stack.len(), self.redo_stack.len());
+        log::debug!("  History: {} items, Position: {}",
+            self.history.len(), self.position);
 
         let update_type = change.update_type();
 
@@ -569,26 +568,39 @@ impl ConfigManager {
         self.preview.is_some() && self.preview_needs_overwrite
     }
 
-    /// Push change to undo stack, maintaining depth limit
+    /// Push change to history, maintaining depth limit and truncating future
     fn push_undo(&mut self, change: ConfigChange) {
         log::debug!("PUSH_UNDO: {}", change.description);
         for delta in &change.deltas {
             log::debug!("  Delta: {} → {}", delta.old_value, delta.new_value);
         }
 
-        self.undo_stack.push(change);
+        // Truncate future history if not at head (clear redo)
+        let future_cleared = if self.position < self.history.len() {
+            let count = self.history.len() - self.position;
+            self.history.truncate(self.position);
+            count
+        } else {
+            0
+        };
 
-        // Trim if over limit
-        if self.undo_stack.len() > self.max_undo_depth {
-            self.undo_stack.remove(0);
+        // Add new change at current position
+        self.history.push(change);
+        self.position = self.history.len();
+
+        // Trim if over limit (remove oldest)
+        if self.history.len() > self.max_undo_depth {
+            self.history.remove(0);
+            self.position = self.position.saturating_sub(1);
         }
 
-        // Clear redo stack (new change invalidates redo)
-        let redo_cleared = self.redo_stack.len();
-        self.redo_stack.clear();
-
-        log::debug!("  Undo stack now: {} items, Redo stack cleared ({} items removed)",
-            self.undo_stack.len(), redo_cleared);
+        if future_cleared > 0 {
+            log::debug!("  History: {} items, Position: {}, Future cleared: {} items",
+                self.history.len(), self.position, future_cleared);
+        } else {
+            log::debug!("  History: {} items, Position: {}",
+                self.history.len(), self.position);
+        }
     }
 
     /// Extract value from any FractalConfig by path (helper for undo/redo)
@@ -1500,24 +1512,34 @@ impl ConfigManager {
         Ok(())
     }
 
-    /// Get undo stack (for displaying in undo window)
-    pub fn undo_history(&self) -> &[ConfigChange] {
-        &self.undo_stack
+    /// Get full history (unified timeline)
+    pub fn history(&self) -> &[ConfigChange] {
+        &self.history
     }
 
-    /// Get redo stack
+    /// Get current position in history
+    pub fn position(&self) -> usize {
+        self.position
+    }
+
+    /// Get undo history (items before current position) - for backward compatibility
+    pub fn undo_history(&self) -> &[ConfigChange] {
+        &self.history[..self.position]
+    }
+
+    /// Get redo history (items at/after current position) - for backward compatibility
     pub fn redo_history(&self) -> &[ConfigChange] {
-        &self.redo_stack
+        &self.history[self.position..]
     }
 
     /// Check if can undo
     pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
+        self.position > 0
     }
 
     /// Check if can redo
     pub fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
+        self.position < self.history.len()
     }
 
     /// Get pending GPU update actions based on recent changes
@@ -1725,14 +1747,14 @@ mod tests {
             .update_param(ConfigPath::Exposure, 2.0.into(), true)
             .unwrap();
         assert_eq!(update1, UpdateType::ToneMappingOnly);
-        assert_eq!(manager.undo_stack.len(), 1);
+        assert_eq!(manager.history.len(), 1);
 
         // Immediate second update - should NOT capture (throttled)
         let update2 = manager
             .update_param(ConfigPath::Exposure, 3.0.into(), true)
             .unwrap();
         assert_eq!(update2, UpdateType::ToneMappingOnly);
-        assert_eq!(manager.undo_stack.len(), 1); // Still 1!
+        assert_eq!(manager.history.len(), 1); // Still 1!
     }
 
     #[test]
@@ -1809,8 +1831,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(update, UpdateType::ViewOnly);
-        assert_eq!(manager.undo_stack.len(), 1);
-        assert_eq!(manager.undo_stack[0].deltas.len(), 3);
-        assert_eq!(manager.undo_stack[0].description, "Reset View");
+        assert_eq!(manager.history.len(), 1);
+        assert_eq!(manager.history[0].deltas.len(), 3);
+        assert_eq!(manager.history[0].description, "Reset View");
     }
 }
