@@ -3,7 +3,6 @@ mod font_loader;
 mod formatting;
 mod help;
 mod helpers;
-mod lazy_undo;
 mod menu_bar;
 mod menu_context;
 mod palette_editor;

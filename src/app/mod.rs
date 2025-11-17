@@ -1102,11 +1102,14 @@ impl App {
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
-            // Use overwrite mode when NOT resetting accumulation
-            // This provides smooth transitions for ViewOnly/ColorOnly changes
-            // When reset_accumulation=true (IterationReset), use normal accumulation
+            // Overwrite mode logic:
+            // - When parameters change (ViewOnly/ColorOnly): Use overwrite for smooth transitions
+            // - When fractal changes (IterationReset): Reset buffer and accumulate normally
+            // - When idle (no changes): Accumulate normally to build up quality
+            // - When stopped: Use overwrite to allow live parameter updates
+            let has_changes = actions.update_view || actions.update_palette || actions.update_tone_curve || actions.update_flame;
             let has_stopped = renderer.total_iterations() >= final_config.max_iterations;
-            let use_overwrite = !actions.reset_accumulation || has_stopped;
+            let use_overwrite = (has_changes && !actions.reset_accumulation) || has_stopped;
             renderer.set_overwrite_mode(use_overwrite);
 
             // Check if we should continue iterating
