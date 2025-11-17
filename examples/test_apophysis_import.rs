@@ -26,7 +26,7 @@ fn main() -> anyhow::Result<()> {
         for (j, xform) in config.flame.transforms.iter().enumerate() {
             println!("\n  Transform {}:", j + 1);
             println!("    Weight: {}", xform.weight);
-            println!("    Color: RGB({:.2}, {:.2}, {:.2})", xform.color[0], xform.color[1], xform.color[2]);
+            println!("    Color position: {}", xform.color);
             println!("    Color Speed: {}", xform.color_speed);
             println!("    Affine: a={} b={} c={} d={} e={} f={}",
                 xform.a, xform.b, xform.c, xform.d, xform.e, xform.f);

@@ -14,20 +14,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     for flame in flames {
-        let config = FractalConfig {
-            flame,
-            zoom: 1.0,
-            pan_x: 0.0,
-            pan_y: 0.0,
-            rotation: 0.0,
-            camera_rotation_x: 0.0,
-            camera_rotation_y: 0.0,
-            density_scale: 1.0,
-            speed_factor: 0.5,
-            color_mode: ColorMode::Transform,
-            palette_index: 1,
-            background_color: [0.0, 0.0, 0.0],
-        };
+        // Use Default and override only the flame
+        let mut config = FractalConfig::default();
+        config.flame = flame;
+        config.palette_index = 1;
 
         let filename = format!("assets/presets/{}.fflame", config.flame.name.to_lowercase().replace(" ", "_"));
         let json = serde_json::to_string_pretty(&config)?;
