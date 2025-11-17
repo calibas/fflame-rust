@@ -3,7 +3,7 @@
 //! Manages the egui_dock DockState and provides default layouts
 //! for different workflows (Beginner, Standard, Advanced, Export).
 
-use egui_dock::{egui, DockState, NodeIndex, Style};
+use egui_dock::{egui, DockState, Style};
 use serde::{Deserialize, Serialize};
 
 /// Identifies which panel to display
