@@ -93,7 +93,7 @@ use web_time::Instant;
 const MAX_COALESCE_SPAN: Duration = Duration::from_millis(3000);
 
 /// Inactivity threshold - pausing longer than this creates a new undo point
-const COALESCE_INACTIVITY_THRESHOLD: Duration = Duration::from_millis(1000);
+const COALESCE_INACTIVITY_THRESHOLD: Duration = Duration::from_millis(500);
 
 /// Check if a config path supports undo point coalescing
 /// By default, all paths support coalescing (enabled for continuous controls)
@@ -533,7 +533,7 @@ impl ConfigManager {
             log::debug!("  COALESCING with previous change (within {}ms inactivity, {}ms total span)",
                 COALESCE_INACTIVITY_THRESHOLD.as_millis(), MAX_COALESCE_SPAN.as_millis());
 
-            // Update the last change's new_value and last_update_time
+            // Update the last change's new_value, description, and last_update_time
             // Keep the original old_value and timestamp from the first change in the sequence
             for (i, new_delta) in change.deltas.iter().enumerate() {
                 if let Some(old_delta) = self.history[last_idx].deltas.get_mut(i) {
@@ -541,6 +541,9 @@ impl ConfigManager {
                     // NOTE: We do NOT update timestamp - it preserves when the sequence started
                 }
             }
+
+            // Update description to reflect final state
+            self.history[last_idx].description = change.description.clone();
 
             // Update last_update_time to track when the most recent change occurred
             self.history[last_idx].last_update_time = change.deltas
@@ -1899,14 +1902,14 @@ mod tests {
 
         // First lazy update - should capture
         let update1 = manager
-            .update_param(ConfigPath::Exposure, 2.0.into(), true)
+            .update_param(ConfigPath::Exposure, 2.0.into())
             .unwrap();
         assert_eq!(update1, UpdateType::ToneMappingOnly);
         assert_eq!(manager.history.len(), 1);
 
         // Immediate second update - should NOT capture (throttled)
         let update2 = manager
-            .update_param(ConfigPath::Exposure, 3.0.into(), true)
+            .update_param(ConfigPath::Exposure, 3.0.into())
             .unwrap();
         assert_eq!(update2, UpdateType::ToneMappingOnly);
         assert_eq!(manager.history.len(), 1); // Still 1!
@@ -1922,15 +1925,15 @@ mod tests {
         assert!(manager.config().exposure == 1.0);
 
         // Change to 2.0
-        manager.update_param(ConfigPath::Exposure, 2.0.into(), false).unwrap();
+        manager.update_param(ConfigPath::Exposure, 2.0.into()).unwrap();
         assert!(manager.config().exposure == 2.0);
 
         // Change to 3.0
-        manager.update_param(ConfigPath::Exposure, 3.0.into(), false).unwrap();
+        manager.update_param(ConfigPath::Exposure, 3.0.into()).unwrap();
         assert!(manager.config().exposure == 3.0);
 
         // Change to 4.0
-        manager.update_param(ConfigPath::Exposure, 4.0.into(), false).unwrap();
+        manager.update_param(ConfigPath::Exposure, 4.0.into()).unwrap();
         assert!(manager.config().exposure == 4.0);
 
         // Undo: should go back to 3.0
