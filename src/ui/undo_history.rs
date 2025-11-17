@@ -13,9 +13,14 @@ pub fn render_undo_history_content(
     let history = config_manager.history();
     let position = config_manager.position();
 
+    // Calculate max height: available space minus room for buttons/stats (min 200px)
+    let available_height = ui.available_height();
+    let max_scroll_height = (available_height - 150.0).max(200.0);
+
     // Show unified timeline with #1 (initial state) at top, growing downward
     egui::ScrollArea::vertical()
         .id_salt("history_scroll_area")
+        .max_height(max_scroll_height)  // Responsive to panel size
         .auto_shrink([false, true])
         .stick_to_bottom(true)  // Auto-scroll to bottom (most recent)
         .show(ui, |ui| {
