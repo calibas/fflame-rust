@@ -9,7 +9,7 @@ pub fn render_menu_bar(
     menu_state: &MenuState,
 ) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-        egui::menu::bar(ui, |ui| {
+        egui::MenuBar::new().ui(ui, |ui| {
             // File Menu
             ui.menu_button(t!("menu.file"), |ui| {
                 if ui.button("📂 Open Config...").clicked() {

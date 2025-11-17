@@ -118,7 +118,7 @@ fn render_unlimited_integer_param(ui: &mut egui::Ui, param: &VariationParameter,
     let response = ui.add(
         egui::Slider::new(&mut int_val, min..=max)
             .text(&param.display_name)
-            .clamp_to_range(false)  // Allow typing values outside slider range
+            .clamping(egui::SliderClamping::Never)  // Allow typing values outside slider range
     );
 
     if response.changed() {
@@ -150,7 +150,7 @@ fn render_unlimited_float_param(ui: &mut egui::Ui, param: &VariationParameter, v
     let response = ui.add(
         egui::Slider::new(value, min..=max)
             .text(&param.display_name)
-            .clamp_to_range(false)  // Allow typing values outside slider range
+            .clamping(egui::SliderClamping::Never)  // Allow typing values outside slider range
     );
 
     if response.changed() {
