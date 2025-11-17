@@ -1089,8 +1089,9 @@ impl App {
 
         // Set overwrite flag based on whether we had changes recently
         // Keep it ON for brief period (100ms ~6 frames) after last change for smooth transitions
-        // This handles both continuous drag and discrete scroll events
-        let had_changes = actions.update_view || actions.update_palette || actions.update_tone_curve || actions.update_flame;
+        // This handles continuous drag, discrete scroll, and transform changes
+        // Note: Excludes tone_curve (post-processing only, doesn't affect accumulation buffer)
+        let had_changes = actions.update_view || actions.update_palette || actions.update_flame;
         let now = web_time::Instant::now();
 
         // Track previous overwrite state to detect transitions
