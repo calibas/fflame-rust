@@ -298,6 +298,13 @@ impl EguiLayer {
                     },
                 });
 
+            // Show palette editor warning dialog (for fixed 256-color mode conversion)
+            palette_editor::render_fixed_mode_warning(
+                ctx,
+                &mut self.palette_editor,
+                config_manager,
+            );
+
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
         });
 

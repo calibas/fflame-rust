@@ -170,6 +170,11 @@ fn render_palette_editor_core_impl(
                 );
             }
 
+            // Commit final change when drag ends or color picker closes
+            if force_commit && config_manager.is_in_preview_mode() {
+                let _ = config_manager.force_commit_preview(&crate::config::ConfigPath::Palette);
+            }
+
             // Remove stop if requested
             if let Some(idx) = stop_to_remove {
                 palette.stops.remove(idx);
@@ -254,7 +259,7 @@ fn render_palette_editor_core_impl(
             ui.label("💡 All changes are applied instantly and tracked in undo history.");
 }
 
-fn render_fixed_mode_warning(
+pub fn render_fixed_mode_warning(
     ctx: &egui::Context,
     palette_editor: &mut PaletteEditor,
     config_manager: &mut crate::config::ConfigManager,
