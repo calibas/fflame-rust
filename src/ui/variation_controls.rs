@@ -63,7 +63,7 @@ pub fn render_variation_category(
         let response = ui.add(
             egui::Slider::new(&mut value, -10.0..=10.0)
                 .text(&var_info.display_name)
-                .clamp_to_range(false)  // Allow typing values outside slider range
+                .clamping(egui::SliderClamping::Never)  // Allow typing values outside slider range
         );
 
         if response.changed() {
@@ -146,7 +146,7 @@ pub fn render_variation_category_final(
         let response = ui.add(
             egui::Slider::new(&mut value, -10.0..=10.0)
                 .text(&var_info.display_name)
-                .clamp_to_range(false)  // Allow typing values outside slider range
+                .clamping(egui::SliderClamping::Never)  // Allow typing values outside slider range
         );
 
         if response.changed() {
