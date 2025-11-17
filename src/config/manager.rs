@@ -249,195 +249,83 @@ impl ConfigManager {
     }
 
     /// Apply a single parameter change
+    ///
+    /// All changes apply immediately and create history entries.
+    /// Coalescing (in push_undo) automatically merges rapid changes to same parameter.
     pub fn update_param(
         &mut self,
         path: ConfigPath,
         new_value: ConfigValue,
-        lazy: bool,
     ) -> Result<UpdateType, ConfigError> {
-        // If in modify session, skip history creation (will create snapshot on commit)
-        let in_modify_session = self.modify_session.is_some();
-
-        if lazy {
-            // Lazy mode: Update current directly, capture on throttle (coalescing)
-            // Overwrite mode is now controlled directly by UpdateAction.reset_accumulation
-
-            // Get old value before updating
-            let old_value = self.get_value(&path)?;
-
-            // Check if actually changed
-            if old_value.approx_eq(&new_value) {
-                return Ok(UpdateType::None);
-            }
-
-            // Update current directly (no preview shadow config)
-            self.set_value(&path, new_value.clone())?;
-            log::trace!("Lazy update: {} = {}", path, new_value);
-
-            // In modify session: no history capture (handled by modify session commit)
-            if in_modify_session {
-                log::trace!("Modify session: updated current (no history)");
-                let update_type = path.update_type();
-                self.record_action(update_type);
-                return Ok(update_type);
-            }
-
-            // Normal mode: check if we should capture this change (coalescing logic)
-            let should_capture = self.should_capture_lazy_undo();
-
-            if should_capture {
-                log::debug!("Lazy capture: {} = {} → {}", path, old_value, new_value);
-
-                let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
-                let change = ConfigChange::single(delta);
-                let update_type = change.update_type();
-
-                self.push_undo(change);
-                log::debug!("  -> Captured to history, len: {}", self.history.len());
-
-                // Record action for GPU updates
-                self.record_action(update_type);
-
-                return Ok(update_type);
-            }
-
-            // No capture yet (still coalescing), but record action for GPU updates
-            let update_type = path.update_type();
-            self.record_action(update_type);
-            Ok(update_type)
-
-        } else {
-            // Non-lazy mode: Update current directly and capture immediately
-
-            let old_value = self.get_value(&path)?;
-
-            // Check if actually changed
-            if old_value.approx_eq(&new_value) {
-                return Ok(UpdateType::None);
-            }
-
-            // Skip history if in modify session
-            if !in_modify_session {
-                log::debug!("Immediate capture: {} = {} → {}", path, old_value, new_value);
-
-                // Create delta and capture
-                let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
-                let change = ConfigChange::single(delta);
-                let update_type = change.update_type();
-
-                self.push_undo(change);
-            } else {
-                log::trace!("Modify session active: updating {} without history", path);
-            }
-
-            // Apply change to current
+        // Special case: modify session (skip history, commit on session end)
+        if self.modify_session.is_some() {
             self.set_value(&path, new_value)?;
-
-            // Record action for GPU updates
             let update_type = path.update_type();
             self.record_action(update_type);
-
-            Ok(update_type)
+            return Ok(update_type);
         }
+
+        // Normal mode: update current and capture
+        let old_value = self.get_value(&path)?;
+
+        if old_value.approx_eq(&new_value) {
+            return Ok(UpdateType::None);
+        }
+
+        let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
+        let change = ConfigChange::single(delta);
+        let update_type = change.update_type();
+
+        self.push_undo(change);  // Coalescing happens here automatically
+        self.set_value(&path, new_value)?;
+        self.record_action(update_type);
+
+        Ok(update_type)
     }
 
     /// Apply a batch of changes (single undo point)
+    ///
+    /// Batch changes always create immediate history entries (no coalescing).
+    /// Use this for grouped parameter changes like triangle editor affine updates.
     pub fn update_batch(
         &mut self,
         changes: Vec<(ConfigPath, ConfigValue)>,
         description: String,
-        lazy: bool,
     ) -> Result<UpdateType, ConfigError> {
-        // If in modify session, skip history creation (will create snapshot on commit)
-        let in_modify_session = self.modify_session.is_some();
-
-        if lazy {
-            // Lazy mode: Update current directly, capture on throttle (coalescing)
-            // Overwrite mode is now controlled directly by UpdateAction.reset_accumulation
-
-            // Create deltas for all changes
-            let mut deltas = Vec::new();
-            for (path, new_value) in changes {
-                let old_value = self.get_value(&path)?;
-                if !old_value.approx_eq(&new_value) {
-                    deltas.push(ConfigDelta::new(path.clone(), old_value, new_value.clone()));
-                    // Update current directly
-                    self.set_value(&path, new_value)?;
-                }
+        // Special case: modify session (skip history, commit on session end)
+        if self.modify_session.is_some() {
+            for (path, value) in changes {
+                self.set_value(&path, value)?;
             }
-
-            if deltas.is_empty() {
-                return Ok(UpdateType::None);
-            }
-
-            log::trace!("Lazy batch update: {} changes", deltas.len());
-
-            let change = ConfigChange::batch(deltas, description);
-            let update_type = change.update_type();
-
-            // In modify session: no history capture (handled by modify session commit)
-            if in_modify_session {
-                log::trace!("Modify session: updated current (no history)");
-                self.record_action(update_type);
-                return Ok(update_type);
-            }
-
-            // Normal mode: check if we should capture this change (coalescing logic)
-            let should_capture = self.should_capture_lazy_undo();
-
-            if should_capture {
-                log::debug!("Lazy batch capture: {} deltas", change.deltas.len());
-                self.push_undo(change);
-                log::debug!("  -> Captured to history, len: {}", self.history.len());
-
-                // Record action for GPU updates
-                self.record_action(update_type);
-
-                return Ok(update_type);
-            }
-
-            // No capture yet, but still record action for GPU updates
+            let update_type = UpdateType::IterationReset;  // Assume worst case for modify session
             self.record_action(update_type);
-            Ok(update_type)
-
-        } else {
-            // Non-lazy mode: Update current directly and capture immediately
-            let mut deltas = Vec::new();
-
-            // Create deltas for all changes
-            for (path, new_value) in changes {
-                let old_value = self.get_value(&path)?;
-                if !old_value.approx_eq(&new_value) {
-                    deltas.push(ConfigDelta::new(path, old_value, new_value));
-                }
-            }
-
-            if deltas.is_empty() {
-                return Ok(UpdateType::None);
-            }
-
-            let change = ConfigChange::batch(deltas, description);
-
-            // Skip history if in modify session
-            if !in_modify_session {
-                // Capture undo point
-                self.push_undo(change.clone());
-            } else {
-                log::trace!("Modify session active: batch update without history");
-            }
-
-            // Apply all changes
-            for delta in &change.deltas {
-                self.set_value(&delta.path, delta.new_value.clone())?;
-            }
-
-            let update_type = change.update_type();
-
-            // Record action for GPU updates
-            self.record_action(update_type);
-
-            Ok(update_type)
+            return Ok(update_type);
         }
+
+        // Normal mode: create deltas and capture
+        let mut deltas = Vec::new();
+        for (path, new_value) in changes {
+            let old_value = self.get_value(&path)?;
+            if !old_value.approx_eq(&new_value) {
+                deltas.push(ConfigDelta::new(path, old_value, new_value));
+            }
+        }
+
+        if deltas.is_empty() {
+            return Ok(UpdateType::None);
+        }
+
+        let change = ConfigChange::batch(deltas, description);
+        let update_type = change.update_type();
+
+        self.push_undo(change.clone());  // Batch changes skip coalescing
+
+        for delta in &change.deltas {
+            self.set_value(&delta.path, delta.new_value.clone())?;
+        }
+
+        self.record_action(update_type);
+        Ok(update_type)
     }
 
     /// Undo last change
@@ -2050,7 +1938,7 @@ mod tests {
 
         // Make change
         manager
-            .update_param(ConfigPath::Exposure, 2.0.into(), false)
+            .update_param(ConfigPath::Exposure, 2.0.into())
             .unwrap();
         assert_eq!(manager.current.exposure, 2.0);
 
@@ -2075,7 +1963,7 @@ mod tests {
         ];
 
         let update = manager
-            .update_batch(changes, "Reset View".to_string(), false)
+            .update_batch(changes, "Reset View".to_string())
             .unwrap();
 
         assert_eq!(update, UpdateType::ViewOnly);

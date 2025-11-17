@@ -18,16 +18,13 @@ pub fn render_view_content(
             let new_zoom = config.zoom * 1.5;
             let _ = config_manager.update_param(
                 ConfigPath::Zoom,
-                new_zoom.into(),
-                false
-            );
+                new_zoom.into());
         }
         if ui.button("➖ Zoom Out").clicked() {
             let new_zoom = config.zoom / 1.5;
             let _ = config_manager.update_param(
                 ConfigPath::Zoom,
-                new_zoom.into(),
-                false
+                new_zoom.into()
             );
         }
     });
@@ -64,8 +61,7 @@ pub fn render_view_content(
             let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into(),
-                false
+                (new_pan_x, new_pan_y).into()
             );
         }
     });
@@ -77,8 +73,7 @@ pub fn render_view_content(
             let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into(),
-                false
+                (new_pan_x, new_pan_y).into()
             );
         }
         if ui.button("  v  ").clicked() {
@@ -88,8 +83,7 @@ pub fn render_view_content(
             let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into(),
-                false
+                (new_pan_x, new_pan_y).into()
             );
         }
         if ui.button("  >  ").clicked() {
@@ -99,8 +93,7 @@ pub fn render_view_content(
             let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
-                (new_pan_x, new_pan_y).into(),
-                false
+                (new_pan_x, new_pan_y).into()
             );
         }
     });
@@ -115,8 +108,7 @@ pub fn render_view_content(
             let new_rotation = degrees.to_radians();
             let _ = config_manager.update_param(
                 ConfigPath::Rotation,
-                new_rotation.into(),
-                response.dragged()
+                new_rotation.into()
             );
         }
     });
@@ -130,8 +122,7 @@ pub fn render_view_content(
         if ui.selectable_label(was_2d, "2D").clicked() {
             if let Err(e) = config_manager.update_param(
                 ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::TwoD.into(),
-                false,
+                crate::scene::transforms::RenderMode::TwoD.into()
             ) {
                 log::error!("Failed to update render mode: {}", e);
             }
@@ -139,8 +130,7 @@ pub fn render_view_content(
         if ui.selectable_label(!was_2d, "3D").clicked() {
             if let Err(e) = config_manager.update_param(
                 ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::ThreeD.into(),
-                false,
+                crate::scene::transforms::RenderMode::ThreeD.into()
             ) {
                 log::error!("Failed to update render mode: {}", e);
             }
@@ -155,8 +145,7 @@ pub fn render_view_content(
             if ui.selectable_label(is_ortho, "Orthographic").clicked() {
                 if let Err(e) = config_manager.update_param(
                     ConfigPath::ProjectionType,
-                    crate::scene::transforms::ProjectionType::Orthographic.into(),
-                    false,
+                    crate::scene::transforms::ProjectionType::Orthographic.into()
                 ) {
                     log::error!("Failed to update projection type: {}", e);
                 }
@@ -164,8 +153,7 @@ pub fn render_view_content(
             if ui.selectable_label(!is_ortho, "Perspective").clicked() {
                 if let Err(e) = config_manager.update_param(
                     ConfigPath::ProjectionType,
-                    crate::scene::transforms::ProjectionType::Perspective { strength: 2.0 }.into(),
-                    false,
+                    crate::scene::transforms::ProjectionType::Perspective { strength: 2.0 }.into()
                 ) {
                     log::error!("Failed to update projection type: {}", e);
                 }
@@ -178,8 +166,7 @@ pub fn render_view_content(
             if response.changed() {
                 if let Err(e) = config_manager.update_param(
                     ConfigPath::ProjectionType,
-                    crate::scene::transforms::ProjectionType::Perspective { strength }.into(),
-                    response.dragged(),
+                    crate::scene::transforms::ProjectionType::Perspective { strength }.into()
                 ) {
                     log::error!("Failed to update perspective strength: {}", e);
                 }
@@ -202,8 +189,7 @@ pub fn render_view_content(
                 let new_camera_x = degrees_x.to_radians();
                 let _ = config_manager.update_param(
                     ConfigPath::CameraRotationX,
-                    new_camera_x.into(),
-                    true
+                    new_camera_x.into()
                 );
             }
         });
@@ -216,8 +202,7 @@ pub fn render_view_content(
                 let new_camera_y = degrees_y.to_radians();
                 let _ = config_manager.update_param(
                     ConfigPath::CameraRotationY,
-                    new_camera_y.into(),
-                    true
+                    new_camera_y.into()
                 );
             }
         });
@@ -240,8 +225,7 @@ pub fn render_view_content(
                 (ConfigPath::CameraRotationY, 0.0.into()),
                 (ConfigPath::CameraZ, 0.0.into()),
             ],
-            "Reset View".to_string(),
-            false
+            "Reset View".to_string()
         );
     }
 }
