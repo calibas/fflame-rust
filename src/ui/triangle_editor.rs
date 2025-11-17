@@ -840,19 +840,6 @@ fn render_triangle_editor_core(
                     }
                 }
 
-                // Force commit preview when drag stops
-                if drag_stopped && config_manager.is_in_preview_mode() {
-                    // Use first affine parameter as representative for batch
-                    let commit_path = match selected_transform {
-                        Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::A },
-                        None => ConfigPath::FinalTransformAffine { param: AffineParam::A },
-                    };
-                    if let Ok(update) = config_manager.force_commit_preview(&commit_path) {
-                        max_update = max_update.max(update);
-                    }
-                    config_manager.reset_lazy_undo();
-                }
-
                 ui.separator();
 
                 ui.label("Affine Coefficients:");
@@ -965,18 +952,6 @@ fn render_triangle_editor_core(
                     dragging |= f_resp.dragged();
                     drag_stopped |= f_resp.drag_stopped();
                 });
-
-                // Force commit preview when drag stops
-                if drag_stopped && config_manager.is_in_preview_mode() {
-                    let commit_path = match selected_transform {
-                        Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::A },
-                        None => ConfigPath::FinalTransformAffine { param: AffineParam::A },
-                    };
-                    if let Ok(update) = config_manager.force_commit_preview(&commit_path) {
-                        max_update = max_update.max(update);
-                    }
-                    config_manager.reset_lazy_undo();
-                }
 
                 ui.separator();
 

@@ -241,12 +241,6 @@ impl ConfigSliderUi for egui::Ui {
             should_capture = true;
         }
 
-        // Force commit preview when drag ends
-        if response.drag_stopped() && manager.is_in_preview_mode() {
-            update_type = update_type.merge(manager.force_commit_preview(&path)?);
-            manager.reset_lazy_undo();
-        }
-
         Ok(ConfigSliderResult {
             changed,
             should_capture,

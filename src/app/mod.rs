@@ -328,10 +328,6 @@ impl App {
         let render_start = Instant::now();
         self.last_frame_time = Some(render_start);
 
-        // Clear overwrite flag at start of each frame
-        // Will be set again during this frame if there are lazy updates
-        self.config_manager.clear_overwrite_flag();
-
         // ============================================================================
         // NEW FRAME ORDER (Fixed race conditions):
         // 1. Render UI (reads current state, shows previous frame's fractal)
@@ -1108,16 +1104,17 @@ impl App {
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
-            // Use overwrite mode in preview or when fractal has stopped (to enable updates)
-            let in_preview_mode = self.config_manager.is_in_preview_mode();
+            // Use overwrite mode when NOT resetting accumulation
+            // This provides smooth transitions for ViewOnly/ColorOnly changes
+            // When reset_accumulation=true (IterationReset), use normal accumulation
             let has_stopped = renderer.total_iterations() >= final_config.max_iterations;
-            renderer.set_overwrite_mode(in_preview_mode || has_stopped);
+            let use_overwrite = !actions.reset_accumulation || has_stopped;
+            renderer.set_overwrite_mode(use_overwrite);
 
             // Check if we should continue iterating
             let max_iterations = Some(final_config.max_iterations);
             let should_iterate = !self.paused &&
-                (max_iterations.map_or(true, |max| renderer.total_iterations() < max) ||
-                 self.config_manager.is_in_preview_mode());
+                max_iterations.map_or(true, |max| renderer.total_iterations() < max);
 
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;

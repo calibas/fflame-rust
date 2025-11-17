@@ -264,11 +264,6 @@ impl<'a> PanelViewer<'a> {
                 self.handle_fractal_drag(drag_delta, available_size);
             }
 
-            // Commit preview when drag ends
-            if response.drag_stopped() && self.context.config_manager.is_in_preview_mode() {
-                let _ = self.context.config_manager.force_commit_preview(&crate::config::ConfigPath::Pan);
-            }
-
             // Handle mouse wheel for zooming
             if response.hovered() {
                 let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
