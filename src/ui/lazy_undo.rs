@@ -6,7 +6,7 @@
 /// **Solution:** Only capture undo state once per second during drag, always on release.
 ///
 /// **Usage:**
-/// ```rust
+/// ```rust,ignore
 /// // In UI code (where you have egui::Ui):
 /// let mut lazy = LazyUndoHelper::new();
 ///
@@ -57,7 +57,7 @@ impl LazyUndoHelper {
     /// - Frame when drag ends (always capture final state)
     ///
     /// **Usage:**
-    /// ```rust
+    /// ```rust,ignore
     /// let response = ui.add(egui::Slider::new(&mut value, 0.0..=1.0));
     /// if lazy.should_capture_for_widget(&response) {
     ///     *flame_changed = true;
@@ -104,7 +104,7 @@ impl LazyUndoHelper {
     /// Manual API for custom drag detection (when not using egui::Response).
     ///
     /// **Usage:**
-    /// ```rust
+    /// ```rust,ignore
     /// let mut lazy = LazyUndoHelper::new();
     ///
     /// if mouse_down {
@@ -176,7 +176,7 @@ pub trait LazyUndoUi {
     /// Add a slider with lazy undo capture.
     ///
     /// **Usage:**
-    /// ```rust
+    /// ```rust,ignore
     /// let result = ui.lazy_slider(&mut lazy_undo, &mut value, 0.0..=1.0, "Exposure");
     /// if result.should_capture {
     ///     app.capture_state();
