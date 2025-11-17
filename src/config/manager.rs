@@ -14,7 +14,7 @@
 /// # Usage Patterns
 ///
 /// ## Reading Config Values
-/// ```rust
+/// ```rust,ignore
 /// // Get immutable reference to active config (includes live preview during drag)
 /// let config = config_manager.active_config();
 /// let zoom = config.zoom;
@@ -22,14 +22,14 @@
 /// ```
 ///
 /// ## Setting Config Values (Immediate Undo)
-/// ```rust
+/// ```rust,ignore
 /// // For discrete controls (buttons, checkboxes, dropdowns)
 /// config_manager.update_param(ConfigPath::TonemapMode, ToneMapMode::Linear.into(), false)?;
 /// config_manager.update_param(ConfigPath::ColorMode, ColorMode::Palette.into(), false)?;
 /// ```
 ///
 /// ## Setting Config Values (Lazy Undo)
-/// ```rust
+/// ```rust,ignore
 /// // For continuous controls (sliders, drag handles) - throttles undo capture
 /// config_manager.update_param(ConfigPath::Zoom, 2.5.into(), true)?;
 /// config_manager.update_param(ConfigPath::Exposure, 1.8.into(), true)?;
@@ -41,7 +41,7 @@
 /// ```
 ///
 /// ## Handling GPU Updates
-/// ```rust
+/// ```rust,ignore
 /// // After all UI updates each frame, check what needs updating
 /// let actions = config_manager.get_pending_actions();
 ///
@@ -65,7 +65,7 @@
 /// ```
 ///
 /// ## Requesting Actions Without Config Changes
-/// ```rust
+/// ```rust,ignore
 /// // Reset button - doesn't change config, just requests buffer clear
 /// config_manager.request_reset();
 ///
@@ -73,7 +73,7 @@
 /// ```
 ///
 /// ## Undo/Redo
-/// ```rust
+/// ```rust,ignore
 /// if config_manager.can_undo() {
 ///     config_manager.undo()?;
 /// }
