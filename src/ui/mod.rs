@@ -402,8 +402,8 @@ impl EguiLayer {
         undo_requested = menu_actions.edit.undo;
         redo_requested = menu_actions.edit.redo;
 
-        // Extract Transform menu actions
-        add_transform = menu_actions.transform.add_transform;
+        // Extract Transform menu actions (OR with existing value from panel button)
+        add_transform |= menu_actions.transform.add_transform;
 
         // Handle Rendering menu actions
         if menu_actions.rendering.pause_toggle {
