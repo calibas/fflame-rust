@@ -406,8 +406,9 @@ impl EguiLayer {
         }
         *quit_requested = menu_actions.file.quit;
 
-        undo_requested = menu_actions.edit.undo;
-        redo_requested = menu_actions.edit.redo;
+        // Combine undo/redo from both menu and panels (OR to not override panel buttons)
+        undo_requested |= menu_actions.edit.undo;
+        redo_requested |= menu_actions.edit.redo;
 
         // Extract Transform menu actions (OR with existing value from panel button)
         add_transform |= menu_actions.transform.add_transform;
