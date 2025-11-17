@@ -7,56 +7,77 @@ pub fn render_undo_history_content(
     undo_requested: &mut bool,
     redo_requested: &mut bool,
 ) {
-    ui.heading("Undo History");
+    ui.heading("History");
 
-    // Undo stack (show in reverse order - most recent first)
-    let undo_history = config_manager.undo_history();
-    if undo_history.is_empty() {
-        ui.label("(No undo history)");
-    } else {
-        egui::ScrollArea::vertical()
-            .id_salt("undo_scroll_area")
-            .max_height(200.0)
-            .show(ui, |ui| {
-                for (i, change) in undo_history.iter().enumerate().rev() {
-                    // Show each change with its description
-                    let label = format!("{}. {}", undo_history.len() - i, change.description);
+    // Get unified history and current position
+    let history = config_manager.history();
+    let position = config_manager.position();
 
-                    if ui.selectable_label(false, label).clicked() {
-                        // Calculate how many undos to perform to get to this point
-                        let _undos_needed = i + 1;
-                        // For now, just do one undo and let user click multiple times
-                        // TODO: Add multi-level undo support
+    // Calculate max height: available space minus room for buttons/stats (min 200px)
+    let available_height = ui.available_height();
+    let max_scroll_height = (available_height - 150.0).max(200.0);
+
+    // Show unified timeline with #1 (initial state) at top, growing downward
+    egui::ScrollArea::vertical()
+        .id_salt("history_scroll_area")
+        .max_height(max_scroll_height)  // Responsive to panel size
+        .auto_shrink([false, true])
+        .stick_to_bottom(true)  // Auto-scroll to bottom (most recent)
+        .show(ui, |ui| {
+            // Show initial state as entry #1 (pinned at top)
+            ui.horizontal(|ui| {
+                // Mark if we're at initial state
+                if position == 0 {
+                    ui.label("▶");
+                } else {
+                    ui.label(" ");
+                }
+
+                // Initial state is always "past" unless we're at position 0
+                let text_color = ui.style().visuals.text_color();
+
+                if ui.selectable_label(false, egui::RichText::new("1. Initial state").color(text_color)).clicked() {
+                    // Undo back to initial state
+                    if position > 0 {
                         *undo_requested = true;
                     }
                 }
             });
-    }
 
-    ui.separator();
-    ui.heading("Redo History");
-
-    // Redo stack (show in order)
-    let redo_history = config_manager.redo_history();
-    if redo_history.is_empty() {
-        ui.label("(No redo history)");
-    } else {
-        egui::ScrollArea::vertical()
-            .id_salt("redo_scroll_area")
-            .max_height(200.0)
-            .show(ui, |ui| {
-                for (i, change) in redo_history.iter().enumerate() {
-                    // Show each change with its description
-                    let label = format!("{}. {}", i + 1, change.description);
-
-                    if ui.selectable_label(false, label).clicked() {
-                        // For now, just do one redo and let user click multiple times
-                        // TODO: Add multi-level redo support
-                        *redo_requested = true;
+            // Show history entries in forward order (oldest to newest, #2, #3, #4...)
+            for (i, change) in history.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    // Current position marker (position points to next change to undo)
+                    // So if position == i+1, this change is the current state
+                    if position == i + 1 {
+                        ui.label("▶");
+                    } else {
+                        ui.label(" ");
                     }
-                }
-            });
-    }
+
+                    // Determine if this is future (grayed out) or past/current
+                    let is_future = i >= position;
+                    let text_color = if is_future {
+                        ui.style().visuals.weak_text_color()
+                    } else {
+                        ui.style().visuals.text_color()
+                    };
+
+                    // Entry number (1-indexed, including initial state as #1)
+                    let label = format!("{}. {}", i + 2, change.description);
+
+                    if ui.selectable_label(false, egui::RichText::new(label).color(text_color)).clicked() {
+                        // For now, just do one undo/redo
+                        // TODO: Add multi-level undo/redo to jump to specific position
+                        if i < position {
+                            *undo_requested = true;
+                        } else if i >= position {
+                            *redo_requested = true;
+                        }
+                    }
+                });
+            }
+        });
 
     ui.separator();
 
@@ -74,8 +95,8 @@ pub fn render_undo_history_content(
         });
     });
 
-    // Show stats
+    // Show stats (total includes initial state as entry #1)
     ui.separator();
-    ui.label(format!("Undo stack: {} entries", undo_history.len()));
-    ui.label(format!("Redo stack: {} entries", redo_history.len()));
+    ui.label(format!("Total entries: {} (including initial state)", history.len() + 1));
+    ui.label(format!("Current position: #{}", position + 1));
 }

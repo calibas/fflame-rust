@@ -17,7 +17,7 @@ pub mod slider;
 
 pub use defaults::*;
 pub use delta::{
-    AffineParam, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, UpdateType,
+    AffineParam, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, SnapshotData, UpdateType,
 };
 pub use fractal_config::FractalConfig;
 pub use manager::{ConfigError, ConfigManager, UpdateAction};

@@ -171,10 +171,6 @@ impl<'a> PanelViewer<'a> {
     fn render_rendering_panel(&mut self, ui: &mut egui::Ui) {
         super::settings::render_settings_content(
             ui,
-            self.context.config_manager.can_undo(),
-            self.context.config_manager.can_redo(),
-            self.context.undo_requested,
-            self.context.redo_requested,
             self.context.png_export_with_background,
             self.context.png_export_transparent,
             self.context.export_width,
@@ -270,7 +266,7 @@ impl<'a> PanelViewer<'a> {
 
             // Commit preview when drag ends
             if response.drag_stopped() && self.context.config_manager.is_in_preview_mode() {
-                let _ = self.context.config_manager.force_commit_preview(&crate::config::ConfigPath::PanX);
+                let _ = self.context.config_manager.force_commit_preview(&crate::config::ConfigPath::Pan);
             }
 
             // Handle mouse wheel for zooming
@@ -309,12 +305,9 @@ impl<'a> PanelViewer<'a> {
         let new_pan_x = config.pan_x + fractal_dx;
         let new_pan_y = config.pan_y + fractal_dy;
 
-        let _ = self.context.config_manager.update_batch(
-            vec![
-                (crate::config::ConfigPath::PanX, new_pan_x.into()),
-                (crate::config::ConfigPath::PanY, new_pan_y.into()),
-            ],
-            "Pan (Mouse Drag)".to_string(),
+        let _ = self.context.config_manager.update_param(
+            crate::config::ConfigPath::Pan,
+            (new_pan_x, new_pan_y).into(),
             true  // Preview mode while dragging
         );
     }
@@ -366,12 +359,11 @@ impl<'a> PanelViewer<'a> {
                     let new_pan_x = point_x - new_fractal_offset_x;
                     let new_pan_y = point_y - new_fractal_offset_y;
 
-                    // Update all three parameters atomically
+                    // Update zoom and pan atomically
                     let _ = self.context.config_manager.update_batch(
                         vec![
                             (crate::config::ConfigPath::Zoom, new_zoom.into()),
-                            (crate::config::ConfigPath::PanX, new_pan_x.into()),
-                            (crate::config::ConfigPath::PanY, new_pan_y.into()),
+                            (crate::config::ConfigPath::Pan, (new_pan_x, new_pan_y).into()),
                         ],
                         "Zoom In (Wheel)".to_string(),
                         false, // Discrete action for scroll

@@ -6,10 +6,6 @@ use super::formatting::format_iterations;
 /// Same as render_settings_window (removed) but without the Window wrapper
 pub fn render_settings_content(
     ui: &mut egui::Ui,
-    can_undo: bool,
-    can_redo: bool,
-    undo_requested: &mut bool,
-    redo_requested: &mut bool,
     png_export_with_background: &mut bool,
     png_export_transparent: &mut bool,
     export_width: &mut u32,
@@ -45,7 +41,7 @@ pub fn render_settings_content(
                     for (idx, preset) in presets.iter().enumerate() {
                         if ui.selectable_value(current_preset_index, idx, &preset.flame.name).changed() {
                             println!("UI: Loading preset: {} ({})", preset.flame.name, idx);
-                            // Load preset via ConfigManager (creates two undo points)
+                            // Load preset via ConfigManager (creates single bidirectional snapshot)
                             if let Err(e) = config_manager.load_config(
                                 preset.clone(),
                                 format!("Load Preset: {}", preset.flame.name),
@@ -67,17 +63,6 @@ pub fn render_settings_content(
                 *open_config_dialog = true;
             }
 
-            ui.separator();
-
-            // Undo/Redo
-            ui.horizontal(|ui| {
-                if ui.add_enabled(can_undo, egui::Button::new("⮪ Undo")).clicked() {
-                    *undo_requested = true;
-                }
-                if ui.add_enabled(can_redo, egui::Button::new("⮬ Redo")).clicked() {
-                    *redo_requested = true;
-                }
-            });
         });
 
     ui.separator();
