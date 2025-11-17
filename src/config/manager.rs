@@ -150,7 +150,7 @@ impl UpdateAction {
 
             UpdateType::ViewOnly => Self {
                 update_view: true,
-                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                reset_accumulation: false, // Never reset - use overwrite mode for smooth updates
                 ..Default::default()
             },
 
@@ -162,13 +162,13 @@ impl UpdateAction {
 
             UpdateType::ColorOnly => Self {
                 update_palette: true,
-                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                reset_accumulation: false, // Never reset - use overwrite mode for smooth updates
                 ..Default::default()
             },
 
             UpdateType::IterationReset => Self {
                 update_flame: true,
-                reset_accumulation: !in_preview_mode, // Preview uses overwrite mode
+                reset_accumulation: true, // Always reset - fractal structure changed
                 rebuild_shader: false, // TODO: detect variation changes
                 ..Default::default()
             },
