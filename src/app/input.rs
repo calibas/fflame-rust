@@ -49,12 +49,9 @@ impl App {
                 let screen_dy = -pan_step;
                 let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
                 let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
-                let _ = self.config_manager.update_batch(
-                    vec![
-                        (crate::config::ConfigPath::PanX, new_pan_x.into()),
-                        (crate::config::ConfigPath::PanY, new_pan_y.into()),
-                    ],
-                    "Pan Up (Keyboard)".to_string(),
+                let _ = self.config_manager.update_param(
+                    crate::config::ConfigPath::Pan,
+                    (new_pan_x, new_pan_y).into(),
                     false  // Immediate capture for keyboard input
                 );
                 self.view_changed_by_keyboard = true;
@@ -65,12 +62,9 @@ impl App {
                 let screen_dy = pan_step;
                 let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
                 let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
-                let _ = self.config_manager.update_batch(
-                    vec![
-                        (crate::config::ConfigPath::PanX, new_pan_x.into()),
-                        (crate::config::ConfigPath::PanY, new_pan_y.into()),
-                    ],
-                    "Pan Down (Keyboard)".to_string(),
+                let _ = self.config_manager.update_param(
+                    crate::config::ConfigPath::Pan,
+                    (new_pan_x, new_pan_y).into(),
                     false  // Immediate capture for keyboard input
                 );
                 self.view_changed_by_keyboard = true;
@@ -81,12 +75,9 @@ impl App {
                 let screen_dy = 0.0;
                 let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
                 let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
-                let _ = self.config_manager.update_batch(
-                    vec![
-                        (crate::config::ConfigPath::PanX, new_pan_x.into()),
-                        (crate::config::ConfigPath::PanY, new_pan_y.into()),
-                    ],
-                    "Pan Left (Keyboard)".to_string(),
+                let _ = self.config_manager.update_param(
+                    crate::config::ConfigPath::Pan,
+                    (new_pan_x, new_pan_y).into(),
                     false  // Immediate capture for keyboard input
                 );
                 self.view_changed_by_keyboard = true;
@@ -97,12 +88,9 @@ impl App {
                 let screen_dy = 0.0;
                 let new_pan_x = config.pan_x + (screen_dx * cos_r - screen_dy * sin_r);
                 let new_pan_y = config.pan_y + (screen_dx * sin_r + screen_dy * cos_r);
-                let _ = self.config_manager.update_batch(
-                    vec![
-                        (crate::config::ConfigPath::PanX, new_pan_x.into()),
-                        (crate::config::ConfigPath::PanY, new_pan_y.into()),
-                    ],
-                    "Pan Right (Keyboard)".to_string(),
+                let _ = self.config_manager.update_param(
+                    crate::config::ConfigPath::Pan,
+                    (new_pan_x, new_pan_y).into(),
                     false  // Immediate capture for keyboard input
                 );
                 self.view_changed_by_keyboard = true;

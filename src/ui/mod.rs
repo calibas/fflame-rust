@@ -362,8 +362,7 @@ impl EguiLayer {
         use crate::config::ConfigPath;
         if menu_actions.view.reset_view {
             let _ = config_manager.update_param(ConfigPath::Zoom, 1.0.into(), false);
-            let _ = config_manager.update_param(ConfigPath::PanX, 0.0.into(), false);
-            let _ = config_manager.update_param(ConfigPath::PanY, 0.0.into(), false);
+            let _ = config_manager.update_param(ConfigPath::Pan, (0.0, 0.0).into(), false);
             let _ = config_manager.update_param(ConfigPath::Rotation, 0.0.into(), false);
         }
 
@@ -406,8 +405,9 @@ impl EguiLayer {
         }
         *quit_requested = menu_actions.file.quit;
 
-        undo_requested = menu_actions.edit.undo;
-        redo_requested = menu_actions.edit.redo;
+        // Combine undo/redo from both menu and panels (OR to not override panel buttons)
+        undo_requested |= menu_actions.edit.undo;
+        redo_requested |= menu_actions.edit.redo;
 
         // Extract Transform menu actions (OR with existing value from panel button)
         add_transform |= menu_actions.transform.add_transform;

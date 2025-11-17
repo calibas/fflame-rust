@@ -246,6 +246,13 @@ fn render_triangle_editor_core(
                                 } else if pos.distance(y_pos) < hit_radius {
                                     drag_target = DragTarget::YPoint;
                                 }
+
+                                // Start modify session if we found a hit
+                                if drag_target != DragTarget::None {
+                                    if let Some(index) = selected_transform {
+                                        let _ = config_manager.start_modify_transform(index);
+                                    }
+                                }
                             }
                         }
 
@@ -277,6 +284,10 @@ fn render_triangle_editor_core(
                         // Start drag on any point in canvas
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
+                            // Start modify session
+                            if let Some(index) = selected_transform {
+                                let _ = config_manager.start_modify_transform(index);
+                            }
                         }
 
                         // Translate entire triangle
@@ -312,6 +323,10 @@ fn render_triangle_editor_core(
                         // Capture initial mouse position
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
+                            // Start modify session
+                            if let Some(index) = selected_transform {
+                                let _ = config_manager.start_modify_transform(index);
+                            }
                         }
 
                         // Rotate X and Y around O based on angle from O
@@ -361,6 +376,10 @@ fn render_triangle_editor_core(
                         // Capture initial mouse position
                         if drag_start_pos.is_none() && response.dragged() {
                             drag_start_pos = response.interact_pointer_pos();
+                            // Start modify session
+                            if let Some(index) = selected_transform {
+                                let _ = config_manager.start_modify_transform(index);
+                            }
                         }
 
                         // Scale along perpendicular axis to X-Y line
@@ -419,16 +438,21 @@ fn render_triangle_editor_core(
 
                 // Clear drag on release
                 let was_dragging = drag_target != DragTarget::None || drag_start_pos.is_some();
-                if !response.dragged() {
-                    // Drag ended - force commit any pending preview changes
-                    if was_dragging && config_manager.is_in_preview_mode() {
-                        // Force commit with any affine parameter (they all return IterationReset)
-                        let commit_path = match selected_transform {
-                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::A },
-                            None => ConfigPath::FinalTransformAffine { param: AffineParam::A },
+                if !response.dragged() && was_dragging {
+                    // Drag ended - commit modify session if active
+                    if config_manager.is_in_modify_session() {
+                        let mode_name = match mouse_mode {
+                            MouseMode::MovePoints => "Move Points",
+                            MouseMode::Translate => "Translate",
+                            MouseMode::Rotate => "Rotate",
+                            MouseMode::Scale => "Scale",
                         };
-                        if let Ok(_) = config_manager.force_commit_preview(&commit_path) {
-                            log::debug!("Triangle Editor: Force-committed preview on drag end");
+                        let description = match selected_transform {
+                            Some(i) => format!("Triangle Edit {} (Transform {})", mode_name, i + 1),
+                            None => format!("Triangle Edit {} (Final)", mode_name),
+                        };
+                        if let Ok(update) = config_manager.commit_modify_transform(description) {
+                            max_update = max_update.max(update);
                         }
                     }
                     drag_target = DragTarget::None;

@@ -89,6 +89,21 @@ use super::fractal_config::FractalConfig;
 use std::time::Duration;
 use web_time::Instant;
 
+/// Coalescing window - merge rapid changes to same parameter within this duration
+const COALESCE_WINDOW: Duration = Duration::from_millis(2000);
+
+/// Check if a config path supports undo point coalescing
+/// Only paths in this whitelist will have rapid changes merged into single undo point
+fn supports_coalescing(path: &ConfigPath) -> bool {
+    match path {
+        ConfigPath::Palette => true,  // Color picker changes (main use case)
+        // Add more paths here as needed:
+        // ConfigPath::Exposure => true,
+        // ConfigPath::Gamma => true,
+        _ => false,
+    }
+}
+
 /// Actions needed after configuration changes
 ///
 /// ConfigManager tracks changes and provides this struct to tell the App layer
@@ -181,11 +196,15 @@ pub struct ConfigManager {
     /// When None: not in preview mode
     preview: Option<FractalConfig>,
 
-    /// Undo stack (deltas, not full configs)
-    undo_stack: Vec<ConfigChange>,
+    /// Full history (unified undo/redo timeline)
+    /// Position points to "current state" in history
+    /// Items before position = past states (can undo)
+    /// Items at/after position = future states (can redo)
+    history: Vec<ConfigChange>,
 
-    /// Redo stack
-    redo_stack: Vec<ConfigChange>,
+    /// Current position in history (0 = initial state, history.len() = head)
+    /// Invariant: 0 <= position <= history.len()
+    position: usize,
 
     /// Maximum undo history
     max_undo_depth: usize,
@@ -193,7 +212,7 @@ pub struct ConfigManager {
     /// Last time we created a lazy undo point
     last_lazy_undo: Option<Instant>,
 
-    /// Lazy undo throttle duration (500ms)
+    /// Lazy undo throttle duration (5000ms = 5 seconds)
     lazy_throttle: Duration,
 
     /// Pending actions accumulated since last get_pending_actions() call
@@ -204,6 +223,19 @@ pub struct ConfigManager {
     /// True for iteration-affecting parameters (view, flame, color)
     /// False for post-processing parameters (tone mapping)
     preview_needs_overwrite: bool,
+
+    /// Active modify session (for transform editing with snapshot on commit)
+    /// When Some: transform edits don't create history entries
+    /// When None: normal operation
+    modify_session: Option<ModifySession>,
+}
+
+/// Session state for transform modification (triangle editor, etc.)
+struct ModifySession {
+    /// Index of transform being modified
+    transform_index: usize,
+    /// Initial state captured at session start
+    initial_transform: crate::scene::transforms::Transform,
 }
 
 impl ConfigManager {
@@ -211,13 +243,14 @@ impl ConfigManager {
         Self {
             current: config,
             preview: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            history: Vec::new(),
+            position: 0,  // Start at beginning (no history yet)
             max_undo_depth: 500,  // ~5MB max memory (500 states × ~10KB each)
             last_lazy_undo: None,
-            lazy_throttle: Duration::from_millis(500),
+            lazy_throttle: Duration::from_millis(5000),
             pending_actions: UpdateAction::none(),
             preview_needs_overwrite: false,
+            modify_session: None,
         }
     }
 
@@ -228,6 +261,9 @@ impl ConfigManager {
         new_value: ConfigValue,
         lazy: bool,
     ) -> Result<UpdateType, ConfigError> {
+        // If in modify session, skip history creation (will create snapshot on commit)
+        let in_modify_session = self.modify_session.is_some();
+
         if lazy {
             // Lazy mode: Update preview, capture on throttle
 
@@ -256,7 +292,16 @@ impl ConfigManager {
             self.set_value_in_preview(&path, new_value.clone())?;
             log::trace!("Updated preview: {} = {}", path, new_value);
 
-            // Check if we should capture this change
+            // In modify session: always commit preview to current (no history capture)
+            if in_modify_session {
+                self.current = self.preview.clone().unwrap();
+                log::trace!("Modify session: committed preview to current (no history)");
+                let update_type = path.update_type();
+                self.record_action(update_type);
+                return Ok(update_type);
+            }
+
+            // Normal mode: check if we should capture this change
             let should_capture = self.should_capture_lazy_undo();
 
             if should_capture {
@@ -278,7 +323,7 @@ impl ConfigManager {
 
                 // Commit preview to current (clone to keep preview active - prevents blink)
                 self.current = self.preview.clone().unwrap();
-                log::debug!("  -> Committed preview to current, undo stack len: {}", self.undo_stack.len());
+                log::debug!("  -> Committed preview to current, history len: {}", self.history.len());
 
                 // Record action for GPU updates
                 self.record_action(update_type);
@@ -301,19 +346,25 @@ impl ConfigManager {
                 return Ok(UpdateType::None);
             }
 
-            log::debug!("Immediate capture: {} = {} → {}", path, old_value, new_value);
+            // Skip history if in modify session
+            if !in_modify_session {
+                log::debug!("Immediate capture: {} = {} → {}", path, old_value, new_value);
 
-            // Create delta and capture
-            let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
-            let change = ConfigChange::single(delta);
-            let update_type = change.update_type();
+                // Create delta and capture
+                let delta = ConfigDelta::new(path.clone(), old_value, new_value.clone());
+                let change = ConfigChange::single(delta);
+                let update_type = change.update_type();
 
-            self.push_undo(change);
+                self.push_undo(change);
+            } else {
+                log::trace!("Modify session active: updating {} without history", path);
+            }
 
             // Apply change to current
             self.set_value(&path, new_value)?;
 
             // Record action for GPU updates
+            let update_type = path.update_type();
             self.record_action(update_type);
 
             Ok(update_type)
@@ -327,6 +378,9 @@ impl ConfigManager {
         description: String,
         lazy: bool,
     ) -> Result<UpdateType, ConfigError> {
+        // If in modify session, skip history creation (will create snapshot on commit)
+        let in_modify_session = self.modify_session.is_some();
+
         if lazy {
             // Lazy mode: Update preview, capture on throttle (same logic as update_param)
 
@@ -365,7 +419,15 @@ impl ConfigManager {
             let change = ConfigChange::batch(deltas, description);
             let update_type = change.update_type();
 
-            // Check if we should capture this change
+            // In modify session: always commit preview to current (no history capture)
+            if in_modify_session {
+                self.current = self.preview.clone().unwrap();
+                log::trace!("Modify session: committed batch preview to current (no history)");
+                self.record_action(update_type);
+                return Ok(update_type);
+            }
+
+            // Normal mode: check if we should capture this change
             let should_capture = self.should_capture_lazy_undo();
 
             if should_capture {
@@ -386,7 +448,7 @@ impl ConfigManager {
 
                 // Commit preview to current (clone to keep preview active - prevents blink)
                 self.current = self.preview.clone().unwrap();
-                log::debug!("  -> Committed batch preview to current, undo stack len: {}", self.undo_stack.len());
+                log::debug!("  -> Committed batch preview to current, history len: {}", self.history.len());
 
                 // Record action for GPU updates
                 self.record_action(update_type);
@@ -416,8 +478,13 @@ impl ConfigManager {
 
             let change = ConfigChange::batch(deltas, description);
 
-            // Capture undo point
-            self.push_undo(change.clone());
+            // Skip history if in modify session
+            if !in_modify_session {
+                // Capture undo point
+                self.push_undo(change.clone());
+            } else {
+                log::trace!("Modify session active: batch update without history");
+            }
 
             // Apply all changes
             for delta in &change.deltas {
@@ -439,22 +506,52 @@ impl ConfigManager {
         self.preview = None;
         self.preview_needs_overwrite = false;
 
-        let change = self
-            .undo_stack
-            .pop()
-            .ok_or(ConfigError::EmptyUndoStack)?;
+        if self.position == 0 {
+            return Err(ConfigError::EmptyUndoStack);
+        }
 
-        log::debug!("Undo: {}", change.description);
+        // Move position back
+        self.position -= 1;
+
+        let change = &self.history[self.position];
+        log::debug!("Undo: {} (position now: {})", change.description, self.position);
 
         // Check if this is a snapshot-based undo
         if let Some(snapshot) = &change.snapshot {
-            log::debug!("  Restoring full config snapshot");
-            self.current = (**snapshot).clone();
-            self.redo_stack.push(change);
-            return Ok(UpdateType::IterationReset); // Full config change
+            match snapshot {
+                crate::config::SnapshotData::FullConfig { before, .. } => {
+                    log::debug!("  Restoring full config snapshot (before)");
+                    self.current = (**before).clone();
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::AddTransform { index, .. } => {
+                    log::debug!("  Undoing add transform at index {}", index);
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms.remove(*index);
+                    }
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::DeleteTransform { index, transform } => {
+                    log::debug!("  Undoing delete transform (re-insert at index {})", index);
+                    if *index <= self.current.flame.transforms.len() {
+                        self.current.flame.transforms.insert(*index, transform.clone());
+                    }
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::ModifyTransform { index, before, .. } => {
+                    log::debug!("  Undoing modify transform (restore before state at index {})", index);
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms[*index] = before.clone();
+                    }
+                    return Ok(UpdateType::IterationReset);
+                }
+            }
         }
 
-        // Delta-based undo (original behavior)
+        // Delta-based undo - apply inverted deltas
         for delta in &change.deltas {
             log::debug!("  Original delta: {} → {}", delta.old_value, delta.new_value);
         }
@@ -467,11 +564,8 @@ impl ConfigManager {
             self.set_value(&delta.path, delta.new_value.clone())?;
         }
 
-        // Push to redo stack
-        self.redo_stack.push(change);
-
-        log::debug!("  Undo stack now: {} items, Redo stack now: {} items",
-            self.undo_stack.len(), self.redo_stack.len());
+        log::debug!("  History: {} items, Position: {}",
+            self.history.len(), self.position);
 
         let update_type = inverted.update_type();
 
@@ -487,38 +581,65 @@ impl ConfigManager {
         self.preview = None;
         self.preview_needs_overwrite = false;
 
-        let change = self
-            .redo_stack
-            .pop()
-            .ok_or(ConfigError::EmptyRedoStack)?;
+        if self.position >= self.history.len() {
+            return Err(ConfigError::EmptyRedoStack);
+        }
 
+        // Clone the change to avoid borrow issues
+        let change = self.history[self.position].clone();
         log::debug!("Redo: {}", change.description);
 
         // Check if this is a snapshot-based redo
         if let Some(snapshot) = &change.snapshot {
-            log::debug!("  Restoring full config snapshot");
-            self.current = (**snapshot).clone();
-            self.undo_stack.push(change);
-            return Ok(UpdateType::IterationReset); // Full config change
+            match snapshot {
+                crate::config::SnapshotData::FullConfig { after, .. } => {
+                    log::debug!("  Restoring full config snapshot (after)");
+                    self.current = (**after).clone();
+                    self.position += 1;
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::AddTransform { index, transform } => {
+                    log::debug!("  Redoing add transform at index {}", index);
+                    if *index <= self.current.flame.transforms.len() {
+                        self.current.flame.transforms.insert(*index, transform.clone());
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::DeleteTransform { index, .. } => {
+                    log::debug!("  Redoing delete transform (remove at index {})", index);
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms.remove(*index);
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::ModifyTransform { index, after, .. } => {
+                    log::debug!("  Redoing modify transform (restore after state at index {})", index);
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms[*index] = after.clone();
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::IterationReset);
+                }
+            }
         }
 
-        // Delta-based redo (original behavior)
+        // Delta-based redo - apply deltas forward
         for delta in &change.deltas {
             log::debug!("  Delta: {} → {}", delta.old_value, delta.new_value);
             log::debug!("  Applying: {} → {}", delta.path, delta.new_value);
             self.set_value(&delta.path, delta.new_value.clone())?;
         }
 
-        // Push back to undo stack (WITHOUT clearing redo stack!)
-        self.undo_stack.push(change.clone());
+        // Move position forward
+        self.position += 1;
 
-        // Trim undo stack if needed
-        if self.undo_stack.len() > self.max_undo_depth {
-            self.undo_stack.remove(0);
-        }
-
-        log::debug!("  Undo stack now: {} items, Redo stack now: {} items",
-            self.undo_stack.len(), self.redo_stack.len());
+        log::debug!("  History: {} items, Position: {}",
+            self.history.len(), self.position);
 
         let update_type = change.update_type();
 
@@ -569,26 +690,106 @@ impl ConfigManager {
         self.preview.is_some() && self.preview_needs_overwrite
     }
 
-    /// Push change to undo stack, maintaining depth limit
+    /// Push change to history, maintaining depth limit and truncating future
     fn push_undo(&mut self, change: ConfigChange) {
         log::debug!("PUSH_UNDO: {}", change.description);
         for delta in &change.deltas {
             log::debug!("  Delta: {} → {}", delta.old_value, delta.new_value);
         }
 
-        self.undo_stack.push(change);
+        // Truncate future history if not at head (clear redo)
+        let future_cleared = if self.position < self.history.len() {
+            let count = self.history.len() - self.position;
+            self.history.truncate(self.position);
+            count
+        } else {
+            0
+        };
 
-        // Trim if over limit
-        if self.undo_stack.len() > self.max_undo_depth {
-            self.undo_stack.remove(0);
+        // Check if we should coalesce with the last change
+        let should_coalesce = self.should_coalesce(&change);
+
+        if should_coalesce {
+            // Replace last change instead of adding new one
+            let last_idx = self.history.len() - 1;
+            log::debug!("  COALESCING with previous change (within {}ms window)", COALESCE_WINDOW.as_millis());
+
+            // Update the last change's new_value and timestamp
+            // Keep the original old_value from the first change in the sequence
+            for (i, new_delta) in change.deltas.iter().enumerate() {
+                if let Some(old_delta) = self.history[last_idx].deltas.get_mut(i) {
+                    old_delta.new_value = new_delta.new_value.clone();
+                    old_delta.timestamp = new_delta.timestamp;
+                }
+            }
+
+            log::debug!("  History: {} items (coalesced), Position: {}",
+                self.history.len(), self.position);
+        } else {
+            // Add new change at current position
+            self.history.push(change);
+            self.position = self.history.len();
+
+            // Trim if over limit (remove oldest)
+            if self.history.len() > self.max_undo_depth {
+                self.history.remove(0);
+                self.position = self.position.saturating_sub(1);
+            }
+
+            if future_cleared > 0 {
+                log::debug!("  History: {} items, Position: {}, Future cleared: {} items",
+                    self.history.len(), self.position, future_cleared);
+            } else {
+                log::debug!("  History: {} items, Position: {}",
+                    self.history.len(), self.position);
+            }
+        }
+    }
+
+    /// Check if new change should be coalesced with last history entry
+    fn should_coalesce(&self, new_change: &ConfigChange) -> bool {
+        // Never coalesce snapshots
+        if new_change.snapshot.is_some() {
+            return false;
         }
 
-        // Clear redo stack (new change invalidates redo)
-        let redo_cleared = self.redo_stack.len();
-        self.redo_stack.clear();
+        // Never coalesce if no deltas (safety check)
+        if new_change.deltas.is_empty() {
+            return false;
+        }
 
-        log::debug!("  Undo stack now: {} items, Redo stack cleared ({} items removed)",
-            self.undo_stack.len(), redo_cleared);
+        // Only coalesce if at head of history
+        if self.position == 0 || self.position != self.history.len() {
+            return false;
+        }
+
+        let last_change = &self.history[self.position - 1];
+
+        // Must have same number of deltas (same parameters being changed)
+        if last_change.deltas.len() != new_change.deltas.len() {
+            return false;
+        }
+
+        // Check each delta
+        for (old_delta, new_delta) in last_change.deltas.iter().zip(new_change.deltas.iter()) {
+            // Must be same path
+            if old_delta.path != new_delta.path {
+                return false;
+            }
+
+            // Path must support coalescing
+            if !supports_coalescing(&new_delta.path) {
+                return false;
+            }
+
+            // Must be within time window
+            let time_since = new_delta.timestamp.duration_since(old_delta.timestamp);
+            if time_since > COALESCE_WINDOW {
+                return false;
+            }
+        }
+
+        true
     }
 
     /// Extract value from any FractalConfig by path (helper for undo/redo)
@@ -599,8 +800,7 @@ impl ConfigManager {
         match path {
             // View
             ConfigPath::Zoom => Ok(config.zoom.into()),
-            ConfigPath::PanX => Ok(config.pan_x.into()),
-            ConfigPath::PanY => Ok(config.pan_y.into()),
+            ConfigPath::Pan => Ok((config.pan_x, config.pan_y).into()),
             ConfigPath::Rotation => Ok(config.rotation.into()),
             ConfigPath::CameraRotationX => Ok(config.camera_rotation_x.into()),
             ConfigPath::CameraRotationY => Ok(config.camera_rotation_y.into()),
@@ -813,11 +1013,10 @@ impl ConfigManager {
             ConfigPath::Zoom => {
                 self.current.zoom = value.try_into()?;
             }
-            ConfigPath::PanX => {
-                self.current.pan_x = value.try_into()?;
-            }
-            ConfigPath::PanY => {
-                self.current.pan_y = value.try_into()?;
+            ConfigPath::Pan => {
+                let (x, y): (f32, f32) = value.try_into()?;
+                self.current.pan_x = x;
+                self.current.pan_y = y;
             }
             ConfigPath::Rotation => {
                 self.current.rotation = value.try_into()?;
@@ -1121,11 +1320,10 @@ impl ConfigManager {
             ConfigPath::Zoom => {
                 preview.zoom = value.try_into()?;
             }
-            ConfigPath::PanX => {
-                preview.pan_x = value.try_into()?;
-            }
-            ConfigPath::PanY => {
-                preview.pan_y = value.try_into()?;
+            ConfigPath::Pan => {
+                let (x, y): (f32, f32) = value.try_into()?;
+                preview.pan_x = x;
+                preview.pan_y = y;
             }
             ConfigPath::Rotation => {
                 preview.rotation = value.try_into()?;
@@ -1462,31 +1660,24 @@ impl ConfigManager {
     }
 
     /// Load a complete config (e.g., preset, imported file)
-    /// This creates two undo entries:
-    /// 1. Snapshot of old state (for undo)
-    /// 2. Snapshot of new state (for redo after undo)
+    /// Creates single bidirectional snapshot for efficient undo/redo
     /// Use this for atomic operations like loading presets
     pub fn load_config(&mut self, new_config: FractalConfig, description: String) -> Result<(), ConfigError> {
         // Clear any preview state
         self.preview = None;
         self.preview_needs_overwrite = false;
 
-        // Create snapshot of current state (for undo)
-        let old_snapshot = ConfigChange::snapshot(
-            self.current.clone(),
-            format!("Before: {}", description),
-        );
-        self.push_undo(old_snapshot);
-
-        // Replace current config
-        self.current = new_config.clone();
-
-        // Create snapshot of new state (for redo after undo)
-        let new_snapshot = ConfigChange::snapshot(
-            new_config,
+        // Create single bidirectional snapshot
+        let change = ConfigChange::full_config_snapshot(
+            self.current.clone(),  // before
+            new_config.clone(),    // after
             description,
         );
-        self.push_undo(new_snapshot);
+
+        self.push_undo(change);
+
+        // Replace current config
+        self.current = new_config;
 
         // Record full config import action
         let mut action = UpdateAction::none();
@@ -1500,24 +1691,170 @@ impl ConfigManager {
         Ok(())
     }
 
-    /// Get undo stack (for displaying in undo window)
-    pub fn undo_history(&self) -> &[ConfigChange] {
-        &self.undo_stack
+    /// Apply a structural change (transform add/delete)
+    /// Creates specialized snapshot and updates config atomically
+    pub fn apply_structural_change(&mut self, change: ConfigChange) -> Result<(), ConfigError> {
+        // Apply the change based on snapshot type
+        if let Some(snapshot) = &change.snapshot {
+            match snapshot {
+                crate::config::SnapshotData::AddTransform { index, transform } => {
+                    if *index <= self.current.flame.transforms.len() {
+                        self.current.flame.transforms.insert(*index, transform.clone());
+                    } else {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                }
+                crate::config::SnapshotData::DeleteTransform { index, .. } => {
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms.remove(*index);
+                    } else {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                }
+                crate::config::SnapshotData::ModifyTransform { index, after, .. } => {
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms[*index] = after.clone();
+                    } else {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                }
+                crate::config::SnapshotData::FullConfig { after, .. } => {
+                    self.current = (**after).clone();
+                }
+            }
+        } else {
+            return Err(ConfigError::InvalidOperation);
+        }
+
+        // Record in history
+        self.push_undo(change);
+
+        // Record GPU update action
+        self.record_action(UpdateType::IterationReset);
+
+        Ok(())
     }
 
-    /// Get redo stack
+    /// Start a modify session for a transform
+    /// Captures initial state but doesn't create history entry yet
+    /// All updates during session will apply to config but not create history
+    /// Call commit_modify_transform() to create ModifyTransform snapshot
+    pub fn start_modify_transform(&mut self, index: usize) -> Result<(), ConfigError> {
+        // Can't start a new session if one is already active
+        if self.modify_session.is_some() {
+            return Err(ConfigError::InvalidOperation);
+        }
+
+        // Validate index
+        if index >= self.current.flame.transforms.len() {
+            return Err(ConfigError::InvalidIndex);
+        }
+
+        // Capture initial state
+        let initial_transform = self.current.flame.transforms[index].clone();
+
+        self.modify_session = Some(ModifySession {
+            transform_index: index,
+            initial_transform,
+        });
+
+        log::debug!("Started modify session for transform {}", index);
+        Ok(())
+    }
+
+    /// Commit the active modify session
+    /// Creates ModifyTransform snapshot with before/after states
+    /// Returns error if no session is active
+    pub fn commit_modify_transform(&mut self, description: String) -> Result<UpdateType, ConfigError> {
+        let session = self.modify_session.take()
+            .ok_or(ConfigError::InvalidOperation)?;
+
+        // Clear preview state (session is ending)
+        self.preview = None;
+        self.preview_needs_overwrite = false;
+
+        let index = session.transform_index;
+        let before = session.initial_transform;
+        let after = self.current.flame.transforms[index].clone();
+
+        // Check if transform actually changed (avoid no-op snapshots)
+        let changed = before.a != after.a || before.b != after.b || before.c != after.c
+            || before.d != after.d || before.e != after.e || before.f != after.f
+            || before.g != after.g;
+
+        if !changed {
+            log::debug!("Modify session commit: no changes detected, skipping snapshot");
+            return Ok(UpdateType::None);
+        }
+
+        // Create ModifyTransform snapshot
+        let change = ConfigChange::modify_transform_snapshot(index, before, after, description);
+
+        // Record in history
+        self.push_undo(change);
+
+        // Record GPU update action
+        self.record_action(UpdateType::IterationReset);
+
+        log::debug!("Committed modify session for transform {}", index);
+        Ok(UpdateType::IterationReset)
+    }
+
+    /// Cancel the active modify session
+    /// Restores transform to initial state and discards changes
+    /// Returns error if no session is active
+    pub fn cancel_modify_transform(&mut self) -> Result<(), ConfigError> {
+        let session = self.modify_session.take()
+            .ok_or(ConfigError::InvalidOperation)?;
+
+        // Clear preview state (session is ending)
+        self.preview = None;
+        self.preview_needs_overwrite = false;
+
+        // Restore initial state
+        let index = session.transform_index;
+        self.current.flame.transforms[index] = session.initial_transform;
+
+        // Record GPU update action (need to restore visual state)
+        self.record_action(UpdateType::IterationReset);
+
+        log::debug!("Cancelled modify session for transform {}", index);
+        Ok(())
+    }
+
+    /// Check if a modify session is currently active
+    pub fn is_in_modify_session(&self) -> bool {
+        self.modify_session.is_some()
+    }
+
+    /// Get full history (unified timeline)
+    pub fn history(&self) -> &[ConfigChange] {
+        &self.history
+    }
+
+    /// Get current position in history
+    pub fn position(&self) -> usize {
+        self.position
+    }
+
+    /// Get undo history (items before current position) - for backward compatibility
+    pub fn undo_history(&self) -> &[ConfigChange] {
+        &self.history[..self.position]
+    }
+
+    /// Get redo history (items at/after current position) - for backward compatibility
     pub fn redo_history(&self) -> &[ConfigChange] {
-        &self.redo_stack
+        &self.history[self.position..]
     }
 
     /// Check if can undo
     pub fn can_undo(&self) -> bool {
-        !self.undo_stack.is_empty()
+        self.position > 0
     }
 
     /// Check if can redo
     pub fn can_redo(&self) -> bool {
-        !self.redo_stack.is_empty()
+        self.position < self.history.len()
     }
 
     /// Get pending GPU update actions based on recent changes
@@ -1560,6 +1897,7 @@ impl ConfigManager {
 pub enum ConfigError {
     TypeMismatch,
     InvalidIndex,
+    InvalidOperation,
     EmptyUndoStack,
     EmptyRedoStack,
     ReadOnlyParameter,
@@ -1570,6 +1908,7 @@ impl std::fmt::Display for ConfigError {
         match self {
             ConfigError::TypeMismatch => write!(f, "Config value type mismatch"),
             ConfigError::InvalidIndex => write!(f, "Invalid transform index"),
+            ConfigError::InvalidOperation => write!(f, "Invalid operation"),
             ConfigError::EmptyUndoStack => write!(f, "Nothing to undo"),
             ConfigError::EmptyRedoStack => write!(f, "Nothing to redo"),
             ConfigError::ReadOnlyParameter => write!(f, "Parameter is read-only"),
@@ -1625,6 +1964,16 @@ impl TryFrom<ConfigValue> for bool {
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {
             ConfigValue::Bool(b) => Ok(b),
+            _ => Err(ConfigError::TypeMismatch),
+        }
+    }
+}
+
+impl TryFrom<ConfigValue> for (f32, f32) {
+    type Error = ConfigError;
+    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
+        match v {
+            ConfigValue::Vec2(x, y) => Ok((x, y)),
             _ => Err(ConfigError::TypeMismatch),
         }
     }
@@ -1725,14 +2074,14 @@ mod tests {
             .update_param(ConfigPath::Exposure, 2.0.into(), true)
             .unwrap();
         assert_eq!(update1, UpdateType::ToneMappingOnly);
-        assert_eq!(manager.undo_stack.len(), 1);
+        assert_eq!(manager.history.len(), 1);
 
         // Immediate second update - should NOT capture (throttled)
         let update2 = manager
             .update_param(ConfigPath::Exposure, 3.0.into(), true)
             .unwrap();
         assert_eq!(update2, UpdateType::ToneMappingOnly);
-        assert_eq!(manager.undo_stack.len(), 1); // Still 1!
+        assert_eq!(manager.history.len(), 1); // Still 1!
     }
 
     #[test]
@@ -1809,8 +2158,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(update, UpdateType::ViewOnly);
-        assert_eq!(manager.undo_stack.len(), 1);
-        assert_eq!(manager.undo_stack[0].deltas.len(), 3);
-        assert_eq!(manager.undo_stack[0].description, "Reset View");
+        assert_eq!(manager.history.len(), 1);
+        assert_eq!(manager.history[0].deltas.len(), 3);
+        assert_eq!(manager.history[0].description, "Reset View");
     }
 }
