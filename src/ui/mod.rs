@@ -255,9 +255,6 @@ impl EguiLayer {
                         // Renderer
                         flame_renderer: flame_renderer.as_ref().map(|v| &**v),
 
-                        // Window visibility (deprecated - will be removed)
-                        show_config_window: &mut false,
-
                         // Action flags
                         add_transform: &mut add_transform,
                         delete_transform: &mut delete_transform,

@@ -28,35 +28,129 @@ impl GpuContext {
             final_size
         };
 
-        let instance = Instance::default();
+        // Create instance with appropriate backend for platform
+        #[cfg(target_arch = "wasm32")]
+        log::info!("Creating GPU instance with BROWSER_WEBGPU backend (WebGL not supported - requires compute shaders)");
+        #[cfg(not(target_arch = "wasm32"))]
+        log::info!("Creating GPU instance with all backends");
+
+        let instance = Instance::new(&InstanceDescriptor {
+            #[cfg(target_arch = "wasm32")]
+            backends: Backends::BROWSER_WEBGPU,  // WebGL doesn't support compute shaders
+            #[cfg(not(target_arch = "wasm32"))]
+            backends: Backends::all(),
+            ..Default::default()
+        });
 
         // SAFETY: We're extending the lifetime of the surface to 'static.
         // This is safe because the window will outlive the GpuContext in our usage.
         // The window is moved into the event loop closure and won't be dropped
         // until the application exits.
-        let surface: Surface<'static> = unsafe {
-            std::mem::transmute(instance.create_surface(window)?)
+        log::info!("Creating surface from window...");
+
+        #[cfg(target_arch = "wasm32")]
+        let surface: Surface<'static> = {
+            use wasm_bindgen::JsCast;
+            use winit::platform::web::WindowExtWebSys;
+
+            // Get the canvas element directly (bypasses winit's canvas handling)
+            let canvas = window.canvas()
+                .ok_or_else(|| anyhow::anyhow!("Failed to get canvas from window"))?;
+
+            log::info!("Got canvas element, creating WebGPU surface target...");
+
+            // Create surface from canvas using raw web_sys element
+            let surface = instance.create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+                .map_err(|e| anyhow::anyhow!("Failed to create surface from canvas: {:?}", e))?;
+
+            log::info!("✓ Surface created successfully from canvas");
+            unsafe { std::mem::transmute(surface) }
         };
 
-        let adapter = instance.request_adapter(&RequestAdapterOptions {
+        #[cfg(not(target_arch = "wasm32"))]
+        let surface: Surface<'static> = {
+            let surface_result = instance.create_surface(window);
+            match surface_result {
+                Ok(s) => {
+                    log::info!("✓ Surface created successfully");
+                    unsafe { std::mem::transmute(s) }
+                }
+                Err(e) => {
+                    log::error!("Failed to create surface: {:?}", e);
+                    return Err(anyhow::anyhow!("Surface creation failed: {:?}", e));
+                }
+            }
+        };
+
+        // Try to get adapter with high performance preference first
+        log::info!("Requesting GPU adapter (high-performance)...");
+        let adapter_options = RequestAdapterOptions {
             compatible_surface: Some(&surface),
             power_preference: PowerPreference::HighPerformance,
-            ..Default::default()
-        }).await.expect("No suitable GPU adapters found");
+            force_fallback_adapter: false,
+        };
+
+        let adapter = instance.request_adapter(&adapter_options).await;
+
+        // If that fails, try with fallback adapter
+        let adapter = match adapter {
+            Ok(a) => {
+                log::info!("✓ High-performance adapter found");
+                a
+            },
+            Err(e) => {
+                log::warn!("High-performance adapter not found: {:?}", e);
+                log::warn!("Trying fallback adapter...");
+                let fallback_options = RequestAdapterOptions {
+                    compatible_surface: Some(&surface),
+                    power_preference: PowerPreference::default(),
+                    force_fallback_adapter: true,
+                };
+                let fallback = instance.request_adapter(&fallback_options)
+                    .await
+                    .expect("No suitable GPU adapters found (tried high-performance and fallback)");
+                log::info!("✓ Fallback adapter found");
+                fallback
+            }
+        };
+
+        // Log adapter info
+        let adapter_info = adapter.get_info();
+        log::info!("GPU Adapter: {}", adapter_info.name);
+        log::info!("  Backend: {:?}", adapter_info.backend);
+        log::info!("  Device Type: {:?}", adapter_info.device_type);
+        log::info!("  Driver: {}", adapter_info.driver);
+        log::info!("  Driver Info: {}", adapter_info.driver_info);
+
+        // Use WebGL2-compatible limits for WASM, full limits for desktop
+        #[cfg(target_arch = "wasm32")]
+        let limits = Limits::downlevel_webgl2_defaults();
+        #[cfg(not(target_arch = "wasm32"))]
+        let limits = Limits::default();
+
+        log::info!("Requesting device with limits: {:?}", limits);
 
         let (device, queue) = adapter.request_device(
             &DeviceDescriptor {
-                label: None,
+                label: Some("Main GPU Device"),
                 required_features: Features::CLEAR_TEXTURE,
-                required_limits: Limits::default(),
+                required_limits: limits,
                 memory_hints: Default::default(),
                 experimental_features: Default::default(),
                 trace: Default::default(),
             }
         ).await?;
 
+        log::info!("✓ GPU device created successfully");
+
         let surface_caps = surface.get_capabilities(&adapter);
+        log::info!("Surface capabilities:");
+        log::info!("  Formats: {:?}", surface_caps.formats);
+        log::info!("  Present modes: {:?}", surface_caps.present_modes);
+        log::info!("  Alpha modes: {:?}", surface_caps.alpha_modes);
+
         let format = surface_caps.formats[0];
+        log::info!("Selected format: {:?}", format);
 
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
@@ -75,7 +169,12 @@ impl GpuContext {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
+
+        log::info!("Configuring surface with: {:?}x{:?}, format: {:?}, present_mode: {:?}",
+            config.width, config.height, config.format, config.present_mode);
+
         surface.configure(&device, &config);
+        log::info!("✓ Surface configured successfully");
 
         Ok(Self { instance, surface, device, queue, config, size })
     }

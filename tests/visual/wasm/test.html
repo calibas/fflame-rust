@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WASM Visual Regression Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: #fff;
+            font-family: monospace;
+        }
+        #status {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 10;
+        }
+        canvas {
+            display: none; /* Hidden - we're using headless export */
+        }
+    </style>
+</head>
+<body>
+    <!-- Dummy canvas for wasm_main() auto-start - not used by WasmApi -->
+    <canvas id="canvas" width="800" height="600"></canvas>
+
+    <div id="status">Loading WASM...</div>
+
+    <script type="module">
+        import init, { WasmApi } from '../../../pkg/fractal_flame_wgpu.js';
+
+        let wasmApi = null;
+
+        // Global flags for test runner
+        window.wasmReady = false;
+        window.renderComplete = false;
+
+        /**
+         * Check WebGPU support
+         */
+        async function checkWebGPU() {
+            if (!navigator.gpu) {
+                throw new Error('WebGPU not supported - enable chrome://flags/#enable-unsafe-webgpu');
+            }
+
+            const adapter = await navigator.gpu.requestAdapter();
+            if (!adapter) {
+                throw new Error('WebGPU adapter not found - GPU may not be available or drivers are outdated');
+            }
+
+            console.log('WebGPU adapter found');
+            return adapter;
+        }
+
+        /**
+         * Initialize WASM module
+         */
+        async function initWasm() {
+            try {
+                // Check WebGPU availability first
+                await checkWebGPU();
+
+                // Initialize WASM module
+                await init();
+
+                // Create API instance
+                wasmApi = new WasmApi();
+
+                document.getElementById('status').textContent = 'WASM Ready';
+                window.wasmReady = true;
+
+            } catch (err) {
+                console.error('Failed to initialize WASM:', err);
+                document.getElementById('status').textContent = 'WASM Init Failed: ' + err.message;
+                throw err;
+            }
+        }
+
+        /**
+         * Load fractal config (called by test runner)
+         */
+        window.loadFractalConfig = function(config) {
+            if (!wasmApi) {
+                throw new Error('WASM not initialized');
+            }
+
+            try {
+                // Load config from JSON
+                const configJson = JSON.stringify(config);
+                wasmApi.load_config_json(configJson);
+
+                // Reset render state
+                window.renderComplete = false;
+
+                document.getElementById('status').textContent = 'Config Loaded';
+
+            } catch (err) {
+                console.error('Failed to load config:', err);
+                throw err;
+            }
+        };
+
+        /**
+         * Start rendering (called by test runner)
+         *
+         * This uses headless rendering - no canvas display
+         */
+        window.startRender = async function() {
+            if (!wasmApi || !wasmApi.has_config()) {
+                throw new Error('WASM not initialized or no config loaded');
+            }
+
+            try {
+                // Get render parameters from config
+                const configJson = wasmApi.get_config_json();
+                const config = JSON.parse(configJson);
+                const maxIterations = config.max_iterations || 1000000000;
+
+                document.getElementById('status').textContent = `Rendering (target: ${maxIterations.toLocaleString()} iterations)`;
+
+                // Export PNG using headless renderer
+                // This blocks until render completes
+                const pngBytes = await wasmApi.export_png(800, 600, 256);
+
+                // Store PNG data for test runner to capture
+                window.pngData = pngBytes;
+                window.renderComplete = true;
+
+                document.getElementById('status').textContent = `Render Complete: ${maxIterations.toLocaleString()} iterations`;
+
+            } catch (err) {
+                console.error('Failed to render:', err);
+                throw err;
+            }
+        };
+
+        /**
+         * Get PNG data (called by test runner)
+         */
+        window.getPngData = function() {
+            return window.pngData;
+        };
+
+        // Initialize on page load
+        initWasm().catch(err => {
+            console.error('Fatal error:', err);
+            document.getElementById('status').textContent = 'Fatal Error: ' + err.message;
+        });
+    </script>
+</body>
+</html>

@@ -347,49 +347,117 @@ metrics.export_to_console();
 
 ## 8. Visual Regression Testing
 
-**Status:** CLI export mode implemented, automated comparison available
+**Status:** ✅ Fully implemented - Desktop CLI + WASM browser tests with automated comparison
 
-**Current Workflow:**
+### Quick Start
+
 ```bash
-# Generate test images from .fflame configs (batch mode)
-cargo run --release -- export --input tests/visual/configs --output tests/visual/current
+# Run all visual tests (desktop + WASM) with performance tracking
+python tests/visual/run_all_tests.py
 
-# Generate single image
-cargo run --release -- export --input config.fflame --output output.png
+# Desktop CLI tests only (800x600, pixel-perfect comparison)
+python tests/visual/run_tests.py
 
-# Compare images with metrics
-cargo run --release --bin compare_images -- --image1 tests/visual/references/linear.png --image2 tests/visual/current/linear.png --advanced
+# WASM browser tests only (Playwright automation)
+python tests/visual/wasm/test_wasm.py
 
-# Advanced comparison shows SSIM, MSE, PSNR
+# Update baselines after verifying changes are correct
+python tests/visual/run_tests.py --update-baseline
+python tests/visual/wasm/test_wasm.py --update-baseline
 ```
 
-**Features:**
-- **Headless rendering** - Uses same GPU code as interactive app
-- **PNG metadata** - Embeds version, build, config JSON, checksums
-- **Batch processing** - Export entire directories of .fflame files
-- **Iteration-based** - Uses `max_iterations` from config (not frame count)
-- **Image comparison** - Advanced metrics (SSIM, MSE, PSNR) and visual diffs
+### Architecture
+
+**Test Infrastructure:**
+- **Desktop Tests** - CLI headless export with pixel-perfect SHA256 comparison
+- **WASM Tests** - Browser automation (Playwright) with headless PNG export
+- **Unified Runner** - Runs both test suites + performance comparison + CSV tracking
+
+**Test Configs:** `tests/visual/configs/*.fflame`
+- Small test cases (500K-1B iterations)
+- Deterministic RNG enabled (`"deterministic_rng": true`)
+- Covers: basic variations, 3D mode, tonemap curves, multi-variation
+
+**Resolution:** 800x600 (faster testing, sufficient for visual regression detection)
+
+### Features
+
+**Pixel-Perfect Comparison:**
+- SHA256 hash of pixel data (not PNG file)
+- Ignores compression artifacts
+- Requires PIL/Pillow: `pip install Pillow numpy`
+
+**Performance Tracking:**
+- Extracts render time from PNG metadata
+- Compares baseline vs current (time delta, throughput delta)
+- Saves to `tests/visual/performance_history.csv`
+- Tracks both desktop and WASM performance
 
 **PNG Metadata (Embedded in every export):**
 ```
-Software: Fractal Flame Renderer v0.1.0
-Build: #123 (abc1234)
-Platform: windows-x86_64
-BuildDate: 2025-10-24T12:34:56Z
-Resolution: 1920x1080
-Iterations: 10000000
-RenderTime: 1234.56ms
-Config: <full FractalConfig JSON>
-ConfigChecksum: sha256:...
+RenderTime: 1234.56ms          # Total export time (device + render + encode)
+Iterations: 10000000           # Total iteration count
+Resolution: 800x600            # Image dimensions
+Config: <full JSON>            # Complete FractalConfig
+TestCategory: variations       # Optional test grouping
 ```
 
-**Current Status:**
-- ✅ CLI export mode working
-- ✅ PNG metadata embedded
-- ✅ Batch processing
-- ✅ Image comparison tool with advanced metrics
-- ⏳ Automated regression test harness (future)
-- ⏳ Reference image library (in progress)
+**Reading Metadata (Python):**
+```python
+from PIL import Image
+
+img = Image.open('output.png')
+render_time = float(img.info.get('RenderTime', '0ms').replace('ms', ''))
+iterations = int(img.info.get('Iterations', '0'))
+```
+
+### Test Process
+
+**Desktop Workflow:**
+1. Build release binary: `cargo build --release`
+2. Run test script: `python tests/visual/run_tests.py`
+3. For each config in `tests/visual/configs/`:
+   - Execute CLI export: `fractal_flame_wgpu export -i config.fflame -o current/test.png --width 800 --height 600`
+   - Calculate SHA256 of pixel data
+   - Compare against baseline SHA256
+   - Extract performance metrics from PNG metadata
+4. Generate console report with pass/fail + performance deltas
+5. Update `performance_history.csv` with timestamped results
+
+**WASM Workflow:**
+1. Build WASM: `./build-wasm.bat` (or `wasm-pack build --target web --release`)
+2. Run test script: `python tests/visual/wasm/test_wasm.py`
+3. For each config in `tests/visual/configs/`:
+   - Launch headless browser (Chrome or Firefox)
+   - Load WASM module via Playwright
+   - Call JavaScript API: `export_headless_wasm(config, 800, 600, 256, 4)`
+   - Download PNG blob
+   - Calculate SHA256 of pixel data
+   - Compare against baseline SHA256
+   - Extract performance metrics from PNG metadata
+4. Generate console report with pass/fail + performance stats
+
+**Unified Workflow:**
+1. Run both test suites: `python tests/visual/run_all_tests.py`
+2. Extract PNG metadata from both desktop and WASM outputs
+3. Compare baseline vs current for all tests
+4. Generate performance report (render time, throughput, deltas)
+5. Update CSV with both desktop and WASM performance data
+
+### Current Status
+
+- ✅ Desktop CLI tests (8 test cases, pixel-perfect comparison)
+- ✅ WASM browser tests (7 test cases, Chrome + Firefox tested)
+- ✅ Automated test runner (unified desktop + WASM)
+- ✅ PNG metadata embedding (total export time, iterations, config)
+- ✅ Performance tracking (CSV history, baseline comparison)
+- ✅ Baseline management (update/regenerate commands)
+
+**Browser Compatibility (WASM):**
+- ✅ Chrome/Chromium 113+ - Fully tested, all features working
+- ✅ Firefox 121+ - Fully tested, all features working
+- ⚠️ Safari - WebGPU experimental, not tested
+- ❌ Mobile - WebGPU support limited/experimental
 
 ---
 
@@ -555,6 +623,7 @@ cargo bench
 Before committing code:
 - [ ] `cargo test` - Unit tests pass
 - [ ] `cargo test --test regression` - Regression tests pass
+- [ ] `python tests/visual/run_all_tests.py` - Visual regression tests pass (desktop + WASM)
 - [ ] `cargo clippy` - No warnings
 - [ ] `cargo run --release` - App works
 - [ ] `cargo bench` - No major performance regression
@@ -575,9 +644,13 @@ Before releasing:
 |------|----------|---------|
 | Unit tests | `src/**/*.rs` (bottom of files) | `cargo test` |
 | Regression | `tests/regression.rs` | `cargo test --test regression` |
+| Visual (Desktop) | `tests/visual/run_tests.py` | `python tests/visual/run_tests.py` |
+| Visual (WASM) | `tests/visual/wasm/test_wasm.py` | `python tests/visual/wasm/test_wasm.py` |
+| Visual (Unified) | `tests/visual/run_all_tests.py` | `python tests/visual/run_all_tests.py` |
 | Benchmarks | `benches/flame_bench.rs` | `cargo bench` |
 | Simple bench | `src/bin/simple_benchmark.rs` | `cargo run --release --bin simple_benchmark` |
-| CLI export | `src/lib.rs`, `src/app.rs` | `cargo run --release -- export -i config.fflame -o out.png` |
+| CLI export | `src/lib.rs`, `src/app/export.rs` | `cargo run --release -- export -i config.fflame -o out.png` |
+| WASM API | `src/wasm_api.rs`, `src/app/export.rs` | See WASM.md for build instructions |
 | Image compare | `src/bin/compare_images.rs` | `cargo run --release --bin compare_images -- --image1 a.png --image2 b.png` |
 | Profiler | `src/profiler.rs` | (used in code) |
 | Metrics | `src/util.rs` | (automatic in app) |
@@ -587,6 +660,6 @@ Before releasing:
 
 ---
 
-**Last Updated:** 2025-10-24
-**Current Build:** #123 (check with `cargo run --example show_version`)
-**Test Coverage:** Unit tests ✅, Regression ✅, Benchmarks ✅, Profiling ✅, Visual (CLI) ✅
+**Last Updated:** 2025-11-16
+**Current Build:** (check with `cargo run --example show_version`)
+**Test Coverage:** Unit tests ✅, Regression ✅, Visual (Desktop + WASM) ✅, Benchmarks ✅, Profiling ✅

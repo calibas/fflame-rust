@@ -11,7 +11,6 @@ crate-type = ["cdylib", "rlib"]
 winit = "0.30"
 # wgpu = "23.0"
 egui = "0.33"
-egui-wgpu = "0.33"
 egui_dock = "0.18"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -47,12 +46,16 @@ web-sys = { version = "0.3", features = [
 console_error_panic_hook = "0.1"
 console_log = "1.0"
 getrandom = { version = "0.2", features = ["js"] }
+egui-wgpu = "0.33"
+# WebGPU only - WebGL doesn't support compute shaders (required for fractal generation)
+wgpu = { version = "27.0", features = ["webgpu"]}
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 egui-winit = { version = "0.33", default-features = true }
 env_logger = "0.11"
 pollster = { version = "0.4", features = ["macro"] }
 clap = { version = "4.5", features = ["derive"] }
+egui-wgpu = "0.33"
 
 [build-dependencies]
 chrono = "0.4"

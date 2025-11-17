@@ -19,9 +19,6 @@ pub struct PanelContext<'a> {
     // Renderer (optional, might not exist during init)
     pub flame_renderer: Option<&'a crate::renderer::compute_kernel::FlameRenderer>,
 
-    // Window visibility flags
-    pub show_config_window: &'a mut bool,
-
     // Action flags
     pub add_transform: &'a mut bool,
     pub delete_transform: &'a mut Option<usize>,
@@ -174,7 +171,6 @@ impl<'a> PanelViewer<'a> {
     fn render_rendering_panel(&mut self, ui: &mut egui::Ui) {
         super::settings::render_settings_content(
             ui,
-            self.context.show_config_window,
             self.context.config_manager.can_undo(),
             self.context.config_manager.can_redo(),
             self.context.undo_requested,

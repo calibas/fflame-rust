@@ -2,10 +2,13 @@
 
 mod input;
 mod config;
-mod export;
+pub mod export;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use export::export_headless;
+
+#[cfg(target_arch = "wasm32")]
+pub use export::export_headless_wasm;
 
 use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, window::Window};
 use egui_wgpu::wgpu::SurfaceError;

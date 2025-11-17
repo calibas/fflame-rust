@@ -1,5 +1,5 @@
 use crate::scene::transforms::{Flame, RenderMode};
-use crate::config::{ConfigManager, ConfigPath, UpdateType};
+use crate::config::{ConfigManager, ConfigPath};
 
 /// Render view controls content (for docking panels)
 pub fn render_view_content(
