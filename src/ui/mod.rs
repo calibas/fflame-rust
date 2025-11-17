@@ -3,7 +3,6 @@ mod font_loader;
 mod formatting;
 mod help;
 mod helpers;
-mod lazy_undo;
 mod menu_bar;
 mod menu_context;
 mod palette_editor;
@@ -361,39 +360,36 @@ impl EguiLayer {
         // Handle View menu actions BEFORE syncing flame (so changes take effect this frame)
         use crate::config::ConfigPath;
         if menu_actions.view.reset_view {
-            let _ = config_manager.update_param(ConfigPath::Zoom, 1.0.into(), false);
-            let _ = config_manager.update_param(ConfigPath::Pan, (0.0, 0.0).into(), false);
-            let _ = config_manager.update_param(ConfigPath::Rotation, 0.0.into(), false);
+            let _ = config_manager.update_param(ConfigPath::Zoom, 1.0.into());
+            let _ = config_manager.update_param(ConfigPath::Pan, (0.0, 0.0).into());
+            let _ = config_manager.update_param(ConfigPath::Rotation, 0.0.into());
         }
 
         if menu_actions.view.zoom_in {
             let current_zoom = config_manager.active_config().zoom;
-            let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom * 1.2).into(), false);
+            let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom * 1.2).into());
         }
 
         if menu_actions.view.zoom_out {
             let current_zoom = config_manager.active_config().zoom;
-            let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom / 1.2).into(), false);
+            let _ = config_manager.update_param(ConfigPath::Zoom, (current_zoom / 1.2).into());
         }
 
         if menu_actions.view.set_mode_2d {
             let _ = config_manager.update_param(
                 ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::TwoD.into(),
-                false
+                crate::scene::transforms::RenderMode::TwoD.into()
             );
         }
 
         if menu_actions.view.set_mode_3d {
             let _ = config_manager.update_param(
                 ConfigPath::RenderMode,
-                crate::scene::transforms::RenderMode::ThreeD.into(),
-                false
+                crate::scene::transforms::RenderMode::ThreeD.into()
             );
         }
 
-        // Sync flame from ConfigManager AFTER UI updates (for live preview during drag)
-        // This ensures app.rs gets the latest preview state when checking is_in_preview_mode()
+        // Sync flame from ConfigManager AFTER UI updates
         *flame = config_manager.active_config().flame.clone();
 
         // Extract menu actions into individual flags for backward compatibility
@@ -425,16 +421,14 @@ impl EguiLayer {
         if let Some(speed) = menu_actions.rendering.set_speed {
             let _ = config_manager.update_param(
                 ConfigPath::SpeedMultiplier,
-                speed.into(),
-                false
+                speed.into()
             );
         }
 
         if let Some(ipt) = menu_actions.rendering.set_iterations_per_thread {
             let _ = config_manager.update_param(
                 ConfigPath::IterationsPerThread,
-                ipt.into(),
-                false
+                ipt.into()
             );
         }
 

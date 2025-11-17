@@ -70,7 +70,7 @@ pub fn render_variation_params(
 
         if param_changed {
             // Update via ConfigManager with lazy undo only during drag
-            if let Ok(update_type) = config_manager.update_param(path.clone(), param_value.into(), dragged) {
+            if let Ok(update_type) = config_manager.update_param(path.clone(), param_value.into()) {
                 max_update = max_update.max(update_type);
             }
         }
@@ -250,7 +250,7 @@ pub fn render_variation_params_final(
 
         if param_changed {
             // Update via ConfigManager with lazy undo only during drag
-            if let Ok(update_type) = config_manager.update_param(path.clone(), param_value.into(), dragged) {
+            if let Ok(update_type) = config_manager.update_param(path.clone(), param_value.into()) {
                 max_update = max_update.max(update_type);
             }
         }

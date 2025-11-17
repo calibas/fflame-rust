@@ -152,11 +152,17 @@ impl FlameRenderer {
         // The caller should call update_tonemap() with current config values after resize()
     }
 
-    /// Reset accumulation buffer and sample count
-    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _camera_z: f32, _speed_factor: f32) {
+    /// Reset iteration counters without clearing accumulation buffer
+    /// Used when fractal parameters change but we want smooth transition via overwrite mode
+    pub fn reset_iteration_counter(&mut self) {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
+    }
+
+    /// Reset accumulation buffer and sample count
+    pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _camera_z: f32, _speed_factor: f32) {
+        self.reset_iteration_counter();
 
         // Clear accumulation buffers
         self.buffers.clear_all(encoder, queue);

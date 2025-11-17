@@ -52,7 +52,6 @@ impl App {
                 let _ = self.config_manager.update_param(
                     crate::config::ConfigPath::Pan,
                     (new_pan_x, new_pan_y).into(),
-                    false  // Immediate capture for keyboard input
                 );
                 self.view_changed_by_keyboard = true;
             }
@@ -65,7 +64,6 @@ impl App {
                 let _ = self.config_manager.update_param(
                     crate::config::ConfigPath::Pan,
                     (new_pan_x, new_pan_y).into(),
-                    false  // Immediate capture for keyboard input
                 );
                 self.view_changed_by_keyboard = true;
             }
@@ -78,7 +76,6 @@ impl App {
                 let _ = self.config_manager.update_param(
                     crate::config::ConfigPath::Pan,
                     (new_pan_x, new_pan_y).into(),
-                    false  // Immediate capture for keyboard input
                 );
                 self.view_changed_by_keyboard = true;
             }
@@ -91,7 +88,6 @@ impl App {
                 let _ = self.config_manager.update_param(
                     crate::config::ConfigPath::Pan,
                     (new_pan_x, new_pan_y).into(),
-                    false  // Immediate capture for keyboard input
                 );
                 self.view_changed_by_keyboard = true;
             }
@@ -100,7 +96,6 @@ impl App {
                 let _ = self.config_manager.update_param(
                     crate::config::ConfigPath::Zoom,
                     new_zoom.into(),
-                    false  // Immediate capture for keyboard input
                 );
                 self.view_changed_by_keyboard = true;
             }
@@ -109,7 +104,6 @@ impl App {
                 let _ = self.config_manager.update_param(
                     crate::config::ConfigPath::Zoom,
                     new_zoom.into(),
-                    false  // Immediate capture for keyboard input
                 );
                 self.view_changed_by_keyboard = true;
             }

@@ -52,6 +52,8 @@ pub struct App {
     pub(super) last_frame_time: Option<web_time::Instant>,
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
+    pub(super) use_overwrite_next_frame: bool,  // Persist overwrite mode for brief period after changes
+    pub(super) last_param_change_time: Option<web_time::Instant>,  // Track when params last changed
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
@@ -158,6 +160,8 @@ impl App {
             last_frame_time: None,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
             frames_since_accumulation: 0,
+            use_overwrite_next_frame: false,
+            last_param_change_time: None,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             export_width: 1920,  // Default export resolution
             export_height: 1080,
@@ -761,8 +765,7 @@ impl App {
                     let new_idx = self.palette_library.palettes().len() - 1;
                     let _ = self.config_manager.update_param(
                         crate::config::ConfigPath::PaletteIndex,
-                        (new_idx as u32).into(),
-                        false
+                        (new_idx as u32).into()
                     );
 
                     // Update renderer
@@ -799,8 +802,7 @@ impl App {
                                     let new_idx = self.palette_library.palettes().len() - 1;
                                     let _ = self.config_manager.update_param(
                                         crate::config::ConfigPath::PaletteIndex,
-                                        (new_idx as u32).into(),
-                                        false
+                                        (new_idx as u32).into()
                                     );
 
                                     // Update renderer
@@ -1064,18 +1066,60 @@ impl App {
                     // For now, this would require recreating the compute pipeline
                 }
 
-                // Reset accumulation if UpdateAction indicates (or keyboard view change)
-                let should_reset = actions.reset_accumulation || view_changed_by_keyboard;
-                if should_reset {
+                // Handle accumulation reset based on change type
+                let should_full_reset = actions.reset_accumulation || view_changed_by_keyboard;
+                let has_view_or_color_change = actions.update_view || actions.update_palette;
+
+                if should_full_reset {
+                    // Structural changes: Clear buffer and reset counters (blank frame expected)
                     renderer.reset(&mut update_encoder, &self.gpu.queue, update_config.iterations_per_thread,
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
-                    self.frames_since_accumulation = 0;  // Reset batch counter
+                    self.frames_since_accumulation = 0;
+                } else if has_view_or_color_change && renderer.total_iterations() >= update_config.max_iterations {
+                    // View/color changes when fractal has stopped iterating:
+                    // Reset counter to restart iteration (smooth transition via overwrite mode)
+                    renderer.reset_iteration_counter();
+                    self.frames_since_accumulation = 0;
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
             }
         }
+
+        // Set overwrite flag based on whether we had changes recently
+        // Keep it ON for brief period (100ms ~6 frames) after last change for smooth transitions
+        // This handles continuous drag, discrete scroll, and transform changes
+        // Note: Excludes tone_curve (post-processing only, doesn't affect accumulation buffer)
+        let had_changes = actions.update_view || actions.update_palette || actions.update_flame;
+        let now = web_time::Instant::now();
+
+        // Track previous overwrite state to detect transitions
+        let was_overwrite = self.use_overwrite_next_frame;
+
+        if had_changes && !actions.reset_accumulation {
+            // Changes happened → enable overwrite mode and update timestamp
+            self.use_overwrite_next_frame = true;
+            self.last_param_change_time = Some(now);
+        } else if !had_changes {
+            // No changes this frame → check if we're still within the smooth transition window
+            if let Some(last_change) = self.last_param_change_time {
+                let time_since_change = now.duration_since(last_change);
+                // Keep overwrite ON for 100ms after last change (~6 frames at 60fps)
+                self.use_overwrite_next_frame = time_since_change.as_millis() < 100;
+
+                // When overwrite window expires, reset iteration counter for clean rebuild
+                if was_overwrite && !self.use_overwrite_next_frame {
+                    if let Some(ref mut renderer) = self.flame_renderer {
+                        renderer.reset_iteration_counter();
+                        log::debug!("Overwrite window expired → reset iteration counter for clean rebuild");
+                    }
+                }
+            } else {
+                self.use_overwrite_next_frame = false;
+            }
+        }
+        // If reset_accumulation=true, disable overwrite (let normal accumulation work after reset)
 
         // Clear pending actions after executing them
         self.config_manager.clear_pending_actions();
@@ -1096,15 +1140,17 @@ impl App {
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
-            // Live mode: Enable overwrite mode during preview, reset when exiting
-            let in_preview_mode = self.config_manager.is_in_preview_mode();
-            renderer.set_overwrite_mode(in_preview_mode);
+            // Overwrite mode logic:
+            // - Use flag set in previous frame (changes were detected then, applied now)
+            // - When fractal stopped: Always allow overwrite to enable live parameter updates
+            let has_stopped = renderer.total_iterations() >= final_config.max_iterations;
+            let use_overwrite = self.use_overwrite_next_frame || has_stopped;
+            renderer.set_overwrite_mode(use_overwrite);
 
             // Check if we should continue iterating
             let max_iterations = Some(final_config.max_iterations);
             let should_iterate = !self.paused &&
-                (max_iterations.map_or(true, |max| renderer.total_iterations() < max) ||
-                 self.config_manager.is_in_preview_mode());
+                max_iterations.map_or(true, |max| renderer.total_iterations() < max);
 
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;
@@ -1112,7 +1158,10 @@ impl App {
                 self.frames_since_accumulation += 1;
 
                 // Determine if we should accumulate this frame
-                let should_accumulate = self.frames_since_accumulation >= self.accumulation_batch_size;
+                // During overwrite mode, accumulate every frame for smooth transitions
+                // During normal accumulation, batch to reduce GPU overhead
+                let batch_size = if use_overwrite { 1 } else { self.accumulation_batch_size };
+                let should_accumulate = self.frames_since_accumulation >= batch_size;
 
                 let t_compute = Instant::now();
                 // 1. Compute new samples with fresh random seed
@@ -1129,7 +1178,7 @@ impl App {
                     // samples_this_frame is only THIS frame's samples, but histogram contains
                     // accumulated samples from all frames in the batch
                     // Pass total samples for proper blend_factor calculation
-                    let total_samples_in_batch = samples_this_frame * self.accumulation_batch_size as u64;
+                    let total_samples_in_batch = samples_this_frame * batch_size as u64;
                     renderer.accumulate_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
                     self.frames_since_accumulation = 0;
                     self.metrics.record_accumulate_time(t_accumulate.elapsed().as_secs_f64() * 1000.0);

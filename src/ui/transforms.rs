@@ -23,8 +23,7 @@ fn render_affine_controls(
         if response_a.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::A },
-                temp_a.into(),
-                response_a.dragged()  // Lazy undo
+                temp_a.into()
             ) {
                 transform.a = config_manager.active_config().flame.transforms[index].a;
                 max_update = max_update.max(update_type);
@@ -40,8 +39,7 @@ fn render_affine_controls(
         if response_b.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::B },
-                temp_b.into(),
-                response_b.dragged()  // Lazy undo
+                temp_b.into()
             ) {
                 transform.b = config_manager.active_config().flame.transforms[index].b;
                 max_update = max_update.max(update_type);
@@ -59,8 +57,7 @@ fn render_affine_controls(
         if response_c.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::C },
-                temp_c.into(),
-                response_c.dragged()  // Lazy undo
+                temp_c.into()
             ) {
                 transform.c = config_manager.active_config().flame.transforms[index].c;
                 max_update = max_update.max(update_type);
@@ -76,8 +73,7 @@ fn render_affine_controls(
         if response_d.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::D },
-                temp_d.into(),
-                response_d.dragged()  // Lazy undo
+                temp_d.into()
             ) {
                 transform.d = config_manager.active_config().flame.transforms[index].d;
                 max_update = max_update.max(update_type);
@@ -95,8 +91,7 @@ fn render_affine_controls(
         if response_e.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::E },
-                temp_e.into(),
-                response_e.dragged()  // Lazy undo
+                temp_e.into()
             ) {
                 transform.e = config_manager.active_config().flame.transforms[index].e;
                 max_update = max_update.max(update_type);
@@ -112,8 +107,7 @@ fn render_affine_controls(
         if response_f.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::F },
-                temp_f.into(),
-                response_f.dragged()  // Lazy undo
+                temp_f.into()
             ) {
                 transform.f = config_manager.active_config().flame.transforms[index].f;
                 max_update = max_update.max(update_type);
@@ -142,8 +136,7 @@ fn render_color_controls(
     if response_color.changed() {
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformColor { index },
-            temp_color.into(),
-            response_color.dragged()  // Preview mode while dragging
+            temp_color.into()
         ) {
             transform.color = config_manager.active_config().flame.transforms[index].color;
             max_update = max_update.max(update_type);
@@ -172,8 +165,7 @@ fn render_color_controls(
     if response_speed.changed() {
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformColorSpeed { index },
-            temp_speed.into(),
-            response_speed.dragged()  // Lazy undo
+            temp_speed.into()
         ) {
             transform.color_speed = config_manager.active_config().flame.transforms[index].color_speed;
             max_update = max_update.max(update_type);
@@ -189,8 +181,7 @@ fn render_color_controls(
     if response_opacity.changed() {
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformOpacity { index },
-            temp_opacity.into(),
-            response_opacity.dragged()  // Lazy undo
+            temp_opacity.into()
         ) {
             transform.opacity = config_manager.active_config().flame.transforms[index].opacity;
             max_update = max_update.max(update_type);
@@ -233,8 +224,7 @@ pub fn render_transforms_content(
         if ui.checkbox(&mut has_final, "Enable Final Transform").changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::FinalTransformEnabled,
-                has_final.into(),
-                false
+                has_final.into()
             ) {
                 flame.final_transform = config_manager.active_config().flame.final_transform.clone();
                 max_update = max_update.max(update_type);
@@ -266,8 +256,7 @@ pub fn render_transforms_content(
                                 if ui.add(egui::DragValue::new(&mut temp_g).speed(0.01)).changed() {
                                     if let Ok(update_type) = config_manager.update_param(
                                         ConfigPath::TransformAffine { index: i, param: AffineParam::G },
-                                        temp_g.into(),
-                                        true
+                                        temp_g.into()
                                     ) {
                                         transform.g = config_manager.active_config().flame.transforms[i].g;
                                         max_update = max_update.max(update_type);
@@ -285,8 +274,7 @@ pub fn render_transforms_content(
                         if response.changed() {
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::TransformWeight { index: i },
-                                temp_weight.into(),
-                                response.dragged()
+                                temp_weight.into()
                             ) {
                                 transform.weight = config_manager.active_config().flame.transforms[i].weight;
                                 max_update = max_update.max(update_type);
@@ -360,8 +348,7 @@ pub fn render_transforms_content(
                                     if response.changed() {
                                         if let Ok(update_type) = config_manager.update_param(
                                             ConfigPath::FinalTransformAffine { param: AffineParam::$param },
-                                            temp.into(),
-                                            response.dragged()
+                                            temp.into()
                                         ) {
                                             final_xform.$field = config_manager.active_config().flame.final_transform.as_ref().unwrap().$field;
                                             max_update = max_update.max(update_type);
@@ -395,8 +382,7 @@ pub fn render_transforms_content(
                         if response_color.changed() {
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::FinalTransformColor,
-                                temp_color.into(),
-                                response_color.dragged()
+                                temp_color.into()
                             ) {
                                 final_xform.color = config_manager.active_config().flame.final_transform.as_ref().unwrap().color;
                                 max_update = max_update.max(update_type);
@@ -411,8 +397,7 @@ pub fn render_transforms_content(
                         if response_speed.changed() {
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::FinalTransformColorSpeed,
-                                temp_speed.into(),
-                                response_speed.dragged()
+                                temp_speed.into()
                             ) {
                                 final_xform.color_speed = config_manager.active_config().flame.final_transform.as_ref().unwrap().color_speed;
                                 max_update = max_update.max(update_type);
