@@ -498,11 +498,10 @@ impl App {
             // Create new config with added transform
             let mut new_config = self.config_manager.active_config().clone();
 
-            // Create a new default transform
+            // Create a new default transform with identity affine and linear variation
             let mut new_transform = crate::scene::transforms::Transform::default();
-            new_transform.a = 0.5;
-            new_transform.d = 0.5;
-            new_transform.set_variation("linear", 0.5);
+            // Linear variation with weight 1.0
+            new_transform.set_variation("linear", 1.0);
             new_transform.color = 0.5;  // Mid-palette position
             new_transform.color_speed = 0.5;
 
