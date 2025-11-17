@@ -67,21 +67,6 @@ impl EasingFunction {
     }
 }
 
-/// Interpolate between two f64 values
-pub fn lerp_f64(a: f64, b: f64, t: f64) -> f64 {
-    a + (b - a) * t
-}
-
-/// Interpolate between two u32 values
-pub fn lerp_u32(a: u32, b: u32, t: f64) -> u32 {
-    (a as f64 + (b as f64 - a as f64) * t).round() as u32
-}
-
-/// Interpolate between two bool values (threshold at 0.5)
-pub fn lerp_bool(a: bool, b: bool, t: f64) -> bool {
-    if t < 0.5 { a } else { b }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,19 +88,5 @@ mod tests {
     fn test_ease_out() {
         let result = EasingFunction::EaseOut.apply(0.5);
         assert!(result > 0.5); // Should decelerate (faster at start)
-    }
-
-    #[test]
-    fn test_lerp() {
-        assert_eq!(lerp_f64(0.0, 10.0, 0.0), 0.0);
-        assert_eq!(lerp_f64(0.0, 10.0, 0.5), 5.0);
-        assert_eq!(lerp_f64(0.0, 10.0, 1.0), 10.0);
-    }
-
-    #[test]
-    fn test_lerp_u32() {
-        assert_eq!(lerp_u32(0, 100, 0.0), 0);
-        assert_eq!(lerp_u32(0, 100, 0.5), 50);
-        assert_eq!(lerp_u32(0, 100, 1.0), 100);
     }
 }
