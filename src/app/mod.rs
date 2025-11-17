@@ -495,8 +495,7 @@ impl App {
 
         // Handle add transform
         if ui_response.add_transform {
-            // Create new config with added transform
-            let mut new_config = self.config_manager.active_config().clone();
+            let insert_index = self.config_manager.active_config().flame.transforms.len();
 
             // Create a new default transform with identity affine and linear variation
             let mut new_transform = crate::scene::transforms::Transform::default();
@@ -505,10 +504,14 @@ impl App {
             new_transform.color = 0.5;  // Mid-palette position
             new_transform.color_speed = 0.5;
 
-            new_config.flame.transforms.push(new_transform);
+            // Create specialized snapshot for efficient undo/redo
+            let change = crate::config::ConfigChange::add_transform_snapshot(
+                insert_index,
+                new_transform,
+                "Add Transform".to_string(),
+            );
 
-            // Load via ConfigManager (creates snapshot-based undo entry)
-            if let Err(e) = self.config_manager.load_config(new_config, "Add Transform".to_string()) {
+            if let Err(e) = self.config_manager.apply_structural_change(change) {
                 eprintln!("Failed to add transform: {}", e);
             } else {
                 // Update app state from config
@@ -518,14 +521,20 @@ impl App {
 
         // Handle delete transform
         if let Some(idx) = ui_response.delete_transform {
-            if self.config_manager.active_config().flame.transforms.len() > 1
-                && idx < self.config_manager.active_config().flame.transforms.len() {
-                // Create new config with deleted transform
-                let mut new_config = self.config_manager.active_config().clone();
-                new_config.flame.transforms.remove(idx);
+            let config = self.config_manager.active_config();
 
-                // Load via ConfigManager (creates snapshot-based undo entry)
-                if let Err(e) = self.config_manager.load_config(new_config, format!("Delete Transform {}", idx)) {
+            if config.flame.transforms.len() > 1 && idx < config.flame.transforms.len() {
+                // Get the transform before deleting
+                let deleted_transform = config.flame.transforms[idx].clone();
+
+                // Create specialized snapshot for efficient undo/redo
+                let change = crate::config::ConfigChange::delete_transform_snapshot(
+                    idx,
+                    deleted_transform,
+                    format!("Delete Transform {}", idx + 1),
+                );
+
+                if let Err(e) = self.config_manager.apply_structural_change(change) {
                     eprintln!("Failed to delete transform: {}", e);
                 } else {
                     // Update app state from config

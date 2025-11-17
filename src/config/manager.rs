@@ -683,7 +683,12 @@ impl ConfigManager {
 
     /// Check if new change should be coalesced with last history entry
     fn should_coalesce(&self, new_change: &ConfigChange) -> bool {
-        // Never coalesce snapshots (they have no deltas)
+        // Never coalesce snapshots
+        if new_change.snapshot.is_some() {
+            return false;
+        }
+
+        // Never coalesce if no deltas (safety check)
         if new_change.deltas.is_empty() {
             return false;
         }
@@ -1621,6 +1626,43 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// Apply a structural change (transform add/delete)
+    /// Creates specialized snapshot and updates config atomically
+    pub fn apply_structural_change(&mut self, change: ConfigChange) -> Result<(), ConfigError> {
+        // Apply the change based on snapshot type
+        if let Some(snapshot) = &change.snapshot {
+            match snapshot {
+                crate::config::SnapshotData::AddTransform { index, transform } => {
+                    if *index <= self.current.flame.transforms.len() {
+                        self.current.flame.transforms.insert(*index, transform.clone());
+                    } else {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                }
+                crate::config::SnapshotData::DeleteTransform { index, .. } => {
+                    if *index < self.current.flame.transforms.len() {
+                        self.current.flame.transforms.remove(*index);
+                    } else {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                }
+                crate::config::SnapshotData::FullConfig { after, .. } => {
+                    self.current = (**after).clone();
+                }
+            }
+        } else {
+            return Err(ConfigError::InvalidOperation);
+        }
+
+        // Record in history
+        self.push_undo(change);
+
+        // Record GPU update action
+        self.record_action(UpdateType::IterationReset);
+
+        Ok(())
+    }
+
     /// Get full history (unified timeline)
     pub fn history(&self) -> &[ConfigChange] {
         &self.history
@@ -1691,6 +1733,7 @@ impl ConfigManager {
 pub enum ConfigError {
     TypeMismatch,
     InvalidIndex,
+    InvalidOperation,
     EmptyUndoStack,
     EmptyRedoStack,
     ReadOnlyParameter,
@@ -1701,6 +1744,7 @@ impl std::fmt::Display for ConfigError {
         match self {
             ConfigError::TypeMismatch => write!(f, "Config value type mismatch"),
             ConfigError::InvalidIndex => write!(f, "Invalid transform index"),
+            ConfigError::InvalidOperation => write!(f, "Invalid operation"),
             ConfigError::EmptyUndoStack => write!(f, "Nothing to undo"),
             ConfigError::EmptyRedoStack => write!(f, "Nothing to redo"),
             ConfigError::ReadOnlyParameter => write!(f, "Parameter is read-only"),
