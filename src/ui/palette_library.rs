@@ -86,42 +86,47 @@ pub fn render_palette_library(
                                         tex
                                     });
 
-                                    // Column 1: Palette name (clickable)
-                                    let label_response = ui.add(
-                                        egui::Label::new(&palette.name)
-                                            .sense(egui::Sense::click())
+                                    // Allocate space for the row first to get rect for background
+                                    let (name_rect, name_response) = ui.allocate_exact_size(
+                                        egui::vec2(ui.available_width().min(150.0), preview_height),
+                                        egui::Sense::click()
                                     );
 
-                                    if label_response.hovered() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                    }
+                                    // Move to next column
+                                    let (img_rect, img_response) = ui.allocate_exact_size(
+                                        egui::vec2(preview_width, preview_height),
+                                        egui::Sense::click()
+                                    );
 
-                                    if label_response.clicked() {
-                                        selected_palette = Some(palette.clone());
-                                    }
-
-                                    // Column 2: Palette preview (clickable)
-                                    let image = egui::Image::new(&texture)
-                                        .fit_to_exact_size(egui::vec2(preview_width, preview_height));
-
-                                    let image_response = ui.add(image.sense(egui::Sense::click()));
-
-                                    if image_response.hovered() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                    }
-
-                                    if image_response.clicked() {
-                                        selected_palette = Some(palette.clone());
-                                    }
-
-                                    // Highlight entire row on hover
-                                    if label_response.hovered() || image_response.hovered() {
-                                        let row_rect = label_response.rect.union(image_response.rect);
+                                    // Draw highlight FIRST (behind everything)
+                                    if name_response.hovered() || img_response.hovered() {
+                                        let row_rect = name_rect.union(img_rect);
                                         ui.painter().rect_filled(
                                             row_rect.expand(2.0),
                                             2.0,
                                             ui.visuals().widgets.hovered.bg_fill,
                                         );
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+
+                                    // Draw text label on top of background
+                                    ui.painter().text(
+                                        name_rect.left_center() + egui::vec2(5.0, 0.0),
+                                        egui::Align2::LEFT_CENTER,
+                                        &palette.name,
+                                        egui::FontId::default(),
+                                        ui.visuals().text_color(),
+                                    );
+
+                                    // Draw image on top of background
+                                    let image = egui::Image::new(&texture)
+                                        .fit_to_exact_size(egui::vec2(preview_width, preview_height));
+
+                                    ui.put(img_rect, image);
+
+                                    // Handle clicks on either element
+                                    if name_response.clicked() || img_response.clicked() {
+                                        selected_palette = Some(palette.clone());
                                     }
 
                                     ui.end_row();
