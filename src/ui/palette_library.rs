@@ -2,7 +2,6 @@
 
 use egui;
 use crate::scene::palette::{PaletteLibrary, Palette};
-use std::collections::HashMap;
 
 /// Render the Palette Library panel
 /// Returns Some(palette) if user selected a new palette (cloned)

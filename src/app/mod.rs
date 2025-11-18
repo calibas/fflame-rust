@@ -547,12 +547,9 @@ impl App {
             }
         }
 
-        // Handle custom palette from editor
+        // Handle custom palette from editor or library
         if let Some(custom_pal) = ui_response.custom_palette {
             // Add custom palette to library for persistence
-            // Note: Don't set PaletteIndex - keep config.palette as working copy
-
-            // Check if this palette already exists in library by name
             let palette_lib = &mut self.palette_library;
             let mut found_index = None;
             for (i, lib_palette) in palette_lib.iter().enumerate() {
@@ -564,20 +561,24 @@ impl App {
 
             if let Some(idx) = found_index {
                 // Palette exists, update it in place
-                palette_lib.update(idx, custom_pal);
+                palette_lib.update(idx, custom_pal.clone());
             } else {
                 // New palette, add to library
-                palette_lib.add(custom_pal);
+                palette_lib.add(custom_pal.clone());
+                found_index = Some(palette_lib.len() - 1);
             }
 
-            // Don't set palette_index - that would clear config.palette
-            // The palette stays in config.palette as the working copy
-
-            // Update renderer
-            let config = self.config_manager.active_config();
-            if let Some(ref mut renderer) = self.flame_renderer {
-                if let Some(palette) = palette_lib.get(config.palette_index) {
-                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, config.palette_rotation);
+            // Apply the palette to the config via ConfigManager
+            if let Ok(update) = self.config_manager.update_param(
+                crate::config::ConfigPath::Palette,
+                crate::config::ConfigValue::Palette(custom_pal.clone()),
+            ) {
+                // Update renderer if needed (ColorOnly or IterationReset)
+                if matches!(update, crate::config::UpdateType::ColorOnly | crate::config::UpdateType::IterationReset) {
+                    let config = self.config_manager.active_config();
+                    if let Some(ref mut renderer) = self.flame_renderer {
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &custom_pal, config.palette_rotation);
+                    }
                 }
             }
         }
