@@ -189,36 +189,39 @@ impl Transform {
     pub fn to_triangle_apophysis(&self) -> ([f32; 2], [f32; 2], [f32; 2]) {
         // Apophysis displays b, c, f with opposite sign from our internal representation
         let display_f = -self.f;
-        // Note: f itself is stored with opposite sign, but O uses the raw value
 
-        // Apophysis formulas:
-        // O = (e, f)  [where f is the internal value we store]
-        // X = (e + a, f + b)  [where b is the display value = -internal_b]
-        // Y = (e + c, f + d)  [where c is the display value = -internal_c]
+        // Apophysis formulas (verified to match exactly):
+        // O = (e, -f)
+        // X = (e + a, -f - c)
+        // Y = (e - b, -f + d)
         let o = [self.e, display_f];
-        let x = [self.e + self.a, display_f + self.b];
-        let y = [self.e + self.c, display_f + self.d];
+        let x = [self.e + self.a, display_f - self.c];
+        let y = [self.e - self.b, display_f + self.d];
         (o, x, y)
     }
 
     /// Update affine coefficients from triangle using Apophysis sign convention
     /// Inverse of to_triangle_apophysis()
     pub fn from_triangle_apophysis(&mut self, o: [f32; 2], x: [f32; 2], y: [f32; 2]) {
-        // From Apophysis formulas:
-        // a = X[0] - O[0]
-        // b_display = X[1] - O[1]  → internal_b = -b_display
-        // c_display = Y[0] - O[0]  → internal_c = -c_display
-        // d = Y[1] - O[1]
+        // Inverse of:
+        // O = (e, -f)
+        // X = (e + a, -f - c)
+        // Y = (e - b, -f + d)
+        //
+        // Solve for coefficients:
         // e = O[0]
-        // f = O[1]  (internal value, display shows opposite)
+        // f = -O[1]
+        // a = X[0] - O[0]
+        // c = O[1] - X[1]  (since X[1] = O[1] - c)
+        // b = O[0] - Y[0]  (since Y[0] = O[0] - b)
+        // d = Y[1] - O[1]
 
-        self.a = x[0] - o[0];
-        self.b = x[1] - o[1];
-        self.c = y[0] - o[0];
-        self.d = y[1] - o[1];
         self.e = o[0];
         self.f = -o[1];
-
+        self.a = x[0] - o[0];
+        self.c = o[1] - x[1];
+        self.b = o[0] - y[0];
+        self.d = y[1] - o[1];
     }
 
     /// Reset transform to identity (unit triangle at origin)
