@@ -163,12 +163,12 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Palette Library panel (browse and manage palette packs)
     fn render_palette_library_panel(&mut self, ui: &mut egui::Ui) {
-        if let Some(_selected_palette) = super::palette_library::render_palette_library(
+        if let Some(selected_palette) = super::palette_library::render_palette_library(
             ui,
             self.context.palette_library,
         ) {
-            // TODO: Handle palette selection (update active palette in config)
-            // This will be wired up in the integration phase
+            // Update custom palette (will be applied to config via ConfigManager)
+            *self.context.custom_palette = Some(selected_palette);
         }
     }
 
