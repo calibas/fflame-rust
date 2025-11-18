@@ -337,10 +337,6 @@ impl Default for PaletteLibrary {
 
 impl PaletteLibrary {
     pub fn new() -> Self {
-        let mut palettes = vec![
-            Palette::grayscale(),
-        ];
-
         // Load packs from assets/palettes/packs/
         let mut packs = Vec::new();
         let mut enabled_packs = Vec::new();
@@ -349,16 +345,6 @@ impl PaletteLibrary {
         {
             use std::fs;
             use std::path::Path;
-
-            // Load old individual palette files for backward compatibility
-            let mut assets_palettes = super::assets::load_palettes_from_dir(
-                Path::new("assets/palettes")
-            );
-            // Mark all asset palettes as built-in (shipped with the application)
-            for pal in &mut assets_palettes {
-                pal.built_in = true;
-            }
-            palettes.extend(assets_palettes);
 
             // Load new palette packs
             let packs_dir = Path::new("assets/palettes/packs");
@@ -392,27 +378,39 @@ impl PaletteLibrary {
             }
         }
 
-        // WASM or fallback: Use built-in palettes if no assets were loaded
-        if palettes.len() == 1 && packs.is_empty() {
-            palettes.extend(vec![
-                Palette::fire(),
-                Palette::cool(),
-                Palette::rainbow(),
-                Palette::purple_pink(),
-            ]);
-        }
-
-        // Create library instance first so we can use add_or_update()
+        // Create library instance with empty palette list
         let mut library = Self {
-            palettes,
+            palettes: Vec::new(),
             packs,
             enabled_packs,
         };
 
-        // Add all enabled pack palettes to the main palette list
+        // Route 1: Add Grayscale (always first)
+        library.add_or_update(Palette::grayscale());
+
+        // Route 2: Load old individual palette files for backward compatibility (desktop only)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use std::path::Path;
+            let assets_palettes = super::assets::load_palettes_from_dir(
+                Path::new("assets/palettes")
+            );
+            for mut pal in assets_palettes {
+                pal.built_in = true;
+                library.add_or_update(pal);
+            }
+        }
+
+        // Route 3: WASM or fallback - use built-in palettes if no assets/packs were loaded
+        if library.palettes.is_empty() && library.packs.is_empty() {
+            library.add_or_update(Palette::fire());
+            library.add_or_update(Palette::cool());
+            library.add_or_update(Palette::rainbow());
+            library.add_or_update(Palette::purple_pink());
+        }
+
+        // Route 4: Add all enabled pack palettes to the main palette list
         // This ensures they appear in the Colors panel dropdown
-        // Mark all pack palettes as built-in (shipped with the application)
-        // Use add_or_update() to prevent duplicates (case-insensitive check)
         let enabled_pack_palettes: Vec<_> = library.packs.iter().enumerate()
             .filter(|(pack_idx, _)| library.enabled_packs.get(*pack_idx).copied().unwrap_or(false))
             .flat_map(|(_, pack)| pack.palettes.clone())
