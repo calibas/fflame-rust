@@ -47,84 +47,86 @@ pub fn render_palette_library(
             if is_enabled {
                 if let Some(pack) = library.get_pack(pack_idx) {
                     ui.indent(format!("pack_{}", pack_idx), |ui| {
-                        for (palette_idx, palette) in pack.palettes.iter().enumerate() {
-                            // Generate preview dimensions
-                            let preview_height = 20.0;
-                            let label_width = 100.0;
-                            let available_width = ui.available_width();
-                            let preview_width = (available_width - label_width - 20.0).max(100.0);
+                        // Use grid for automatic alignment
+                        egui::Grid::new(format!("palette_grid_{}", pack_idx))
+                            .num_columns(2)
+                            .spacing([10.0, 4.0])
+                            .striped(false)
+                            .show(ui, |ui| {
+                                for (palette_idx, palette) in pack.palettes.iter().enumerate() {
+                                    let preview_height = 20.0;
+                                    let preview_width = 200.0;
 
-                            // Generate texture ID based on pack and palette index
-                            let texture_id = egui::Id::new(("palette_preview", pack_idx, palette_idx));
+                                    // Generate texture ID based on pack and palette index
+                                    let texture_id = egui::Id::new(("palette_preview", pack_idx, palette_idx));
 
-                            // Load or get cached texture using egui's memory system
-                            let texture = ui.ctx().data_mut(|data| {
-                                data.get_temp::<egui::TextureHandle>(texture_id)
-                            }).unwrap_or_else(|| {
-                                // Generate preview image
-                                let preview_image = PaletteLibrary::generate_preview(
-                                    palette,
-                                    preview_width as usize,
-                                    preview_height as usize,
-                                );
+                                    // Load or get cached texture using egui's memory system
+                                    let texture = ui.ctx().data_mut(|data| {
+                                        data.get_temp::<egui::TextureHandle>(texture_id)
+                                    }).unwrap_or_else(|| {
+                                        // Generate preview image
+                                        let preview_image = PaletteLibrary::generate_preview(
+                                            palette,
+                                            preview_width as usize,
+                                            preview_height as usize,
+                                        );
 
-                                // Load and cache texture
-                                let tex = ui.ctx().load_texture(
-                                    format!("palette_{}_{}", pack_idx, palette_idx),
-                                    preview_image,
-                                    egui::TextureOptions::LINEAR,
-                                );
+                                        // Load and cache texture
+                                        let tex = ui.ctx().load_texture(
+                                            format!("palette_{}_{}", pack_idx, palette_idx),
+                                            preview_image,
+                                            egui::TextureOptions::LINEAR,
+                                        );
 
-                                // Store in egui memory
-                                ui.ctx().data_mut(|data| {
-                                    data.insert_temp(texture_id, tex.clone());
-                                });
+                                        // Store in egui memory
+                                        ui.ctx().data_mut(|data| {
+                                            data.insert_temp(texture_id, tex.clone());
+                                        });
 
-                                tex
-                            });
+                                        tex
+                                    });
 
-                            // Clickable palette entry with hover effect
-                            let (rect, response) = ui.allocate_exact_size(
-                                egui::vec2(ui.available_width(), preview_height),
-                                egui::Sense::click()
-                            );
-
-                            // Draw highlight on hover
-                            if response.hovered() {
-                                ui.painter().rect_filled(
-                                    rect,
-                                    2.0,
-                                    ui.visuals().widgets.hovered.bg_fill,
-                                );
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-
-                            // Draw palette entry content
-                            ui.allocate_ui_at_rect(rect, |ui| {
-                                ui.horizontal(|ui| {
-                                    // Palette name on the left (fixed width)
-                                    ui.allocate_ui_with_layout(
-                                        egui::vec2(label_width, preview_height),
-                                        egui::Layout::left_to_right(egui::Align::Center),
-                                        |ui| {
-                                            ui.label(&palette.name);
-                                        }
+                                    // Column 1: Palette name (clickable)
+                                    let label_response = ui.add(
+                                        egui::Label::new(&palette.name)
+                                            .sense(egui::Sense::click())
                                     );
 
-                                    // Preview gradient on the right
+                                    if label_response.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+
+                                    if label_response.clicked() {
+                                        selected_palette = Some(palette.clone());
+                                    }
+
+                                    // Column 2: Palette preview (clickable)
                                     let image = egui::Image::new(&texture)
                                         .fit_to_exact_size(egui::vec2(preview_width, preview_height));
 
-                                    ui.add(image);
-                                });
+                                    let image_response = ui.add(image.sense(egui::Sense::click()));
+
+                                    if image_response.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+
+                                    if image_response.clicked() {
+                                        selected_palette = Some(palette.clone());
+                                    }
+
+                                    // Highlight entire row on hover
+                                    if label_response.hovered() || image_response.hovered() {
+                                        let row_rect = label_response.rect.union(image_response.rect);
+                                        ui.painter().rect_filled(
+                                            row_rect.expand(2.0),
+                                            2.0,
+                                            ui.visuals().widgets.hovered.bg_fill,
+                                        );
+                                    }
+
+                                    ui.end_row();
+                                }
                             });
-
-                            if response.clicked() {
-                                selected_palette = Some(palette.clone());
-                            }
-
-                            ui.add_space(4.0);
-                        }
                     });
                 }
             }
