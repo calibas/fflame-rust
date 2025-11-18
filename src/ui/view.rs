@@ -137,39 +137,20 @@ pub fn render_view_content(
         }
     });
 
-    // Show projection controls only in 3D mode
+    // Show perspective control only in 3D mode
     if matches!(config.flame.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
-        ui.label("Projection");
-        ui.horizontal(|ui| {
-            let is_ortho = matches!(config.flame.projection, crate::scene::transforms::ProjectionType::Orthographic);
-            if ui.selectable_label(is_ortho, "Orthographic").clicked() {
-                if let Err(e) = config_manager.update_param(
-                    ConfigPath::ProjectionType,
-                    crate::scene::transforms::ProjectionType::Orthographic.into()
-                ) {
-                    log::error!("Failed to update projection type: {}", e);
-                }
-            }
-            if ui.selectable_label(!is_ortho, "Perspective").clicked() {
-                if let Err(e) = config_manager.update_param(
-                    ConfigPath::ProjectionType,
-                    crate::scene::transforms::ProjectionType::Perspective { strength: 2.0 }.into()
-                ) {
-                    log::error!("Failed to update projection type: {}", e);
-                }
-            }
-        });
-
-        // Perspective strength slider
-        if let crate::scene::transforms::ProjectionType::Perspective { mut strength } = config.flame.projection {
-            let response = ui.add(egui::Slider::new(&mut strength, 0.5..=10.0).text("Perspective Strength"));
-            if response.changed() {
-                if let Err(e) = config_manager.update_param(
-                    ConfigPath::ProjectionType,
-                    crate::scene::transforms::ProjectionType::Perspective { strength }.into()
-                ) {
-                    log::error!("Failed to update perspective strength: {}", e);
-                }
+        let mut perspective = config.flame.perspective_strength;
+        let response = ui.add(
+            egui::Slider::new(&mut perspective, 0.0..=10.0)
+                .text("Perspective")
+                .step_by(0.1)
+        );
+        if response.changed() {
+            if let Err(e) = config_manager.update_param(
+                ConfigPath::PerspectiveStrength,
+                perspective.into()
+            ) {
+                log::error!("Failed to update perspective strength: {}", e);
             }
         }
     }

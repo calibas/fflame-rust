@@ -125,7 +125,6 @@ pub struct GpuParams {
     pub seed: u32,
     pub color_mode: u32, // 0 = transform colors, 1 = palette, 2 = speed
     pub render_mode: u32, // 0 = 2D, 1 = 3D
-    pub projection_type: u32, // 0 = orthographic, 1 = perspective
     pub splat_size: f32,
     pub zoom: f32,
     pub pan_x: f32,
@@ -304,7 +303,6 @@ impl FlameBuffers {
             seed: 12345,
             color_mode: 0, // Default to transform colors
             render_mode: 0, // Default to 2D
-            projection_type: 0, // Default to orthographic
             splat_size: 1.0,
             zoom: 1.0,
             pan_x: 0.0,

@@ -22,7 +22,7 @@ use quick_xml::Reader;
 use crate::config::FractalConfig;
 use crate::scene::palette::{Palette, ColorMode};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-use crate::scene::transforms::{Flame, RenderMode, Transform, ProjectionType};
+use crate::scene::transforms::{Flame, RenderMode, Transform};
 use crate::variations::global_registry;
 
 /// Parse Apophysis .flame XML file
@@ -213,12 +213,8 @@ fn parse_flame_element(
         RenderMode::TwoD
     };
 
-    // Determine projection type from cam_perspective
-    let projection = if f32::abs(cam_perspective) > 0.0001 {
-        ProjectionType::Perspective { strength: f32::abs(cam_perspective) }
-    } else {
-        ProjectionType::Orthographic
-    };
+    // Determine perspective strength from cam_perspective
+    let perspective_strength = f32::abs(cam_perspective);
 
     // Build FractalConfig
     let flame = Flame {
@@ -226,7 +222,7 @@ fn parse_flame_element(
         transforms,
         final_transform,
         render_mode,
-        projection,
+        perspective_strength,
     };
 
     // Convert Apophysis scale/center to our zoom/pan

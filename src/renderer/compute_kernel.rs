@@ -25,7 +25,7 @@ pub struct FlameRenderer {
     density_scale: f32,
     background_color: [f32; 3],
     current_render_mode: crate::scene::transforms::RenderMode,
-    current_projection: crate::scene::transforms::ProjectionType,
+    perspective_strength: f32,
     deterministic_rng: bool,
     frame_counter: u32, // For deterministic seed progression
     histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
@@ -100,7 +100,7 @@ impl FlameRenderer {
             density_scale: 1.0,
             background_color: [0.0, 0.0, 0.0],
             current_render_mode: flame.render_mode,
-            current_projection: flame.projection,
+            perspective_strength: flame.perspective_strength,
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
@@ -176,10 +176,9 @@ impl FlameRenderer {
     /// Returns the number of samples generated this frame
     pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool) -> u64 {
         // Update seed for new random samples each frame
-        let (projection_type, perspective_strength) = match self.current_projection {
-            crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
-            crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
-        };
+        // projection_type removed - shader now uses perspective_strength directly
+        // 0.0 = orthographic (flat), higher values = increasing perspective
+        let perspective_strength = self.perspective_strength;
 
         let seed = self.get_rng_seed();
         let params = GpuParams {
@@ -194,14 +193,13 @@ impl FlameRenderer {
                 crate::scene::transforms::RenderMode::TwoD => 0,
                 crate::scene::transforms::RenderMode::ThreeD => 1,
             },
-            projection_type,
             splat_size: 1.0,
             zoom,
             pan_x,
             pan_y,
             rotation,
             speed_factor,
-            perspective_strength,
+            perspective_strength: self.perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
             camera_z,
@@ -354,9 +352,9 @@ impl FlameRenderer {
         self.density_scale = config.density_scale;
         self.background_color = config.background_color;
 
-        // 4. Update render mode and projection
+        // 4. Update render mode and perspective
         self.current_render_mode = config.flame.render_mode;
-        self.current_projection = config.flame.projection;
+        self.perspective_strength = config.flame.perspective_strength;
         self.histogram_color_scale = config.histogram_color_scale;
         self.low_density_smoothing = config.low_density_smoothing;
 
@@ -365,11 +363,7 @@ impl FlameRenderer {
 
         // Note: scale_buffer removed - scale is now in params.histogram_color_scale
 
-        // 6. Update ALL GPU params with correct num_transforms, render_mode, projection
-        let (projection_type, perspective_strength) = match self.current_projection {
-            crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
-            crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
-        };
+        // 6. Update ALL GPU params with correct num_transforms, render_mode, perspective
 
         // Update transform tracking
         self.num_transforms = config.flame.transforms.len() as u32;
@@ -387,14 +381,13 @@ impl FlameRenderer {
                 crate::scene::transforms::RenderMode::TwoD => 0,
                 crate::scene::transforms::RenderMode::ThreeD => 1,
             },
-            projection_type,
             splat_size: 1.0,
             zoom: config.zoom,
             pan_x: config.pan_x,
             pan_y: config.pan_y,
             rotation: config.rotation,
             speed_factor: config.speed_factor,
-            perspective_strength,
+            perspective_strength: self.perspective_strength,
             camera_rotation_x: config.camera_rotation_x,
             camera_rotation_y: config.camera_rotation_y,
             camera_z: config.camera_z,
@@ -432,18 +425,13 @@ impl FlameRenderer {
         self.buffers.update_transforms(queue, flame);
         self.buffers.update_variation_params(queue, flame);
 
-        // Update render mode and projection
+        // Update render mode and perspective
         self.current_render_mode = flame.render_mode;
-        self.current_projection = flame.projection;
+        self.perspective_strength = flame.perspective_strength;
 
         // Update transform tracking
         self.num_transforms = flame.transforms.len() as u32;
         self.has_final_transform = flame.final_transform.is_some();
-
-        let (projection_type, perspective_strength) = match self.current_projection {
-            crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
-            crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
-        };
 
         let params = GpuParams {
             num_transforms: self.num_transforms,
@@ -457,14 +445,13 @@ impl FlameRenderer {
                 crate::scene::transforms::RenderMode::TwoD => 0,
                 crate::scene::transforms::RenderMode::ThreeD => 1,
             },
-            projection_type,
             splat_size: 1.0,
             zoom,
             pan_x,
             pan_y,
             rotation,
             speed_factor,
-            perspective_strength,
+            perspective_strength: self.perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
             camera_z,
@@ -584,10 +571,6 @@ impl FlameRenderer {
 
     /// Update iterations per thread
     pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
-        let (projection_type, perspective_strength) = match self.current_projection {
-            crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
-            crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
-        };
 
         let params = GpuParams {
             num_transforms: self.num_transforms,
@@ -607,8 +590,7 @@ impl FlameRenderer {
                 crate::scene::transforms::RenderMode::TwoD => 0,
                 crate::scene::transforms::RenderMode::ThreeD => 1,
             },
-            projection_type,
-            perspective_strength,
+            perspective_strength: self.perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
             camera_z,
@@ -723,11 +705,6 @@ impl FlameRenderer {
     pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         self.color_mode = color_mode;
 
-        let (projection_type, perspective_strength) = match self.current_projection {
-            crate::scene::transforms::ProjectionType::Orthographic => (0u32, 2.0f32),
-            crate::scene::transforms::ProjectionType::Perspective { strength } => (1u32, strength),
-        };
-
         // Update params to reflect new color mode
         let params = GpuParams {
             num_transforms: self.num_transforms,
@@ -747,8 +724,7 @@ impl FlameRenderer {
                 crate::scene::transforms::RenderMode::TwoD => 0,
                 crate::scene::transforms::RenderMode::ThreeD => 1,
             },
-            projection_type,
-            perspective_strength,
+            perspective_strength: self.perspective_strength,
             camera_rotation_x,
             camera_rotation_y,
             camera_z,
