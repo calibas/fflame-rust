@@ -32,21 +32,31 @@ pub fn render_palette_library(
                 }
             };
 
-            // Pack header with checkbox
+            // Pack header with checkbox and collapsing control
+            let header_id = ui.make_persistent_id(format!("pack_header_{}", pack_idx));
+
+            // Checkbox for enabling/disabling pack
+            let mut enabled = is_enabled;
             ui.horizontal(|ui| {
-                let mut enabled = is_enabled;
                 if ui.checkbox(&mut enabled, "").changed() {
                     library.set_pack_enabled(pack_idx, enabled);
                 }
-
-                ui.strong(&pack_name);
-                ui.label(format!("({} palettes)", palette_count));
             });
 
-            // Show palettes if pack is enabled
-            if is_enabled {
-                if let Some(pack) = library.get_pack(pack_idx) {
-                    ui.indent(format!("pack_{}", pack_idx), |ui| {
+            // Collapsing header for expand/collapse
+            egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                header_id,
+                true // Default to open
+            )
+            .show_header(ui, |ui| {
+                ui.strong(&pack_name);
+                ui.label(format!("({} palettes)", palette_count));
+            })
+            .body(|ui| {
+                // Show palettes only if pack is enabled
+                if is_enabled {
+                    if let Some(pack) = library.get_pack(pack_idx) {
                         // Calculate max name width for this pack
                         let max_name_width = pack.palettes.iter()
                             .map(|p| p.name.len() as f32 * 8.0) // Rough estimate: 8px per character
@@ -156,9 +166,9 @@ pub fn render_palette_library(
                                     ui.end_row();
                                 }
                             });
-                    });
+                    }
                 }
-            }
+            });
 
             ui.separator();
         }

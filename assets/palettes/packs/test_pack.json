@@ -1,0 +1,22 @@
+{
+  "pack_name": "Test Pack",
+  "description": "Random stuff",
+  "enabled_by_default": true,
+  "palettes": [
+    {
+      "name": "Machinehead",
+      "stops": [
+        {"position": 0.0, "color": [0.0, 1.0, 0.0]},
+        {"position": 1.0, "color": [1.0, 0.0, 0.0]}
+      ]
+    },
+    {
+      "name": "Rastafari",
+      "stops": [
+        {"position": 0.0, "color": [0.0, 0.667, 0.004]},
+        {"position": 0.5, "color": [0.992, 0.992, 0.0]},
+        {"position": 1.0, "color": [0.992, 0.0, 0.008]}
+      ]
+    }
+  ]
+}
