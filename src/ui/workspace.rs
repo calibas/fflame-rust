@@ -19,6 +19,8 @@ pub enum PanelType {
     Colors,
     /// Palette editing (existing Palette Editor window)
     PaletteEditor,
+    /// Palette library (browse and manage palette packs)
+    PaletteLibrary,
     /// Camera/navigation (zoom, pan, rotation, 3D camera)
     View,
     /// Performance/quality (iterations, accumulation, speed)
@@ -41,6 +43,7 @@ impl std::fmt::Display for PanelType {
             PanelType::TriangleEditor => write!(f, "Triangle Editor"),
             PanelType::Colors => write!(f, "Colors"),
             PanelType::PaletteEditor => write!(f, "Palette Editor"),
+            PanelType::PaletteLibrary => write!(f, "Palette Library"),
             PanelType::View => write!(f, "View"),
             PanelType::Rendering => write!(f, "Rendering"),
             PanelType::History => write!(f, "History"),
