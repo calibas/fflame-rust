@@ -402,6 +402,16 @@ impl PaletteLibrary {
             ]);
         }
 
+        // Add all enabled pack palettes to the main palette list
+        // This ensures they appear in the Colors panel dropdown
+        for (pack_idx, pack) in packs.iter().enumerate() {
+            if enabled_packs.get(pack_idx).copied().unwrap_or(false) {
+                for palette in &pack.palettes {
+                    palettes.push(palette.clone());
+                }
+            }
+        }
+
         Self {
             palettes,
             packs,
@@ -452,10 +462,27 @@ impl PaletteLibrary {
         self.enabled_packs.get(index).copied().unwrap_or(false)
     }
 
-    /// Toggle pack enabled state
+    /// Toggle pack enabled state and rebuild palette list
     pub fn set_pack_enabled(&mut self, index: usize, enabled: bool) {
         if let Some(state) = self.enabled_packs.get_mut(index) {
             *state = enabled;
+            self.rebuild_palette_list();
+        }
+    }
+
+    /// Rebuild the main palette list from packs
+    /// Called when packs are enabled/disabled
+    fn rebuild_palette_list(&mut self) {
+        // Keep only built-in palettes (not from packs)
+        self.palettes.retain(|p| p.built_in);
+
+        // Add all enabled pack palettes
+        for (pack_idx, pack) in self.packs.iter().enumerate() {
+            if self.enabled_packs.get(pack_idx).copied().unwrap_or(false) {
+                for palette in &pack.palettes {
+                    self.palettes.push(palette.clone());
+                }
+            }
         }
     }
 
