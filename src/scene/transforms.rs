@@ -591,20 +591,8 @@ impl Default for RenderMode {
     }
 }
 
-/// Projection type for 3D rendering
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub enum ProjectionType {
-    /// Orthographic projection (no perspective distortion)
-    Orthographic,
-    /// Perspective projection with configurable strength
-    Perspective { strength: f32 },
-}
-
-impl Default for ProjectionType {
-    fn default() -> Self {
-        Self::Orthographic
-    }
-}
+// ProjectionType enum removed - now using perspective_strength f32 directly
+// 0.0 = orthographic (flat), higher values = increasing perspective distortion
 
 /// A 2D point in fractal space
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -658,9 +646,9 @@ pub struct Flame {
     #[serde(default)]
     pub render_mode: RenderMode,
 
-    /// Projection type for 3D rendering
+    /// Perspective strength for 3D rendering (0.0 = flat/orthographic, 10.0 = strong perspective)
     #[serde(default)]
-    pub projection: ProjectionType,
+    pub perspective_strength: f32,
 }
 
 fn default_flame_name() -> String {
@@ -674,7 +662,7 @@ impl Default for Flame {
             transforms: Vec::new(),
             final_transform: None,
             render_mode: RenderMode::default(),
-            projection: ProjectionType::default(),
+            perspective_strength: 0.0,  // Default to orthographic (flat)
         }
     }
 }

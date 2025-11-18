@@ -71,11 +71,10 @@ impl PngMetadata {
         let (render_mode, projection) = match config.flame.render_mode {
             crate::scene::transforms::RenderMode::TwoD => ("2D".to_string(), "N/A".to_string()),
             crate::scene::transforms::RenderMode::ThreeD => {
-                let proj_str = match config.flame.projection {
-                    crate::scene::transforms::ProjectionType::Orthographic => "Orthographic".to_string(),
-                    crate::scene::transforms::ProjectionType::Perspective { strength } => {
-                        format!("Perspective{{strength:{}}}", strength)
-                    }
+                let proj_str = if config.flame.perspective_strength < 0.01 {
+                    "Orthographic".to_string()
+                } else {
+                    format!("Perspective{{strength:{}}}", config.flame.perspective_strength)
                 };
                 ("3D".to_string(), proj_str)
             }

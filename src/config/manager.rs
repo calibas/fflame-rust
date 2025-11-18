@@ -830,7 +830,7 @@ impl ConfigManager {
 
             // Flame
             ConfigPath::RenderMode => Ok(config.flame.render_mode.into()),
-            ConfigPath::ProjectionType => Ok(config.flame.projection.into()),
+            ConfigPath::PerspectiveStrength => Ok(config.flame.perspective_strength.into()),
         }
     }
 
@@ -1138,8 +1138,8 @@ impl ConfigManager {
             ConfigPath::RenderMode => {
                 self.current.flame.render_mode = value.try_into()?;
             }
-            ConfigPath::ProjectionType => {
-                self.current.flame.projection = value.try_into()?;
+            ConfigPath::PerspectiveStrength => {
+                self.current.flame.perspective_strength = value.try_into()?;
             }
         }
 
@@ -1429,8 +1429,8 @@ impl ConfigManager {
             ConfigPath::RenderMode => {
                 preview.flame.render_mode = value.try_into()?;
             }
-            ConfigPath::ProjectionType => {
-                preview.flame.projection = value.try_into()?;
+            ConfigPath::PerspectiveStrength => {
+                preview.flame.perspective_strength = value.try_into()?;
             }
         }
 
@@ -1822,7 +1822,7 @@ impl TryFrom<ConfigValue> for [f32; 3] {
 
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::palette::ColorMode;
-use crate::scene::transforms::{RenderMode, ProjectionType};
+use crate::scene::transforms::RenderMode;
 
 impl TryFrom<ConfigValue> for ToneMapMode {
     type Error = ConfigError;
@@ -1849,16 +1849,6 @@ impl TryFrom<ConfigValue> for RenderMode {
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {
             ConfigValue::RenderMode(m) => Ok(m),
-            _ => Err(ConfigError::TypeMismatch),
-        }
-    }
-}
-
-impl TryFrom<ConfigValue> for ProjectionType {
-    type Error = ConfigError;
-    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
-        match v {
-            ConfigValue::ProjectionType(p) => Ok(p),
             _ => Err(ConfigError::TypeMismatch),
         }
     }

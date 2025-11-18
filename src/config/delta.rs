@@ -10,7 +10,7 @@
 use crate::scene::palette::Palette;
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::palette::ColorMode;
-use crate::scene::transforms::{RenderMode, ProjectionType};
+use crate::scene::transforms::RenderMode;
 use std::fmt::{self, Display, Formatter};
 use web_time::Instant;
 
@@ -86,7 +86,7 @@ pub enum ConfigPath {
 
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
-    ProjectionType,
+    PerspectiveStrength,
 }
 
 /// Affine transformation parameter (a, b, c, d, e, f, g)
@@ -196,7 +196,7 @@ impl Display for ConfigPath {
 
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
-            ConfigPath::ProjectionType => write!(f, "Projection Type"),
+            ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
         }
     }
 }
@@ -215,7 +215,6 @@ pub enum ConfigValue {
     ToneMapMode(ToneMapMode),
     ColorMode(ColorMode),
     RenderMode(RenderMode),
-    ProjectionType(ProjectionType),
     ToneCurve(ToneCurve),
     Palette(Palette),
 }
@@ -242,7 +241,6 @@ impl ConfigValue {
             (ConfigValue::ToneMapMode(a), ConfigValue::ToneMapMode(b)) => a == b,
             (ConfigValue::ColorMode(a), ConfigValue::ColorMode(b)) => a == b,
             (ConfigValue::RenderMode(a), ConfigValue::RenderMode(b)) => a == b,
-            (ConfigValue::ProjectionType(a), ConfigValue::ProjectionType(b)) => a == b,
             // For complex types, do shallow comparison or always return false
             _ => false,
         }
@@ -265,7 +263,6 @@ impl Display for ConfigValue {
             ConfigValue::ToneMapMode(m) => write!(f, "{:?}", m),
             ConfigValue::ColorMode(m) => write!(f, "{:?}", m),
             ConfigValue::RenderMode(m) => write!(f, "{:?}", m),
-            ConfigValue::ProjectionType(p) => write!(f, "{:?}", p),
             ConfigValue::ToneCurve(curve) => {
                 write!(f, "[Tone Curve: {} pts: {:?}]",
                     curve.points.len(),
@@ -346,12 +343,6 @@ impl From<ColorMode> for ConfigValue {
 impl From<RenderMode> for ConfigValue {
     fn from(v: RenderMode) -> Self {
         ConfigValue::RenderMode(v)
-    }
-}
-
-impl From<ProjectionType> for ConfigValue {
-    fn from(v: ProjectionType) -> Self {
-        ConfigValue::ProjectionType(v)
     }
 }
 
@@ -654,7 +645,7 @@ impl ConfigPath {
             | ConfigPath::FinalTransformVariation { .. }
             | ConfigPath::FinalTransformVariationParam { .. }
             | ConfigPath::RenderMode
-            | ConfigPath::ProjectionType
+            | ConfigPath::PerspectiveStrength
             | ConfigPath::MaxIterations
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
         }

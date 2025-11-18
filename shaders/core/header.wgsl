@@ -37,7 +37,6 @@ struct Params {
     seed: u32,
     color_mode: u32,  // 0 = transform colors, 1 = palette, 2 = speed
     render_mode: u32,  // 0 = 2D, 1 = 3D
-    projection_type: u32,  // 0 = orthographic, 1 = perspective
     splat_size: f32,
     zoom: f32,
     pan_x: f32,

@@ -205,12 +205,12 @@ pub fn create_complex_flame() -> Flame {
 /// Create a 3D flame using z-manipulating variations
 #[allow(dead_code)]
 pub fn create_3d_flame() -> Flame {
-    use super::transforms::{RenderMode, ProjectionType};
+    use super::transforms::RenderMode;
 
     let mut flame = Flame::new();
     flame.name = "3D Spiral Tower".to_string();
     flame.render_mode = RenderMode::ThreeD;
-    flame.projection = ProjectionType::Perspective { strength: 3.0 };
+    flame.perspective_strength = 3.0;
 
     // Transform 1: Linear with Zcone - creates a cone in Z
     let mut xform1 = Transform::new();
