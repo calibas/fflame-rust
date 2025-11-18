@@ -47,6 +47,13 @@ pub fn render_palette_library(
             if is_enabled {
                 if let Some(pack) = library.get_pack(pack_idx) {
                     ui.indent(format!("pack_{}", pack_idx), |ui| {
+                        // Calculate max name width for this pack
+                        let max_name_width = pack.palettes.iter()
+                            .map(|p| p.name.len() as f32 * 8.0) // Rough estimate: 8px per character
+                            .fold(0.0f32, f32::max)
+                            .max(100.0) // Minimum
+                            .min(200.0); // Maximum to prevent excessive width
+
                         // Use grid for automatic alignment
                         egui::Grid::new(format!("palette_grid_{}", pack_idx))
                             .num_columns(2)
@@ -87,8 +94,9 @@ pub fn render_palette_library(
                                     });
 
                                     // Allocate space for the row first to get rect for background
+                                    // Use calculated max width for first column (all rows will align)
                                     let (name_rect, name_response) = ui.allocate_exact_size(
-                                        egui::vec2(ui.available_width().min(150.0), preview_height),
+                                        egui::vec2(max_name_width, preview_height),
                                         egui::Sense::click()
                                     );
 
