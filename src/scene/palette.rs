@@ -404,10 +404,13 @@ impl PaletteLibrary {
 
         // Add all enabled pack palettes to the main palette list
         // This ensures they appear in the Colors panel dropdown
+        // Mark all pack palettes as built-in (shipped with the application)
         for (pack_idx, pack) in packs.iter().enumerate() {
             if enabled_packs.get(pack_idx).copied().unwrap_or(false) {
                 for palette in &pack.palettes {
-                    palettes.push(palette.clone());
+                    let mut pal = palette.clone();
+                    pal.built_in = true; // Pack palettes are shipped assets
+                    palettes.push(pal);
                 }
             }
         }
@@ -435,6 +438,22 @@ impl PaletteLibrary {
         if index < self.palettes.len() {
             self.palettes[index] = palette;
         }
+    }
+
+    /// Add palette if name doesn't exist, otherwise update existing
+    /// Returns the index of the palette (existing or newly added)
+    pub fn add_or_update(&mut self, palette: Palette) -> usize {
+        // Search for existing palette with same name
+        for (i, lib_palette) in self.palettes.iter_mut().enumerate() {
+            if lib_palette.name == palette.name {
+                // Update existing
+                *lib_palette = palette;
+                return i;
+            }
+        }
+        // Add new
+        self.palettes.push(palette);
+        self.palettes.len() - 1
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Palette> {
@@ -473,14 +492,25 @@ impl PaletteLibrary {
     /// Rebuild the main palette list from packs
     /// Called when packs are enabled/disabled
     fn rebuild_palette_list(&mut self) {
-        // Keep only built-in palettes (not from packs)
-        self.palettes.retain(|p| p.built_in);
+        // Keep only non-pack palettes:
+        // - Hardcoded built-ins (grayscale, fire, etc.)
+        // - Legacy assets/palettes/*.palette files
+        // - User-created/imported palettes
+        // Remove pack palettes (we'll re-add enabled ones)
+        let pack_names: std::collections::HashSet<String> = self.packs
+            .iter()
+            .flat_map(|pack| pack.palettes.iter().map(|p| p.name.clone()))
+            .collect();
+
+        self.palettes.retain(|p| !pack_names.contains(&p.name));
 
         // Add all enabled pack palettes
         for (pack_idx, pack) in self.packs.iter().enumerate() {
             if self.enabled_packs.get(pack_idx).copied().unwrap_or(false) {
                 for palette in &pack.palettes {
-                    self.palettes.push(palette.clone());
+                    let mut pal = palette.clone();
+                    pal.built_in = true; // Pack palettes are shipped assets
+                    self.palettes.push(pal);
                 }
             }
         }
