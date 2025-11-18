@@ -319,9 +319,14 @@ impl Palette {
     }
 }
 
-/// Collection of available palettes
+/// Collection of available palettes organized into packs
 pub struct PaletteLibrary {
+    /// Flat list of all palettes (backward compatibility)
     palettes: Vec<Palette>,
+    /// Palette packs (new system)
+    packs: Vec<PalettePack>,
+    /// Runtime enabled state for each pack
+    enabled_packs: Vec<bool>,
 }
 
 impl Default for PaletteLibrary {
@@ -336,21 +341,59 @@ impl PaletteLibrary {
             Palette::grayscale(),
         ];
 
-        // Desktop: Load palettes from assets folder (copied to target/ by build.rs)
+        // Load packs from assets/palettes/packs/
+        let mut packs = Vec::new();
+        let mut enabled_packs = Vec::new();
+
         #[cfg(not(target_arch = "wasm32"))]
         {
+            use std::fs;
+            use std::path::Path;
+
+            // Load old individual palette files for backward compatibility
             let mut assets_palettes = super::assets::load_palettes_from_dir(
-                std::path::Path::new("assets/palettes")
+                Path::new("assets/palettes")
             );
             // Mark all asset palettes as built-in (shipped with the application)
             for pal in &mut assets_palettes {
                 pal.built_in = true;
             }
             palettes.extend(assets_palettes);
+
+            // Load new palette packs
+            let packs_dir = Path::new("assets/palettes/packs");
+            if packs_dir.exists() {
+                if let Ok(entries) = fs::read_dir(packs_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                            match fs::read_to_string(&path) {
+                                Ok(content) => {
+                                    match serde_json::from_str::<PalettePack>(&content) {
+                                        Ok(pack) => {
+                                            log::info!("Loaded palette pack: {} ({} palettes)",
+                                                pack.pack_name, pack.palettes.len());
+                                            let enabled = pack.enabled_by_default;
+                                            packs.push(pack);
+                                            enabled_packs.push(enabled);
+                                        }
+                                        Err(e) => {
+                                            log::error!("Failed to parse palette pack {:?}: {}", path, e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to read palette pack {:?}: {}", path, e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // WASM or fallback: Use built-in palettes if no assets were loaded
-        if palettes.len() == 1 {
+        if palettes.len() == 1 && packs.is_empty() {
             palettes.extend(vec![
                 Palette::fire(),
                 Palette::cool(),
@@ -359,7 +402,11 @@ impl PaletteLibrary {
             ]);
         }
 
-        Self { palettes }
+        Self {
+            palettes,
+            packs,
+            enabled_packs,
+        }
     }
 
     pub fn palettes(&self) -> &[Palette] {
@@ -386,6 +433,55 @@ impl PaletteLibrary {
 
     pub fn len(&self) -> usize {
         self.palettes.len()
+    }
+
+    // ===== PACK-RELATED METHODS =====
+
+    /// Get number of packs
+    pub fn pack_count(&self) -> usize {
+        self.packs.len()
+    }
+
+    /// Get pack at index
+    pub fn get_pack(&self, index: usize) -> Option<&PalettePack> {
+        self.packs.get(index)
+    }
+
+    /// Check if pack is enabled
+    pub fn is_pack_enabled(&self, index: usize) -> bool {
+        self.enabled_packs.get(index).copied().unwrap_or(false)
+    }
+
+    /// Toggle pack enabled state
+    pub fn set_pack_enabled(&mut self, index: usize, enabled: bool) {
+        if let Some(state) = self.enabled_packs.get_mut(index) {
+            *state = enabled;
+        }
+    }
+
+    /// Generate preview image for a palette
+    /// Returns ColorImage suitable for egui texture rendering
+    pub fn generate_preview(palette: &Palette, width: usize, height: usize) -> egui::ColorImage {
+        let mut pixels = vec![egui::Color32::BLACK; width * height];
+
+        for x in 0..width {
+            let t = x as f32 / (width - 1).max(1) as f32;
+            let color = palette.sample_color(t);
+            let color32 = egui::Color32::from_rgb(
+                (color[0] * 255.0) as u8,
+                (color[1] * 255.0) as u8,
+                (color[2] * 255.0) as u8,
+            );
+
+            // Fill vertical column
+            for y in 0..height {
+                pixels[y * width + x] = color32;
+            }
+        }
+
+        egui::ColorImage::from_rgba_unmultiplied([width, height], &pixels.iter()
+            .flat_map(|c| [c.r(), c.g(), c.b(), c.a()])
+            .collect::<Vec<u8>>())
     }
 }
 
@@ -479,4 +575,16 @@ mod tests {
         assert!((found_pos - original_pos).abs() < 0.01,
             "Roundtrip failed: {} -> {:?} -> {}", original_pos, color, found_pos);
     }
+}
+
+// ===== PALETTE PACK SYSTEM =====
+
+/// A pack of related palettes loaded from JSON
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PalettePack {
+    pub pack_name: String,
+    pub description: String,
+    #[serde(default)]
+    pub enabled_by_default: bool,
+    pub palettes: Vec<Palette>,
 }

@@ -1,0 +1,122 @@
+{
+  "pack_name": "Starter Pack",
+  "description": "Curated selection of versatile palettes for fractal flames",
+  "enabled_by_default": true,
+  "palettes": [
+    {
+      "name": "Fire",
+      "stops": [
+        {"position": 0.0, "color": [0.0, 0.0, 0.0]},
+        {"position": 0.3, "color": [0.5, 0.0, 0.0]},
+        {"position": 0.6, "color": [1.0, 0.5, 0.0]},
+        {"position": 0.9, "color": [1.0, 1.0, 0.0]},
+        {"position": 1.0, "color": [1.0, 1.0, 1.0]}
+      ]
+    },
+    {
+      "name": "Ocean",
+      "stops": [
+        {"position": 0.0, "color": [0.0, 0.0, 0.2]},
+        {"position": 0.5, "color": [0.0, 0.4, 0.8]},
+        {"position": 0.8, "color": [0.0, 0.8, 1.0]},
+        {"position": 1.0, "color": [0.5, 1.0, 1.0]}
+      ]
+    },
+    {
+      "name": "Forest",
+      "stops": [
+        {"position": 0.0, "color": [0.05, 0.1, 0.0]},
+        {"position": 0.4, "color": [0.1, 0.3, 0.1]},
+        {"position": 0.7, "color": [0.2, 0.5, 0.2]},
+        {"position": 1.0, "color": [0.5, 0.8, 0.3]}
+      ]
+    },
+    {
+      "name": "Sunset",
+      "stops": [
+        {"position": 0.0, "color": [0.2, 0.0, 0.3]},
+        {"position": 0.3, "color": [0.6, 0.1, 0.2]},
+        {"position": 0.6, "color": [1.0, 0.4, 0.1]},
+        {"position": 0.9, "color": [1.0, 0.7, 0.3]},
+        {"position": 1.0, "color": [1.0, 0.9, 0.6]}
+      ]
+    },
+    {
+      "name": "Galaxy",
+      "stops": [
+        {"position": 0.0, "color": [0.05, 0.0, 0.1]},
+        {"position": 0.3, "color": [0.2, 0.0, 0.4]},
+        {"position": 0.5, "color": [0.5, 0.2, 0.8]},
+        {"position": 0.7, "color": [0.8, 0.4, 1.0]},
+        {"position": 1.0, "color": [1.0, 0.8, 1.0]}
+      ]
+    },
+    {
+      "name": "Copper",
+      "stops": [
+        {"position": 0.0, "color": [0.1, 0.05, 0.0]},
+        {"position": 0.5, "color": [0.6, 0.3, 0.1]},
+        {"position": 0.8, "color": [0.9, 0.5, 0.2]},
+        {"position": 1.0, "color": [1.0, 0.8, 0.5]}
+      ]
+    },
+    {
+      "name": "Ice",
+      "stops": [
+        {"position": 0.0, "color": [0.0, 0.05, 0.15]},
+        {"position": 0.4, "color": [0.3, 0.5, 0.7]},
+        {"position": 0.7, "color": [0.6, 0.8, 1.0]},
+        {"position": 1.0, "color": [0.9, 1.0, 1.0]}
+      ]
+    },
+    {
+      "name": "Lava",
+      "stops": [
+        {"position": 0.0, "color": [0.1, 0.0, 0.0]},
+        {"position": 0.4, "color": [0.6, 0.1, 0.0]},
+        {"position": 0.7, "color": [1.0, 0.3, 0.0]},
+        {"position": 0.9, "color": [1.0, 0.6, 0.0]},
+        {"position": 1.0, "color": [1.0, 1.0, 0.5]}
+      ]
+    },
+    {
+      "name": "Neon",
+      "stops": [
+        {"position": 0.0, "color": [0.0, 0.0, 0.0]},
+        {"position": 0.25, "color": [1.0, 0.0, 1.0]},
+        {"position": 0.5, "color": [0.0, 1.0, 1.0]},
+        {"position": 0.75, "color": [1.0, 1.0, 0.0]},
+        {"position": 1.0, "color": [1.0, 1.0, 1.0]}
+      ]
+    },
+    {
+      "name": "Earth",
+      "stops": [
+        {"position": 0.0, "color": [0.2, 0.1, 0.05]},
+        {"position": 0.4, "color": [0.4, 0.25, 0.1]},
+        {"position": 0.7, "color": [0.6, 0.4, 0.2]},
+        {"position": 1.0, "color": [0.8, 0.6, 0.4]}
+      ]
+    },
+    {
+      "name": "Rainbow",
+      "stops": [
+        {"position": 0.0, "color": [1.0, 0.0, 0.0]},
+        {"position": 0.17, "color": [1.0, 0.5, 0.0]},
+        {"position": 0.33, "color": [1.0, 1.0, 0.0]},
+        {"position": 0.5, "color": [0.0, 1.0, 0.0]},
+        {"position": 0.67, "color": [0.0, 0.5, 1.0]},
+        {"position": 0.83, "color": [0.5, 0.0, 1.0]},
+        {"position": 1.0, "color": [1.0, 0.0, 0.5]}
+      ]
+    },
+    {
+      "name": "Monochrome",
+      "stops": [
+        {"position": 0.0, "color": [0.0, 0.0, 0.0]},
+        {"position": 0.5, "color": [0.5, 0.5, 0.5]},
+        {"position": 1.0, "color": [1.0, 1.0, 1.0]}
+      ]
+    }
+  ]
+}
