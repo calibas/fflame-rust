@@ -184,6 +184,47 @@ impl Transform {
         self.f = -o[1];
     }
 
+    /// Convert affine coefficients to triangle using Apophysis sign convention
+    /// Matches Apophysis triangle editor exactly
+    pub fn to_triangle_apophysis(&self) -> ([f32; 2], [f32; 2], [f32; 2]) {
+        // Apophysis displays b, c, f with opposite sign from our internal representation
+        let display_b = -self.b;
+        let display_c = -self.c;
+        // Note: f itself is stored with opposite sign, but O uses the raw value
+
+        // Apophysis formulas:
+        // O = (e, f)  [where f is the internal value we store]
+        // X = (e + a, f + b)  [where b is the display value = -internal_b]
+        // Y = (e + c, f + d)  [where c is the display value = -internal_c]
+        let o = [self.e, self.f];
+        let x = [self.e + self.a, self.f + display_b];
+        let y = [self.e + display_c, self.f + self.d];
+        (o, x, y)
+    }
+
+    /// Update affine coefficients from triangle using Apophysis sign convention
+    /// Inverse of to_triangle_apophysis()
+    pub fn from_triangle_apophysis(&mut self, o: [f32; 2], x: [f32; 2], y: [f32; 2]) {
+        // From Apophysis formulas:
+        // a = X[0] - O[0]
+        // b_display = X[1] - O[1]  → internal_b = -b_display
+        // c_display = Y[0] - O[0]  → internal_c = -c_display
+        // d = Y[1] - O[1]
+        // e = O[0]
+        // f = O[1]  (internal value, display shows opposite)
+
+        self.a = x[0] - o[0];
+        let display_b = x[1] - o[1];
+        let display_c = y[0] - o[0];
+        self.d = y[1] - o[1];
+        self.e = o[0];
+        self.f = o[1];
+
+        // Convert back to internal representation (opposite sign for b and c)
+        self.b = -display_b;
+        self.c = -display_c;
+    }
+
     /// Reset transform to identity (unit triangle at origin)
     pub fn reset_to_identity(&mut self) {
         self.a = 1.0;
