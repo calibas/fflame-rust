@@ -377,7 +377,7 @@ impl App {
             &mut self.config_manager,
             self.flame_renderer.as_mut(),
             &mut self.flame,
-            &self.palette_library,
+            &mut self.palette_library,
             &self.preset_library,
             &mut self.current_preset_index,
             &mut self.paused,
