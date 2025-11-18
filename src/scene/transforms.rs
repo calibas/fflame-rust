@@ -188,17 +188,16 @@ impl Transform {
     /// Matches Apophysis triangle editor exactly
     pub fn to_triangle_apophysis(&self) -> ([f32; 2], [f32; 2], [f32; 2]) {
         // Apophysis displays b, c, f with opposite sign from our internal representation
-        let display_b = -self.b;
-        let display_c = -self.c;
+        let display_f = -self.f;
         // Note: f itself is stored with opposite sign, but O uses the raw value
 
         // Apophysis formulas:
         // O = (e, f)  [where f is the internal value we store]
         // X = (e + a, f + b)  [where b is the display value = -internal_b]
         // Y = (e + c, f + d)  [where c is the display value = -internal_c]
-        let o = [self.e, self.f];
-        let x = [self.e + self.a, self.f + display_b];
-        let y = [self.e + display_c, self.f + self.d];
+        let o = [self.e, display_f];
+        let x = [self.e + self.a, display_f + self.b];
+        let y = [self.e + self.c, display_f + self.d];
         (o, x, y)
     }
 
@@ -214,15 +213,12 @@ impl Transform {
         // f = O[1]  (internal value, display shows opposite)
 
         self.a = x[0] - o[0];
-        let display_b = x[1] - o[1];
-        let display_c = y[0] - o[0];
+        self.b = x[1] - o[1];
+        self.c = y[0] - o[0];
         self.d = y[1] - o[1];
         self.e = o[0];
-        self.f = o[1];
+        self.f = -o[1];
 
-        // Convert back to internal representation (opposite sign for b and c)
-        self.b = -display_b;
-        self.c = -display_c;
     }
 
     /// Reset transform to identity (unit triangle at origin)
