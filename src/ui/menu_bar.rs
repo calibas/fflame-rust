@@ -126,11 +126,6 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor);
 
                 }
-                let palette_library_open = workspace.panel_exists(super::workspace::PanelType::PaletteLibrary);
-                if ui.selectable_label(palette_library_open, "Show Palette Library").clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PaletteLibrary);
-
-                }
 
                 ui.separator();
 
@@ -249,6 +244,12 @@ pub fn render_menu_bar(
                 let palette_editor_open = workspace.panel_exists(super::workspace::PanelType::PaletteEditor);
                 if ui.selectable_label(palette_editor_open, "🎨 Palette Editor").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor);
+
+                }
+
+                let palette_library_open = workspace.panel_exists(super::workspace::PanelType::PaletteLibrary);
+                if ui.selectable_label(palette_library_open, "📚 Palette Library").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::PaletteLibrary);
 
                 }
 
