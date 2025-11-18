@@ -2,6 +2,7 @@
 
 use egui;
 use crate::scene::palette::{PaletteLibrary, Palette};
+use std::collections::HashMap;
 
 /// Render the Palette Library panel
 /// Returns Some(palette) if user selected a new palette (cloned)
@@ -47,27 +48,43 @@ pub fn render_palette_library(
             if is_enabled {
                 if let Some(pack) = library.get_pack(pack_idx) {
                     ui.indent(format!("pack_{}", pack_idx), |ui| {
-                        for palette in &pack.palettes {
-                            // Generate preview on-demand
-                            let preview_height = 10;
-                            let available_width = ui.available_width();
-                            let preview_width = (available_width - 20.0).max(100.0) as usize;
-
-                            let preview_image = PaletteLibrary::generate_preview(
-                                palette,
-                                preview_width,
-                                preview_height,
-                            );
-
-                            // Convert to egui texture
-                            let texture = ui.ctx().load_texture(
-                                format!("palette_preview_{}", palette.name),
-                                preview_image,
-                                egui::TextureOptions::LINEAR,
-                            );
-
+                        for (palette_idx, palette) in pack.palettes.iter().enumerate() {
                             // Clickable palette entry
                             ui.vertical(|ui| {
+                                // Generate preview on-demand
+                                let preview_height = 10;
+                                let available_width = ui.available_width();
+                                let preview_width = (available_width - 20.0).max(100.0) as usize;
+
+                                // Generate texture ID based on pack and palette index
+                                let texture_id = egui::Id::new(("palette_preview", pack_idx, palette_idx));
+
+                                // Load or get cached texture using egui's memory system
+                                let texture = ui.ctx().data_mut(|data| {
+                                    data.get_temp::<egui::TextureHandle>(texture_id)
+                                }).unwrap_or_else(|| {
+                                    // Generate preview image
+                                    let preview_image = PaletteLibrary::generate_preview(
+                                        palette,
+                                        preview_width,
+                                        preview_height,
+                                    );
+
+                                    // Load and cache texture
+                                    let tex = ui.ctx().load_texture(
+                                        format!("palette_{}_{}", pack_idx, palette_idx),
+                                        preview_image,
+                                        egui::TextureOptions::LINEAR,
+                                    );
+
+                                    // Store in egui memory
+                                    ui.ctx().data_mut(|data| {
+                                        data.insert_temp(texture_id, tex.clone());
+                                    });
+
+                                    tex
+                                });
+
                                 // Preview image
                                 let image = egui::Image::new(&texture)
                                     .fit_to_exact_size(egui::vec2(preview_width as f32, preview_height as f32));
