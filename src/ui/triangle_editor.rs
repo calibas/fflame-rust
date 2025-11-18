@@ -269,7 +269,7 @@ fn render_triangle_editor_core(
                                 }
 
                                 // Apply triangle changes via update_batch
-                                transform.from_triangle(o, x, y);
+                                transform.from_triangle_apophysis(o, x, y);
                                 let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Move Points)".to_string()) {
                                     // Sync transform from active_config for live preview
@@ -307,7 +307,7 @@ fn render_triangle_editor_core(
                                 y[1] += world_delta[1];
 
                                 // Apply triangle changes via update_batch
-                                transform.from_triangle(o, x, y);
+                                transform.from_triangle_apophysis(o, x, y);
                                 let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Translate)".to_string()) {
                                     sync_transform(transform, config_manager);
@@ -360,7 +360,7 @@ fn render_triangle_editor_core(
                                 y = [o[0] + y_rot[0], o[1] + y_rot[1]];
 
                                 // Apply triangle changes via update_batch
-                                transform.from_triangle(o, x, y);
+                                transform.from_triangle_apophysis(o, x, y);
                                 let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Rotate)".to_string()) {
                                     sync_transform(transform, config_manager);
@@ -421,7 +421,7 @@ fn render_triangle_editor_core(
                                         y = [o[0] + y_vec[0] * scale_factor, o[1] + y_vec[1] * scale_factor];
 
                                         // Apply triangle changes via update_batch
-                                        transform.from_triangle(o, x, y);
+                                        transform.from_triangle_apophysis(o, x, y);
                                         let changes = make_affine_changes(transform);
                                         if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Scale)".to_string()) {
                                             sync_transform(transform, config_manager);
@@ -629,7 +629,7 @@ fn render_triangle_editor_core(
             };
 
             if let Some(transform) = transform_for_coords {
-                let (mut o, mut x, mut y) = transform.to_triangle();
+                let (mut o, mut x, mut y) = transform.to_triangle_apophysis();
 
                 ui.label(format!("Triangle Coordinates ({}):", transform_name));
 
@@ -675,7 +675,7 @@ fn render_triangle_editor_core(
                                                            o: [f32; 2], x: [f32; 2], y: [f32; 2],
                                                            description: &str| {
                             let mut temp = transform_ref.clone();
-                            temp.from_triangle(o, x, y);
+                            temp.from_triangle_apophysis(o, x, y);
                             let changes = match selected_transform {
                                 Some(index) => vec![
                                     (ConfigPath::TransformAffine { index, param: AffineParam::A }, temp.a.into()),
@@ -825,7 +825,7 @@ fn render_triangle_editor_core(
                 if coords_changed {
                     // Convert triangle coords to affine parameters
                     let mut temp_transform = transform.clone();
-                    temp_transform.from_triangle(o, x, y);
+                    temp_transform.from_triangle_apophysis(o, x, y);
 
                     // Batch update all affine parameters via ConfigManager
                     let changes = make_affine_changes(&temp_transform);
@@ -847,6 +847,12 @@ fn render_triangle_editor_core(
                 let mut dragging = false;
                 let mut drag_stopped = false;
 
+                // Display variables with Apophysis-compatible signs
+                // Apophysis displays b, c, f with opposite sign
+                let mut display_b = -transform.b;
+                let mut display_c = -transform.c;
+                let mut display_f = -transform.f;
+
                 ui.horizontal(|ui| {
                     let a_resp = ui.add(egui::DragValue::new(&mut transform.a).speed(0.01).prefix("a: "));
                     if a_resp.changed() {
@@ -864,8 +870,10 @@ fn render_triangle_editor_core(
                     dragging |= a_resp.dragged();
                     drag_stopped |= a_resp.drag_stopped();
 
-                    let b_resp = ui.add(egui::DragValue::new(&mut transform.b).speed(0.01).prefix("b: "));
+                    let b_resp = ui.add(egui::DragValue::new(&mut display_b).speed(0.01).prefix("b: "));
                     if b_resp.changed() {
+                        // Negate back to internal representation
+                        transform.b = -display_b;
                         let path = match selected_transform {
                             Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::B },
                             None => ConfigPath::FinalTransformAffine { param: AffineParam::B },
@@ -897,8 +905,10 @@ fn render_triangle_editor_core(
                     drag_stopped |= e_resp.drag_stopped();
                 });
                 ui.horizontal(|ui| {
-                    let c_resp = ui.add(egui::DragValue::new(&mut transform.c).speed(0.01).prefix("c: "));
+                    let c_resp = ui.add(egui::DragValue::new(&mut display_c).speed(0.01).prefix("c: "));
                     if c_resp.changed() {
+                        // Negate back to internal representation
+                        transform.c = -display_c;
                         let path = match selected_transform {
                             Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::C },
                             None => ConfigPath::FinalTransformAffine { param: AffineParam::C },
@@ -929,8 +939,10 @@ fn render_triangle_editor_core(
                     dragging |= d_resp.dragged();
                     drag_stopped |= d_resp.drag_stopped();
 
-                    let f_resp = ui.add(egui::DragValue::new(&mut transform.f).speed(0.01).prefix("f: "));
+                    let f_resp = ui.add(egui::DragValue::new(&mut display_f).speed(0.01).prefix("f: "));
                     if f_resp.changed() {
+                        // Negate back to internal representation
+                        transform.f = -display_f;
                         let path = match selected_transform {
                             Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::F },
                             None => ConfigPath::FinalTransformAffine { param: AffineParam::F },
