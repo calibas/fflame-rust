@@ -225,7 +225,7 @@ fn render_triangle_editor_core(
             };
 
             if let Some(transform) = transform_mut {
-                let (mut o, mut x, mut y) = transform.to_triangle();
+                let (mut o, mut x, mut y) = transform.to_triangle_apophysis();
 
                 let o_pos = to_canvas(o);
                 let x_pos = to_canvas(x);
@@ -468,7 +468,7 @@ fn render_triangle_editor_core(
 
             // Draw all transforms as semi-transparent triangles
             for (i, transform) in flame.transforms.iter().enumerate() {
-                let (o, x, y) = transform.to_triangle();
+                let (o, x, y) = transform.to_triangle_apophysis();
 
                 let o_pos = to_canvas(o);
                 let x_pos = to_canvas(x);
@@ -549,7 +549,7 @@ fn render_triangle_editor_core(
 
             // Draw final transform if present (light grey, distinct style)
             if let Some(final_xform) = &flame.final_transform {
-                let (o, x, y) = final_xform.to_triangle();
+                let (o, x, y) = final_xform.to_triangle_apophysis();
 
                 let o_pos = to_canvas(o);
                 let x_pos = to_canvas(x);
@@ -701,7 +701,7 @@ fn render_triangle_editor_core(
                         ui.horizontal(|ui| {
                             ui.add_space(30.0);
                             if ui.button("  ^  ").clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
+                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle_apophysis();
                                 o_new[1] += 0.1;
                                 x_new[1] += 0.1;
                                 y_new[1] += 0.1;
@@ -713,7 +713,7 @@ fn render_triangle_editor_core(
                         });
                         ui.horizontal(|ui| {
                             if ui.button("  <  ").clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
+                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle_apophysis();
                                 o_new[0] -= 0.1;
                                 x_new[0] -= 0.1;
                                 y_new[0] -= 0.1;
@@ -723,7 +723,7 @@ fn render_triangle_editor_core(
                                 }
                             }
                             if ui.button("  v  ").clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
+                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle_apophysis();
                                 o_new[1] -= 0.1;
                                 x_new[1] -= 0.1;
                                 y_new[1] -= 0.1;
@@ -733,7 +733,7 @@ fn render_triangle_editor_core(
                                 }
                             }
                             if ui.button("  >  ").clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle();
+                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle_apophysis();
                                 o_new[0] += 0.1;
                                 x_new[0] += 0.1;
                                 y_new[0] += 0.1;
@@ -752,7 +752,7 @@ fn render_triangle_editor_core(
                                 let angle = -15.0_f32.to_radians();
                                 let cos_a = angle.cos();
                                 let sin_a = angle.sin();
-                                let (o_curr, x_curr, y_curr) = transform.to_triangle();
+                                let (o_curr, x_curr, y_curr) = transform.to_triangle_apophysis();
 
                                 let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
                                 let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
@@ -772,7 +772,7 @@ fn render_triangle_editor_core(
                                 let angle = 15.0_f32.to_radians();
                                 let cos_a = angle.cos();
                                 let sin_a = angle.sin();
-                                let (o_curr, x_curr, y_curr) = transform.to_triangle();
+                                let (o_curr, x_curr, y_curr) = transform.to_triangle_apophysis();
 
                                 let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
                                 let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
@@ -793,7 +793,7 @@ fn render_triangle_editor_core(
                         // Scale buttons
                         ui.horizontal(|ui| {
                             if ui.button("⇄ Scale Up").clicked() {
-                                let (o_curr, x_curr, y_curr) = transform.to_triangle();
+                                let (o_curr, x_curr, y_curr) = transform.to_triangle_apophysis();
                                 let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
                                 let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
 
@@ -806,7 +806,7 @@ fn render_triangle_editor_core(
                                 }
                             }
                             if ui.button("⇄ Scale Down").clicked() {
-                                let (o_curr, x_curr, y_curr) = transform.to_triangle();
+                                let (o_curr, x_curr, y_curr) = transform.to_triangle_apophysis();
                                 let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
                                 let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
 
