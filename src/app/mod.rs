@@ -17,7 +17,7 @@ use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
 use crate::renderer::FlameRenderer;
 use crate::scene::transforms::Flame;
-use crate::scene::palette::{PaletteLibrary, ColorMode};
+use crate::scene::palette::{PaletteLibrary, Palette, ColorMode};
 use crate::scene::presets::PresetLibrary;
 use crate::util::PerformanceMetrics;
 use crate::config::{FractalConfig, ConfigManager};
@@ -84,18 +84,10 @@ impl App {
 
         let mut palette_library = PaletteLibrary::new();
 
-        // Create initial custom palette and add to library
-        let initial_palette = {
-            let mut pal = palette_library.get(1).unwrap().clone();
-            // Rename if built-in to avoid confusion
-            if pal.built_in {
-                pal.name = format!("{} (Custom)", pal.name);
-                pal.built_in = false;
-            }
-            // Add to library so it appears in dropdown
-            palette_library.add(pal.clone());
-            pal
-        };
+        // Use palette from library (no need to duplicate)
+        let initial_palette = palette_library.get(1)
+            .cloned()
+            .unwrap_or_else(|| Palette::grayscale());
 
         // Create initial config for undo history
         let initial_config = FractalConfig {
@@ -549,24 +541,8 @@ impl App {
 
         // Handle custom palette from editor or library
         if let Some(custom_pal) = ui_response.custom_palette {
-            // Add custom palette to library for persistence
-            let palette_lib = &mut self.palette_library;
-            let mut found_index = None;
-            for (i, lib_palette) in palette_lib.iter().enumerate() {
-                if lib_palette.name == custom_pal.name {
-                    found_index = Some(i);
-                    break;
-                }
-            }
-
-            if let Some(idx) = found_index {
-                // Palette exists, update it in place
-                palette_lib.update(idx, custom_pal.clone());
-            } else {
-                // New palette, add to library
-                palette_lib.add(custom_pal.clone());
-                found_index = Some(palette_lib.len() - 1);
-            }
+            // Add or update palette in library (prevents duplicates)
+            let _palette_index = self.palette_library.add_or_update(custom_pal.clone());
 
             // Apply the palette to the config via ConfigManager
             if let Ok(update) = self.config_manager.update_param(
@@ -760,13 +736,12 @@ impl App {
                     // Update palette editor
                     self.egui_layer.update_palette_editor(palette.clone());
 
-                    // Add to library
-                    self.palette_library.add(palette.clone());
-                    // Set to the newly added palette (last in list)
-                    let new_idx = self.palette_library.palettes().len() - 1;
+                    // Add or update in library (prevents duplicates)
+                    let palette_idx = self.palette_library.add_or_update(palette.clone());
+                    // Set to the palette
                     let _ = self.config_manager.update_param(
                         crate::config::ConfigPath::PaletteIndex,
-                        (new_idx as u32).into()
+                        (palette_idx as u32).into()
                     );
 
                     // Update renderer
@@ -797,13 +772,12 @@ impl App {
                                     // Update palette editor
                                     self.egui_layer.update_palette_editor(palette.clone());
 
-                                    // Add to library
-                                    self.palette_library.add(palette.clone());
-                                    // Set to the newly added palette (last in list)
-                                    let new_idx = self.palette_library.palettes().len() - 1;
+                                    // Add or update in library (prevents duplicates)
+                                    let palette_idx = self.palette_library.add_or_update(palette.clone());
+                                    // Set to the palette
                                     let _ = self.config_manager.update_param(
                                         crate::config::ConfigPath::PaletteIndex,
-                                        (new_idx as u32).into()
+                                        (palette_idx as u32).into()
                                     );
 
                                     // Update renderer

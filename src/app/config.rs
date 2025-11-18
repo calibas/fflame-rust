@@ -29,21 +29,8 @@ impl App {
 
         // Handle palette library updates
         if let Some(ref palette) = config.palette {
-            // Try to find if this palette already exists in library by name
-            let mut found_index = None;
-            for (i, lib_palette) in self.palette_library.iter().enumerate() {
-                if lib_palette.name == palette.name {
-                    found_index = Some(i);
-                    break;
-                }
-            }
-
-            if found_index.is_some() {
-                // Palette exists, no need to update (library is stable)
-            } else {
-                // New palette, add to library
-                self.palette_library.add(palette.clone());
-            }
+            // Add or update palette in library (prevents duplicates)
+            let _palette_idx = self.palette_library.add_or_update(palette.clone());
 
             // Sync palette editor with the palette
             self.egui_layer.update_palette_editor(palette.clone());
