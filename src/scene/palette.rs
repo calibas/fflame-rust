@@ -402,24 +402,29 @@ impl PaletteLibrary {
             ]);
         }
 
-        // Add all enabled pack palettes to the main palette list
-        // This ensures they appear in the Colors panel dropdown
-        // Mark all pack palettes as built-in (shipped with the application)
-        for (pack_idx, pack) in packs.iter().enumerate() {
-            if enabled_packs.get(pack_idx).copied().unwrap_or(false) {
-                for palette in &pack.palettes {
-                    let mut pal = palette.clone();
-                    pal.built_in = true; // Pack palettes are shipped assets
-                    palettes.push(pal);
-                }
-            }
-        }
-
-        Self {
+        // Create library instance first so we can use add_or_update()
+        let mut library = Self {
             palettes,
             packs,
             enabled_packs,
+        };
+
+        // Add all enabled pack palettes to the main palette list
+        // This ensures they appear in the Colors panel dropdown
+        // Mark all pack palettes as built-in (shipped with the application)
+        // Use add_or_update() to prevent duplicates (case-insensitive check)
+        let enabled_pack_palettes: Vec<_> = library.packs.iter().enumerate()
+            .filter(|(pack_idx, _)| library.enabled_packs.get(*pack_idx).copied().unwrap_or(false))
+            .flat_map(|(_, pack)| pack.palettes.clone())
+            .collect();
+
+        for palette in enabled_pack_palettes {
+            let mut pal = palette.clone();
+            pal.built_in = true; // Pack palettes are shipped assets
+            library.add_or_update(pal);
         }
+
+        library
     }
 
     pub fn palettes(&self) -> &[Palette] {
@@ -440,14 +445,15 @@ impl PaletteLibrary {
         }
     }
 
-    /// Add palette if name doesn't exist, otherwise update existing
+    /// Add palette if name doesn't exist (case-insensitive), otherwise skip with warning
     /// Returns the index of the palette (existing or newly added)
     pub fn add_or_update(&mut self, palette: Palette) -> usize {
-        // Search for existing palette with same name
-        for (i, lib_palette) in self.palettes.iter_mut().enumerate() {
-            if lib_palette.name == palette.name {
-                // Update existing
-                *lib_palette = palette;
+        // Search for existing palette with same name (case-insensitive)
+        for (i, lib_palette) in self.palettes.iter().enumerate() {
+            if lib_palette.name.to_lowercase() == palette.name.to_lowercase() {
+                // Duplicate found - skip and warn
+                log::warn!("Skipping duplicate palette '{}' (already exists as '{}')",
+                    palette.name, lib_palette.name);
                 return i;
             }
         }
@@ -504,15 +510,17 @@ impl PaletteLibrary {
 
         self.palettes.retain(|p| !pack_names.contains(&p.name));
 
-        // Add all enabled pack palettes
-        for (pack_idx, pack) in self.packs.iter().enumerate() {
-            if self.enabled_packs.get(pack_idx).copied().unwrap_or(false) {
-                for palette in &pack.palettes {
-                    let mut pal = palette.clone();
-                    pal.built_in = true; // Pack palettes are shipped assets
-                    self.palettes.push(pal);
-                }
-            }
+        // Add all enabled pack palettes (use add_or_update to prevent duplicates)
+        // Collect first to avoid borrow checker issues
+        let palettes_to_add: Vec<Palette> = self.packs.iter().enumerate()
+            .filter(|(pack_idx, _)| self.enabled_packs.get(*pack_idx).copied().unwrap_or(false))
+            .flat_map(|(_, pack)| pack.palettes.clone())
+            .collect();
+
+        for palette in palettes_to_add {
+            let mut pal = palette;
+            pal.built_in = true; // Pack palettes are shipped assets
+            self.add_or_update(pal);
         }
     }
 
