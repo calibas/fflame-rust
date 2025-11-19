@@ -226,39 +226,50 @@ class UnifiedBenchmarkRunner:
             current_benchmark = None
 
             for line in lines:
-                # Check if this is a benchmark name line (appears before "time:" line)
-                # Benchmark names don't start with whitespace and end before "time:"
-                if not line.startswith(' ') and 'time:' not in line and 'Benchmarking' not in line:
-                    # Could be a benchmark name
-                    stripped = line.strip()
-                    if stripped and '/' in stripped:  # Benchmark names have group/name format
-                        current_benchmark = stripped
+                # Check for benchmark name in various formats:
+                # 1. "benchmark_name/subname" (on its own line)
+                # 2. "Benchmarking benchmark_name/subname: Analyzing"
+                # 3. "benchmark_name/subname time:   [...]" (name on same line as time)
 
-                # Check if this is a time line
+                # Try to extract benchmark name from line
+                bench_name_match = re.search(r'([a-z_]+/[a-z_0-9/.]+)', line, re.IGNORECASE)
+                if bench_name_match and 'Benchmarking' not in line:
+                    # Found a potential benchmark name
+                    potential_name = bench_name_match.group(1)
+                    # Only update if this line doesn't have 'time:' (which means name is on previous line)
+                    if 'time:' not in line:
+                        current_benchmark = potential_name
+
+                # Check if this is a time line (and extract benchmark name from same line if present)
                 time_pattern = r'time:\s+\[([0-9.]+)\s+([a-zµ]+)\s+([0-9.]+)\s+([a-zµ]+)\s+([0-9.]+)\s+([a-zµ]+)\]'
                 match = re.search(time_pattern, line)
-                if match and current_benchmark:
-                    lower = float(match.group(1))
-                    mean = float(match.group(3))
-                    upper = float(match.group(5))
-                    unit = match.group(4)
+                if match:
+                    # If benchmark name is on the same line as time, use it
+                    if bench_name_match and current_benchmark is None:
+                        current_benchmark = bench_name_match.group(1)
 
-                    # Convert to nanoseconds
-                    multiplier = {'ps': 0.001, 'ns': 1.0, 'µs': 1000.0, 'us': 1000.0, 'ms': 1_000_000.0}
-                    mean_ns = mean * multiplier.get(unit, 1.0)
-                    stddev_ns = (upper - lower) / 2.0 * multiplier.get(unit, 1.0)
+                    if current_benchmark:
+                        lower = float(match.group(1))
+                        mean = float(match.group(3))
+                        upper = float(match.group(5))
+                        unit = match.group(4)
 
-                    # Calculate ops/sec
-                    throughput_ops_sec = 1_000_000_000.0 / mean_ns if mean_ns > 0 else 0.0
+                        # Convert to nanoseconds
+                        multiplier = {'ps': 0.001, 'ns': 1.0, 'µs': 1000.0, 'us': 1000.0, 'ms': 1_000_000.0}
+                        mean_ns = mean * multiplier.get(unit, 1.0)
+                        stddev_ns = (upper - lower) / 2.0 * multiplier.get(unit, 1.0)
 
-                    self.cpu_benchmarks.append(CriterionBenchmark(
-                        name=current_benchmark,
-                        mean_ns=mean_ns,
-                        stddev_ns=stddev_ns,
-                        throughput_ops_sec=throughput_ops_sec
-                    ))
+                        # Calculate ops/sec
+                        throughput_ops_sec = 1_000_000_000.0 / mean_ns if mean_ns > 0 else 0.0
 
-                    current_benchmark = None  # Reset after capturing
+                        self.cpu_benchmarks.append(CriterionBenchmark(
+                            name=current_benchmark,
+                            mean_ns=mean_ns,
+                            stddev_ns=stddev_ns,
+                            throughput_ops_sec=throughput_ops_sec
+                        ))
+
+                        current_benchmark = None  # Reset after capturing
 
             print(f"{Colors.OKGREEN}✅ Parsed {len(self.cpu_benchmarks)} CPU benchmarks{Colors.ENDC}")
             return len(self.cpu_benchmarks) > 0
@@ -395,9 +406,12 @@ class UnifiedBenchmarkRunner:
             img = Image.open(png_path)
             info = img.info
 
-            # Extract key fields
-            total_iterations = int(info.get('total_iterations', 0))
-            render_time_ms = float(info.get('render_time_ms', 0))
+            # Extract key fields (PNG metadata keys are capitalized)
+            total_iterations = int(info.get('Iterations', 0))
+            render_time_str = info.get('RenderTime', '0ms')
+
+            # Parse render time (format: "123.45ms")
+            render_time_ms = float(render_time_str.replace('ms', ''))
 
             return {
                 'width': img.width,
@@ -405,7 +419,8 @@ class UnifiedBenchmarkRunner:
                 'total_iterations': total_iterations,
                 'render_time_ms': render_time_ms,
             }
-        except Exception:
+        except Exception as e:
+            print(f"{Colors.WARNING}Failed to extract metadata from {png_path.name}: {e}{Colors.ENDC}")
             return None
 
     def generate_report(self):
