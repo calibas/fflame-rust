@@ -115,7 +115,6 @@ impl<'a> ConfigSlider<'a> {
 
             // Force commit preview to current (captures final delta if changed)
             update_type = update_type.merge(self.manager.force_commit_preview(&self.path)?);
-            self.manager.reset_lazy_undo();
         }
 
         Ok(ConfigSliderResult {
