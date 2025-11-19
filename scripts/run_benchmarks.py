@@ -137,6 +137,8 @@ class UnifiedBenchmarkRunner:
         self.render_benchmarks: List[RenderBenchmark] = []
         self.baseline_data: Optional[Dict] = None
         self.previous_runs: List[Tuple[str, float]] = []  # [(timestamp, aggregate_ops_sec), ...]
+        self.prev_run_1: Optional[List] = None  # Previous run #1 rows
+        self.prev_run_2: Optional[List] = None  # Previous run #2 rows
 
     def run_all(self) -> bool:
         """Run all benchmarks and generate report."""
@@ -572,63 +574,75 @@ class UnifiedBenchmarkRunner:
         print(f"{'='*70}{Colors.ENDC}")
         print()
 
-        # CPU Benchmarks
+        # CPU Benchmarks Table
         if self.cpu_benchmarks:
             print(f"{Colors.BOLD}CPU Microbenchmarks (Criterion):{Colors.ENDC}")
-            print(f"{'Benchmark':<50} {'Mean':<15} {'Ops/sec':<15}")
-            print("-" * 70)
+            print(f"{'Benchmark':<50} {'Mean':<15} {'Ops/sec':<15} {'% Change':<15} {'Previous #1':<15} {'Previous #2':<15}")
+            print("-" * 135)
 
             for bench in self.cpu_benchmarks:
                 mean_str = self.format_time(bench.mean_ns)
-                ops_str = self.format_throughput(bench.throughput_ops_sec)
+                ops_str = f"{bench.throughput_ops_sec:,.0f}"
 
-                # Check for regression
-                regression = self.check_cpu_regression(bench)
-                color = Colors.ENDC
-                marker = ""
+                # Get previous runs
+                prev1_ops = self.get_prev_cpu_benchmark(bench.name, 0)
+                prev2_ops = self.get_prev_cpu_benchmark(bench.name, 1)
 
-                if regression:
-                    if abs(regression) > 10.0:
-                        color = Colors.FAIL
-                        marker = f" ⚠️  {regression:+.1f}%"
-                    elif abs(regression) > 5.0:
-                        color = Colors.WARNING
-                        marker = f" ⚠️  {regression:+.1f}%"
-                    elif regression < -2.0:
-                        color = Colors.OKGREEN
-                        marker = f" ✨ {regression:+.1f}%"
+                prev1_str = f"{prev1_ops:,.0f}" if prev1_ops else "—"
+                prev2_str = f"{prev2_ops:,.0f}" if prev2_ops else "—"
 
-                print(f"{color}{bench.name:<50} {mean_str:<15} {ops_str:<15}{marker}{Colors.ENDC}")
+                # Calculate % change vs previous #1
+                if prev1_ops:
+                    delta = ((bench.throughput_ops_sec - prev1_ops) / prev1_ops) * 100.0
+                    row_color = Colors.ENDC
+                    if delta > 10.0:
+                        row_color = Colors.FAIL
+                    elif delta > 5.0:
+                        row_color = Colors.WARNING
+                    elif delta < -2.0:
+                        row_color = Colors.OKGREEN
+                    delta_str = f"{delta:+.1f}%"
+                else:
+                    delta_str = "—"
+                    row_color = Colors.ENDC
+
+                print(f"{row_color}{bench.name:<50} {mean_str:<15} {ops_str:<15} {delta_str:<15} {prev1_str:<15} {prev2_str:<15}{Colors.ENDC}")
 
             print()
 
-        # GPU Benchmarks
+        # GPU Benchmarks Table
         if self.render_benchmarks:
             print(f"{Colors.BOLD}GPU Rendering Benchmarks:{Colors.ENDC}")
-            print(f"{'Test':<30} {'Type':<10} {'Time':<15} {'Throughput':<20}")
-            print("-" * 70)
+            print(f"{'Test':<30} {'Type':<10} {'Time':<15} {'Throughput':<20} {'% Change':<15} {'Previous #1':<20} {'Previous #2':<20}")
+            print("-" * 135)
 
             for bench in self.render_benchmarks:
                 time_str = f"{bench.render_time_ms:.1f}ms"
                 throughput_str = f"{bench.throughput_miter_sec:.1f} Miter/s"
 
-                # Check for regression
-                regression = self.check_render_regression(bench)
-                color = Colors.ENDC
-                marker = ""
+                # Get previous runs
+                prev1_throughput = self.get_prev_render_benchmark(bench.name, bench.test_type, 0)
+                prev2_throughput = self.get_prev_render_benchmark(bench.name, bench.test_type, 1)
 
-                if regression:
-                    if regression > 10.0:
-                        color = Colors.FAIL
-                        marker = f" ⚠️  {regression:+.1f}%"
-                    elif regression > 5.0:
-                        color = Colors.WARNING
-                        marker = f" ⚠️  {regression:+.1f}%"
-                    elif regression < -2.0:
-                        color = Colors.OKGREEN
-                        marker = f" ✨ {regression:+.1f}%"
+                prev1_str = f"{prev1_throughput:.1f} Miter/s" if prev1_throughput else "—"
+                prev2_str = f"{prev2_throughput:.1f} Miter/s" if prev2_throughput else "—"
 
-                print(f"{color}{bench.name:<30} {bench.test_type:<10} {time_str:<15} {throughput_str:<20}{marker}{Colors.ENDC}")
+                # Calculate % change vs previous #1
+                if prev1_throughput:
+                    delta = ((bench.throughput_miter_sec - prev1_throughput) / prev1_throughput) * 100.0
+                    row_color = Colors.ENDC
+                    if delta < -10.0:  # Note: lower throughput is worse
+                        row_color = Colors.FAIL
+                    elif delta < -5.0:
+                        row_color = Colors.WARNING
+                    elif delta > 2.0:
+                        row_color = Colors.OKGREEN
+                    delta_str = f"{delta:+.1f}%"
+                else:
+                    delta_str = "—"
+                    row_color = Colors.ENDC
+
+                print(f"{row_color}{bench.name:<30} {bench.test_type:<10} {time_str:<15} {throughput_str:<20} {delta_str:<15} {prev1_str:<20} {prev2_str:<20}{Colors.ENDC}")
 
             print()
 
@@ -642,13 +656,19 @@ class UnifiedBenchmarkRunner:
 
         # Aggregate Performance Comparison
         current_ops_sec = self.calculate_aggregate_ops_sec()
-        print(f"{Colors.BOLD}Aggregate Performance:{Colors.ENDC}")
-        print(f"  Current: {self.format_throughput(current_ops_sec)}")
+        print(f"{Colors.BOLD}Aggregate Performance Comparison:{Colors.ENDC}")
+        print()
 
-        if len(self.previous_runs) >= 1:
-            prev1_timestamp, prev1_ops_sec = self.previous_runs[0]
+        # Prepare data for 3 columns: Current, Prev #1, Prev #2
+        prev1_ops_sec = self.previous_runs[0][1] if len(self.previous_runs) >= 1 else None
+        prev2_ops_sec = self.previous_runs[1][1] if len(self.previous_runs) >= 2 else None
+
+        # Calculate deltas
+        delta1_str = "—"
+        delta2_str = "—"
+
+        if prev1_ops_sec:
             delta1 = ((current_ops_sec - prev1_ops_sec) / prev1_ops_sec) * 100.0
-
             color = Colors.ENDC
             if delta1 > 10.0:
                 color = Colors.FAIL
@@ -656,13 +676,10 @@ class UnifiedBenchmarkRunner:
                 color = Colors.WARNING
             elif delta1 < -2.0:
                 color = Colors.OKGREEN
+            delta1_str = f"{color}{delta1:+.1f}%{Colors.ENDC}"
 
-            print(f"  vs {prev1_timestamp}: {color}{delta1:+.1f}% ({self.format_throughput(prev1_ops_sec)}){Colors.ENDC}")
-
-        if len(self.previous_runs) >= 2:
-            prev2_timestamp, prev2_ops_sec = self.previous_runs[1]
+        if prev2_ops_sec:
             delta2 = ((current_ops_sec - prev2_ops_sec) / prev2_ops_sec) * 100.0
-
             color = Colors.ENDC
             if delta2 > 10.0:
                 color = Colors.FAIL
@@ -670,11 +687,26 @@ class UnifiedBenchmarkRunner:
                 color = Colors.WARNING
             elif delta2 < -2.0:
                 color = Colors.OKGREEN
+            delta2_str = f"{color}{delta2:+.1f}%{Colors.ENDC}"
 
-            print(f"  vs {prev2_timestamp}: {color}{delta2:+.1f}% ({self.format_throughput(prev2_ops_sec)}){Colors.ENDC}")
+        # Table header
+        print(f"  {'Metric':<20} {'Current':<20} {'Previous #1':<20} {'Previous #2':<20}")
+        print(f"  {'-'*20} {'-'*20} {'-'*20} {'-'*20}")
 
-        if len(self.previous_runs) == 0:
-            print(f"  {Colors.OKCYAN}(No previous runs to compare){Colors.ENDC}")
+        # Throughput row
+        current_throughput = self.format_throughput(current_ops_sec)
+        prev1_throughput = self.format_throughput(prev1_ops_sec) if prev1_ops_sec else "—"
+        prev2_throughput = self.format_throughput(prev2_ops_sec) if prev2_ops_sec else "—"
+        print(f"  {'Throughput':<20} {current_throughput:<20} {prev1_throughput:<20} {prev2_throughput:<20}")
+
+        # ops/sec row
+        current_ops_str = f"{current_ops_sec:,.0f}"
+        prev1_ops_str = f"{prev1_ops_sec:,.0f}" if prev1_ops_sec else "—"
+        prev2_ops_str = f"{prev2_ops_sec:,.0f}" if prev2_ops_sec else "—"
+        print(f"  {'ops/sec':<20} {current_ops_str:<20} {prev1_ops_str:<20} {prev2_ops_str:<20}")
+
+        # Delta row
+        print(f"  {'Delta vs Current':<20} {'—':<20} {delta1_str:<20} {delta2_str:<20}")
 
         print()
 
@@ -760,9 +792,16 @@ class UnifiedBenchmarkRunner:
                     runs[timestamp] = []
                 runs[timestamp].append(row)
 
-            # Calculate aggregate for each run
+            # Get the two most recent runs
+            sorted_timestamps = sorted(runs.keys(), reverse=True)
+            if len(sorted_timestamps) >= 1:
+                self.prev_run_1 = runs[sorted_timestamps[0]]
+            if len(sorted_timestamps) >= 2:
+                self.prev_run_2 = runs[sorted_timestamps[1]]
+
+            # Also calculate aggregate for each run
             run_aggregates = []
-            for timestamp in sorted(runs.keys(), reverse=True):
+            for timestamp in sorted_timestamps[:2]:
                 rows = runs[timestamp]
                 total_ops_sec = 0.0
 
@@ -780,13 +819,36 @@ class UnifiedBenchmarkRunner:
 
                 run_aggregates.append((timestamp, total_ops_sec))
 
-                if len(run_aggregates) >= 2:
-                    break
-
             self.previous_runs = run_aggregates
 
         except Exception as e:
             print(f"{Colors.WARNING}Failed to load previous runs: {e}{Colors.ENDC}")
+
+    def get_prev_cpu_benchmark(self, bench_name: str, run_index: int) -> Optional[float]:
+        """Get ops/sec from previous run for CPU benchmark (run_index: 0=prev1, 1=prev2)."""
+        prev_run = self.prev_run_1 if run_index == 0 else self.prev_run_2
+        if not prev_run:
+            return None
+
+        for row in prev_run:
+            if row[5] == 'cpu' and row[6] == bench_name:
+                # Column 10: Throughput_ops_sec
+                if row[10]:
+                    return float(row[10])
+        return None
+
+    def get_prev_render_benchmark(self, bench_name: str, test_type: str, run_index: int) -> Optional[float]:
+        """Get throughput from previous run for GPU benchmark (run_index: 0=prev1, 1=prev2)."""
+        prev_run = self.prev_run_1 if run_index == 0 else self.prev_run_2
+        if not prev_run:
+            return None
+
+        for row in prev_run:
+            if row[5] == 'render' and row[6] == bench_name and row[7] == test_type:
+                # Column 15: Throughput_Miter_sec
+                if row[15]:
+                    return float(row[15])
+        return None
 
     def save_to_csv(self):
         """Save results to unified CSV (only if not quick mode)."""
