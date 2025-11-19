@@ -307,49 +307,117 @@ class UnifiedBenchmarkRunner:
                 return False
 
             print(f"Found {len(config_files)} config files")
+            print(f"Running {5 if not self.quick_mode else 3} iterations per config (warmup + measurement)")
+            print()
 
-            # Render each config
+            # Render each config multiple times
+            repeats = 3 if self.quick_mode else 5
+
             for config_path in config_files:
                 name = config_path.stem
-                output_path = self.current_dir / f"{name}.png"
+                print(f"  {name}:")
 
-                # Run export
-                cmd = [
-                    "cargo", "run", "--release", "--",
-                    "export",
-                    "-i", str(config_path),
-                    "-o", str(output_path)
-                ]
+                render_times = []
+                metadata_cache = None
 
-                print(f"  Rendering {name}...", end=" ", flush=True)
+                # Run multiple times
+                for i in range(repeats):
+                    output_path = self.current_dir / f"{name}_run{i}.png"
 
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    cwd=self.root
-                )
+                    cmd = [
+                        "cargo", "run", "--release", "--",
+                        "export",
+                        "-i", str(config_path),
+                        "-o", str(output_path)
+                    ]
 
-                if result.returncode != 0:
-                    print(f"{Colors.FAIL}FAILED{Colors.ENDC}")
-                    continue
+                    is_warmup = (i == 0)
+                    print(f"    Run {i+1}/{repeats} {'(warmup)' if is_warmup else ''}...", end=" ", flush=True)
 
-                # Extract metadata from PNG
-                metadata = self.extract_png_metadata(output_path)
-                if metadata and metadata['render_time_ms'] > 0:
-                    throughput = metadata['total_iterations'] / metadata['render_time_ms'] / 1000.0
-                    self.render_benchmarks.append(RenderBenchmark(
-                        name=name,
-                        test_type="desktop",
-                        width=metadata['width'],
-                        height=metadata['height'],
-                        total_iterations=metadata['total_iterations'],
-                        render_time_ms=metadata['render_time_ms'],
-                        throughput_miter_sec=throughput
-                    ))
-                    print(f"{Colors.OKGREEN}OK ({metadata['render_time_ms']:.1f}ms, {throughput:.1f} Miter/s){Colors.ENDC}")
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        cwd=self.root
+                    )
+
+                    if result.returncode != 0:
+                        print(f"{Colors.FAIL}FAILED{Colors.ENDC}")
+                        continue
+
+                    # Extract metadata
+                    metadata = self.extract_png_metadata(output_path)
+                    if metadata and metadata['render_time_ms'] > 0:
+                        render_times.append(metadata['render_time_ms'])
+                        if metadata_cache is None:
+                            metadata_cache = metadata
+                        print(f"{Colors.OKGREEN}{metadata['render_time_ms']:.1f}ms{Colors.ENDC}")
+                    else:
+                        print(f"{Colors.WARNING}no metadata{Colors.ENDC}")
+
+                    # Clean up intermediate files (keep last one for visual inspection)
+                    if i < repeats - 1:
+                        try:
+                            output_path.unlink()
+                        except:
+                            pass
+
+                # Rename last file to canonical name
+                if repeats > 0:
+                    last_file = self.current_dir / f"{name}_run{repeats-1}.png"
+                    final_file = self.current_dir / f"{name}.png"
+                    if last_file.exists():
+                        if final_file.exists():
+                            final_file.unlink()
+                        last_file.rename(final_file)
+
+                # Calculate statistics (discard first run as warmup)
+                if len(render_times) > 1:
+                    times_for_stats = render_times[1:]  # Skip warmup
+                    mean_time = sum(times_for_stats) / len(times_for_stats)
+                    min_time = min(times_for_stats)
+                    max_time = max(times_for_stats)
+
+                    # Calculate standard deviation
+                    if len(times_for_stats) > 1:
+                        variance = sum((t - mean_time) ** 2 for t in times_for_stats) / len(times_for_stats)
+                        stddev = variance ** 0.5
+                        cv_percent = (stddev / mean_time * 100) if mean_time > 0 else 0
+                    else:
+                        stddev = 0
+                        cv_percent = 0
+
+                    if metadata_cache:
+                        throughput = metadata_cache['total_iterations'] / mean_time / 1000.0
+                        self.render_benchmarks.append(RenderBenchmark(
+                            name=name,
+                            test_type="desktop",
+                            width=metadata_cache['width'],
+                            height=metadata_cache['height'],
+                            total_iterations=metadata_cache['total_iterations'],
+                            render_time_ms=mean_time,
+                            throughput_miter_sec=throughput
+                        ))
+
+                        print(f"    {Colors.BOLD}Stats: mean={mean_time:.1f}ms, stddev={stddev:.2f}ms ({cv_percent:.1f}%), range=[{min_time:.1f}, {max_time:.1f}]ms{Colors.ENDC}")
+                    print()
+                elif len(render_times) == 1:
+                    # Only one successful run
+                    if metadata_cache:
+                        throughput = metadata_cache['total_iterations'] / render_times[0] / 1000.0
+                        self.render_benchmarks.append(RenderBenchmark(
+                            name=name,
+                            test_type="desktop",
+                            width=metadata_cache['width'],
+                            height=metadata_cache['height'],
+                            total_iterations=metadata_cache['total_iterations'],
+                            render_time_ms=render_times[0],
+                            throughput_miter_sec=throughput
+                        ))
+                    print()
                 else:
-                    print(f"{Colors.WARNING}OK (no metadata){Colors.ENDC}")
+                    print(f"    {Colors.FAIL}All runs failed{Colors.ENDC}")
+                    print()
 
             return True
 
