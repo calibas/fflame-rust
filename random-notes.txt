@@ -248,3 +248,35 @@ Hyper-polar3D.fflame
 "polar": 0.74376243,
 
 Same affine values, some precision loss with variations.
+
+
+
+
+
+Fixed Paletted mode wastes tons of space, 701 Apophysis palettes take up 38mb in a .json.
+
+3 options (we currently use the last)
+
+(185, 234, 235), (193, 238, 235)
+
+or
+
+#B9EAEA,#C1EEEB
+
+or
+
+"position": 0.0,
+"color": [
+        0.7254901960784313,
+        0.9176470588235294,
+        0.9215686274509803
+]
+},
+{
+"position": 0.00392156862745098,
+"color": [
+        0.7568627450980392,
+        0.9333333333333333,
+        0.9215686274509803
+]
+},
