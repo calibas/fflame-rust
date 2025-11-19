@@ -718,7 +718,7 @@ mod tests {
     fn test_config_change_batch() {
         let deltas = vec![
             ConfigDelta::new(ConfigPath::Zoom, 1.0.into(), 2.0.into()),
-            ConfigDelta::new(ConfigPath::PanX, 0.0.into(), 1.0.into()),
+            ConfigDelta::new(ConfigPath::Pan, (0.0, 0.0).into(), (1.0, 0.0).into()),
         ];
 
         let change = ConfigChange::batch(deltas, "Reset View".to_string());

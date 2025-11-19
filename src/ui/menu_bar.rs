@@ -247,6 +247,12 @@ pub fn render_menu_bar(
 
                 }
 
+                let palette_library_open = workspace.panel_exists(super::workspace::PanelType::PaletteLibrary);
+                if ui.selectable_label(palette_library_open, "📚 Palette Library").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::PaletteLibrary);
+
+                }
+
                 // Config Import/Export opens as floating window in docking system
                 let config_dialog_open = workspace.panel_exists(super::workspace::PanelType::ConfigDialog);
                 if ui.selectable_label(config_dialog_open, "📄 Config Import/Export").clicked() {
