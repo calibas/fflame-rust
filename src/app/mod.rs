@@ -732,13 +732,35 @@ impl App {
         // Handle palette import from JSON
         if let Some(json) = ui_response.palette_import_json {
             match serde_json::from_str::<crate::scene::palette::Palette>(&json) {
-                Ok(palette) => {
-                    // Update palette editor
+                Ok(mut palette) => {
+                    // Check if palette with same name exists (case-insensitive)
+                    let existing_idx = self.palette_library.iter()
+                        .position(|p| p.name.to_lowercase() == palette.name.to_lowercase());
+
+                    if existing_idx.is_some() {
+                        // Generate unique name with (Copy) or (Copy N) suffix
+                        let base_name = palette.name.clone();
+                        let mut counter = 1;
+                        let mut new_name = format!("{} (Copy)", base_name);
+
+                        while self.palette_library.iter().any(|p| p.name.to_lowercase() == new_name.to_lowercase()) {
+                            counter += 1;
+                            new_name = format!("{} (Copy {})", base_name, counter);
+                        }
+
+                        palette.name = new_name;
+                        palette.built_in = false; // Mark as custom
+                    } else {
+                        palette.built_in = false; // Mark as custom
+                    }
+
+                    // Add to library (now guaranteed to have unique name)
+                    let palette_idx = self.palette_library.add_or_update(palette.clone());
+
+                    // Update palette editor with the new palette
                     self.egui_layer.update_palette_editor(palette.clone());
 
-                    // Add or update in library (prevents duplicates)
-                    let palette_idx = self.palette_library.add_or_update(palette.clone());
-                    // Set to the palette
+                    // Set as active palette
                     let _ = self.config_manager.update_param(
                         crate::config::ConfigPath::PaletteIndex,
                         (palette_idx as u32).into()
