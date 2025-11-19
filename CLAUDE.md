@@ -253,6 +253,10 @@ cargo test
 # Regression tests (integration tests)
 cargo test --test regression
 
+# Unified benchmark suite (CPU + GPU, with regression detection)
+python scripts/run_benchmarks.py          # Full suite
+python scripts/run_benchmarks.py --quick  # Quick mode (skip WASM)
+
 # Visual regression tests (desktop CLI + WASM browser)
 python tests/visual/run_all_tests.py
 
@@ -262,10 +266,10 @@ python tests/visual/run_tests.py
 # WASM browser visual tests only
 python tests/visual/wasm/test_wasm.py
 
-# CPU benchmarks (Criterion - precise microbenchmarks)
+# CPU benchmarks only (Criterion - precise microbenchmarks)
 cargo bench
 
-# Simple benchmark (CLI - human-readable)
+# Simple benchmark (CLI - human-readable CPU check)
 cargo run --release --bin simple_benchmark
 
 # Show version info
