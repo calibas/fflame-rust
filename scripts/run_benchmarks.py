@@ -593,38 +593,41 @@ class UnifiedBenchmarkRunner:
             print(f"{Colors.WARNING}Failed to extract metadata from {png_path.name}: {e}{Colors.ENDC}")
             return None
 
-    def compare_desktop_wasm_hashes(self):
-        """Compare pixel hashes between desktop and WASM renders."""
+    def compare_directories(self, dir1: Path, dir2: Path, label1: str, label2: str):
+        """Compare pixel hashes between two directories of PNG files."""
         if not HAS_PILLOW:
             return
 
-        # Get list of test names from render benchmarks
-        desktop_tests = {b.name for b in self.render_benchmarks if b.test_type == "desktop"}
-        wasm_tests = {b.name for b in self.render_benchmarks if b.test_type == "wasm"}
-
-        # Only compare tests that exist in both
-        common_tests = desktop_tests & wasm_tests
-
-        if not common_tests:
+        if not dir1.exists() or not dir2.exists():
             return
 
-        print(f"{Colors.BOLD}Desktop vs WASM Pixel Comparison:{Colors.ENDC}")
-        print(f"{'Test':<30} {'Desktop Hash':<20} {'WASM Hash':<20} {'Match':<10}")
+        # Find all PNG files in both directories
+        dir1_pngs = {f.stem for f in dir1.glob("*.png")}
+        dir2_pngs = {f.stem for f in dir2.glob("*.png")}
+
+        # Only compare files that exist in both
+        common_files = dir1_pngs & dir2_pngs
+
+        if not common_files:
+            return
+
+        print(f"{Colors.BOLD}{label1} vs {label2} Comparison:{Colors.ENDC}")
+        print(f"{'Test':<30} {label1 + ' Hash':<20} {label2 + ' Hash':<20} {'Match':<10}")
         print("-" * 85)
 
         matches = 0
         mismatches = 0
 
-        for test_name in sorted(common_tests):
-            desktop_path = self.current_dir / f"{test_name}.png"
-            wasm_path = self.current_dir / "wasm" / f"{test_name}.png"
+        for test_name in sorted(common_files):
+            path1 = dir1 / f"{test_name}.png"
+            path2 = dir2 / f"{test_name}.png"
 
-            if desktop_path.exists() and wasm_path.exists():
-                desktop_hash = self.hash_image(desktop_path)
-                wasm_hash = self.hash_image(wasm_path)
+            if path1.exists() and path2.exists():
+                hash1 = self.hash_image(path1)
+                hash2 = self.hash_image(path2)
 
                 # Compare hashes
-                if desktop_hash == wasm_hash:
+                if hash1 == hash2:
                     match_str = f"{Colors.OKGREEN}✓ MATCH{Colors.ENDC}"
                     matches += 1
                 else:
@@ -632,13 +635,13 @@ class UnifiedBenchmarkRunner:
                     mismatches += 1
 
                 # Truncate hashes for display
-                desktop_short = desktop_hash[:16] + "..."
-                wasm_short = wasm_hash[:16] + "..."
+                hash1_short = hash1[:16] + "..."
+                hash2_short = hash2[:16] + "..."
 
-                print(f"{test_name:<30} {desktop_short:<20} {wasm_short:<20} {match_str}")
+                print(f"{test_name:<30} {hash1_short:<20} {hash2_short:<20} {match_str}")
 
         print()
-        print(f"{Colors.BOLD}Hash Comparison Summary:{Colors.ENDC}")
+        print(f"{Colors.BOLD}Summary:{Colors.ENDC}")
         print(f"  Matches: {Colors.OKGREEN}{matches}{Colors.ENDC}")
         if mismatches > 0:
             print(f"  Mismatches: {Colors.FAIL}{mismatches}{Colors.ENDC}")
@@ -752,8 +755,17 @@ class UnifiedBenchmarkRunner:
 
             print()
 
-        # Desktop vs WASM Hash Comparison
-        self.compare_desktop_wasm_hashes()
+        # Hash Comparisons
+        # 1. Desktop: baseline vs current
+        self.compare_directories(self.baseline_dir, self.current_dir, "Baseline", "Current")
+
+        # 2. WASM: baseline vs current
+        baseline_wasm = self.baseline_dir / "wasm"
+        current_wasm = self.current_dir / "wasm"
+        self.compare_directories(baseline_wasm, current_wasm, "Baseline WASM", "Current WASM")
+
+        # 3. Current: desktop vs WASM (just to see what happens)
+        self.compare_directories(self.current_dir, current_wasm, "Desktop", "WASM")
 
         # Summary
         total = len(self.cpu_benchmarks) + len(self.render_benchmarks)
