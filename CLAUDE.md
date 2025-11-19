@@ -62,6 +62,7 @@
     - `view.rs` - Camera and navigation controls panel
     - `tone_mapping.rs` - Color and tone mapping panel
     - `palette_editor.rs` - Palette editing panel
+    - `palette_library.rs` - **Palette Library panel** (Added 2025-11-18)
     - `undo_history.rs` - Visual undo history browser panel
     - `menu_bar.rs` - Top menu bar (File, Edit, View, etc.)
   - `src/i18n.rs` - **Internationalization support** (Added 2025-11-13)
@@ -154,6 +155,29 @@
   - More flexible than fixed side panel layout
   - Users can organize UI to match workflow
   - Foundation for future workspace presets (Beginner/Standard/Advanced layouts)
+
+### Palette Library System (Added 2025-11-18)
+- **713 Total Palettes**: 12 curated + 701 Apophysis classics
+- **Pack-Based Organization**:
+  - **Starter Pack** (12 palettes) - Enabled by default
+  - **Apophysis Pack** (701 palettes) - Disabled by default (enable via UI)
+  - JSON format: `assets/palettes/packs/*.json`
+- **Palette Library Panel**:
+  - Visual browsing with gradient previews (200px × 20px)
+  - Grid layout: Name on left, preview on right
+  - Expand/collapse packs independently of enable/disable
+  - Click palette to select (creates editable custom copy)
+  - Hover feedback: Row highlight + pointer cursor
+- **Loading System**:
+  - Desktop: Loads from filesystem at runtime
+  - WASM: Embeds Starter Pack at compile time (~2KB)
+  - All routes use `add_or_update()` with case-insensitive duplicate checking
+  - First palette loaded with a name wins (duplicates logged/skipped)
+- **Custom Copy Behavior**:
+  - Selecting from library creates copy: `"Name (Custom)"` or `"Name (Custom N)"`
+  - Copy is editable (`built_in = false`), original unchanged
+  - Same behavior as Colors panel dropdown
+- **See**: [docs/main/COLOR.md](docs/main/COLOR.md) for palette system details
 
 ### Internationalization (i18n - Added 2025-11-13)
 - **Framework**: rust-i18n v3.1 with YAML translation files
