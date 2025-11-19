@@ -589,7 +589,20 @@ class UnifiedBenchmarkRunner:
                 prev2_ops = self.get_prev_cpu_benchmark(bench.name, 1)
 
                 prev1_str = f"{prev1_ops:,.0f}" if prev1_ops else "—"
-                prev2_str = f"{prev2_ops:,.0f}" if prev2_ops else "—"
+
+                # Color-code prev2 based on comparison with current
+                if prev2_ops:
+                    delta2 = ((bench.throughput_ops_sec - prev2_ops) / prev2_ops) * 100.0
+                    prev2_color = Colors.ENDC
+                    if delta2 < -10.0:
+                        prev2_color = Colors.FAIL
+                    elif delta2 < -5.0:
+                        prev2_color = Colors.WARNING
+                    elif delta2 > 2.0:
+                        prev2_color = Colors.OKGREEN
+                    prev2_str = f"{prev2_color}{prev2_ops:,.0f}{Colors.ENDC}"
+                else:
+                    prev2_str = "—"
 
                 # Calculate % change vs previous #1
                 if prev1_ops:
@@ -600,14 +613,14 @@ class UnifiedBenchmarkRunner:
                         row_color = Colors.FAIL
                     elif delta < -5.0:  # >5% slower
                         row_color = Colors.WARNING
-                    elif delta > 4.0:  # >4% faster
+                    elif delta > 2.0:  # >2% faster
                         row_color = Colors.OKGREEN
                     delta_str = f"{delta:+.1f}%"
                 else:
                     delta_str = "—"
                     row_color = Colors.ENDC
 
-                print(f"{row_color}{bench.name:<50} {mean_str:<15} {ops_str:<15} {delta_str:<15} {prev1_str:<15} {prev2_str:<15}{Colors.ENDC}")
+                print(f"{row_color}{bench.name:<50} {mean_str:<15} {ops_str:<15} {delta_str:<15} {prev1_str:<15}{Colors.ENDC} {prev2_str:<15}")
 
             print()
 
@@ -626,7 +639,20 @@ class UnifiedBenchmarkRunner:
                 prev2_throughput = self.get_prev_render_benchmark(bench.name, bench.test_type, 1)
 
                 prev1_str = f"{prev1_throughput:.1f} Miter/s" if prev1_throughput else "—"
-                prev2_str = f"{prev2_throughput:.1f} Miter/s" if prev2_throughput else "—"
+
+                # Color-code prev2 based on comparison with current
+                if prev2_throughput:
+                    delta2 = ((bench.throughput_miter_sec - prev2_throughput) / prev2_throughput) * 100.0
+                    prev2_color = Colors.ENDC
+                    if delta2 < -10.0:
+                        prev2_color = Colors.FAIL
+                    elif delta2 < -5.0:
+                        prev2_color = Colors.WARNING
+                    elif delta2 > 2.0:
+                        prev2_color = Colors.OKGREEN
+                    prev2_str = f"{prev2_color}{prev2_throughput:.1f} Miter/s{Colors.ENDC}"
+                else:
+                    prev2_str = "—"
 
                 # Calculate % change vs previous #1
                 if prev1_throughput:
@@ -643,7 +669,7 @@ class UnifiedBenchmarkRunner:
                     delta_str = "—"
                     row_color = Colors.ENDC
 
-                print(f"{row_color}{bench.name:<30} {bench.test_type:<10} {time_str:<15} {throughput_str:<20} {delta_str:<15} {prev1_str:<20} {prev2_str:<20}{Colors.ENDC}")
+                print(f"{row_color}{bench.name:<30} {bench.test_type:<10} {time_str:<15} {throughput_str:<20} {delta_str:<15} {prev1_str:<20}{Colors.ENDC} {prev2_str:<20}")
 
             print()
 
