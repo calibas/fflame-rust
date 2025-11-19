@@ -434,13 +434,11 @@ impl EguiLayer {
         }
 
         UiResponse {
-            pause_changed,
             config_export_requested: config_export_json,
             config_import_requested: config_import_json,
             config_save_file_requested: config_save_file,
             config_load_file_requested: config_load_file,
             apophysis_import_file_requested: apophysis_import_file,
-            apophysis_import_configs: None,
             custom_palette,
             palette_export_json,
             palette_save_file,
@@ -451,7 +449,6 @@ impl EguiLayer {
             redo_requested,
             png_export_with_background,
             png_export_transparent,
-            preset_changed,
             add_transform,
             delete_transform,
             open_palette_editor,
