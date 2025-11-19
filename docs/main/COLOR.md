@@ -7,6 +7,7 @@
 - [TRANSFORMS.md](TRANSFORMS.md) - Color modes in flame algorithm
 - [RENDERER.md](RENDERER.md) - Accumulate pass details
 - [BUFFERS.md](BUFFERS.md) - Histogram buffer layout
+- [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) - Palette library system (713 palettes)
 
 **Code locations:**
 - [src/scene/palette.rs](../../src/scene/palette.rs) - Palette system
@@ -186,38 +187,43 @@ pub fn rainbow() -> Self {
 
 **Location:** [src/scene/palette.rs](../../src/scene/palette.rs)
 
+**Overview:** The palette library manages 713 palettes organized into packs.
+
 ```rust
 pub struct PaletteLibrary {
+    palettes: Vec<Palette>,      // Flat list for dropdown (Colors panel)
+    packs: Vec<PalettePack>,      // Pack storage
+    enabled_packs: Vec<bool>,     // Runtime enable state
+}
+
+pub struct PalettePack {
+    pub pack_name: String,
+    pub description: String,
+    pub enabled_by_default: bool,
     pub palettes: Vec<Palette>,
 }
-
-impl PaletteLibrary {
-    pub fn new() -> Self {
-        let mut library = Self { palettes: Vec::new() };
-
-        // Add built-in palettes
-        library.add(Palette::fire());
-        library.add(Palette::ocean());
-        library.add(Palette::rainbow());
-        library.add(Palette::grayscale());
-        library.add(Palette::sunset());
-        library.add(Palette::neon());
-        library.add(Palette::earth());
-
-        // Auto-load from assets/palettes/ (desktop only)
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if let Ok(palettes) = load_palettes_from_dir("assets/palettes") {
-                for palette in palettes {
-                    library.add(palette);
-                }
-            }
-        }
-
-        library
-    }
-}
 ```
+
+**Included Packs:**
+- **Starter Pack** (12 palettes) - Enabled by default
+  - Fire, Ocean, Forest, Sunset, Galaxy, Copper, Ice, Lava, Neon, Earth, Rainbow, Monochrome
+- **Apophysis Pack** (701 palettes) - Disabled by default
+  - Complete classic Apophysis gradient collection
+
+**Loading Routes:**
+1. Grayscale (hardcoded - always first)
+2. Legacy `assets/palettes/*.palette` files (desktop only)
+3. Palette packs from `assets/palettes/packs/*.json` (desktop)
+4. Embedded Starter Pack (WASM only - compile-time via `include_str!()`)
+5. Fallback palettes (fire, cool, rainbow, purple_pink) if no packs loaded
+6. Runtime imports (editor, file picker, config load, palette library selection)
+
+**All routes use `add_or_update()`:**
+- Case-insensitive duplicate checking
+- First palette loaded with a name wins
+- Duplicates logged and skipped
+
+**See:** [PALETTE_LIBRARY.md](PALETTE_LIBRARY.md) for complete documentation
 
 ### Palette File Format
 

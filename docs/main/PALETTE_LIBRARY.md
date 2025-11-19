@@ -1,0 +1,407 @@
+# Palette Library System
+
+## Overview
+
+The Palette Library provides access to **713 palettes** organized into packs, with a visual browsing UI and duplicate-free loading system.
+
+## Components
+
+### 1. Palette Packs
+
+**Location**: `assets/palettes/packs/*.json`
+
+**Included Packs**:
+- **Starter Pack** (12 palettes) - Enabled by default
+  - Fire, Ocean, Forest, Sunset, Galaxy, Copper, Ice, Lava, Neon, Earth, Rainbow, Monochrome
+- **Apophysis Pack** (701 palettes) - Disabled by default
+  - Complete collection of classic Apophysis gradients
+
+**JSON Format**:
+```json
+{
+  "pack_name": "Starter Pack",
+  "description": "Curated selection of versatile palettes for fractal flames",
+  "enabled_by_default": true,
+  "palettes": [
+    {
+      "name": "Fire",
+      "stops": [
+        {"position": 0.0, "color": [0.0, 0.0, 0.0]},
+        {"position": 1.0, "color": [1.0, 1.0, 1.0]}
+      ]
+    }
+  ]
+}
+```
+
+### 2. Palette Library Panel
+
+**Access**: Window → Show Palette Library
+
+**Features**:
+- **Visual previews**: Horizontal gradient bars (200px × 20px)
+- **Grid layout**: Palette name on left, preview on right
+- **Pack controls**:
+  - Click pack name to expand/collapse
+  - Checkbox to enable/disable pack
+  - Collapse state independent of enable state
+- **Selection**: Click any palette or name to select
+- **Hover feedback**: Row highlighting + pointer cursor
+
+**Behavior**:
+- Selecting a palette creates an editable custom copy
+- Copy is named `"Name (Custom)"` or `"Name (Custom N)"`
+- Original palette in library remains unchanged
+- Same behavior as Colors panel dropdown
+
+### 3. Loading System
+
+**Desktop Builds**:
+```
+Route 1: Grayscale (hardcoded)
+Route 2: Legacy assets/palettes/*.palette files
+Route 3: Palette packs from assets/palettes/packs/*.json
+Route 4: Runtime imports (editor, file picker, config load)
+```
+
+**WASM Builds**:
+```
+Route 1: Grayscale (hardcoded)
+Route 2: Embedded Starter Pack (compile-time via include_str!)
+Route 3: Fallback palettes (only if embed fails)
+Route 4: Runtime imports (editor, JSON paste, config load)
+```
+
+**All routes use `add_or_update()`**:
+- Case-insensitive duplicate checking
+- First palette loaded with a name wins
+- Duplicates logged and skipped
+- Returns index of existing or newly added palette
+
+### 4. Data Structures
+
+**PalettePack** (`src/scene/palette.rs`):
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PalettePack {
+    pub pack_name: String,
+    pub description: String,
+    #[serde(default)]
+    pub enabled_by_default: bool,
+    pub palettes: Vec<Palette>,
+}
+```
+
+**PaletteLibrary** (`src/scene/palette.rs`):
+```rust
+pub struct PaletteLibrary {
+    palettes: Vec<Palette>,      // Flat list for dropdown
+    packs: Vec<PalettePack>,      // Pack storage
+    enabled_packs: Vec<bool>,     // Runtime enable state
+}
+```
+
+## Load Order Details
+
+### Initialization (PaletteLibrary::new())
+
+1. **Load pack files** (desktop only)
+   - Read `assets/palettes/packs/*.json`
+   - Parse and store in `packs` vec
+   - Store `enabled_by_default` state
+
+2. **Create library instance**
+   - Empty `palettes` vec initially
+
+3. **Route 1: Grayscale**
+   - `library.add_or_update(Palette::grayscale())`
+   - Always first palette
+
+4. **Route 2: Legacy files** (desktop only)
+   - Load `assets/palettes/*.palette`
+   - Mark as `built_in = true`
+   - Add via `add_or_update()`
+
+5. **Route 3: WASM embed** (WASM only)
+   - Parse embedded `starter_pack.json`
+   - Add to `packs` vec
+   - Mark as enabled
+
+6. **Route 4: Pack palettes**
+   - For each enabled pack:
+     - Mark palettes as `built_in = true`
+     - Add via `add_or_update()`
+   - Palettes appear in Colors panel dropdown
+
+### Runtime Loading
+
+All runtime routes use `add_or_update()`:
+
+**From Palette Editor**:
+- User modifies palette
+- Saved via `custom_palette` → `add_or_update()`
+- Preserves `built_in` flag
+
+**From Palette Library**:
+- User clicks palette
+- Creates custom copy with unique name
+- Sets `built_in = false`
+- Adds via `add_or_update()`
+
+**From File Import**:
+- User loads `.palette` file
+- Parses JSON
+- Adds via `add_or_update()`
+
+**From Config Import**:
+- Loads `.fflame` file
+- Extracts embedded palette
+- Adds via `add_or_update()`
+
+## Usage
+
+### Adding New Packs (Desktop)
+
+1. Create JSON file in `assets/palettes/packs/`
+2. Follow pack format (see above)
+3. Restart application
+4. Pack appears in Palette Library
+
+### Embedding Packs (WASM)
+
+Edit `src/scene/palette.rs:408`:
+```rust
+const STARTER_PACK_JSON: &str = include_str!("../../assets/palettes/packs/starter_pack.json");
+const MY_PACK_JSON: &str = include_str!("../../assets/palettes/packs/my_pack.json");
+```
+
+Parse and add both packs in WASM initialization.
+
+### Enabling/Disabling Packs
+
+**Via UI**:
+1. Open Palette Library (Window menu)
+2. Check/uncheck pack checkbox
+3. Palettes immediately added/removed from library
+4. State not persisted (resets on restart)
+
+**Future**: Could add persistence via config file
+
+### Creating Custom Palettes
+
+**Method 1: From Library**:
+1. Open Palette Library
+2. Click any palette
+3. Editable copy created automatically
+4. Edit in Palette Editor panel
+
+**Method 2: From Editor**:
+1. Open Palette Editor
+2. Modify current palette
+3. Auto-saved as custom palette
+
+**Method 3: Import JSON**:
+1. Palette Editor → Import/Export section
+2. Paste JSON or load file
+3. Palette added to library
+
+## Implementation Notes
+
+### Duplicate Prevention
+
+All loading uses `add_or_update()`:
+```rust
+pub fn add_or_update(&mut self, palette: Palette) -> usize {
+    // Search for existing palette (case-insensitive)
+    for (i, lib_palette) in self.palettes.iter().enumerate() {
+        if lib_palette.name.to_lowercase() == palette.name.to_lowercase() {
+            log::warn!("Skipping duplicate palette '{}'", palette.name);
+            return i;  // Return existing index, don't update
+        }
+    }
+    // Add new palette
+    self.palettes.push(palette);
+    self.palettes.len() - 1
+}
+```
+
+**Key behaviors**:
+- Case-insensitive comparison ("Fire" == "fire")
+- First-wins policy (doesn't overwrite existing)
+- Logs warning for visibility
+- Returns index (existing or new)
+
+### Pack Toggle (rebuild_palette_list)
+
+When user toggles pack checkbox:
+```rust
+fn rebuild_palette_list(&mut self) {
+    // Remove all pack palettes by name
+    let pack_names: HashSet<String> = self.packs.iter()
+        .flat_map(|pack| pack.palettes.iter().map(|p| p.name.clone()))
+        .collect();
+
+    self.palettes.retain(|p| !pack_names.contains(&p.name));
+
+    // Re-add enabled pack palettes
+    for palette in enabled_pack_palettes {
+        pal.built_in = true;
+        self.add_or_update(pal);
+    }
+}
+```
+
+**Behavior**:
+- Removes ALL pack palettes (not just from toggled pack)
+- Re-adds only enabled pack palettes
+- Preserves non-pack palettes (hardcoded, legacy files, custom)
+
+### Custom Copy Naming
+
+From Palette Library selection:
+```rust
+let base_name = &palette.name;
+let mut new_name = format!("{} (Custom)", base_name);
+let mut counter = 2;
+
+while library.palettes().iter().any(|p| p.name == new_name) {
+    new_name = format!("{} (Custom {})", base_name, counter);
+    counter += 1;
+}
+
+palette_copy.name = new_name;
+palette_copy.built_in = false;
+```
+
+**Results**:
+- First copy: `"Fire (Custom)"`
+- Second copy: `"Fire (Custom 2)"`
+- Third copy: `"Fire (Custom 3)"`
+- Etc.
+
+### UI Implementation
+
+**Grid Layout** (`src/ui/palette_library.rs`):
+```rust
+egui::Grid::new(format!("palette_grid_{}", pack_idx))
+    .num_columns(2)
+    .spacing([10.0, 4.0])
+    .show(ui, |ui| {
+        // Column 1: Palette name (calculated width)
+        // Column 2: Preview gradient (200px)
+    });
+```
+
+**Texture Caching**:
+- Uses `egui::TextureHandle` stored in `egui::Memory`
+- Unique ID per pack/palette: `("palette_preview", pack_idx, palette_idx)`
+- Generated once, reused across frames
+- Prevents texture destruction issues
+
+**Hover Effect**:
+```rust
+// Draw highlight FIRST (background layer)
+if response.hovered() {
+    ui.painter().rect_filled(rect, 2.0, hover_color);
+    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+}
+
+// Draw content on top (foreground layer)
+ui.painter().text(...);  // Palette name
+ui.put(rect, image);      // Gradient preview
+```
+
+## Performance
+
+**Binary Size**:
+- Apophysis pack: +2.9MB (desktop)
+- WASM embed: +~2KB (Starter Pack only)
+
+**Memory**:
+- 713 palettes × 256 colors × 3 × 4 bytes ≈ 2.1MB
+- Negligible for modern systems
+
+**Load Time**:
+- All packs: <10ms (filesystem read + JSON parse)
+- WASM embed: <1ms (compile-time string, runtime parse)
+
+**Render Impact**:
+- None - palette data already in GPU
+- Texture cache prevents regeneration
+
+## Troubleshooting
+
+### Palette Not Appearing
+
+**Check pack enabled**:
+- Open Palette Library
+- Ensure pack checkbox is checked
+
+**Check for duplicates**:
+- Look for warning in console: `"Skipping duplicate palette..."`
+- First palette loaded with that name wins
+
+**Check pack file**:
+- Valid JSON format
+- Correct field names (`pack_name`, `palettes`, etc.)
+- Palette stops have `position` (0.0-1.0) and `color` (RGB array)
+
+### WASM Missing Palettes
+
+**Desktop has packs, WASM doesn't**:
+- WASM only embeds Starter Pack by default
+- Edit `src/scene/palette.rs` to embed additional packs
+- Rebuild WASM binary
+
+**Embedded pack not loading**:
+- Check browser console for parse errors
+- Verify JSON syntax in `starter_pack.json`
+- Check WASM build output for warnings
+
+### Duplicate Warnings
+
+**Expected behavior**:
+- First palette loaded with a name is kept
+- Subsequent loads with same name (case-insensitive) are skipped
+- Warning logged for visibility
+
+**Common causes**:
+- Legacy file + pack have same palette name
+- Multiple packs with overlapping palettes
+- User imported palette that exists in pack
+
+**Solution**:
+- Warnings are informational, not errors
+- Rename palette in JSON if you want both versions
+- Disable conflicting pack if you prefer legacy file
+
+## Future Enhancements
+
+### Planned Features
+
+- **Persistent pack state**: Save enabled/disabled state to config
+- **Pack management UI**: Add/remove packs without filesystem access
+- **Search/filter**: Find palettes by name
+- **Favorites**: Bookmark frequently used palettes
+- **Categories/tags**: Organize palettes by theme
+- **Thumbnail cache**: Pre-generate preview images
+
+### WASM Enhancements
+
+- **Runtime pack loading**: Fetch packs from URLs
+- **User uploads**: Load custom `.json` packs via file picker
+- **IndexedDB storage**: Persist user packs in browser
+- **CDN integration**: Load community packs from server
+
+### Performance Optimizations
+
+- **Lazy texture generation**: Generate previews on-demand
+- **Virtual scrolling**: Only render visible palettes
+- **Pack lazy loading**: Load pack palettes when enabled
+- **Compression**: Compress pack JSON files
+
+## See Also
+
+- [COLOR.md](COLOR.md) - Full color system documentation
+- [UI.md](UI.md) - UI architecture and panels
+- [CONFIG.md](CONFIG.md) - Configuration and serialization
