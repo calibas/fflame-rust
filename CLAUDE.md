@@ -250,43 +250,29 @@ See [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md) for complete guide.
 # Unit tests (embedded in source files)
 cargo test
 
-# Regression tests (integration tests)
-cargo test --test regression
-
-# Unified benchmark suite (CPU + GPU, with regression detection)
+# Unified benchmark suite (CPU + GPU + visual regression)
 python scripts/run_benchmarks.py          # Full suite
 python scripts/run_benchmarks.py --quick  # Quick mode (skip WASM)
-
-# Visual regression tests (desktop CLI + WASM browser)
-python tests/visual/run_all_tests.py
-
-# Desktop CLI visual tests only
-python tests/visual/run_tests.py
-
-# WASM browser visual tests only
-python tests/visual/wasm/test_wasm.py
-
-# CPU benchmarks only (Criterion - precise microbenchmarks)
-cargo bench
-
-# Simple benchmark (CLI - human-readable CPU check)
-cargo run --release --bin simple_benchmark
-
-# Show version info
-cargo run --example show_version
 
 # Main app
 cargo run --release
 ```
 
+**Unified Benchmark Suite** (`scripts/run_benchmarks.py`):
+- **CPU Microbenchmarks**: Criterion benchmarks with statistical analysis (5 runs, warmup)
+- **GPU Desktop Rendering**: Headless PNG export tests (800×600, multiple runs)
+- **GPU WASM Rendering**: Browser-based WebGPU tests via Selenium (800×600)
+- **Visual Regression**: Pixel-perfect hash comparison (baseline vs current, desktop + WASM)
+- **Performance Tracking**: CSV history with previous 2 runs for regression detection
+- **Color-coded output**: Green (>2% faster), yellow (>5% slower), red (>10% slower)
+
 **What's Tested:**
 - Unit tests: Transform math, variations, palette interpolation, version info
-- Regression: 12 tests (CPU determinism, all variations, presets, serialization)
-- Visual regression: Pixel-perfect comparison + performance tracking (desktop + WASM)
-- Benchmarks (Criterion): Affine transforms, point helpers (r/θ/φ), color blending, HashMap lookups, transform cloning
-- Benchmarks (simple): Human-readable iteration speed for all registered variations
+- CPU benchmarks: Affine transforms, point helpers (r/θ/φ), all 26 core variations
+- GPU benchmarks: 8 visual test configs (variations, presets, 3D, tone mapping)
+- Visual regression: SHA256 hash comparison of pixel data (baseline vs current)
 
-**All tests passing:** ✅ 15+ unit tests, 12 regression tests, 8 visual tests (desktop), 7 visual tests (WASM)
+**All tests passing:** ✅ 15+ unit tests, 24 CPU benchmarks, 16 GPU benchmarks (8 desktop + 8 WASM), visual regression checks
 
 ### CLI Export Mode
 
