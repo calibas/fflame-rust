@@ -448,7 +448,6 @@ impl<'de> Deserialize<'de> for Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::variations::VariationRegistry;
 
     #[test]
     fn test_named_variations() {
@@ -632,22 +631,15 @@ impl Point {
 }
 
 /// Flame system - collection of transforms
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Flame {
-    #[serde(default = "default_flame_name")]
     pub name: String,
-
     pub transforms: Vec<Transform>,
-
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_transform: Option<Transform>,
-
     /// Rendering mode (2D or 3D)
-    #[serde(default)]
     pub render_mode: RenderMode,
-
     /// Perspective strength for 3D rendering (0.0 = flat/orthographic, 10.0 = strong perspective)
-    #[serde(default)]
     pub perspective_strength: f32,
 }
 
@@ -743,5 +735,102 @@ impl Flame {
             }
         }
         self.transforms.len().saturating_sub(1)
+    }
+}
+
+// Custom deserializer for Flame to handle backward compatibility with old ProjectionType enum
+impl<'de> Deserialize<'de> for Flame {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "snake_case")]
+        enum Field {
+            Name,
+            Transforms,
+            FinalTransform,
+            RenderMode,
+            PerspectiveStrength,
+            Projection, // Old field name for backward compatibility
+        }
+
+        struct FlameVisitor;
+
+        impl<'de> Visitor<'de> for FlameVisitor {
+            type Value = Flame;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("struct Flame")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<Flame, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut name = None;
+                let mut transforms = None;
+                let mut final_transform = None;
+                let mut render_mode = None;
+                let mut perspective_strength = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Name => {
+                            name = Some(map.next_value()?);
+                        }
+                        Field::Transforms => {
+                            transforms = Some(map.next_value()?);
+                        }
+                        Field::FinalTransform => {
+                            final_transform = Some(map.next_value()?);
+                        }
+                        Field::RenderMode => {
+                            render_mode = Some(map.next_value()?);
+                        }
+                        Field::PerspectiveStrength => {
+                            perspective_strength = Some(map.next_value()?);
+                        }
+                        Field::Projection => {
+                            // Old format: enum ProjectionType
+                            // { "Orthographic": null } or { "Perspective": { "strength": 2.0 } }
+                            let value: serde_json::Value = map.next_value()?;
+
+                            // Extract strength from old ProjectionType enum
+                            perspective_strength = Some(match value {
+                                serde_json::Value::String(ref s) if s == "Orthographic" => 0.0,
+                                serde_json::Value::Object(ref obj) => {
+                                    if let Some(persp) = obj.get("Perspective") {
+                                        if let Some(strength_obj) = persp.as_object() {
+                                            if let Some(strength) = strength_obj.get("strength") {
+                                                strength.as_f64().unwrap_or(0.0) as f32
+                                            } else {
+                                                2.0 // Default if strength missing
+                                            }
+                                        } else {
+                                            2.0 // Default
+                                        }
+                                    } else {
+                                        0.0 // Orthographic
+                                    }
+                                }
+                                _ => 0.0, // Default to orthographic
+                            });
+                        }
+                    }
+                }
+
+                Ok(Flame {
+                    name: name.unwrap_or_else(|| default_flame_name()),
+                    transforms: transforms.ok_or_else(|| de::Error::missing_field("transforms"))?,
+                    final_transform: final_transform.unwrap_or(None),
+                    render_mode: render_mode.unwrap_or_default(),
+                    perspective_strength: perspective_strength.unwrap_or(0.0),
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "render_mode", "perspective_strength", "projection"];
+        deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }

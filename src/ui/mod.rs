@@ -6,6 +6,7 @@ mod helpers;
 mod menu_bar;
 mod menu_context;
 mod palette_editor;
+mod palette_library;
 mod panel_viewer;
 mod performance;
 mod response;
@@ -154,7 +155,7 @@ impl EguiLayer {
         config_manager: &mut crate::config::ConfigManager,
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
         flame: &mut crate::scene::transforms::Flame,
-        palette_library: &crate::scene::palette::PaletteLibrary,
+        palette_library: &mut crate::scene::palette::PaletteLibrary,
         preset_library: &crate::scene::presets::PresetLibrary,
         current_preset_index: &mut usize,
         paused: &mut bool,

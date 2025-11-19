@@ -224,3 +224,59 @@ Allow stretching/squishing of palette via slider
 
 
 Investigate HDR and ways of storing iteration data in ways that aren't limited to screen display.
+
+
+
+Dynamic tone mapping based upon total number of pixels drawn to the screen (not total iterations, speed, zoom or iterations per thread). Update each batch? Fastest way to get total density?
+Use HDR values for RGB, do we have that already with f32? Tone mapping based on min/max values instead of static values. All this should be optional. New color mode?
+
+
+Slight differences in fractal rendering, see Hyper-polar3D.flame
+Do we have the same floating point precision?
+Hyper-polar3D.flame
+coefs="-0.548209 -0.569072 0.569072 -0.548209 0.784181 0.346844"
+polar="0.743762412108481"
+
+Hyper-polar3D.fflame
+        "a": -0.548209,
+        "b": 0.569072,
+        "c": -0.569072,
+        "d": -0.548209,
+        "e": 0.784181,
+        "f": 0.346844,
+        "g": 0.0,
+"polar": 0.74376243,
+
+Same affine values, some precision loss with variations.
+
+
+
+
+
+Fixed Paletted mode wastes tons of space, 701 Apophysis palettes take up 38mb in a .json.
+
+3 options (we currently use the last)
+
+(185, 234, 235), (193, 238, 235)
+
+or
+
+#B9EAEA,#C1EEEB
+
+or
+
+"position": 0.0,
+"color": [
+        0.7254901960784313,
+        0.9176470588235294,
+        0.9215686274509803
+]
+},
+{
+"position": 0.00392156862745098,
+"color": [
+        0.7568627450980392,
+        0.9333333333333333,
+        0.9215686274509803
+]
+},

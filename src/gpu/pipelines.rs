@@ -12,7 +12,7 @@ pub struct FlamePipelines {
 }
 
 impl FlamePipelines {
-    pub fn new(device: &Device, surface_format: TextureFormat, flame: &Flame) -> Self {
+    pub fn new(device: &Device, _surface_format: TextureFormat, flame: &Flame) -> Self {
         // Load non-trajectory shaders (these don't need dynamic compilation)
         let accumulate_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Accumulate Shader"),

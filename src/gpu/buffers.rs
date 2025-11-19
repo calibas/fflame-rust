@@ -562,7 +562,7 @@ impl FlameBuffers {
     }
 
     /// Clear all accumulation buffers
-    pub fn clear_all(&self, encoder: &mut CommandEncoder, queue: &Queue) {
+    pub fn clear_all(&self, encoder: &mut CommandEncoder, _queue: &Queue) {
         // Use CLEAR_TEXTURE feature if available (desktop usually has it)
         #[cfg(not(target_arch = "wasm32"))]
         {

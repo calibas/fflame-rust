@@ -14,7 +14,7 @@ pub struct PanelContext<'a> {
 
     // Libraries
     pub preset_library: &'a crate::scene::presets::PresetLibrary,
-    pub palette_library: &'a crate::scene::palette::PaletteLibrary,
+    pub palette_library: &'a mut crate::scene::palette::PaletteLibrary,
 
     // Renderer (optional, might not exist during init)
     pub flame_renderer: Option<&'a crate::renderer::compute_kernel::FlameRenderer>,
@@ -90,6 +90,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             PanelType::PaletteEditor => {
                 self.render_palette_editor_panel(ui);
             }
+            PanelType::PaletteLibrary => {
+                self.render_palette_library_panel(ui);
+            }
             PanelType::View => {
                 self.render_view_panel(ui);
             }
@@ -156,6 +159,17 @@ impl<'a> PanelViewer<'a> {
             self.context.palette_import_json,
             self.context.palette_load_file,
         );
+    }
+
+    /// Render Palette Library panel (browse and manage palette packs)
+    fn render_palette_library_panel(&mut self, ui: &mut egui::Ui) {
+        if let Some(selected_palette) = super::palette_library::render_palette_library(
+            ui,
+            self.context.palette_library,
+        ) {
+            // Update custom palette (will be applied to config via ConfigManager)
+            *self.context.custom_palette = Some(selected_palette);
+        }
     }
 
     /// Render the View panel (zoom, pan, rotation)
