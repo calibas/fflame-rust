@@ -22,7 +22,7 @@ fn render_palette_editor_core_impl(
     palette_editor: &mut PaletteEditor,
     config_manager: &mut crate::config::ConfigManager,
     palette: &mut Palette,
-    custom_palette: &mut Option<Palette>,
+    _custom_palette: &mut Option<Palette>,
     palette_export_json: &mut Option<Palette>,
     palette_save_file: &mut Option<Palette>,
     palette_import_json: &mut Option<String>,

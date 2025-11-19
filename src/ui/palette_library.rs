@@ -24,7 +24,7 @@ pub fn render_palette_library(
         // Iterate through all packs
         for pack_idx in 0..library.pack_count() {
             // Get pack info before borrowing mutably
-            let (pack_name, pack_description, palette_count, is_enabled) = {
+            let (pack_name, _pack_description, palette_count, is_enabled) = {
                 if let Some(pack) = library.get_pack(pack_idx) {
                     (pack.pack_name.clone(), pack.description.clone(), pack.palettes.len(), library.is_pack_enabled(pack_idx))
                 } else {
