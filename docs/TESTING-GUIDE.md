@@ -8,21 +8,9 @@ Quick reference for running all types of tests, benchmarks, and profiling tools.
 # Unit Tests (built into modules)
 cargo test
 
-# Regression Tests (integration tests)
-cargo test --test regression
-
-# Visual Regression Tests (PNG export + comparison)
-cargo run --release -- export --input tests/visual/configs --output tests/visual/current
-cargo run --release --bin compare_images -- --image1 ref.png --image2 current.png --advanced
-
-# CPU Benchmarks (Criterion)
-cargo bench
-
-# Simple CPU Benchmark
-cargo run --release --bin simple_benchmark
-
-# Show Version Info
-cargo run --example show_version
+# Unified Benchmark Suite (CPU + GPU + visual regression)
+python scripts/run_benchmarks.py          # Full suite
+python scripts/run_benchmarks.py --quick  # Quick mode (skip WASM)
 
 # Run Main App (GUI)
 cargo run --release
@@ -30,6 +18,18 @@ cargo run --release
 # Run Main App (CLI export mode)
 cargo run --release -- export --input config.fflame --output output.png
 ```
+
+**The unified benchmark suite replaces:**
+- `cargo bench` - CPU benchmarks (Criterion)
+- `python tests/visual/run_tests.py` - Desktop visual tests
+- `python tests/visual/wasm/test_wasm.py` - WASM visual tests
+- `cargo run --bin simple_benchmark` - Simple CPU benchmark
+- Manual hash/image comparison scripts
+
+**All in one place with:**
+- Performance tracking (previous 2 runs)
+- Visual regression (pixel hash comparison)
+- Color-coded regression detection
 
 ---
 
@@ -76,7 +76,147 @@ test result: ok. 15 passed; 0 failed; 0 ignored
 
 ---
 
-## 2. Regression Tests
+## 2. Unified Benchmark Suite
+
+**What:** Complete performance and visual regression testing system
+
+**Location:** [scripts/run_benchmarks.py](../scripts/run_benchmarks.py)
+
+**Run:**
+```bash
+# Full suite (CPU + Desktop GPU + WASM GPU)
+python scripts/run_benchmarks.py
+
+# Quick mode (CPU + Desktop GPU only, skip WASM)
+python scripts/run_benchmarks.py --quick
+```
+
+**What It Does:**
+
+1. **CPU Microbenchmarks** (Criterion)
+   - Runs `cargo bench` with statistical analysis
+   - 5 runs per benchmark (1 warmup + 4 measurement)
+   - Benchmarks: affine transforms, variations, point calculations
+
+2. **Desktop GPU Rendering** (Headless CLI)
+   - Exports 8 test configs as PNG (800×600)
+   - Multiple runs with warmup for accurate timing
+   - Extracts render time and iterations from PNG metadata
+   - Tests: variations, presets, 3D, tone mapping
+
+3. **WASM GPU Rendering** (Browser Automation)
+   - Runs same 8 tests in Chrome via Selenium
+   - Headless WebGPU export (800×600)
+   - Same timing extraction as desktop
+
+4. **Visual Regression** (Hash Comparison)
+   - SHA256 hash of pixel data (ignores PNG compression)
+   - Three comparisons:
+     - Baseline vs Current (desktop)
+     - Baseline WASM vs Current WASM
+     - Desktop vs WASM (current only)
+   - Detects pixel-perfect changes
+
+5. **Performance Tracking**
+   - Saves results to CSV with timestamp
+   - Compares to previous 2 full runs
+   - Color-coded regression detection:
+     - 🟢 Green: >2% faster
+     - 🟡 Yellow: >5% slower
+     - 🔴 Red: >10% slower
+
+**Example Output:**
+```
+======================================================================
+Unified Performance Benchmark Suite
+======================================================================
+
+Platform: Windows
+Quick Mode: No
+
+[1/3] Running CPU Microbenchmarks (Criterion)...
+----------------------------------------------------------------------
+Building Criterion benchmarks...
+Running 24 benchmarks with statistical analysis...
+✅ Parsed 24 CPU benchmarks
+
+[2/3] Running GPU Rendering Tests (Desktop CLI)...
+----------------------------------------------------------------------
+Building release binary...
+Running 8 tests with 3 iterations each (warmup + measurement)...
+  simple-linear: 45.2ms, 45.1ms, 45.3ms
+  misc-variations: 52.7ms, 52.5ms, 52.6ms
+  ...
+✅ Completed 8 desktop rendering tests
+
+[3/3] Running GPU Rendering Tests (WASM Browser)...
+----------------------------------------------------------------------
+Building WASM module...
+Starting Chrome browser (headless)...
+  simple-linear: 48.3ms
+  misc-variations: 55.1ms
+  ...
+✅ Completed 8 WASM rendering tests
+
+======================================================================
+Benchmark Results
+======================================================================
+
+CPU Microbenchmarks (Criterion):
+Benchmark                                          Mean            Ops/sec         % Change        Previous #1     Previous #2
+---------------------------------------------------------------------------------------------------------------------------------
+affine_transform                                   26.4 ns         37,878,788      +1.2%           37,500,000      37,000,000
+variation_linear                                   26.5 ns         37,735,849      -0.5%           37,900,000      38,000,000
+...
+
+GPU Rendering Benchmarks:
+Test                           Type       Time            Throughput           % Change        Previous #1          Previous #2
+---------------------------------------------------------------------------------------------------------------------------------
+simple-linear                  desktop    45.2ms          221.2 Miter/s        +2.3%           216.1 Miter/s        210.5 Miter/s
+simple-linear                  wasm       48.3ms          207.0 Miter/s        +1.8%           203.4 Miter/s        199.8 Miter/s
+...
+
+Baseline vs Current Comparison:
+Test                           Baseline Hash        Current Hash         Match
+-------------------------------------------------------------------------------------
+simple-linear                  a1b2c3d4e5f6...      a1b2c3d4e5f6...      ✓ MATCH
+misc-variations                f6e5d4c3b2a1...      f6e5d4c3b2a1...      ✓ MATCH
+...
+
+Summary:
+  Matches: 8
+  Mismatches: 0
+
+Baseline WASM vs Current WASM Comparison:
+...
+
+Desktop vs WASM Comparison:
+...
+
+Summary:
+  Total benchmarks: 40
+  CPU benchmarks: 24
+  GPU benchmarks: 16
+
+Results saved to: benchmark_results/unified_benchmarks.csv
+Baseline updated: benchmark_results/last_run.json
+```
+
+**Files Generated:**
+- `benchmark_results/unified_benchmarks.csv` - Full history (timestamped rows)
+- `benchmark_results/last_run.json` - Current run (for next comparison)
+- `tests/visual/current/*.png` - Desktop renders
+- `tests/visual/current/wasm/*.png` - WASM renders
+
+**Use Cases:**
+- Pre-commit verification (--quick mode)
+- Full regression testing (CI/CD)
+- Performance tracking over time
+- Visual regression detection
+
+---
+
+## 3. Unit Tests (Legacy - Still Available)
 
 **What:** Integration tests to prevent breaking changes
 
