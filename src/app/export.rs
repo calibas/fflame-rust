@@ -181,7 +181,7 @@ pub async fn export_headless(
     height: u32,
     test_category: Option<String>,
     iterations_per_thread: u32,
-    speed_multiplier: u32,
+    _speed_multiplier: u32,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     use crate::renderer::compute_kernel::FlameRenderer;
     use crate::scene::palette::PaletteLibrary;

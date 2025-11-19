@@ -178,7 +178,6 @@ impl FlameRenderer {
         // Update seed for new random samples each frame
         // projection_type removed - shader now uses perspective_strength directly
         // 0.0 = orthographic (flat), higher values = increasing perspective
-        let perspective_strength = self.perspective_strength;
 
         let seed = self.get_rng_seed();
         let params = GpuParams {

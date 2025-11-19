@@ -2,7 +2,6 @@ mod config_dialog;
 mod font_loader;
 mod formatting;
 mod help;
-mod helpers;
 mod menu_bar;
 mod menu_context;
 mod palette_editor;
