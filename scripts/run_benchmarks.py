@@ -426,43 +426,109 @@ class UnifiedBenchmarkRunner:
             return False
 
     def run_wasm_rendering(self) -> bool:
-        """Run WASM browser rendering tests."""
+        """Run WASM browser rendering tests with multiple runs."""
         try:
-            # Run the WASM test script
-            result = subprocess.run(
-                [sys.executable, "tests/visual/wasm/test_wasm.py"],
-                capture_output=True,
-                text=True,
-                cwd=self.root
-            )
-
-            if result.returncode != 0:
-                print(f"{Colors.WARNING}WASM tests failed or not available{Colors.ENDC}")
-                return False
-
-            # Extract metadata from WASM PNGs
             wasm_dir = self.current_dir / "wasm"
-            if wasm_dir.exists():
-                for png_path in wasm_dir.glob("*.png"):
-                    name = png_path.stem
-                    metadata = self.extract_png_metadata(png_path)
-                    if metadata and metadata['render_time_ms'] > 0:
-                        throughput = metadata['total_iterations'] / metadata['render_time_ms'] / 1000.0
-                        self.render_benchmarks.append(RenderBenchmark(
-                            name=name,
-                            test_type="wasm",
-                            width=metadata['width'],
-                            height=metadata['height'],
-                            total_iterations=metadata['total_iterations'],
-                            render_time_ms=metadata['render_time_ms'],
-                            throughput_miter_sec=throughput
-                        ))
+            wasm_dir.mkdir(parents=True, exist_ok=True)
 
-            print(f"{Colors.OKGREEN}✅ Completed WASM tests{Colors.ENDC}")
+            repeats = 3 if self.quick_mode else 5
+            print(f"Running {repeats} iterations (warmup + measurement) via browser automation")
+            print()
+
+            # Track render times per config
+            config_times = {}
+
+            # Run multiple times
+            for run_idx in range(repeats):
+                is_warmup = (run_idx == 0)
+                print(f"  WASM Run {run_idx + 1}/{repeats} {'(warmup)' if is_warmup else ''}:")
+
+                # Run the WASM test script
+                result = subprocess.run(
+                    [sys.executable, "tests/visual/wasm/test_wasm.py"],
+                    capture_output=True,
+                    text=True,
+                    cwd=self.root
+                )
+
+                if result.returncode != 0:
+                    print(f"{Colors.FAIL}    WASM test run failed{Colors.ENDC}")
+                    if run_idx == 0:  # If first run fails, abort
+                        print(f"{Colors.WARNING}WASM tests failed or not available{Colors.ENDC}")
+                        return False
+                    continue
+
+                # Extract metadata from WASM PNGs for this run
+                if wasm_dir.exists():
+                    for png_path in wasm_dir.glob("*.png"):
+                        name = png_path.stem
+                        metadata = self.extract_png_metadata(png_path)
+                        if metadata and metadata['render_time_ms'] > 0:
+                            if name not in config_times:
+                                config_times[name] = {
+                                    'times': [],
+                                    'metadata': metadata
+                                }
+                            config_times[name]['times'].append(metadata['render_time_ms'])
+                            print(f"    {name}: {metadata['render_time_ms']:.1f}ms")
+
+                print()
+
+            # Calculate statistics for each config
+            for name, data in config_times.items():
+                times = data['times']
+                metadata = data['metadata']
+
+                if len(times) > 1:
+                    # Discard first run (warmup)
+                    times_for_stats = times[1:]
+                    mean_time = sum(times_for_stats) / len(times_for_stats)
+                    min_time = min(times_for_stats)
+                    max_time = max(times_for_stats)
+
+                    # Calculate standard deviation
+                    if len(times_for_stats) > 1:
+                        variance = sum((t - mean_time) ** 2 for t in times_for_stats) / len(times_for_stats)
+                        stddev = variance ** 0.5
+                        cv_percent = (stddev / mean_time * 100) if mean_time > 0 else 0
+                    else:
+                        stddev = 0
+                        cv_percent = 0
+
+                    throughput = metadata['total_iterations'] / mean_time / 1000.0
+                    self.render_benchmarks.append(RenderBenchmark(
+                        name=name,
+                        test_type="wasm",
+                        width=metadata['width'],
+                        height=metadata['height'],
+                        total_iterations=metadata['total_iterations'],
+                        render_time_ms=mean_time,
+                        throughput_miter_sec=throughput
+                    ))
+
+                    print(f"  {name} Stats: mean={mean_time:.1f}ms, stddev={stddev:.2f}ms ({cv_percent:.1f}%), range=[{min_time:.1f}, {max_time:.1f}]ms")
+
+                elif len(times) == 1:
+                    # Single run only
+                    throughput = metadata['total_iterations'] / times[0] / 1000.0
+                    self.render_benchmarks.append(RenderBenchmark(
+                        name=name,
+                        test_type="wasm",
+                        width=metadata['width'],
+                        height=metadata['height'],
+                        total_iterations=metadata['total_iterations'],
+                        render_time_ms=times[0],
+                        throughput_miter_sec=throughput
+                    ))
+
+            print()
+            print(f"{Colors.OKGREEN}✅ Completed WASM tests ({len(config_times)} configs){Colors.ENDC}")
             return True
 
         except Exception as e:
             print(f"{Colors.WARNING}WASM tests skipped: {e}{Colors.ENDC}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def extract_png_metadata(self, png_path: Path) -> Optional[Dict]:
