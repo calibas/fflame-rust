@@ -100,6 +100,7 @@ class BenchmarkRun:
     git_branch: str
     rustc_version: str
     build_profile: str
+    quick_mode: bool  # True if run with --quick flag
 
     # CPU benchmarks
     cpu_benchmarks: List[CriterionBenchmark]
@@ -111,6 +112,9 @@ class BenchmarkRun:
     total_tests: int
     passed_tests: int
     failed_tests: int
+
+    # Aggregate metric (ops/sec across all benchmarks)
+    aggregate_ops_sec: float = 0.0
 
 
 class UnifiedBenchmarkRunner:
@@ -132,6 +136,7 @@ class UnifiedBenchmarkRunner:
         self.cpu_benchmarks: List[CriterionBenchmark] = []
         self.render_benchmarks: List[RenderBenchmark] = []
         self.baseline_data: Optional[Dict] = None
+        self.previous_runs: List[Tuple[str, float]] = []  # [(timestamp, aggregate_ops_sec), ...]
 
     def run_all(self) -> bool:
         """Run all benchmarks and generate report."""
@@ -145,6 +150,9 @@ class UnifiedBenchmarkRunner:
 
         # Load baseline for comparison
         self.load_baseline()
+
+        # Load previous 2 full runs from CSV
+        self.load_previous_runs()
 
         # Run benchmarks
         success = True
@@ -632,6 +640,44 @@ class UnifiedBenchmarkRunner:
         print(f"  GPU benchmarks: {len(self.render_benchmarks)}")
         print()
 
+        # Aggregate Performance Comparison
+        current_ops_sec = self.calculate_aggregate_ops_sec()
+        print(f"{Colors.BOLD}Aggregate Performance:{Colors.ENDC}")
+        print(f"  Current: {self.format_throughput(current_ops_sec)}")
+
+        if len(self.previous_runs) >= 1:
+            prev1_timestamp, prev1_ops_sec = self.previous_runs[0]
+            delta1 = ((current_ops_sec - prev1_ops_sec) / prev1_ops_sec) * 100.0
+
+            color = Colors.ENDC
+            if delta1 > 10.0:
+                color = Colors.FAIL
+            elif delta1 > 5.0:
+                color = Colors.WARNING
+            elif delta1 < -2.0:
+                color = Colors.OKGREEN
+
+            print(f"  vs {prev1_timestamp}: {color}{delta1:+.1f}% ({self.format_throughput(prev1_ops_sec)}){Colors.ENDC}")
+
+        if len(self.previous_runs) >= 2:
+            prev2_timestamp, prev2_ops_sec = self.previous_runs[1]
+            delta2 = ((current_ops_sec - prev2_ops_sec) / prev2_ops_sec) * 100.0
+
+            color = Colors.ENDC
+            if delta2 > 10.0:
+                color = Colors.FAIL
+            elif delta2 > 5.0:
+                color = Colors.WARNING
+            elif delta2 < -2.0:
+                color = Colors.OKGREEN
+
+            print(f"  vs {prev2_timestamp}: {color}{delta2:+.1f}% ({self.format_throughput(prev2_ops_sec)}){Colors.ENDC}")
+
+        if len(self.previous_runs) == 0:
+            print(f"  {Colors.OKCYAN}(No previous runs to compare){Colors.ENDC}")
+
+        print()
+
     def check_cpu_regression(self, bench: CriterionBenchmark) -> Optional[float]:
         """Check for CPU benchmark regression. Returns percent change."""
         if not self.baseline_data or 'cpu_benchmarks' not in self.baseline_data:
@@ -678,8 +724,77 @@ class UnifiedBenchmarkRunner:
         else:
             return f"{ops_sec/1_000_000_000:.1f} G/s"
 
+    def calculate_aggregate_ops_sec(self) -> float:
+        """Calculate total ops/sec across all benchmarks."""
+        total = 0.0
+
+        # CPU benchmarks: use throughput_ops_sec directly
+        for bench in self.cpu_benchmarks:
+            total += bench.throughput_ops_sec
+
+        # GPU benchmarks: throughput_miter_sec is already in millions of iterations per second
+        # Convert to ops/sec by multiplying by 1,000,000
+        for bench in self.render_benchmarks:
+            total += bench.throughput_miter_sec * 1_000_000.0
+
+        return total
+
+    def load_previous_runs(self):
+        """Load last 2 full benchmark runs from CSV for comparison."""
+        if not self.csv_path.exists():
+            return
+
+        try:
+            # Read CSV from bottom up to get most recent runs
+            with open(self.csv_path, 'r', encoding='utf-8') as f:
+                lines = list(csv.reader(f))
+
+            if len(lines) <= 1:  # Only header or empty
+                return
+
+            # Group rows by timestamp (each run has multiple rows)
+            runs = {}
+            for row in reversed(lines[1:]):  # Skip header, process newest first
+                timestamp = row[0]
+                if timestamp not in runs:
+                    runs[timestamp] = []
+                runs[timestamp].append(row)
+
+            # Calculate aggregate for each run
+            run_aggregates = []
+            for timestamp in sorted(runs.keys(), reverse=True):
+                rows = runs[timestamp]
+                total_ops_sec = 0.0
+
+                for row in rows:
+                    benchmark_type = row[5]  # 'cpu' or 'render'
+
+                    if benchmark_type == 'cpu':
+                        # Column 10: Throughput_ops_sec
+                        if row[10]:
+                            total_ops_sec += float(row[10])
+                    elif benchmark_type == 'render':
+                        # Column 15: Throughput_Miter_sec (convert to ops/sec)
+                        if row[15]:
+                            total_ops_sec += float(row[15]) * 1_000_000.0
+
+                run_aggregates.append((timestamp, total_ops_sec))
+
+                if len(run_aggregates) >= 2:
+                    break
+
+            self.previous_runs = run_aggregates
+
+        except Exception as e:
+            print(f"{Colors.WARNING}Failed to load previous runs: {e}{Colors.ENDC}")
+
     def save_to_csv(self):
-        """Save results to unified CSV."""
+        """Save results to unified CSV (only if not quick mode)."""
+        if self.quick_mode:
+            print(f"{Colors.OKCYAN}Quick mode: Skipping CSV save{Colors.ENDC}")
+            print()
+            return
+
         # Get git info
         git_commit = self.run_cmd("git rev-parse --short HEAD")
         git_branch = self.run_cmd("git rev-parse --abbrev-ref HEAD")
