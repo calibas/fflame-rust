@@ -595,11 +595,12 @@ class UnifiedBenchmarkRunner:
                 if prev1_ops:
                     delta = ((bench.throughput_ops_sec - prev1_ops) / prev1_ops) * 100.0
                     row_color = Colors.ENDC
-                    if delta > 10.0:
+                    # For CPU: higher ops/sec is better, lower is worse
+                    if delta < -10.0:  # >10% slower
                         row_color = Colors.FAIL
-                    elif delta > 5.0:
+                    elif delta < -5.0:  # >5% slower
                         row_color = Colors.WARNING
-                    elif delta < -2.0:
+                    elif delta > 4.0:  # >4% faster
                         row_color = Colors.OKGREEN
                     delta_str = f"{delta:+.1f}%"
                 else:
