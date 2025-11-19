@@ -82,7 +82,7 @@ impl App {
             &flame,
         );
 
-        let mut palette_library = PaletteLibrary::new();
+        let palette_library = PaletteLibrary::new();
 
         // Use palette from library (no need to duplicate)
         let initial_palette = palette_library.get(1)

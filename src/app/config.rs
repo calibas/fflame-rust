@@ -84,7 +84,7 @@ impl App {
 
     /// Export PNG at custom dimensions (creates temporary renderer)
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn export_custom_size(&self, transparent: bool, config: FractalConfig, render_time_ms: f64) {
+    pub fn export_custom_size(&self, transparent: bool, config: FractalConfig, _render_time_ms: f64) {
         use crate::renderer::compute_kernel::FlameRenderer;
         use std::time::Instant;
 
