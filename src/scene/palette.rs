@@ -401,7 +401,25 @@ impl PaletteLibrary {
             }
         }
 
-        // Route 3: WASM or fallback - use built-in palettes if no assets/packs were loaded
+        // Route 3: WASM builds - embed Starter Pack
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Embed starter_pack.json at compile time
+            const STARTER_PACK_JSON: &str = include_str!("../../assets/palettes/packs/starter_pack.json");
+            match serde_json::from_str::<PalettePack>(STARTER_PACK_JSON) {
+                Ok(pack) => {
+                    log::info!("Loaded embedded Starter Pack ({} palettes)", pack.palettes.len());
+                    let enabled = pack.enabled_by_default;
+                    library.packs.push(pack);
+                    library.enabled_packs.push(enabled);
+                }
+                Err(e) => {
+                    log::error!("Failed to parse embedded Starter Pack: {}", e);
+                }
+            }
+        }
+
+        // Fallback: If still no palettes loaded (shouldn't happen), use hardcoded ones
         if library.palettes.is_empty() && library.packs.is_empty() {
             library.add_or_update(Palette::fire());
             library.add_or_update(Palette::cool());
