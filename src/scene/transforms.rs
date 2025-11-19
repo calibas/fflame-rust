@@ -448,7 +448,6 @@ impl<'de> Deserialize<'de> for Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::variations::VariationRegistry;
 
     #[test]
     fn test_named_variations() {

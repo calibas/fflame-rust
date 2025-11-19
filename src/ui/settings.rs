@@ -7,7 +7,7 @@ use super::formatting::format_iterations;
 pub fn render_settings_content(
     ui: &mut egui::Ui,
     png_export_with_background: &mut bool,
-    png_export_transparent: &mut bool,
+    _png_export_transparent: &mut bool,
     export_width: &mut u32,
     export_height: &mut u32,
     use_custom_export_size: &mut bool,

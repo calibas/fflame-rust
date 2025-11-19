@@ -179,9 +179,6 @@ fn render_triangle_editor_core(
                     .unwrap_or(None)
             });
 
-            // Track if we were dragging in the previous frame
-            let was_dragging = drag_target != DragTarget::None || drag_start_pos.is_some();
-
             // Helper to create affine changes for either regular or final transform
             let make_affine_changes = |xform: &crate::scene::transforms::Transform| -> Vec<(ConfigPath, crate::config::ConfigValue)> {
                 match selected_transform {
