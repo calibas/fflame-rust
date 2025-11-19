@@ -279,7 +279,8 @@ cargo run --release
 - Unit tests: Transform math, variations, palette interpolation, version info
 - Regression: 12 tests (CPU determinism, all variations, presets, serialization)
 - Visual regression: Pixel-perfect comparison + performance tracking (desktop + WASM)
-- Benchmarks: CPU iteration, all 26 variations, affine, point calculations
+- Benchmarks (Criterion): Affine transforms, point helpers (r/θ/φ), color blending, HashMap lookups, transform cloning
+- Benchmarks (simple): Human-readable iteration speed for all registered variations
 
 **All tests passing:** ✅ 15+ unit tests, 12 regression tests, 8 visual tests (desktop), 7 visual tests (WASM)
 
