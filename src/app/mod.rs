@@ -755,15 +755,15 @@ impl App {
                     }
 
                     // Add to library (now guaranteed to have unique name)
-                    let palette_idx = self.palette_library.add_or_update(palette.clone());
+                    let _palette_idx = self.palette_library.add_or_update(palette.clone());
 
                     // Update palette editor with the new palette
                     self.egui_layer.update_palette_editor(palette.clone());
 
-                    // Set as active palette
+                    // Set as active palette in config (this is what the UI checks)
                     let _ = self.config_manager.update_param(
-                        crate::config::ConfigPath::PaletteIndex,
-                        (palette_idx as u32).into()
+                        crate::config::ConfigPath::Palette,
+                        crate::config::ConfigValue::Palette(palette.clone())
                     );
 
                     // Update renderer
