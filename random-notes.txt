@@ -280,3 +280,22 @@ or
         0.9215686274509803
 ]
 },
+
+
+
+Find Apo iteration depth:
+
+        The actual values are defined at ControlPoint.pas:35-40:
+          const
+                SUB_BATCH_SIZE = 10000;
+                FUSE = 15;
+        So the iteration depth per trajectory is:
+        15 fuse iterations (warmup, discarded)
+        10,000 output iterations (plotted points)
+        Total: 10,015 iterations per continuous trajectory
+        Each time BucketFillerThread.pas:89 calls fcp.iterateXYC(SUB_BATCH_SIZE, points), it runs one complete trajectory of 10,015 iterations.
+
+
+Ability to edit scenes by selectively adding (whitelist) or removing (blacklist) transform "paths".
+
+Same image sizes in WASM /desktop benchmarks. Test max iterations/second and different speed options.
