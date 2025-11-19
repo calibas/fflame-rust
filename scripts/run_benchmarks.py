@@ -26,6 +26,7 @@ import csv
 import re
 import platform
 import io
+import hashlib
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -38,11 +39,12 @@ if platform.system() == 'Windows':
 
 try:
     from PIL import Image
+    import numpy as np
     HAS_PILLOW = True
 except ImportError:
     HAS_PILLOW = False
-    print("⚠️  Warning: PIL/Pillow not installed. PNG metadata extraction will be limited.")
-    print("   Install with: pip install Pillow")
+    print("⚠️  Warning: PIL/Pillow not installed. PNG metadata extraction and hash comparison will be limited.")
+    print("   Install with: pip install Pillow numpy")
 
 
 # ANSI color codes for terminal output
@@ -338,7 +340,9 @@ class UnifiedBenchmarkRunner:
                         "cargo", "run", "--release", "--",
                         "export",
                         "-i", str(config_path),
-                        "-o", str(output_path)
+                        "-o", str(output_path),
+                        "--width", "800",
+                        "--height", "600"
                     ]
 
                     is_warmup = (i == 0)
