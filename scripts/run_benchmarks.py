@@ -545,6 +545,28 @@ class UnifiedBenchmarkRunner:
             traceback.print_exc()
             return False
 
+    def hash_image(self, path: Path) -> str:
+        """
+        Calculate SHA256 hash of image pixel data (if PIL available) or file.
+
+        This ignores PNG compression differences and only compares
+        actual rendered pixels when PIL is available.
+        """
+        if HAS_PILLOW:
+            try:
+                img = np.array(Image.open(path))
+                return hashlib.sha256(img.tobytes()).hexdigest()
+            except Exception as e:
+                print(f"{Colors.WARNING}Failed to read image pixels for {path.name}: {e}{Colors.ENDC}")
+                # Fall back to file hash
+
+        # Fallback: hash the file itself
+        sha256 = hashlib.sha256()
+        with open(path, 'rb') as f:
+            while chunk := f.read(8192):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+
     def extract_png_metadata(self, png_path: Path) -> Optional[Dict]:
         """Extract metadata from PNG tEXt chunks."""
         if not HAS_PILLOW or not png_path.exists():
@@ -570,6 +592,59 @@ class UnifiedBenchmarkRunner:
         except Exception as e:
             print(f"{Colors.WARNING}Failed to extract metadata from {png_path.name}: {e}{Colors.ENDC}")
             return None
+
+    def compare_desktop_wasm_hashes(self):
+        """Compare pixel hashes between desktop and WASM renders."""
+        if not HAS_PILLOW:
+            return
+
+        # Get list of test names from render benchmarks
+        desktop_tests = {b.name for b in self.render_benchmarks if b.test_type == "desktop"}
+        wasm_tests = {b.name for b in self.render_benchmarks if b.test_type == "wasm"}
+
+        # Only compare tests that exist in both
+        common_tests = desktop_tests & wasm_tests
+
+        if not common_tests:
+            return
+
+        print(f"{Colors.BOLD}Desktop vs WASM Pixel Comparison:{Colors.ENDC}")
+        print(f"{'Test':<30} {'Desktop Hash':<20} {'WASM Hash':<20} {'Match':<10}")
+        print("-" * 85)
+
+        matches = 0
+        mismatches = 0
+
+        for test_name in sorted(common_tests):
+            desktop_path = self.current_dir / f"{test_name}.png"
+            wasm_path = self.current_dir / "wasm" / f"{test_name}.png"
+
+            if desktop_path.exists() and wasm_path.exists():
+                desktop_hash = self.hash_image(desktop_path)
+                wasm_hash = self.hash_image(wasm_path)
+
+                # Compare hashes
+                if desktop_hash == wasm_hash:
+                    match_str = f"{Colors.OKGREEN}✓ MATCH{Colors.ENDC}"
+                    matches += 1
+                else:
+                    match_str = f"{Colors.FAIL}✗ MISMATCH{Colors.ENDC}"
+                    mismatches += 1
+
+                # Truncate hashes for display
+                desktop_short = desktop_hash[:16] + "..."
+                wasm_short = wasm_hash[:16] + "..."
+
+                print(f"{test_name:<30} {desktop_short:<20} {wasm_short:<20} {match_str}")
+
+        print()
+        print(f"{Colors.BOLD}Hash Comparison Summary:{Colors.ENDC}")
+        print(f"  Matches: {Colors.OKGREEN}{matches}{Colors.ENDC}")
+        if mismatches > 0:
+            print(f"  Mismatches: {Colors.FAIL}{mismatches}{Colors.ENDC}")
+        else:
+            print(f"  Mismatches: {mismatches}")
+        print()
 
     def generate_report(self):
         """Generate console report with regression detection."""
@@ -676,6 +751,9 @@ class UnifiedBenchmarkRunner:
                 print(f"{row_color}{bench.name:<30} {bench.test_type:<10} {time_str:<15} {throughput_str:<20} {delta_str:<15} {prev1_str:<20}{Colors.ENDC} {prev2_str:<20}")
 
             print()
+
+        # Desktop vs WASM Hash Comparison
+        self.compare_desktop_wasm_hashes()
 
         # Summary
         total = len(self.cpu_benchmarks) + len(self.render_benchmarks)
