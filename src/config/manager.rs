@@ -1908,39 +1908,49 @@ mod tests {
     #[test]
     fn test_undo_redo_sequence() {
         // Test a longer sequence to catch redo bugs
+        // Use different parameters to avoid coalescing
         let config = FractalConfig::default();
         let mut manager = ConfigManager::new(config);
 
-        // Start at exposure = 1.0
+        // Initial state
         assert!(manager.config().exposure == 1.0);
+        assert!(manager.config().gamma == 2.2);
+        assert!(manager.config().brightness == 1.0);
+        assert!(manager.config().zoom == 1.0);
 
-        // Change to 2.0
+        // Change 1: exposure
         manager.update_param(ConfigPath::Exposure, 2.0.into()).unwrap();
         assert!(manager.config().exposure == 2.0);
 
-        // Change to 3.0
-        manager.update_param(ConfigPath::Exposure, 3.0.into()).unwrap();
-        assert!(manager.config().exposure == 3.0);
+        // Change 2: gamma
+        manager.update_param(ConfigPath::Gamma, 3.0.into()).unwrap();
+        assert!(manager.config().gamma == 3.0);
 
-        // Change to 4.0
-        manager.update_param(ConfigPath::Exposure, 4.0.into()).unwrap();
-        assert!(manager.config().exposure == 4.0);
+        // Change 3: brightness
+        manager.update_param(ConfigPath::Brightness, 1.5.into()).unwrap();
+        assert!(manager.config().brightness == 1.5);
 
-        // Undo: should go back to 3.0
+        // Change 4: zoom
+        manager.update_param(ConfigPath::Zoom, 2.0.into()).unwrap();
+        assert!(manager.config().zoom == 2.0);
+
+        // Undo: should revert zoom
         manager.undo().unwrap();
-        assert!(manager.config().exposure == 3.0, "After 1st undo, expected 3.0, got {}", manager.config().exposure);
+        assert!(manager.config().zoom == 1.0, "After 1st undo, expected zoom=1.0, got {}", manager.config().zoom);
+        assert!(manager.config().brightness == 1.5);
 
-        // Undo: should go back to 2.0
+        // Undo: should revert brightness
         manager.undo().unwrap();
-        assert!(manager.config().exposure == 2.0, "After 2nd undo, expected 2.0, got {}", manager.config().exposure);
+        assert!(manager.config().brightness == 1.0, "After 2nd undo, expected brightness=1.0, got {}", manager.config().brightness);
+        assert!(manager.config().gamma == 3.0);
 
-        // Redo: should go back to 3.0
+        // Redo: should restore brightness
         manager.redo().unwrap();
-        assert!(manager.config().exposure == 3.0, "After 1st redo, expected 3.0, got {}", manager.config().exposure);
+        assert!(manager.config().brightness == 1.5, "After 1st redo, expected brightness=1.5, got {}", manager.config().brightness);
 
-        // Redo: should go back to 4.0
+        // Redo: should restore zoom
         manager.redo().unwrap();
-        assert!(manager.config().exposure == 4.0, "After 2nd redo, expected 4.0, got {}", manager.config().exposure);
+        assert!(manager.config().zoom == 2.0, "After 2nd redo, expected zoom=2.0, got {}", manager.config().zoom);
     }
 
     #[test]
@@ -1970,8 +1980,8 @@ mod tests {
 
         let changes = vec![
             (ConfigPath::Zoom, ConfigValue::Float(2.0)),
-            (ConfigPath::PanX, ConfigValue::Float(1.0)),
-            (ConfigPath::PanY, ConfigValue::Float(-1.0)),
+            (ConfigPath::Pan, ConfigValue::Vec2(1.0, -1.0)),
+            (ConfigPath::Rotation, ConfigValue::Float(45.0)),
         ];
 
         let update = manager
