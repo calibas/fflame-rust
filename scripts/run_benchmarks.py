@@ -217,17 +217,31 @@ class UnifiedBenchmarkRunner:
                 return False
 
             # Parse Criterion output
-            # Format: benchmark_name     time:   [XX.XXX ns XX.XXX ns XX.XXX ns]
-            pattern = r'(\S+)\s+time:\s+\[([0-9.]+)\s+([a-zµ]+)\s+([0-9.]+)\s+([a-zµ]+)\s+([0-9.]+)\s+([a-zµ]+)\]'
+            # Criterion outputs benchmark name on one line, then "time:" on the next
+            # Example:
+            # affine_transform/affine_2x3_matrix
+            #                         time:   [1.2973 ns 1.2988 ns 1.2992 ns]
 
-            for line in result.stdout.split('\n') + result.stderr.split('\n'):
-                match = re.search(pattern, line)
-                if match:
-                    name = match.group(1).strip()
-                    lower = float(match.group(2))
-                    mean = float(match.group(4))
-                    upper = float(match.group(6))
-                    unit = match.group(5)
+            lines = (result.stdout + result.stderr).split('\n')
+            current_benchmark = None
+
+            for line in lines:
+                # Check if this is a benchmark name line (appears before "time:" line)
+                # Benchmark names don't start with whitespace and end before "time:"
+                if not line.startswith(' ') and 'time:' not in line and 'Benchmarking' not in line:
+                    # Could be a benchmark name
+                    stripped = line.strip()
+                    if stripped and '/' in stripped:  # Benchmark names have group/name format
+                        current_benchmark = stripped
+
+                # Check if this is a time line
+                time_pattern = r'time:\s+\[([0-9.]+)\s+([a-zµ]+)\s+([0-9.]+)\s+([a-zµ]+)\s+([0-9.]+)\s+([a-zµ]+)\]'
+                match = re.search(time_pattern, line)
+                if match and current_benchmark:
+                    lower = float(match.group(1))
+                    mean = float(match.group(3))
+                    upper = float(match.group(5))
+                    unit = match.group(4)
 
                     # Convert to nanoseconds
                     multiplier = {'ps': 0.001, 'ns': 1.0, 'µs': 1000.0, 'us': 1000.0, 'ms': 1_000_000.0}
@@ -238,11 +252,13 @@ class UnifiedBenchmarkRunner:
                     throughput_ops_sec = 1_000_000_000.0 / mean_ns if mean_ns > 0 else 0.0
 
                     self.cpu_benchmarks.append(CriterionBenchmark(
-                        name=name,
+                        name=current_benchmark,
                         mean_ns=mean_ns,
                         stddev_ns=stddev_ns,
                         throughput_ops_sec=throughput_ops_sec
                     ))
+
+                    current_benchmark = None  # Reset after capturing
 
             print(f"{Colors.OKGREEN}✅ Parsed {len(self.cpu_benchmarks)} CPU benchmarks{Colors.ENDC}")
             return len(self.cpu_benchmarks) > 0
