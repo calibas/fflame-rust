@@ -25,7 +25,6 @@ pub struct PanelContext<'a> {
     pub undo_requested: &'a mut bool,
     pub redo_requested: &'a mut bool,
     pub preset_changed: &'a mut bool,
-    pub pause_changed: &'a mut bool,
     pub open_palette_editor: &'a mut bool,
 
     // UI state
@@ -196,7 +195,6 @@ impl<'a> PanelViewer<'a> {
             self.context.flame,
             self.context.flame_renderer,
             self.context.paused,
-            self.context.pause_changed,
             self.context.config_manager,
             self.context.open_config_dialog,
         );
