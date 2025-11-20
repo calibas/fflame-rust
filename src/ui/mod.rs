@@ -127,17 +127,25 @@ impl EguiLayer {
                 self.renderer.free_texture(&old_id);
             }
 
-            // Register renderer's texture with egui
-            let texture_id = self.renderer.register_native_texture(
-                device,
-                texture_view,
-                FilterMode::Linear,
-            );
-
-            self.fractal_texture_id = Some(texture_id);
             self.fractal_texture_width = width;
             self.fractal_texture_height = height;
         }
+
+        // ALWAYS update the texture view, even if size didn't change
+        // This is critical for minimize/restore - the texture view can become stale
+        // even if the size is the same
+        if let Some(old_id) = self.fractal_texture_id.take() {
+            if !needs_reregister {
+                self.renderer.free_texture(&old_id);
+            }
+        }
+
+        let texture_id = self.renderer.register_native_texture(
+            device,
+            texture_view,
+            FilterMode::Linear,
+        );
+        self.fractal_texture_id = Some(texture_id);
     }
 
     /// Get the egui TextureId for the fractal texture (for displaying in UI)

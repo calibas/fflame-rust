@@ -321,6 +321,12 @@ impl App {
     fn render(&mut self, window: &Window) -> Result<(), SurfaceError> {
         use web_time::Instant;
 
+        // Skip rendering if window is minimized (size is 0)
+        // This prevents surface errors and wasted GPU work
+        if self.gpu.size.width == 0 || self.gpu.size.height == 0 {
+            return Ok(());
+        }
+
         let render_start = Instant::now();
         self.last_frame_time = Some(render_start);
 
