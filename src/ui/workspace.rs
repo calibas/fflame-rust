@@ -121,14 +121,14 @@ impl Workspace {
         let mut state = DockState::new(vec![PanelType::FractalViewport]);
 
         // Split left for Transforms
-        let [_fractal_node, left_node] = state.main_surface_mut().split_left(
+        let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
             egui_dock::NodeIndex::root(),
             0.25, // 25% width for left panel
             vec![PanelType::Transforms],
         );
 
         // Split right for other controls (Colors, View, Rendering, History)
-        let [_fractal_node, right_node] = state.main_surface_mut().split_right(
+        let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.75, // Right panel starts at 75% (takes remaining 25%)
             vec![PanelType::Colors, PanelType::View, PanelType::Rendering, PanelType::History],
@@ -158,10 +158,6 @@ impl Workspace {
         state
     }
 
-    /// Get the dock style (visual appearance)
-    pub fn style() -> Style {
-        Style::from_egui(&egui::Style::default())
-    }
 }
 
 impl Default for Workspace {

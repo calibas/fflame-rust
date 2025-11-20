@@ -1,22 +1,6 @@
 // Use web-time for WASM compatibility (provides Instant on all platforms)
 use web_time::{Duration, Instant};
 
-/// Performance snapshot for logging/export
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct PerformanceSnapshot {
-    pub version: String,
-    pub git_hash: String,
-    pub build_time: String,
-    pub fps: f64,
-    pub frame_time_ms: f64,
-    pub frame_count: u64,
-    pub compute_time_ms: f64,
-    pub accumulate_time_ms: f64,
-    pub tonemap_time_ms: f64,
-    pub ui_time_ms: f64,
-    pub timestamp: String,
-}
-
 /// Performance metrics tracker with detailed component timing
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct PerformanceMetrics {
@@ -62,9 +46,6 @@ pub struct PerformanceMetrics {
     #[serde(skip)]
     render_times: Vec<f64>,
 
-    // Version and build info (captured at creation, not serialized/deserialized)
-    #[serde(skip)]
-    pub version_info: Option<crate::version::VersionInfo>,
 }
 
 impl PerformanceMetrics {
@@ -93,47 +74,7 @@ impl PerformanceMetrics {
             submit_times: Vec::new(),
             present_times: Vec::new(),
             render_times: Vec::new(),
-            version_info: Some(crate::version::VersionInfo::current()),
         }
-    }
-
-    /// Export performance statistics as JSON (includes version info)
-    pub fn export_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
-    }
-
-    /// Get version-tagged performance snapshot
-    pub fn snapshot(&self) -> PerformanceSnapshot {
-        PerformanceSnapshot {
-            version: self.version_info.as_ref().map(|v| v.full_version()).unwrap_or_else(|| "unknown".to_string()),
-            git_hash: self.version_info.as_ref().map(|v| v.git_hash.to_string()).unwrap_or_else(|| "unknown".to_string()),
-            build_time: self.version_info.as_ref().map(|v| v.build_time.to_string()).unwrap_or_else(|| "unknown".to_string()),
-            fps: self.fps,
-            frame_time_ms: self.frame_time_ms,
-            frame_count: self.frame_count,
-            compute_time_ms: self.compute_time_ms,
-            accumulate_time_ms: self.accumulate_time_ms,
-            tonemap_time_ms: self.tonemap_time_ms,
-            ui_time_ms: self.ui_time_ms,
-            timestamp: chrono::Utc::now().to_rfc3339(),
-        }
-    }
-
-    /// Log performance snapshot to console (WASM-compatible)
-    pub fn log_snapshot(&self) {
-        let snapshot = self.snapshot();
-        log::info!("Performance Snapshot:");
-        log::info!("  Version: {}", snapshot.version);
-        log::info!("  Git: {}", snapshot.git_hash);
-        log::info!("  Built: {}", snapshot.build_time);
-        log::info!("  FPS: {:.1}", snapshot.fps);
-        log::info!("  Frame Time: {:.2}ms", snapshot.frame_time_ms);
-        log::info!("  Frame Count: {}", snapshot.frame_count);
-        log::info!("  Compute: {:.2}ms", snapshot.compute_time_ms);
-        log::info!("  Accumulate: {:.2}ms", snapshot.accumulate_time_ms);
-        log::info!("  Tonemap: {:.2}ms", snapshot.tonemap_time_ms);
-        log::info!("  UI: {:.2}ms", snapshot.ui_time_ms);
-        log::info!("  Timestamp: {}", snapshot.timestamp);
     }
 
     /// Export snapshot to browser console (WASM only)
@@ -145,13 +86,6 @@ impl PerformanceMetrics {
         if let Ok(json) = serde_json::to_string_pretty(&snapshot) {
             web_sys::console::log_1(&JsValue::from_str(&format!("Performance Snapshot:\n{}", json)));
         }
-    }
-
-    /// Export snapshot to browser console (no-op on desktop)
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn export_to_console(&self) {
-        // No-op on desktop - use export_json() instead
-        log::warn!("export_to_console() is WASM-only. Use export_json() on desktop.");
     }
 
     /// Update metrics at the end of each frame
