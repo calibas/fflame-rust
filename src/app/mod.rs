@@ -372,6 +372,14 @@ impl App {
                         resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.saturation, resize_config.hue_shift, resize_config.value_scale,
                         viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations);
                     renderer.update_curve_lut(&self.gpu.queue, &resize_config.tonemap_curve);
+
+                    // Re-register texture with egui after resize (new texture view created)
+                    self.egui_layer.register_fractal_texture(
+                        &self.gpu.device,
+                        renderer.get_fractal_texture_view(),
+                        viewport_size.0,
+                        viewport_size.1,
+                    );
                 }
             }
         }
