@@ -12,12 +12,12 @@ pub fn render_menu_bar(
         egui::MenuBar::new().ui(ui, |ui| {
             // File Menu
             ui.menu_button(t!("menu.file"), |ui| {
-                if ui.button("📂 Open Config...").clicked() {
+                if ui.button("📂 Open...").clicked() {
                     menu_actions.file.load_config = true;
 
                 }
 
-                if ui.button("💾 Save Config As...").clicked() {
+                if ui.button("💾 Save As...").clicked() {
                     menu_actions.file.save_config = true;
 
                 }

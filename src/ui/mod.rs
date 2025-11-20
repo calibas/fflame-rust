@@ -393,13 +393,13 @@ impl EguiLayer {
         *flame = config_manager.active_config().flame.clone();
 
         // Extract menu actions into individual flags for backward compatibility
-        config_load_file = menu_actions.file.load_config;
-        config_save_file = menu_actions.file.save_config;
-        apophysis_import_file = menu_actions.file.import_apophysis;
+        config_load_file |= menu_actions.file.load_config;
+        config_save_file |= menu_actions.file.save_config;
+        apophysis_import_file |= menu_actions.file.import_apophysis;
         if menu_actions.file.export_png {
             png_export_transparent = true;
         }
-        *quit_requested = menu_actions.file.quit;
+        *quit_requested |= menu_actions.file.quit;
 
         // Combine undo/redo from both menu and panels (OR to not override panel buttons)
         undo_requested |= menu_actions.edit.undo;

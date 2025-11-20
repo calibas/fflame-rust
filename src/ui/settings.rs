@@ -318,9 +318,11 @@ pub fn render_settings_content(
     egui::CollapsingHeader::new("Export")
         .default_open(false)
         .show(ui, |ui| {
-            ui.label("PNG Export Options");
+            ui.label("PNG Export");
 
-            ui.checkbox(png_export_with_background, "Export with Background");
+            if ui.button("Export with Background").clicked() {
+                *png_export_with_background = true;
+            }
             // TODO: Transparent export currently broken, hiding for now
             // ui.checkbox(png_export_transparent, "Export Transparent");
 
@@ -342,9 +344,6 @@ pub fn render_settings_content(
             if !*use_custom_export_size {
                 ui.label("Export will use current viewport size");
             }
-
-            ui.separator();
-            ui.label("Use File → Export to save PNG");
         });
 
     ui.separator();
