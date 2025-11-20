@@ -215,12 +215,6 @@ pub fn render_menu_bar(
 
                 }
 
-                // Help opens as floating window in docking system
-                let help_open = workspace.panel_exists(super::workspace::PanelType::Help);
-                if ui.selectable_label(help_open, "❓ Help").clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Help);
-
-                }
                 ui.separator();
 
                 // Palette Editor opens as floating window in docking system
@@ -277,12 +271,12 @@ pub fn render_menu_bar(
             ui.menu_button(t!("menu.help"), |ui| {
                 // Help panel opens as floating window in docking system
                 let help_open = workspace.panel_exists(super::workspace::PanelType::Help);
-                if ui.selectable_label(help_open, "❓ Help (F1)").clicked() {
+                if ui.selectable_label(help_open, "❓ Help").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Help);
 
                 }
 
-                if ui.selectable_label(help_open, "⌨ Keyboard Shortcuts (Ctrl+/)").clicked() {
+                if ui.selectable_label(help_open, "⌨ Keyboard Shortcuts").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Help);
 
                 }
