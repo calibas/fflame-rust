@@ -174,69 +174,19 @@ impl App {
                         WindowEvent::Resized(size) => {
                             // Skip resize if dimensions are zero (happens when minimizing on Windows)
                             if size.width > 0 && size.height > 0 {
+                                log::debug!("Window resized to {}x{}", size.width, size.height);
                                 app.gpu.resize(size);
-                                // Also resize renderer buffers to match
-                                if let Some(ref mut renderer) = app.flame_renderer {
-                                    let config = app.config_manager.active_config();
-                                    let mut encoder = app.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                                        label: Some("Resize Encoder"),
-                                    });
-                                    renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, size.width, size.height,
-                                        &app.flame, config.iterations_per_thread, config.zoom, config.pan_x, config.pan_y, config.rotation,
-                                        config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor);
-                                    app.gpu.queue.submit(std::iter::once(encoder.finish()));
-
-                                    // Restore palette and color mode after buffer recreation
-                                    // (FlameBuffers::new() resets to defaults: fire palette and transform colors)
-                                    let palette = config.palette.as_ref()
-                                        .or_else(|| app.palette_library.get(config.palette_index));
-                                    if let Some(palette) = palette {
-                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette, config.palette_rotation);
-                                    }
-                                    renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
-                                        config.zoom, config.pan_x, config.pan_y, config.rotation,
-                                        config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor);
-
-                                    // Restore tonemap parameters after buffer recreation
-                                    renderer.update_tonemap(&app.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma,
-                                        config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale,
-                                        size.width, size.height, renderer.total_iterations(), config.max_iterations);
-                                    renderer.update_curve_lut(&app.gpu.queue, &config.tonemap_curve);
-                                }
+                                // NOTE: Don't resize renderer here - it will be resized by fractal viewport resize
+                                // The fractal panel is smaller than the window (due to UI panels)
+                                // Resizing renderer to window size causes aspect ratio mismatch
                             }
                         },
                         WindowEvent::ScaleFactorChanged { .. } => {
-                            // Handle DPI/zoom changes - resize canvas to match new scale
+                            // Handle DPI/zoom changes - resize surface to match new scale
+                            // Note: Renderer resize will happen via fractal viewport resize in render()
                             let new_size = window.inner_size();
                             if new_size.width > 0 && new_size.height > 0 {
                                 app.gpu.resize(new_size);
-                                if let Some(ref mut renderer) = app.flame_renderer {
-                                    let config = app.config_manager.active_config();
-                                    let mut encoder = app.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                                        label: Some("Scale Factor Resize Encoder"),
-                                    });
-                                    renderer.resize(&app.gpu.device, &mut encoder, &app.gpu.queue, new_size.width, new_size.height,
-                                        &app.flame, config.iterations_per_thread, config.zoom, config.pan_x, config.pan_y, config.rotation,
-                                        config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor);
-                                    app.gpu.queue.submit(std::iter::once(encoder.finish()));
-
-                                    // Restore palette and color mode after buffer recreation
-                                    // (FlameBuffers::new() resets to defaults: fire palette and transform colors)
-                                    let palette = config.palette.as_ref()
-                                        .or_else(|| app.palette_library.get(config.palette_index));
-                                    if let Some(palette) = palette {
-                                        renderer.update_palette(&app.gpu.device, &app.gpu.queue, palette, config.palette_rotation);
-                                    }
-                                    renderer.set_color_mode(&app.gpu.queue, config.color_mode, config.iterations_per_thread,
-                                        config.zoom, config.pan_x, config.pan_y, config.rotation,
-                                        config.camera_rotation_x, config.camera_rotation_y, config.camera_z, config.speed_factor);
-
-                                    // Restore tonemap parameters after buffer recreation
-                                    renderer.update_tonemap(&app.gpu.queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma,
-                                        config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale,
-                                        new_size.width, new_size.height, renderer.total_iterations(), config.max_iterations);
-                                    renderer.update_curve_lut(&app.gpu.queue, &config.tonemap_curve);
-                                }
                                 window.request_redraw();
                             }
                         },
