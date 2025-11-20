@@ -386,6 +386,7 @@ impl App {
         // Handle viewport resize immediately (before rendering)
         if let Some(viewport_size) = ui_response.fractal_viewport_size {
             if viewport_size != self.fractal_viewport_size {
+                log::info!("Fractal viewport resize: {:?} → {:?}", self.fractal_viewport_size, viewport_size);
                 self.fractal_viewport_size = viewport_size;
 
                 // Resize renderer to match new viewport dimensions

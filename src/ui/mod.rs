@@ -119,6 +119,9 @@ impl EguiLayer {
             || self.fractal_texture_height != height;
 
         if needs_reregister {
+            log::info!("Re-registering fractal texture: {}x{} → {}x{}",
+                self.fractal_texture_width, self.fractal_texture_height, width, height);
+
             // Unregister old texture if it exists
             if let Some(old_id) = self.fractal_texture_id.take() {
                 self.renderer.free_texture(&old_id);
