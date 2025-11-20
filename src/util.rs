@@ -77,17 +77,6 @@ impl PerformanceMetrics {
         }
     }
 
-    /// Export snapshot to browser console (WASM only)
-    #[cfg(target_arch = "wasm32")]
-    pub fn export_to_console(&self) {
-        use wasm_bindgen::prelude::*;
-
-        let snapshot = self.snapshot();
-        if let Ok(json) = serde_json::to_string_pretty(&snapshot) {
-            web_sys::console::log_1(&JsValue::from_str(&format!("Performance Snapshot:\n{}", json)));
-        }
-    }
-
     /// Update metrics at the end of each frame
     pub fn update(&mut self) {
         let now = Instant::now();
