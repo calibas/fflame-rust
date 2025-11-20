@@ -149,7 +149,11 @@ impl GpuContext {
         log::info!("  Present modes: {:?}", surface_caps.present_modes);
         log::info!("  Alpha modes: {:?}", surface_caps.alpha_modes);
 
-        let format = surface_caps.formats[0];
+        // Prefer non-sRGB formats for egui compatibility (avoids sRGB warning)
+        let format = surface_caps.formats.iter()
+            .find(|f| matches!(f, TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Unorm))
+            .copied()
+            .unwrap_or(surface_caps.formats[0]);
         log::info!("Selected format: {:?}", format);
 
         let config = SurfaceConfiguration {
