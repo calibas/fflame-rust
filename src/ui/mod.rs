@@ -182,12 +182,9 @@ impl EguiLayer {
         // Note: Config change tracking now handled by ConfigManager.get_pending_actions()
         // Only non-config actions tracked here (file I/O, palette library, transforms, etc.)
 
-        let mut pause_changed = false;
         let mut preset_changed = false;
         let mut add_transform = false;
         let mut delete_transform = None;
-        let mut show_triangle_editor = false;
-        let mut show_undo_history = false;
 
         // Config import/export
         let mut config_export_json = None;
@@ -271,7 +268,6 @@ impl EguiLayer {
                         undo_requested: &mut undo_requested,
                         redo_requested: &mut redo_requested,
                         preset_changed: &mut preset_changed,
-                        pause_changed: &mut pause_changed,
                         open_palette_editor: &mut open_palette_editor,
 
                         // UI state
@@ -422,7 +418,6 @@ impl EguiLayer {
         // Handle Rendering menu actions
         if menu_actions.rendering.pause_toggle {
             *paused = !*paused;
-            pause_changed = true;
         }
 
         if menu_actions.rendering.reset_accumulation {

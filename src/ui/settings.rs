@@ -17,7 +17,6 @@ pub fn render_settings_content(
     flame: &mut Flame,
     flame_renderer: Option<&crate::renderer::compute_kernel::FlameRenderer>,
     paused: &mut bool,
-    pause_changed: &mut bool,
     config_manager: &mut ConfigManager,
     open_config_dialog: &mut bool,
 ) {
@@ -76,7 +75,6 @@ pub fn render_settings_content(
                 let button_text = if *paused { "▶ Resume" } else { "⏸ Pause" };
                 if ui.button(button_text).clicked() {
                     *paused = !*paused;
-                    *pause_changed = true;
                 }
 
                 if ui.button("🔄 Reset Accumulation").clicked() {
