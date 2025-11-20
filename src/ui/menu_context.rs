@@ -39,9 +39,6 @@ pub struct TransformMenuActions {
     pub add_transform: bool,
     pub delete_transform: Option<usize>,
     pub randomize_transform: bool,
-    pub save_preset: bool,
-    pub import_palette: bool,
-    pub export_palette: bool,
 }
 
 /// Actions that can be triggered from the Rendering menu

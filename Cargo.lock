@@ -1394,6 +1394,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "web-time",
+ "webbrowser",
  "wgpu",
  "winit",
 ]
