@@ -24,6 +24,7 @@ web-time = "1.1"
 rfd = "0.15"
 once_cell = "1.19"
 chrono = "0.4"
+webbrowser = "1.0"
 
 # Optional
 image = "0.25"

@@ -64,11 +64,6 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                // Future features (not implemented yet)
-                ui.add_enabled(false, egui::Button::new("📋 Copy Transform"));
-                ui.add_enabled(false, egui::Button::new("📄 Paste Transform"));
-                ui.add_enabled(false, egui::Button::new("📑 Duplicate Transform"));
-
                 ui.separator();
 
                 ui.add_enabled(false, egui::Button::new("⚙ Preferences..."));
@@ -134,13 +129,6 @@ pub fn render_menu_bar(
                     menu_actions.transform.add_transform = true;
 
                 }
-
-                // Not implemented yet
-                ui.add_enabled(false, egui::Button::new("Copy Transform"));
-                ui.add_enabled(false, egui::Button::new("Paste Transform"));
-                ui.add_enabled(false, egui::Button::new("Duplicate Transform"));
-                ui.add_enabled(false, egui::Button::new("Delete Transform"));
-                ui.add_enabled(false, egui::Button::new("Randomize Transform"));
             });
 
             // Rendering Menu
@@ -181,11 +169,6 @@ pub fn render_menu_bar(
                         }
                     }
                 });
-
-                ui.separator();
-
-                // Benchmark (not implemented)
-                ui.add_enabled(false, egui::Button::new("Benchmark..."));
             });
 
             // Windows Menu
@@ -306,9 +289,13 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                // Future features (not implemented yet)
-                ui.add_enabled(false, egui::Button::new("🐛 Report Bug..."));
-                ui.add_enabled(false, egui::Button::new("ℹ About..."));
+                if ui.button("🐛 Report Bug...").clicked() {
+                    let _ = webbrowser::open("https://github.com/calibas/fflame-rust/issues/new");
+                }
+
+                if ui.button("ℹ About...").clicked() {
+                    let _ = webbrowser::open("https://github.com/calibas/fflame-rust");
+                }
             });
 
             // Push language selector to the right side
