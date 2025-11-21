@@ -155,12 +155,11 @@ impl FlameRenderer {
     }
 
     /// Reset iteration counters without clearing accumulation buffer
-    /// Used when fractal parameters change but we want smooth transition via overwrite mode
+    /// Used when transitioning from overwrite mode to normal accumulation
     pub fn reset_iteration_counter(&mut self) {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
-        // NOTE: Don't reset effective_iterations here - it carries forward through overwrite mode
-        // to prevent brightness flash when exiting preview
+        self.effective_iterations = 0; // Reset for new accumulation phase
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
     }
 
