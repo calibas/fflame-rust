@@ -680,9 +680,16 @@ impl FlameRenderer {
         // Area in fractal space (not pixel space!)
         let area = (width * height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density scaled by zoom² (Apophysis formula)
-        let apophysis_batch_size = 10000.0; // SUB_BATCH_SIZE from ControlPoint.pas:35
-        let base_density = apophysis_batch_size / ((width * height) as f32);
+        // Sample density: actual iterations / pixel area (Apophysis formula)
+        // This must use the ACTUAL accumulated iteration count, not a synthetic constant!
+        // Apophysis: sample_density = fcp.actual_density * sqr(power(2, fcp.zoom))
+        //            where actual_density = total_iterations / pixel_area
+        let pixel_area = (width * height) as f32;
+        let base_density = if pixel_area > 0.0 {
+            self.total_iterations as f32 / pixel_area
+        } else {
+            1.0
+        };
         let zoom_scale = (2.0_f32).powf(apophysis_zoom * 2.0);  // 2^(2*zoom) = (2^zoom)²
         let sample_density = base_density * zoom_scale;
 
