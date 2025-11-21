@@ -691,14 +691,16 @@ impl FlameRenderer {
         // Area in fractal space (not pixel space!)
         let area = (width * height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: use effective_iterations for stable brightness
-        // effective_iterations doesn't reset during overwrite mode, preventing brightness flash
-        // when transitioning from preview to normal accumulation.
+        // Sample density: use max_iterations as fixed reference (like Apophysis)
+        // Apophysis renders to completion, so sample_density is constant throughout.
+        // For progressive rendering, using max_iterations keeps the brightness curve stable.
+        // Early frames will be darker (they genuinely have less data), late frames lighter.
+        // This is the "correct" behavior - brightness reflects actual accumulation progress.
         // Apophysis: sample_density = fcp.actual_density * sqr(power(2, fcp.zoom))
         //            where actual_density = total_iterations / pixel_area
         let pixel_area = (width * height) as f32;
         let base_density = if pixel_area > 0.0 {
-            self.effective_iterations.max(1_000_000) as f32 / pixel_area
+            _max_iterations as f32 / pixel_area
         } else {
             1.0
         };
