@@ -705,7 +705,8 @@ impl FlameRenderer {
             1.0
         };
         let zoom_scale = (2.0_f32).powf(apophysis_zoom * 2.0);  // 2^(2*zoom) = (2^zoom)²
-        let sample_density = base_density * zoom_scale;
+        // let sample_density = base_density * zoom_scale;
+        let sample_density = base_density;
 
         let params = TonemapParams {
             exposure,
