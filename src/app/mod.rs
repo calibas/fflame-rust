@@ -370,7 +370,7 @@ impl App {
                     // Restore tonemap parameters after buffer recreation
                     renderer.update_tonemap(&self.gpu.queue, resize_config.tonemap_mode, resize_config.use_curve, resize_config.exposure, resize_config.gamma,
                         resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.saturation, resize_config.hue_shift, resize_config.value_scale,
-                        viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom);
+                        viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, resize_config.iterations_per_thread, 1);
                     renderer.update_curve_lut(&self.gpu.queue, &resize_config.tonemap_curve);
 
                     // Re-register texture with egui after resize (new texture view created)
@@ -1163,10 +1163,13 @@ impl App {
             // 4. Update tonemap parameters and render to fractal texture
             renderer.update_density_scale(&self.gpu.queue, final_config.density_scale);
             renderer.update_background_color(&self.gpu.queue, final_config.background_color);
+            // Calculate batch_size for tonemap (same logic as accumulation)
+            let batch_size_for_tonemap = if use_overwrite { 1 } else { self.accumulation_batch_size };
             renderer.update_tonemap(&self.gpu.queue, final_config.tonemap_mode, final_config.use_curve,
                 final_config.exposure, final_config.gamma, final_config.gamma_threshold, final_config.brightness,
                 final_config.vibrancy, final_config.saturation, final_config.hue_shift, final_config.value_scale,
-                renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations, final_config.zoom);
+                renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations, final_config.zoom,
+                final_config.iterations_per_thread, batch_size_for_tonemap);
 
             // Render to internal fractal texture
             renderer.tonemap_pass(&mut render_encoder);
