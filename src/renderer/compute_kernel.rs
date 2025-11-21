@@ -21,6 +21,7 @@ pub struct FlameRenderer {
     pub height: u32,
     samples_accumulated: u64,
     total_iterations: u64,
+    effective_iterations: u64, // For brightness calculation - doesn't reset during overwrite mode
     color_mode: ColorMode,
     density_scale: f32,
     background_color: [f32; 3],
@@ -96,6 +97,7 @@ impl FlameRenderer {
             height,
             samples_accumulated: 0,
             total_iterations: 0,
+            effective_iterations: 0,
             color_mode: ColorMode::Palette,
             density_scale: 1.0,
             background_color: [0.0, 0.0, 0.0],
@@ -157,12 +159,16 @@ impl FlameRenderer {
     pub fn reset_iteration_counter(&mut self) {
         self.samples_accumulated = 0;
         self.total_iterations = 0;
+        // NOTE: Don't reset effective_iterations here - it carries forward through overwrite mode
+        // to prevent brightness flash when exiting preview
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
     }
 
-    /// Reset accumulation buffer and sample count
+    /// Reset accumulation buffer and sample count (full reset including effective iterations)
     pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _camera_z: f32, _speed_factor: f32) {
         self.reset_iteration_counter();
+        // Reset effective_iterations when doing a full reset (buffer cleared)
+        self.effective_iterations = 0;
 
         // Clear accumulation buffers
         self.buffers.clear_all(encoder, queue);
@@ -245,6 +251,12 @@ impl FlameRenderer {
     /// Run accumulation pass to blend new samples with previous accumulation
     pub fn accumulate_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, device: &Device, samples_this_frame: u64) {
         self.samples_accumulated += samples_this_frame;
+
+        // Update effective_iterations (for brightness) only when NOT in overwrite mode
+        // This prevents brightness flash when exiting overwrite/preview mode
+        if !self.overwrite_mode {
+            self.effective_iterations += samples_this_frame;
+        }
 
         // Calculate blend_factor based on mode
         let blend_factor = if self.overwrite_mode {
@@ -680,13 +692,14 @@ impl FlameRenderer {
         // Area in fractal space (not pixel space!)
         let area = (width * height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: actual iterations / pixel area (Apophysis formula)
-        // This must use the ACTUAL accumulated iteration count, not a synthetic constant!
+        // Sample density: use effective_iterations for stable brightness
+        // effective_iterations doesn't reset during overwrite mode, preventing brightness flash
+        // when transitioning from preview to normal accumulation.
         // Apophysis: sample_density = fcp.actual_density * sqr(power(2, fcp.zoom))
         //            where actual_density = total_iterations / pixel_area
         let pixel_area = (width * height) as f32;
         let base_density = if pixel_area > 0.0 {
-            self.total_iterations as f32 / pixel_area
+            self.effective_iterations.max(1_000_000) as f32 / pixel_area
         } else {
             1.0
         };

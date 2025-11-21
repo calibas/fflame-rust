@@ -95,6 +95,22 @@ The brightness formula might be fundamentally designed for single-pass rendering
 
 ## Current Status
 
-Using Attempt 1 (total_iterations) as baseline. Need to understand why Apophysis doesn't have this problem.
+Using Attempt 1 (total_iterations) as baseline.
 
-**Question:** Does Apophysis even support progressive rendering? Or do they always render to completion before displaying?
+**Answer:** Apophysis only displays **after completion**. When brightness formula runs, `total_iterations == max_iterations`. No progressive rendering issue.
+
+## The Real Problem
+
+We're doing **real-time progressive rendering** which Apophysis doesn't support. Need to define "correct" brightness during accumulation.
+
+**Best Option: Use total_iterations but don't reset on parameter changes**
+
+Current issue: When exiting overwrite mode, `total_iterations` resets to ~0, causing bright flash.
+
+Solution: Track "effective_iterations" that carries forward through overwrite mode:
+- During normal accumulation: effective_iterations = total_iterations (grows normally)
+- When entering overwrite: Don't reset effective_iterations (keep existing value)
+- During overwrite: effective_iterations stays constant (no accumulation)
+- When exiting overwrite: Continue from existing effective_iterations value
+
+This provides consistent brightness without flash, while still reflecting actual accumulation progress.
