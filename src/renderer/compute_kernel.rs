@@ -402,7 +402,7 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, self.width, self.height, self.total_iterations, config.max_iterations);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -644,7 +644,7 @@ impl FlameRenderer {
     }
 
     /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, and value scale
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64) {
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match tonemap_mode {
@@ -653,17 +653,36 @@ impl FlameRenderer {
             crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
         };
 
-        // Calculate area and sample_density for brightness lookup table
-        // Apophysis uses sample_density = total_iterations / area (calculated once for full render)
-        // For progressive rendering, use Apophysis's SUB_BATCH_SIZE (10,000) as reference
-        // This gives consistent brightness independent of iterations_per_thread setting
-        let area = (width * height) as f32;
+        // Calculate area and sample_density for brightness lookup table with Apophysis zoom compensation
+        // Apophysis ImageMaker.pas:448-452:
+        //   sample_density := fcp.actual_density * sqr(power(2, fcp.zoom));
+        //   area := FBitmap.Width * FBitmap.Height / (fcp.ppux * fcp.ppuy);
+        //   where ppux = pixels_per_unit * 2^zoom
+        //
+        // This normalizes brightness across zoom levels:
+        // - Zoomed in: Higher sample_density → smaller k2 → less brightness boost
+        // - Zoomed out: Lower sample_density → larger k2 → more brightness boost
+        //
+        // NOTE: Our zoom is LINEAR (zoom=1.0 is default, zoom=2.0 is 2x scale)
+        //       Apophysis zoom is LOGARITHMIC (zoom=0 is default, zoom=1 means scale by 2^1=2)
+        //       Convert: apophysis_zoom = log2(our_zoom)
+
+        // Convert our linear zoom to Apophysis logarithmic zoom
+        let apophysis_zoom = zoom.log2();  // our zoom=1.0 → apophysis zoom=0, our zoom=2.0 → apophysis zoom=1
+
+        // Calculate pixels per unit at current zoom (ppux = ppuy for square pixels)
+        // Base pixels_per_unit is chosen to match our coordinate system
+        let base_pixels_per_unit = (width.min(height) as f32) * 0.25;  // From world_to_pixel scale
+        let pixels_per_unit_zoomed = base_pixels_per_unit * (2.0_f32).powf(apophysis_zoom);
+
+        // Area in fractal space (not pixel space!)
+        let area = (width * height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
+
+        // Sample density scaled by zoom² (Apophysis formula)
         let apophysis_batch_size = 10000.0; // SUB_BATCH_SIZE from ControlPoint.pas:35
-        let sample_density = if area > 0.0 {
-            apophysis_batch_size / area
-        } else {
-            1.0
-        };
+        let base_density = apophysis_batch_size / ((width * height) as f32);
+        let zoom_scale = (2.0_f32).powf(apophysis_zoom * 2.0);  // 2^(2*zoom) = (2^zoom)²
+        let sample_density = base_density * zoom_scale;
 
         let params = TonemapParams {
             exposure,

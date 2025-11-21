@@ -3,7 +3,6 @@
     "allow": [
       "Bash(cargo build:*)",
       "Bash(cargo test:*)",
-      "Bash(cargo run:*)",
       "Bash(cargo check:*)",
       "Bash(wasm-bindgen:*)",
       "Bash(tasklist)",
