@@ -415,7 +415,7 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, config.iterations_per_thread, 1);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -657,7 +657,7 @@ impl FlameRenderer {
     }
 
     /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, and value scale
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32) {
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, batch_size: u32) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match tonemap_mode {
@@ -691,21 +691,25 @@ impl FlameRenderer {
         // Area in fractal space (not pixel space!)
         let area = (width * height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: use max_iterations as fixed reference (like Apophysis)
-        // Apophysis renders to completion, so sample_density is constant throughout.
-        // For progressive rendering, using max_iterations keeps the brightness curve stable.
-        // Early frames will be darker (they genuinely have less data), late frames lighter.
-        // This is the "correct" behavior - brightness reflects actual accumulation progress.
-        // Apophysis: sample_density = fcp.actual_density * sqr(power(2, fcp.zoom))
-        //            where actual_density = total_iterations / pixel_area
+        // Sample density: use iterations per frame for consistent brightness
+        // The key insight: brightness formula should be calibrated for the PER-FRAME density
+        // increment, not the total accumulated density.
+        //
+        // Each accumulation adds: NUM_WORKGROUPS × iterations_per_thread × batch_size iterations
+        // This gets distributed across all pixels, giving a consistent per-pixel density increase
+        // per frame. By calibrating sample_density to this per-frame rate, the brightness
+        // formula produces consistent results regardless of total accumulated iterations.
+        //
+        // This solves the progressive rendering problem: instead of matching total accumulated
+        // density (which grows over time), we match the per-frame increment (which is constant).
+        const NUM_WORKGROUPS: u32 = 128;
+        let iterations_per_frame = (NUM_WORKGROUPS * iterations_per_thread * batch_size) as f32;
         let pixel_area = (width * height) as f32;
         let base_density = if pixel_area > 0.0 {
-            _max_iterations as f32 / pixel_area
+            iterations_per_frame / pixel_area
         } else {
             1.0
         };
-        let zoom_scale = (2.0_f32).powf(apophysis_zoom * 2.0);  // 2^(2*zoom) = (2^zoom)²
-        // let sample_density = base_density * zoom_scale;
         let sample_density = base_density;
 
         let params = TonemapParams {
