@@ -107,7 +107,7 @@ impl FlameRenderer {
             low_density_smoothing: 0.5, // Moderate smoothing default
             density_compression_strength: 0.0, // Linear accumulation default (no compression)
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
-            use_dynamic_blend: false, // Default to fixed blend rate (changed from exponential)
+            use_dynamic_blend: true, // Default to clamped exponential (0.8 → 0.01)
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
             overwrite_mode: false, // Default to normal blending (progressive refinement)
             num_transforms: flame.transforms.len() as u32,
@@ -252,11 +252,13 @@ impl FlameRenderer {
             // Prevents mixing of different fractal states during drag
             1.0
         } else if self.use_dynamic_blend {
-            // Exponential convergence (normal mode): blend_factor decreases over time
-            // Prevents overbright over time, converges to stable image
-            samples_this_frame as f32 / self.samples_accumulated as f32
+            // Clamped exponential decay: Start at 0.8 for fast initial convergence,
+            // decay over time but never drop below 0.01 so iterations always contribute
+            let raw_blend = samples_this_frame as f32 / self.samples_accumulated as f32;
+            let clamped_blend = raw_blend.max(0.01).min(0.8);
+            clamped_blend
         } else {
-            // Fixed blend rate (testing mode): constant blend per frame
+            // Fixed blend rate: constant blend per frame
             // Useful for testing density compression effects
             self.blend_factor
         };

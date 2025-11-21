@@ -22,8 +22,8 @@ pub const DEFAULT_GAMMA_THRESHOLD: f32 = 0.0025; // Smooths gamma curve at low d
 // Accumulation
 pub const DEFAULT_LOW_DENSITY_SMOOTHING: f32 = 0.5; // Moderate smoothing
 pub const DEFAULT_DENSITY_COMPRESSION: f32 = 0.0; // No compression
-pub const DEFAULT_BLEND_FACTOR: f32 = 0.1; // 10% blend rate
-pub const DEFAULT_USE_DYNAMIC_BLEND: bool = false; // Fixed blend rate (was true for exponential convergence)
+pub const DEFAULT_BLEND_FACTOR: f32 = 0.1; // 10% blend rate (used when dynamic blend is off)
+pub const DEFAULT_USE_DYNAMIC_BLEND: bool = true; // Clamped exponential: 0.8 → 0.01
 
 // Performance
 pub const DEFAULT_ITERATIONS_PER_THREAD: u32 = 256;
