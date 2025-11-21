@@ -107,7 +107,7 @@ impl FlameRenderer {
             low_density_smoothing: 0.5, // Moderate smoothing default
             density_compression_strength: 0.0, // Linear accumulation default (no compression)
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
-            use_dynamic_blend: true, // Default to exponential convergence (old behavior)
+            use_dynamic_blend: false, // Default to fixed blend rate (changed from exponential)
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
             overwrite_mode: false, // Default to normal blending (progressive refinement)
             num_transforms: flame.transforms.len() as u32,
