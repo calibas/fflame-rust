@@ -103,14 +103,35 @@ Using Attempt 1 (total_iterations) as baseline.
 
 We're doing **real-time progressive rendering** which Apophysis doesn't support. Need to define "correct" brightness during accumulation.
 
-**Best Option: Use total_iterations but don't reset on parameter changes**
+## Attempt 4: Track effective_iterations (Commits 896a472, c635138)
+```rust
+// During accumulation (not overwrite):
+effective_iterations += samples_this_frame
 
-Current issue: When exiting overwrite mode, `total_iterations` resets to ~0, causing bright flash.
+// When exiting overwrite (reset_iteration_counter):
+effective_iterations = 0
 
-Solution: Track "effective_iterations" that carries forward through overwrite mode:
-- During normal accumulation: effective_iterations = total_iterations (grows normally)
-- When entering overwrite: Don't reset effective_iterations (keep existing value)
-- During overwrite: effective_iterations stays constant (no accumulation)
-- When exiting overwrite: Continue from existing effective_iterations value
+// For brightness:
+base_density = effective_iterations.max(1M) / pixel_area
+```
 
-This provides consistent brightness without flash, while still reflecting actual accumulation progress.
+**Behavior:**
+- ❌ Much too bright at first (effective_iterations starts at 0)
+- ❌ Gradually approaches correct brightness at end of iterations
+- ❌ Still getting bright flash at beginning
+
+**Why:** Low effective_iterations → low sample_density → high k2 → excessive brightness
+
+---
+
+## Current Understanding
+
+The brightness formula is fundamentally incompatible with progressive rendering where density builds gradually. All attempts fail because:
+
+1. **Low iterations early** → formula assumes low density → brightens image
+2. **High iterations late** → formula assumes high density → darkens image
+3. **But actual buffer density grows continuously** → mismatch at all times
+
+**The real issue:** `sample_density` in k2 is meant to be a **constant reference** for calibration, but `bucket_count` (actual pixel hits) grows over time. When they don't match, brightness is wrong.
+
+**Possible solution:** Use max_iterations as fixed reference (constant brightness curve), but that makes early frames genuinely darker because they have less actual data. Need to determine: is that the correct behavior?
