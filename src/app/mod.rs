@@ -240,45 +240,33 @@ impl App {
                         max_iterations.map_or(true, |max| r.total_iterations() < max)
                     });
 
-                    // Determine target frame rate based on activity:
-                    // - Rendering: Use speed multiplier (60-960 FPS)
-                    // - UI interaction: 60 FPS (smooth response)
-                    // - Truly idle: 10 FPS (minimal GPU usage)
-                    // DISABLE_FRAME_LIMIT: Run as fast as possible for profiling
-                    let (target_fps, mode) = if std::env::var("DISABLE_FRAME_LIMIT").is_ok() {
-                        (10000.0, "unlimited")  // Effectively unlimited
-                    } else if is_rendering {
-                        (60.0 * config.speed_multiplier as f64, "rendering")
-                    } else if app.ui_needs_repaint {
-                        (60.0, "ui_active")
-                    } else {
-                        (10.0, "idle")
-                    };
-                    let target_frame_time = Duration::from_secs_f64(1.0 / target_fps);
+                    // EVENT-DRIVEN RENDERING:
+                    // Only render when something actually changes
+                    if is_rendering {
+                        // Actively rendering fractals: continuous updates at target FPS
+                        let target_fps = 60.0 * config.speed_multiplier as f64;
+                        let target_frame_time = Duration::from_secs_f64(1.0 / target_fps);
 
-                    // Log frame rate mode changes
-                    static LAST_MODE: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
-                    if let Ok(mut last) = LAST_MODE.lock() {
-                        if *last != Some(mode) {
-                            log::info!("Frame rate mode: {} (target {} FPS)", mode, target_fps);
-                            *last = Some(mode);
-                        }
-                    }
-
-                    let now = Instant::now();
-                    if let Some(last_frame) = app.last_frame_time {
-                        let elapsed = now.duration_since(last_frame);
-                        if elapsed >= target_frame_time {
-                            // Time for next frame, request redraw
-                            window.request_redraw();
+                        let now = Instant::now();
+                        if let Some(last_frame) = app.last_frame_time {
+                            let elapsed = now.duration_since(last_frame);
+                            if elapsed >= target_frame_time {
+                                window.request_redraw();
+                            } else {
+                                let wait_until = last_frame + target_frame_time;
+                                elwt.set_control_flow(ControlFlow::WaitUntil(wait_until));
+                            }
                         } else {
-                            // Wait until next frame is due
-                            let wait_until = last_frame + target_frame_time;
-                            elwt.set_control_flow(ControlFlow::WaitUntil(wait_until));
+                            window.request_redraw();
                         }
-                    } else {
-                        // First frame, render immediately
+                    } else if app.ui_needs_repaint {
+                        // UI needs update: render ONE frame
                         window.request_redraw();
+                        app.ui_needs_repaint = false; // Clear flag after requesting
+                    } else {
+                        // Truly idle: sleep until an event wakes us
+                        elwt.set_control_flow(ControlFlow::Wait);
+                        // No request_redraw() call - we'll wake on mouse/keyboard events
                     }
                 }
                 _ => {}
@@ -1315,12 +1303,9 @@ impl App {
         self.gpu.profiler.end_frame().unwrap();
 
         let t5 = Instant::now();
-        // SKIP_PRESENT: Test if present() itself causes GPU overhead
-        if std::env::var("SKIP_PRESENT").is_err() {
-            frame.present();
-        } else {
-            log::warn!("Skipping frame.present() - screen will be blank!");
-        }
+
+        frame.present();
+
         self.metrics.record_present_time(t5.elapsed().as_secs_f64() * 1000.0);
 
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
