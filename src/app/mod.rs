@@ -244,7 +244,10 @@ impl App {
                     // - Rendering: Use speed multiplier (60-960 FPS)
                     // - UI interaction: 60 FPS (smooth response)
                     // - Truly idle: 10 FPS (minimal GPU usage)
-                    let (target_fps, mode) = if is_rendering {
+                    // DISABLE_FRAME_LIMIT: Run as fast as possible for profiling
+                    let (target_fps, mode) = if std::env::var("DISABLE_FRAME_LIMIT").is_ok() {
+                        (10000.0, "unlimited")  // Effectively unlimited
+                    } else if is_rendering {
                         (60.0 * config.speed_multiplier as f64, "rendering")
                     } else if app.ui_needs_repaint {
                         (60.0, "ui_active")
