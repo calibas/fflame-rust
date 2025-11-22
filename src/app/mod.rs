@@ -56,6 +56,7 @@ pub struct App {
     pub(super) last_param_change_time: Option<web_time::Instant>,  // Track when params last changed
     pub(super) rendering_complete: bool,  // True when rendering has finished (max_iterations reached)
     pub(super) ui_needs_repaint: bool,  // Track if UI is requesting repaints (for frame rate boost)
+    pub(super) pending_redraws: u32,  // Counter for queued redraws (for UI animations after input)
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
@@ -160,6 +161,7 @@ impl App {
             last_param_change_time: None,
             rendering_complete: false,
             ui_needs_repaint: false,
+            pending_redraws: 0,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             export_width: 1920,  // Default export resolution
             export_height: 1080,
@@ -179,9 +181,15 @@ impl App {
                         WindowEvent::CursorMoved { .. } |
                         WindowEvent::MouseInput { .. } |
                         WindowEvent::MouseWheel { .. } |
-                        WindowEvent::KeyboardInput { .. } |
+                        WindowEvent::KeyboardInput { .. } => {
+                            // Queue 10 frames for UI animations (hover effects, transitions, etc.)
+                            app.pending_redraws = 10;
+                            window.request_redraw();
+                        }
                         WindowEvent::Resized(_) |
                         WindowEvent::ScaleFactorChanged { .. } => {
+                            // Window events need just 1 frame
+                            app.pending_redraws = 1;
                             window.request_redraw();
                         }
                         _ => {}
@@ -261,8 +269,8 @@ impl App {
 
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
-                    if is_rendering {
-                        // Actively rendering fractals: continuous updates
+                    if is_rendering || app.pending_redraws > 0 {
+                        // Actively rendering fractals OR UI animations pending
                         if config.vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
                             window.request_redraw();
@@ -281,6 +289,12 @@ impl App {
                             } else {
                                 window.request_redraw();
                             }
+                        }
+
+                        // Decrement pending redraws counter after requesting next frame
+                        // AboutToWait fires AFTER RedrawRequested, so we're counting frames that just drew
+                        if app.pending_redraws > 0 {
+                            app.pending_redraws -= 1;
                         }
                     } else {
                         // Truly idle: sleep until event wakes us
