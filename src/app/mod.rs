@@ -54,6 +54,7 @@ pub struct App {
     pub(super) frames_since_accumulation: u32,
     pub(super) use_overwrite_next_frame: bool,  // Persist overwrite mode for brief period after changes
     pub(super) last_param_change_time: Option<web_time::Instant>,  // Track when params last changed
+    pub(super) rendering_complete: bool,  // True when rendering has finished (max_iterations reached)
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
@@ -154,6 +155,7 @@ impl App {
             frames_since_accumulation: 0,
             use_overwrite_next_frame: false,
             last_param_change_time: None,
+            rendering_complete: false,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             export_width: 1920,  // Default export resolution
             export_height: 1080,
@@ -1038,11 +1040,13 @@ impl App {
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                     self.frames_since_accumulation = 0;
+                    self.rendering_complete = false;  // Reset completion flag
                 } else if has_view_or_color_change && renderer.total_iterations() >= update_config.max_iterations {
                     // View/color changes when fractal has stopped iterating:
                     // Reset counter to restart iteration (smooth transition via overwrite mode)
                     renderer.reset_iteration_counter();
                     self.frames_since_accumulation = 0;
+                    self.rendering_complete = false;  // Reset completion flag
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
@@ -1074,6 +1078,7 @@ impl App {
                 if was_overwrite && !self.use_overwrite_next_frame {
                     if let Some(ref mut renderer) = self.flame_renderer {
                         renderer.reset_iteration_counter();
+                        self.rendering_complete = false;  // Reset completion flag
                         log::debug!("Overwrite window expired → reset iteration counter for clean rebuild");
                     }
                 }
@@ -1114,6 +1119,12 @@ impl App {
             let should_iterate = !self.paused &&
                 max_iterations.map_or(true, |max| renderer.total_iterations() < max);
 
+            // Mark rendering as complete the frame after max_iterations is reached
+            if !should_iterate && !self.rendering_complete {
+                self.rendering_complete = true;
+                log::debug!("Rendering complete: max_iterations reached");
+            }
+
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;
 
@@ -1151,7 +1162,7 @@ impl App {
                 self.metrics.record_compute_time(0.0);
                 self.metrics.record_accumulate_time(0.0);
             }
-
+            
             let t_tonemap = Instant::now();
             // 3. Update accumulation parameters from config
             renderer.set_low_density_smoothing(final_config.low_density_smoothing);
