@@ -308,6 +308,31 @@ pub fn render_settings_content(
                     );
                 }
             });
+
+            ui.separator();
+
+            // VSync and frame rate settings
+            let mut vsync = config.vsync_enabled;
+            if ui.checkbox(&mut vsync, "Enable VSync").changed() {
+                let _ = config_manager.update_param(
+                    ConfigPath::VsyncEnabled,
+                    vsync.into()
+                );
+            }
+
+            // Only show target FPS when VSync is disabled
+            if !config.vsync_enabled {
+                ui.horizontal(|ui| {
+                    ui.label("Target FPS:");
+                    let mut target_fps = config.target_fps as f32;
+                    if ui.add(egui::Slider::new(&mut target_fps, 10.0..=1000.0).suffix(" FPS")).changed() {
+                        let _ = config_manager.update_param(
+                            ConfigPath::TargetFps,
+                            target_fps.into()
+                        );
+                    }
+                });
+            }
         });
 
     ui.separator();
