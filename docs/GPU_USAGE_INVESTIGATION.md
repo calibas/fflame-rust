@@ -262,34 +262,108 @@ This is **NOT a bug**. The application is behaving correctly:
 3. Focus on absolute work time (0.22ms) rather than % utilization
 4. Profiler confirms rendering is already efficient
 
-## Adaptive Frame Rate Optimization (2025-11-22)
+## Root Cause Discovery (2025-11-22)
 
-**Problem:**
-- Rendering at 60 FPS when idle wastes GPU cycles (0.22ms × 60 = 13.2ms/second)
-- High frame rate prevents GPU from entering deep power-saving states
-- Causes unnecessary heat and battery drain
+### The Investigation
 
-**Solution:**
-Implemented adaptive frame rate control based on activity:
-1. **Rendering mode** (not paused, under max_iterations): 60-960 FPS (speed multiplier)
-2. **UI interaction** (egui requests repaint): 60 FPS (smooth response)
-3. **Truly idle** (no rendering, no UI changes): 10 FPS (minimal GPU usage)
+**Initial Symptom:**
+- GPU usage reported as HIGH when idle (fractal rendering complete)
+- GPU usage reported as LOWER when actively rendering fractals
+- Computer heating up even when "doing nothing"
 
-**Implementation:**
-- Added `ui_needs_repaint` field to App struct
-- Modified `UiResponse` to include `needs_repaint` from egui
-- Updated frame rate logic in Event::AboutToWait handler
-- Logging shows mode transitions: rendering → ui_active → idle
+**Hypothesis Testing:**
 
-**Expected Impact:**
-- Idle GPU usage: 6× reduction (60 FPS → 10 FPS = 13.2ms/s → 2.2ms/s)
-- UI still responsive when interacting (60 FPS during mouse/keyboard input)
-- Full speed during fractal rendering (unchanged)
+1. **Measured actual GPU work** (wgpu-profiler):
+   - egui_render: 0.12-0.16ms
+   - fractal_tonemap: 0.10-0.12ms
+   - Total GPU work when idle: **0.22-0.28ms** (tiny!)
+
+2. **Measured CPU overhead:**
+   - Total CPU work: ~1.8ms per frame
+   - frame.present(): 0.14ms (not blocking)
+
+3. **Found mystery gap:**
+   - Frame interval: 17.25ms (60 FPS with VSync)
+   - Measured work: 1.8ms
+   - **15.5ms unaccounted for** (87% of frame time!)
+
+4. **Tested VSync impact:**
+   - With VSync (Mailbox/Fifo): 17ms frame interval, HIGH GPU usage
+   - Without VSync (Immediate): **4ms frame interval, LOW GPU usage**
+   - **VSync adds 13ms of overhead per frame!**
+
+5. **Isolated the culprit:**
+   - With frame.present(): HIGH GPU usage
+   - Without frame.present(): **GPU usage drops to 1/10th**
+   - **CONFIRMED: frame.present() triggers hidden GPU work**
+
+### The Root Cause
+
+**`frame.present()` triggers OS-level compositor work that's invisible to application profiling:**
+
+- **Desktop Window Manager (DWM)** on Windows / **WindowServer** on macOS
+- **Display composition** - blending application window with desktop
+- **Color space conversion** - sRGB ↔ display color profile
+- **Hardware cursor compositing**
+- **Multi-monitor synchronization**
+- **VSync coordination** with display refresh
+
+This compositor work:
+- Happens in the **OS graphics stack**, not our application
+- Uses **real GPU resources** (execution units, memory bandwidth)
+- Shows as "GPU usage" in system monitors
+- Is **invisible to wgpu-profiler** (only measures our command buffers)
+
+### Why Idle Usage Appears Higher Than Active Rendering
+
+**When actively rendering (600 FPS):**
+- Application: Heavy compute work (millions of iterations)
+- OS Compositor: 600 present() calls/second
+- GPU sees: Mostly application work, compositor is small percentage
+- Result: Efficient GPU usage (doing real work)
+
+**When idle at 60 FPS:**
+- Application: Tiny work (0.28ms GPU, 1.8ms CPU)
+- OS Compositor: 60 present() calls/second
+- GPU sees: **Mostly idle, then wake for compositor**
+- Result: Inefficient GPU usage (compositor overhead dominates)
+
+The GPU reports HIGH usage when idle because:
+1. Frequent wake-ups (60/sec) prevent deep power states
+2. Compositor work per frame is **significant relative to app work** (13ms compositor vs 0.28ms app)
+3. GPU is held in active power state for VSync synchronization
+
+### Attempted Optimizations
+
+**Adaptive Frame Rate (2025-11-22):**
+Implemented 3-tier frame rate control:
+1. **Rendering mode**: 60-960 FPS (speed multiplier)
+2. **UI interaction**: 60 FPS (smooth response)
+3. **Truly idle**: 10 FPS (6× reduction in compositor calls)
+
+**Result:**
+- Helps, but doesn't eliminate the problem
+- Still calling present() 10×/second when idle
+- Each present() still triggers full compositor work
 
 **Files Modified:**
 - [src/app/mod.rs](../src/app/mod.rs) - Frame rate control logic
-- [src/ui/mod.rs](../src/ui/mod.rs) - Pass egui repaint requests
+- [src/ui/mod.rs](../src/ui/mod.js) - Pass egui repaint requests
 - [src/ui/response.rs](../src/ui/response.rs) - Add needs_repaint field
+
+### The Real Solution
+
+**Event-driven rendering** (to be implemented):
+- When rendering: Continuous updates at target FPS
+- When idle + UI interaction: Render **one frame** per event
+- When idle + no interaction: **Don't render at all** (zero present() calls)
+- Use `ControlFlow::Wait` to let OS sleep until events arrive
+
+**Expected Impact:**
+- **Zero GPU usage when truly idle** (no compositor calls)
+- **Zero CPU usage when idle** (event loop sleeps)
+- **Instant response** to interaction (OS wakes immediately)
+- **Eliminates the root cause** (no unnecessary present() calls)
 
 ## Notes
 
