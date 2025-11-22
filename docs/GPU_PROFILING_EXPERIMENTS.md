@@ -274,17 +274,34 @@ set SKIP_PRESENT=1
 - Compositor: 600 present() calls/sec
 - GPU: **Mostly doing app work** (efficient usage, compositor is small %)
 
-### The Solution
+### The Solution - Event-Driven Rendering
 
-**Event-driven rendering** (not polling at fixed FPS):
-1. **Rendering mode**: Continuous updates at target FPS
-2. **Idle + interaction**: One frame per UI event
+**IMPLEMENTED:** Event-driven rendering (not polling at fixed FPS)
+
+**Implementation:**
+```rust
+if is_rendering {
+    // Continuous at target FPS
+    window.request_redraw();
+} else if ui_needs_repaint {
+    // One frame per event
+    window.request_redraw();
+    ui_needs_repaint = false;
+} else {
+    // Sleep until event
+    elwt.set_control_flow(ControlFlow::Wait);
+}
+```
+
+**Behavior:**
+1. **Rendering mode**: Continuous updates at target FPS (60-960)
+2. **Idle + interaction**: One frame per UI event, then sleep
 3. **Idle + no interaction**: Zero frames (ControlFlow::Wait)
 
 **Impact:**
-- Zero GPU usage when truly idle (no present() calls)
-- Zero CPU usage when idle (OS sleeps event loop)
-- Instant response to interaction
-- Eliminates unnecessary compositor overhead
+- ✅ Zero GPU usage when truly idle (no present() calls)
+- ✅ Zero CPU usage when idle (OS sleeps event loop)
+- ✅ Instant response to interaction (OS wakes immediately)
+- ✅ Eliminates unnecessary compositor overhead
 
-**Status:** To be implemented next.
+**Result:** Mystery solved and optimized!

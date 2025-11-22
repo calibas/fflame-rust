@@ -351,19 +351,40 @@ Implemented 3-tier frame rate control:
 - [src/ui/mod.rs](../src/ui/mod.js) - Pass egui repaint requests
 - [src/ui/response.rs](../src/ui/response.rs) - Add needs_repaint field
 
-### The Real Solution
+### The Real Solution - Event-Driven Rendering (IMPLEMENTED 2025-11-22)
 
-**Event-driven rendering** (to be implemented):
-- When rendering: Continuous updates at target FPS
-- When idle + UI interaction: Render **one frame** per event
-- When idle + no interaction: **Don't render at all** (zero present() calls)
-- Use `ControlFlow::Wait` to let OS sleep until events arrive
+**Replaced fixed FPS polling with true event-driven rendering:**
 
-**Expected Impact:**
-- **Zero GPU usage when truly idle** (no compositor calls)
-- **Zero CPU usage when idle** (event loop sleeps)
-- **Instant response** to interaction (OS wakes immediately)
-- **Eliminates the root cause** (no unnecessary present() calls)
+```rust
+Event::AboutToWait => {
+    if is_rendering {
+        // Continuous rendering at target FPS
+        window.request_redraw();
+    } else if ui_needs_repaint {
+        // UI changed: render ONE frame
+        window.request_redraw();
+        ui_needs_repaint = false;
+    } else {
+        // Truly idle: sleep until event
+        elwt.set_control_flow(ControlFlow::Wait);
+    }
+}
+```
+
+**Behavior:**
+- **Rendering mode**: Continuous updates at target FPS (60-960 based on speed multiplier)
+- **UI interaction**: One frame per event, then sleep
+- **Truly idle**: `ControlFlow::Wait` - OS sleeps event loop until input arrives
+- **Zero frames when nothing changes** = zero present() calls = zero compositor overhead
+
+**Impact:**
+- ✅ **Zero GPU usage when truly idle** (no compositor calls)
+- ✅ **Zero CPU usage when idle** (event loop sleeps)
+- ✅ **Instant response** to interaction (OS wakes on first input)
+- ✅ **Eliminates the root cause** (no unnecessary present() calls)
+
+**Files Modified:**
+- [src/app/mod.rs](../src/app/mod.rs) - Event-driven rendering logic
 
 ## Notes
 

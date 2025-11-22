@@ -171,6 +171,10 @@ impl App {
                     // Let egui handle events first
                     let consumed = app.egui_layer.handle_event(&event, &window);
 
+                    // Request redraw for any window event (mouse, keyboard, etc.)
+                    // This ensures UI stays responsive when in ControlFlow::Wait
+                    window.request_redraw();
+
                     match event {
                         WindowEvent::CloseRequested => {
                             app.shutdown(elwt);
@@ -1190,6 +1194,8 @@ impl App {
             if !should_iterate && !self.rendering_complete {
                 self.rendering_complete = true;
                 log::debug!("Rendering complete: max_iterations reached");
+                // Force UI repaint to show completion state
+                self.ui_needs_repaint = true;
             }
 
             if should_iterate {
