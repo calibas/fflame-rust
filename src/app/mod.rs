@@ -171,9 +171,19 @@ impl App {
                     // Let egui handle events first
                     let consumed = app.egui_layer.handle_event(&event, &window);
 
-                    // Request redraw for any window event (mouse, keyboard, etc.)
-                    // This ensures UI stays responsive when in ControlFlow::Wait
-                    window.request_redraw();
+                    // Request redraw for events that need visual updates
+                    // This wakes from ControlFlow::Wait when user interacts
+                    match &event {
+                        WindowEvent::CursorMoved { .. } |
+                        WindowEvent::MouseInput { .. } |
+                        WindowEvent::MouseWheel { .. } |
+                        WindowEvent::KeyboardInput { .. } |
+                        WindowEvent::Resized(_) |
+                        WindowEvent::ScaleFactorChanged { .. } => {
+                            window.request_redraw();
+                        }
+                        _ => {}
+                    }
 
                     match event {
                         WindowEvent::CloseRequested => {
@@ -268,9 +278,21 @@ impl App {
                         window.request_redraw();
                         app.ui_needs_repaint = false; // Clear flag after requesting
                     } else {
-                        // Truly idle: sleep until an event wakes us
+                        // Idle mode: Rate-limit UI updates to 60 FPS
+                        // This prevents mouse movement from triggering 1000+ FPS
+                        let target_frame_time = Duration::from_secs_f64(1.0 / 60.0);
+                        let now = Instant::now();
+                        if let Some(last_frame) = app.last_frame_time {
+                            let elapsed = now.duration_since(last_frame);
+                            if elapsed < target_frame_time {
+                                // Too soon - wait until next frame is due
+                                let wait_until = last_frame + target_frame_time;
+                                elwt.set_control_flow(ControlFlow::WaitUntil(wait_until));
+                                return; // Don't process further, wait for timer
+                            }
+                        }
+                        // If no redraw was requested, sleep until event
                         elwt.set_control_flow(ControlFlow::Wait);
-                        // No request_redraw() call - we'll wake on mouse/keyboard events
                     }
                 }
                 _ => {}
