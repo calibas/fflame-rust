@@ -415,7 +415,8 @@ impl FlameRenderer {
         self.deterministic_rng = config.deterministic_rng;
 
         // 8. Update tone mapping settings from config
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, config.iterations_per_thread, 1);
+        // Not in live preview mode (loading config)
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, config.iterations_per_thread, 1, false);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -657,7 +658,7 @@ impl FlameRenderer {
     }
 
     /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, and value scale
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, batch_size: u32) {
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, batch_size: u32, is_live_preview: bool) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match tonemap_mode {
@@ -709,7 +710,14 @@ impl FlameRenderer {
         // - Both bucket_count growth and sample_density scale together
         // - The ratio stays constant → brightness stays constant
         // - iterations_per_thread only affects render speed, not appearance
-        let sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0);
+        let mut sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0);
+
+        // Live preview mode: Divide by 8 for brighter preview
+        // This compensates for lower density accumulation during live parameter editing
+        // Only applies during active editing (is_live_preview), not when rendering stops
+        if is_live_preview {
+            sample_density /= 8.0;
+        }
 
         let params = TonemapParams {
             exposure,
