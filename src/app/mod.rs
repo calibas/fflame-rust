@@ -182,8 +182,8 @@ impl App {
                         WindowEvent::MouseInput { .. } |
                         WindowEvent::MouseWheel { .. } |
                         WindowEvent::KeyboardInput { .. } => {
-                            // Queue 10 frames for UI animations (hover effects, transitions, etc.)
-                            app.pending_redraws = 10;
+                            // Queue 15 frames for UI animations (hover effects, transitions, etc.)
+                            app.pending_redraws = 15;
                             window.request_redraw();
                         }
                         WindowEvent::Resized(_) |
@@ -293,8 +293,15 @@ impl App {
 
                         // Decrement pending redraws counter after requesting next frame
                         // AboutToWait fires AFTER RedrawRequested, so we're counting frames that just drew
+                        // While actively rendering, keep counter at minimum 1 for UI responsiveness
                         if app.pending_redraws > 0 {
-                            app.pending_redraws -= 1;
+                            if is_rendering {
+                                // Keep at least 1 while rendering for smooth UI
+                                app.pending_redraws = app.pending_redraws.saturating_sub(1).max(1);
+                            } else {
+                                // Not rendering: count down to 0 normally
+                                app.pending_redraws -= 1;
+                            }
                         }
                     } else {
                         // Truly idle: sleep until event wakes us
