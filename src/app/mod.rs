@@ -280,6 +280,15 @@ impl App {
         }
 
         let render_start = Instant::now();
+
+        // Log frame timing for GPU usage investigation
+        if let Some(last_frame) = self.last_frame_time {
+            let frame_time = render_start.duration_since(last_frame);
+            log::info!("Frame interval: {:.3}ms (rendering_complete={})",
+                frame_time.as_secs_f64() * 1000.0,
+                self.rendering_complete);
+        }
+
         self.last_frame_time = Some(render_start);
 
         // ============================================================================
