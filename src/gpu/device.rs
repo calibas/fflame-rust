@@ -9,8 +9,6 @@ pub struct GpuContext {
     pub queue: Queue,
     pub config: SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
-    #[cfg(not(target_arch = "wasm32"))]
-    pub profiler: wgpu_profiler::GpuProfiler,
 }
 
 impl GpuContext {
@@ -225,16 +223,6 @@ impl GpuContext {
         surface.configure(&device, &config);
         log::info!("✓ Surface configured successfully");
 
-        #[cfg(not(target_arch = "wasm32"))]
-        let profiler = wgpu_profiler::GpuProfiler::new(
-            &device,
-            wgpu_profiler::GpuProfilerSettings {
-                enable_timer_queries: true,
-                enable_debug_groups: true,
-                max_num_pending_frames: 3,
-            }
-        ).unwrap();
-
         Ok(Self {
             instance,
             surface,
@@ -242,8 +230,6 @@ impl GpuContext {
             queue,
             config,
             size,
-            #[cfg(not(target_arch = "wasm32"))]
-            profiler,
         })
     }
 
