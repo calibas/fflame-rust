@@ -278,20 +278,8 @@ impl App {
                         window.request_redraw();
                         app.ui_needs_repaint = false; // Clear flag after requesting
                     } else {
-                        // Idle mode: Rate-limit UI updates to 60 FPS
-                        // This prevents mouse movement from triggering 1000+ FPS
-                        let target_frame_time = Duration::from_secs_f64(1.0 / 60.0);
-                        let now = Instant::now();
-                        if let Some(last_frame) = app.last_frame_time {
-                            let elapsed = now.duration_since(last_frame);
-                            if elapsed < target_frame_time {
-                                // Too soon - wait until next frame is due
-                                let wait_until = last_frame + target_frame_time;
-                                elwt.set_control_flow(ControlFlow::WaitUntil(wait_until));
-                                return; // Don't process further, wait for timer
-                            }
-                        }
-                        // If no redraw was requested, sleep until event
+                        // Truly idle: sleep until event wakes us
+                        // VSync (Fifo mode) will cap frame rate at monitor refresh
                         elwt.set_control_flow(ControlFlow::Wait);
                     }
                 }
@@ -318,12 +306,12 @@ impl App {
         let render_start = Instant::now();
 
         // Log frame timing for GPU usage investigation
-        if let Some(last_frame) = self.last_frame_time {
-            let frame_time = render_start.duration_since(last_frame);
-            log::info!("Frame interval: {:.3}ms (rendering_complete={})",
-                frame_time.as_secs_f64() * 1000.0,
-                self.rendering_complete);
-        }
+        // if let Some(last_frame) = self.last_frame_time {
+        //     let frame_time = render_start.duration_since(last_frame);
+        //     log::info!("Frame interval: {:.3}ms (rendering_complete={})",
+        //         frame_time.as_secs_f64() * 1000.0,
+        //         self.rendering_complete);
+        // }
 
         self.last_frame_time = Some(render_start);
 
@@ -1339,45 +1327,45 @@ impl App {
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
 
         // Process profiler results (desktop only)
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            // Always process finished frames to drain the profiler queue
-            if let Some(frame_data) = self.gpu.profiler.process_finished_frame(self.gpu.queue.get_timestamp_period()) {
-                log::trace!("Profiler returned {} scopes", frame_data.len());
+        // #[cfg(not(target_arch = "wasm32"))]
+        // {
+        //     // Always process finished frames to drain the profiler queue
+        //     if let Some(frame_data) = self.gpu.profiler.process_finished_frame(self.gpu.queue.get_timestamp_period()) {
+        //         log::trace!("Profiler returned {} scopes", frame_data.len());
 
-                // Debug: Log ALL frame data when idle to see what's happening
-                if self.rendering_complete && !frame_data.is_empty() {
-                    log::info!("=== GPU Profiling (IDLE) ===");
-                    log::info!("Frame has {} scopes", frame_data.len());
+        //         // Debug: Log ALL frame data when idle to see what's happening
+        //         if self.rendering_complete && !frame_data.is_empty() {
+        //             log::info!("=== GPU Profiling (IDLE) ===");
+        //             log::info!("Frame has {} scopes", frame_data.len());
 
-                    // GPU timings (from wgpu-profiler)
-                    let mut total_gpu_ms = 0.0;
-                    for (i, scope) in frame_data.iter().enumerate() {
-                        if let Some(ref time_range) = scope.time {
-                            let duration_ms = (time_range.end - time_range.start) * 1000.0;
-                            let duration_us = (time_range.end - time_range.start) * 1_000_000.0;
-                            log::info!("  GPU[{}] {}: {:.3}ms ({:.1}µs)", i, scope.label, duration_ms, duration_us);
-                            total_gpu_ms += duration_ms;
-                        } else {
-                            log::info!("  GPU[{}] {}: <no timing data>", i, scope.label);
-                        }
-                    }
-                    log::info!("  GPU TOTAL: {:.3}ms", total_gpu_ms);
+        //             // GPU timings (from wgpu-profiler)
+        //             let mut total_gpu_ms = 0.0;
+        //             for (i, scope) in frame_data.iter().enumerate() {
+        //                 if let Some(ref time_range) = scope.time {
+        //                     let duration_ms = (time_range.end - time_range.start) * 1000.0;
+        //                     let duration_us = (time_range.end - time_range.start) * 1_000_000.0;
+        //                     log::info!("  GPU[{}] {}: {:.3}ms ({:.1}µs)", i, scope.label, duration_ms, duration_us);
+        //                     total_gpu_ms += duration_ms;
+        //                 } else {
+        //                     log::info!("  GPU[{}] {}: <no timing data>", i, scope.label);
+        //                 }
+        //             }
+        //             log::info!("  GPU TOTAL: {:.3}ms", total_gpu_ms);
 
-                    // CPU-side timings (from metrics)
-                    log::info!("CPU timings:");
-                    log::info!("  get_current_texture: {:.3}ms", t_get_texture);
-                    log::info!("  create_view: {:.3}ms", t_create_view);
-                    log::info!("  create_encoder: {:.3}ms", t_create_encoder);
-                    log::info!("  ui_render (CPU): {:.3}ms", self.metrics.ui_time_ms);
-                    log::info!("  submit (UI): {:.3}ms", self.metrics.submit_time_ms);
-                    log::info!("  present: {:.3}ms", self.metrics.present_time_ms);
-                    log::info!("  TOTAL frame: {:.3}ms", self.metrics.render_time_ms);
-                }
-            } else {
-                log::trace!("No frame data available this frame");
-            }
-        }
+        //             // CPU-side timings (from metrics)
+        //             log::info!("CPU timings:");
+        //             log::info!("  get_current_texture: {:.3}ms", t_get_texture);
+        //             log::info!("  create_view: {:.3}ms", t_create_view);
+        //             log::info!("  create_encoder: {:.3}ms", t_create_encoder);
+        //             log::info!("  ui_render (CPU): {:.3}ms", self.metrics.ui_time_ms);
+        //             log::info!("  submit (UI): {:.3}ms", self.metrics.submit_time_ms);
+        //             log::info!("  present: {:.3}ms", self.metrics.present_time_ms);
+        //             log::info!("  TOTAL frame: {:.3}ms", self.metrics.render_time_ms);
+        //         }
+        //     } else {
+        //         log::trace!("No frame data available this frame");
+        //     }
+        // }
 
         Ok(())
     }

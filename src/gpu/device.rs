@@ -175,39 +175,36 @@ impl GpuContext {
         log::info!("Selected format: {:?}", format);
 
         // Allow testing different present modes via environment variable
-        let present_mode = if cfg!(target_arch = "wasm32") {
-            PresentMode::Fifo  // WASM only supports Fifo
-        } else if let Ok(mode_str) = std::env::var("PRESENT_MODE") {
-            match mode_str.to_lowercase().as_str() {
-                "immediate" => {
-                    log::warn!("Using PresentMode::Immediate (no VSync) - EXPERIMENTAL");
-                    PresentMode::Immediate
-                }
-                "fifo" => {
-                    log::info!("Using PresentMode::Fifo (VSync blocking)");
-                    PresentMode::Fifo
-                }
-                "mailbox" => {
-                    log::info!("Using PresentMode::Mailbox (VSync non-blocking)");
-                    PresentMode::Mailbox
-                }
-                _ => {
-                    log::warn!("Unknown PRESENT_MODE '{}', using default", mode_str);
-                    if cfg!(target_os = "macos") {
-                        PresentMode::Fifo
-                    } else {
-                        PresentMode::Mailbox
-                    }
-                }
-            }
-        } else {
-            // Default behavior
-            if cfg!(target_os = "macos") {
-                PresentMode::Fifo
-            } else {
-                PresentMode::Mailbox
-            }
-        };
+        // let present_mode = if cfg!(target_arch = "wasm32") {
+        //     PresentMode::Fifo  // WASM only supports Fifo
+        // } else if let Ok(mode_str) = std::env::var("PRESENT_MODE") {
+        //     match mode_str.to_lowercase().as_str() {
+        //         "immediate" => {
+        //             log::warn!("Using PresentMode::Immediate (no VSync) - EXPERIMENTAL");
+        //             PresentMode::Immediate
+        //         }
+        //         "fifo" => {
+        //             log::info!("Using PresentMode::Fifo (VSync blocking)");
+        //             PresentMode::Fifo
+        //         }
+        //         "mailbox" => {
+        //             log::info!("Using PresentMode::Mailbox (VSync non-blocking)");
+        //             PresentMode::Mailbox
+        //         }
+        //         _ => {
+        //             log::warn!("Unknown PRESENT_MODE '{}', using default", mode_str);
+        //             if cfg!(target_os = "macos") {
+        //                 PresentMode::Fifo
+        //             } else {
+        //                 PresentMode::Mailbox
+        //             }
+        //         }
+        //     }
+        // } else {
+        //     // Default: Use Fifo (true VSync) to cap at monitor refresh rate
+        //     PresentMode::Fifo
+        // };
+        let present_mode = PresentMode::Fifo;
 
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
