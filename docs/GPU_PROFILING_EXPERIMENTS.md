@@ -140,6 +140,42 @@ Test on macOS to see if Windows-specific (DWM compositor) is the issue.
    - Modern OSes do continuous composition
    - As long as actual work is minimal (~0.22ms), it's fine
 
+## Comprehensive Profiling Added (2025-11-22)
+
+**CPU-side timing now measured for ALL operations:**
+- `get_current_texture()` - Swapchain acquisition (may block waiting for VSync)
+- `create_view()` - Texture view creation
+- `create_command_encoder()` - Encoder allocation
+- UI render (CPU time)
+- `queue.submit()` - Command buffer submission
+- `frame.present()` - **KEY SUSPECT** - triggers VSync, composition, DWM
+
+**What to look for when testing:**
+1. **present() time** - If this is high when idle, it's blocking/waiting
+2. **get_current_texture() time** - May block if swapchain is busy
+3. **Total CPU time vs GPU time** - Where is the time going?
+
+**Example output when idle:**
+```
+=== GPU Profiling (IDLE) ===
+GPU timings:
+  GPU[0] egui_render: 0.120ms (120.4µs)
+  GPU[1] fractal_tonemap: 0.096ms (95.8µs)
+  GPU TOTAL: 0.216ms
+
+CPU timings:
+  get_current_texture: ???ms  ← May reveal VSync blocking
+  create_view: ???ms
+  create_encoder: ???ms
+  ui_render (CPU): ???ms
+  submit (UI): ???ms
+  present: ???ms  ← KEY METRIC - suspected culprit
+  TOTAL frame: ???ms
+```
+
+**Hypothesis:**
+If `present()` time is high (e.g., 10-15ms when idle), that's where the mystery "GPU usage" comes from - it's not actual rendering work, but VSync/composition blocking.
+
 ## Conclusion
 
 The wgpu-profiler confirms our rendering is extremely efficient (~0.22ms per frame, 1.3% of frame time).
@@ -149,4 +185,4 @@ The high GPU "usage" percentage is likely from:
 - Driver/OS-level work invisible to profiler
 - How GPU utilization % is calculated
 
-This is **normal behavior** for a 60 FPS graphics application on modern OSes.
+**Next step:** Run with profiling and check if `present()` time reveals the mystery.
