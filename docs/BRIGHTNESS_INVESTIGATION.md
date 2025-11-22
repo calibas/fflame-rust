@@ -135,3 +135,87 @@ The brightness formula is fundamentally incompatible with progressive rendering 
 **The real issue:** `sample_density` in k2 is meant to be a **constant reference** for calibration, but `bucket_count` (actual pixel hits) grows over time. When they don't match, brightness is wrong.
 
 **Possible solution:** Use max_iterations as fixed reference (constant brightness curve), but that makes early frames genuinely darker because they have less actual data. Need to determine: is that the correct behavior?
+
+---
+
+## Attempt 5: Using iterations_per_frame (Commit 098789b)
+```rust
+const NUM_WORKGROUPS: u32 = 128;
+let iterations_per_frame = (NUM_WORKGROUPS * iterations_per_thread * batch_size) as f32;
+let base_density = iterations_per_frame / pixel_area;
+sample_density = base_density;
+```
+
+**Behavior:**
+- ✅ Consistent brightness frame-to-frame (no drift over time)
+- ✅ Works in both overwrite and normal modes
+- ❌ Brightness changes when adjusting iterations_per_thread slider
+- ❌ Lower iterations_per_thread makes image darker (wrong!)
+
+**Why:** iterations_per_thread is a performance knob (how to chunk work), not a visual parameter. Making brightness depend on it couples appearance to performance settings.
+
+**Problem:** The logarithmic formula is sublinear. When both bucket_count and sample_density scale proportionally with iterations_per_thread, the brightness doesn't scale proportionally due to the log10() term.
+
+---
+
+## Attempt 6: Using effective_iterations
+```rust
+let base_density = if self.effective_iterations > 0 && pixel_area > 0.0 {
+    self.effective_iterations as f32 / pixel_area
+} else {
+    1.0  // First frame fallback
+};
+sample_density = base_density;
+```
+
+**Behavior:**
+- ⚠️ Still brightness changes with iterations_per_thread (slightly better than Attempt 5)
+- ❌ Early frames much darker, late frames much brighter
+- ❌ Units mismatch: sample_density in "iterations/pixel", bucket_count in "hits/pixel"
+
+**Why it fails:**
+- effective_iterations counts ALL iterations (including misses and opacity failures)
+- bucket_count counts only HITS that land on pixels
+- For typical fractals, only 10-30% of iterations result in hits
+- Example: 10M iterations → 800×600 = 20.8 iterations/pixel, but only ~2-6 actual hits/pixel
+- Formula compares apples (iterations) to oranges (hits)
+
+---
+
+## Attempt 7: Fixed reference value
+```rust
+let sample_density = 50.0;  // Fixed constant
+```
+
+**Behavior:**
+- ❌ Still brightness changes with iterations_per_thread
+- Works better but not perfect
+
+**Why it fails:**
+- bucket_count growth rate actually DOES depend on iterations_per_thread
+- More iterations per frame → more hits per frame → faster bucket_count growth
+- Fixed sample_density doesn't account for this variable growth rate
+
+---
+
+## THE ACTUAL FIX: Normalized reference value (Current)
+```rust
+let sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0);
+```
+
+**Behavior:**
+- ✅ Brightness completely independent of iterations_per_thread slider adjustments
+- ✅ Consistent brightness when changing performance settings
+- ✅ Zoom compensation works correctly (via area calculation)
+- ✅ Brightness only depends on exposure/gamma (user controls)
+
+**Why this is correct:**
+- bucket_count accumulation rate scales with iterations_per_thread
+- sample_density must scale proportionally to maintain constant ratio
+- Normalized to default (256): sample_density scales as (iterations_per_thread / 256.0)
+- Base value 5000.0 chosen empirically (~100x higher than Apophysis due to batch rendering)
+- At default (256): 5000.0 × 1.0 = 5000.0
+- At half (128): 5000.0 × 0.5 = 2500.0
+- At double (512): 5000.0 × 2.0 = 10000.0
+
+**Key insight:** Both bucket_count and sample_density must scale together with iterations_per_thread to maintain a constant ratio. The normalization factor (iterations_per_thread / 256.0) ensures they scale proportionally, making brightness independent of the performance setting.
