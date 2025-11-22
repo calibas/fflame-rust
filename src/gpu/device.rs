@@ -9,6 +9,8 @@ pub struct GpuContext {
     pub queue: Queue,
     pub config: SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub profiler: wgpu_profiler::GpuProfiler,
 }
 
 impl GpuContext {
@@ -130,10 +132,26 @@ impl GpuContext {
 
         log::info!("Requesting device with limits: {:?}", limits);
 
+        // Check adapter features for timestamp query support
+        let adapter_features = adapter.features();
+        log::info!("Adapter features: {:?}", adapter_features);
+        log::info!("TIMESTAMP_QUERY supported: {}", adapter_features.contains(Features::TIMESTAMP_QUERY));
+        log::info!("TIMESTAMP_QUERY_INSIDE_ENCODERS supported: {}", adapter_features.contains(Features::TIMESTAMP_QUERY_INSIDE_ENCODERS));
+        log::info!("TIMESTAMP_QUERY_INSIDE_PASSES supported: {}", adapter_features.contains(Features::TIMESTAMP_QUERY_INSIDE_PASSES));
+
+        // Enable timestamp queries for profiling (desktop only)
+        #[cfg(not(target_arch = "wasm32"))]
+        let required_features = Features::CLEAR_TEXTURE
+            | Features::TIMESTAMP_QUERY
+            | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
+            | Features::TIMESTAMP_QUERY_INSIDE_PASSES;
+        #[cfg(target_arch = "wasm32")]
+        let required_features = Features::CLEAR_TEXTURE;
+
         let (device, queue) = adapter.request_device(
             &DeviceDescriptor {
                 label: Some("Main GPU Device"),
-                required_features: Features::CLEAR_TEXTURE,
+                required_features,
                 required_limits: limits,
                 memory_hints: Default::default(),
                 experimental_features: Default::default(),
@@ -180,7 +198,26 @@ impl GpuContext {
         surface.configure(&device, &config);
         log::info!("✓ Surface configured successfully");
 
-        Ok(Self { instance, surface, device, queue, config, size })
+        #[cfg(not(target_arch = "wasm32"))]
+        let profiler = wgpu_profiler::GpuProfiler::new(
+            &device,
+            wgpu_profiler::GpuProfilerSettings {
+                enable_timer_queries: true,
+                enable_debug_groups: true,
+                max_num_pending_frames: 3,
+            }
+        ).unwrap();
+
+        Ok(Self {
+            instance,
+            surface,
+            device,
+            queue,
+            config,
+            size,
+            #[cfg(not(target_arch = "wasm32"))]
+            profiler,
+        })
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
