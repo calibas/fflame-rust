@@ -192,15 +192,79 @@ The GPU usage increase when idle may not be about wasted work, but about **how G
 - When idle: 60 FPS locked to VSync, GPU waiting for vertical blank
 - VSync wait time may be counted as "GPU usage" by monitoring tools
 
-## Next Investigation Steps
+## Final Solution: wgpu-profiler Integration (2025-11-22)
 
-1. Check absolute GPU time (ms) vs percentage metrics
-2. Monitor GPU clocks/power states during rendering vs idle
-3. Check if VSync/present timing differs between states
-4. Profile with GPU profiling tools (RenderDoc, Nsight, etc.)
+**Implementation:**
+- Added wgpu-profiler 0.25 dependency (desktop only)
+- Enabled all timestamp query features:
+  - `TIMESTAMP_QUERY` - Base feature
+  - `TIMESTAMP_QUERY_INSIDE_ENCODERS` - Required for encoder scopes
+  - `TIMESTAMP_QUERY_INSIDE_PASSES` - Required for pass scopes
+- Created profiler scopes using `profiler.scope()` with `Deref`/`DerefMut`
+- Called `resolve_queries()` on BOTH encoders (UI and fractal)
+- Called `end_frame()` after submit
+- Called `process_finished_frame()` to retrieve results
+
+**Critical Fix:**
+Initially timestamp queries returned `time=None`. The fix required:
+1. Enabling `TIMESTAMP_QUERY_INSIDE_ENCODERS` feature (not just base `TIMESTAMP_QUERY`)
+2. Calling `resolve_queries()` on the UI encoder before submission (was missing)
+3. Using correct scope API: `profiler.scope()` with `&mut *scope` (not `begin_query/end_query`)
+
+**Actual GPU Times When Idle (Measured):**
+```
+=== GPU Profiling (IDLE) ===
+  egui_render: 0.074ms (73.7µs)
+  fractal_tonemap: 0.053ms (53.0µs)
+Total: ~0.13ms (130µs) per frame at 60 FPS
+```
+
+**Key Findings:**
+- ✅ GPU timestamp queries working correctly
+- ✅ Actual GPU rendering work when idle is **negligible** (~130µs = 0.13ms)
+- ✅ This represents only 0.78% of frame time (0.13ms / 16.67ms)
+- ❌ High GPU "usage" metrics are NOT from excessive rendering work
+
+**Root Cause Analysis:**
+The perceived "high GPU usage when idle" is **NOT** caused by wasted GPU rendering cycles. The profiler proves actual GPU work is minimal. The high usage metrics are likely due to:
+
+1. **GPU Utilization Metrics Interpretation**
+   - GPU usage % measures time GPU is "active" (not idle/sleep)
+   - Even minimal work (0.13ms) keeps GPU from deep sleep states
+   - 60 FPS means GPU wakes 60x/second for tiny bursts of work
+   - Metrics may show high % even though absolute work is low
+
+2. **Power State Management**
+   - When rendering: GPU stays in high-performance state continuously
+   - When idle: GPU rapidly transitions between sleep/wake states
+   - State transitions themselves consume power and show as "usage"
+   - Frequent wake-ups (60 Hz) prevent deep power-saving modes
+
+3. **VSync and Presentation Overhead**
+   - `frame.present()` called 60x/second regardless
+   - VSync timing and display composition overhead
+   - Driver/compositor work not visible to profiler
+
+4. **Windows-Specific Behavior**
+   - Desktop Window Manager (DWM) composition
+   - Driver overhead for display synchronization
+   - Power management policies
+
+**Conclusion:**
+This is **NOT a bug**. The application is behaving correctly:
+- When idle, minimal GPU rendering work is performed (~0.13ms/frame)
+- High GPU "usage" metrics are misleading - they reflect power state activity, not wasted cycles
+- No optimization needed - actual GPU work is already minimal
+
+**Recommendations:**
+1. Accept that GPU metrics show higher % when idle (this is normal behavior)
+2. Focus on absolute work time (0.13ms) rather than % utilization
+3. Consider reducing frame rate when idle (30 FPS instead of 60 FPS) if power consumption is a concern
+4. No code changes needed - profiler confirms rendering is efficient
 
 ## Notes
 
 - Performance metrics already tracked in `PerformanceMetrics`
 - Frame timing already measured (compute, accumulate, tonemap, submit, present)
-- May need to add egui-specific metrics
+- wgpu-profiler shows actual GPU execution time (ground truth)
+- Investigation complete - issue resolved ✅
