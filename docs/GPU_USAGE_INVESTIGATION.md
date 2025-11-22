@@ -214,15 +214,15 @@ Initially timestamp queries returned `time=None`. The fix required:
 **Actual GPU Times When Idle (Measured):**
 ```
 === GPU Profiling (IDLE) ===
-  egui_render: 0.074ms (73.7µs)
-  fractal_tonemap: 0.053ms (53.0µs)
-Total: ~0.13ms (130µs) per frame at 60 FPS
+  egui_render: 0.120ms (120.4µs)
+  fractal_tonemap: 0.096ms (95.8µs)
+Total: ~0.22ms (216µs) per frame at 60 FPS
 ```
 
 **Key Findings:**
 - ✅ GPU timestamp queries working correctly
-- ✅ Actual GPU rendering work when idle is **negligible** (~130µs = 0.13ms)
-- ✅ This represents only 0.78% of frame time (0.13ms / 16.67ms)
+- ✅ Actual GPU rendering work when idle is **negligible** (~216µs = 0.22ms)
+- ✅ This represents only 1.3% of frame time (0.22ms / 16.67ms)
 - ❌ High GPU "usage" metrics are NOT from excessive rendering work
 
 **Root Cause Analysis:**
@@ -252,13 +252,13 @@ The perceived "high GPU usage when idle" is **NOT** caused by wasted GPU renderi
 
 **Conclusion:**
 This is **NOT a bug**. The application is behaving correctly:
-- When idle, minimal GPU rendering work is performed (~0.13ms/frame)
+- When idle, minimal GPU rendering work is performed (~0.22ms/frame)
 - High GPU "usage" metrics are misleading - they reflect power state activity, not wasted cycles
 - No optimization needed - actual GPU work is already minimal
 
 **Recommendations:**
 1. Accept that GPU metrics show higher % when idle (this is normal behavior)
-2. Focus on absolute work time (0.13ms) rather than % utilization
+2. Focus on absolute work time (0.22ms) rather than % utilization
 3. Consider reducing frame rate when idle (30 FPS instead of 60 FPS) if power consumption is a concern
 4. No code changes needed - profiler confirms rendering is efficient
 

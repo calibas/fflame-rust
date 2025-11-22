@@ -6,19 +6,19 @@
 1. **get_current_texture()** - Acquire swapchain image from surface
 2. **create_view()** - Create texture view for rendering target
 3. **create_command_encoder()** - Create UI encoder
-4. **egui_render** - UI rendering pass ✅ PROFILED (~70µs)
+4. **egui_render** - UI rendering pass ✅ PROFILED (~120µs)
 5. **resolve_queries()** - Resolve UI timestamp queries
 6. **queue.submit()** - Submit UI commands to GPU
 7. **create_command_encoder()** - Create fractal encoder
-8. **fractal_tonemap** - Tonemap rendering pass ✅ PROFILED (~50µs)
+8. **fractal_tonemap** - Tonemap rendering pass ✅ PROFILED (~96µs)
 9. **resolve_queries()** - Resolve fractal timestamp queries
 10. **queue.submit()** - Submit fractal commands to GPU
 11. **end_frame()** - End profiler frame (bookkeeping)
 12. **frame.present()** - Present to screen ❌ NOT PROFILED
 
-**Total Measured GPU Time: ~0.13ms (130µs)**
+**Total Measured GPU Time: ~0.22ms (216µs)**
 **Total Frame Time: ~16.67ms (60 FPS)**
-**Measured GPU %: 0.78% of frame time**
+**Measured GPU %: 1.3% of frame time**
 
 **When RENDERING (rendering_complete=false):**
 - All of the above PLUS:
@@ -70,7 +70,7 @@ Modify frame timing to only present at 30 FPS when idle instead of 60 FPS.
 ### Experiment 3: Skip All Rendering When Idle
 Skip both egui and tonemap when idle - only present previous frame.
 
-**Expected Result:** Should show minimal difference since those passes only take 0.13ms.
+**Expected Result:** Should show minimal difference since those passes only take 0.22ms.
 
 ### Experiment 4: Check macOS vs Windows
 Test on macOS to see if Windows-specific (DWM compositor) is the issue.
@@ -138,11 +138,11 @@ Test on macOS to see if Windows-specific (DWM compositor) is the issue.
 5. **Accept it as normal:**
    - 60 FPS UI apps typically show some GPU usage
    - Modern OSes do continuous composition
-   - As long as actual work is minimal (~0.13ms), it's fine
+   - As long as actual work is minimal (~0.22ms), it's fine
 
 ## Conclusion
 
-The wgpu-profiler confirms our rendering is extremely efficient (~0.13ms per frame).
+The wgpu-profiler confirms our rendering is extremely efficient (~0.22ms per frame, 1.3% of frame time).
 The high GPU "usage" percentage is likely from:
 - VSync synchronization overhead
 - Windows DWM composition
