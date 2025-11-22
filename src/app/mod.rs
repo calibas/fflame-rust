@@ -325,29 +325,61 @@ impl App {
             );
         }
 
-        let ui_response = self.egui_layer.render_ui(
-            &self.gpu.device,
-            &self.gpu.queue,
-            &mut encoder,
-            &surface_view,
-            window,
-            self.gpu.size,
-            &self.metrics,
-            &mut self.config_manager,
-            self.flame_renderer.as_mut(),
-            &mut self.flame,
-            &mut self.palette_library,
-            &self.preset_library,
-            &mut self.current_preset_index,
-            &mut self.paused,
-            &mut self.quit_requested,
-            can_undo,
-            can_redo,
-            &mut self.workspace,
-            &mut self.export_width,
-            &mut self.export_height,
-            &mut self.use_custom_export_size,
-        );
+        let ui_response;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut scope = self.gpu.profiler.scope("egui_render", &mut encoder);
+            ui_response = self.egui_layer.render_ui(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut *scope,
+                &surface_view,
+                window,
+                self.gpu.size,
+                &self.metrics,
+                &mut self.config_manager,
+                self.flame_renderer.as_mut(),
+                &mut self.flame,
+                &mut self.palette_library,
+                &self.preset_library,
+                &mut self.current_preset_index,
+                &mut self.paused,
+                &mut self.quit_requested,
+                can_undo,
+                can_redo,
+                &mut self.workspace,
+                &mut self.export_width,
+                &mut self.export_height,
+                &mut self.use_custom_export_size,
+            );
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            ui_response = self.egui_layer.render_ui(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut encoder,
+                &surface_view,
+                window,
+                self.gpu.size,
+                &self.metrics,
+                &mut self.config_manager,
+                self.flame_renderer.as_mut(),
+                &mut self.flame,
+                &mut self.palette_library,
+                &self.preset_library,
+                &mut self.current_preset_index,
+                &mut self.paused,
+                &mut self.quit_requested,
+                can_undo,
+                can_redo,
+                &mut self.workspace,
+                &mut self.export_width,
+                &mut self.export_height,
+                &mut self.use_custom_export_size,
+            );
+        }
+
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
 
         // Handle viewport resize immediately (before rendering)
@@ -397,6 +429,11 @@ impl App {
 
         // Submit UI rendering (must happen before we start processing responses)
         let t_submit = Instant::now();
+
+        // Resolve profiler queries for UI encoder (desktop only)
+        #[cfg(not(target_arch = "wasm32"))]
+        self.gpu.profiler.resolve_queries(&mut encoder);
+
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
@@ -1149,9 +1186,22 @@ impl App {
                 // 1. Compute new samples with fresh random seed
                 // Clear histogram only when starting a new batch (frame 1 of batch)
                 let clear_histogram = self.frames_since_accumulation == 1;
-                let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, NUM_WORKGROUPS,
-                    final_config.iterations_per_thread, final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
-                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram);
+
+                let samples_this_frame;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let mut scope = self.gpu.profiler.scope("fractal_compute", &mut render_encoder);
+                    samples_this_frame = renderer.compute_pass(&mut *scope, &self.gpu.queue, NUM_WORKGROUPS,
+                        final_config.iterations_per_thread, final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
+                        final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram);
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, NUM_WORKGROUPS,
+                        final_config.iterations_per_thread, final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
+                        final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram);
+                }
+
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
 
                 let t_accumulate = Instant::now();
@@ -1161,7 +1211,17 @@ impl App {
                     // accumulated samples from all frames in the batch
                     // Pass total samples for proper blend_factor calculation
                     let total_samples_in_batch = samples_this_frame * batch_size as u64;
-                    renderer.accumulate_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        let mut scope = self.gpu.profiler.scope("fractal_accumulate", &mut render_encoder);
+                        renderer.accumulate_pass(&mut *scope, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        renderer.accumulate_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                    }
+
                     self.frames_since_accumulation = 0;
                     self.metrics.record_accumulate_time(t_accumulate.elapsed().as_secs_f64() * 1000.0);
                 } else {
@@ -1194,20 +1254,66 @@ impl App {
                 final_config.iterations_per_thread, batch_size_for_tonemap, is_live_preview);
 
             // Render to internal fractal texture
-            renderer.tonemap_pass(&mut render_encoder);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let mut scope = self.gpu.profiler.scope("fractal_tonemap", &mut render_encoder);
+                renderer.tonemap_pass(&mut *scope);
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                renderer.tonemap_pass(&mut render_encoder);
+            }
+
             self.metrics.record_tonemap_time(t_tonemap.elapsed().as_secs_f64() * 1000.0);
         }
 
         // Submit rendering commands
         let t_submit = Instant::now();
+
+        // Resolve queries before submitting (desktop only)
+        #[cfg(not(target_arch = "wasm32"))]
+        self.gpu.profiler.resolve_queries(&mut render_encoder);
+
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
+
+        // End profiling frame after submit (desktop only)
+        #[cfg(not(target_arch = "wasm32"))]
+        self.gpu.profiler.end_frame().unwrap();
 
         let t5 = Instant::now();
         frame.present();
         self.metrics.record_present_time(t5.elapsed().as_secs_f64() * 1000.0);
 
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
+
+        // Process profiler results (desktop only)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Always process finished frames to drain the profiler queue
+            if let Some(frame_data) = self.gpu.profiler.process_finished_frame(self.gpu.queue.get_timestamp_period()) {
+                log::trace!("Profiler returned {} scopes", frame_data.len());
+
+                // Debug: Log ALL frame data when idle to see what's happening
+                if self.rendering_complete && !frame_data.is_empty() {
+                    log::info!("=== GPU Profiling (IDLE) ===");
+                    log::info!("Frame has {} scopes", frame_data.len());
+                    for (i, scope) in frame_data.iter().enumerate() {
+                        log::info!("Scope {}: label='{}', time={:?}", i, scope.label, scope.time);
+                        if let Some(ref time_range) = scope.time {
+                            let duration_sec = time_range.end - time_range.start;
+                            let duration_ms = duration_sec * 1000.0;
+                            let duration_us = duration_sec * 1_000_000.0;
+                            log::info!("  {}: {:.3}ms ({:.1}µs)", scope.label, duration_ms, duration_us);
+                        } else {
+                            log::info!("  {}: <no timing data>", scope.label);
+                        }
+                    }
+                }
+            } else {
+                log::trace!("No frame data available this frame");
+            }
+        }
 
         Ok(())
     }
