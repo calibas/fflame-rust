@@ -257,10 +257,39 @@ This is **NOT a bug**. The application is behaving correctly:
 - No optimization needed - actual GPU work is already minimal
 
 **Recommendations:**
-1. Accept that GPU metrics show higher % when idle (this is normal behavior)
-2. Focus on absolute work time (0.22ms) rather than % utilization
-3. Consider reducing frame rate when idle (30 FPS instead of 60 FPS) if power consumption is a concern
-4. No code changes needed - profiler confirms rendering is efficient
+1. ✅ **IMPLEMENTED**: Reduce frame rate when idle (10 FPS vs 60 FPS)
+2. ✅ **IMPLEMENTED**: Boost to 60 FPS during UI interaction for responsive feel
+3. Focus on absolute work time (0.22ms) rather than % utilization
+4. Profiler confirms rendering is already efficient
+
+## Adaptive Frame Rate Optimization (2025-11-22)
+
+**Problem:**
+- Rendering at 60 FPS when idle wastes GPU cycles (0.22ms × 60 = 13.2ms/second)
+- High frame rate prevents GPU from entering deep power-saving states
+- Causes unnecessary heat and battery drain
+
+**Solution:**
+Implemented adaptive frame rate control based on activity:
+1. **Rendering mode** (not paused, under max_iterations): 60-960 FPS (speed multiplier)
+2. **UI interaction** (egui requests repaint): 60 FPS (smooth response)
+3. **Truly idle** (no rendering, no UI changes): 10 FPS (minimal GPU usage)
+
+**Implementation:**
+- Added `ui_needs_repaint` field to App struct
+- Modified `UiResponse` to include `needs_repaint` from egui
+- Updated frame rate logic in Event::AboutToWait handler
+- Logging shows mode transitions: rendering → ui_active → idle
+
+**Expected Impact:**
+- Idle GPU usage: 6× reduction (60 FPS → 10 FPS = 13.2ms/s → 2.2ms/s)
+- UI still responsive when interacting (60 FPS during mouse/keyboard input)
+- Full speed during fractal rendering (unchanged)
+
+**Files Modified:**
+- [src/app/mod.rs](../src/app/mod.rs) - Frame rate control logic
+- [src/ui/mod.rs](../src/ui/mod.rs) - Pass egui repaint requests
+- [src/ui/response.rs](../src/ui/response.rs) - Add needs_repaint field
 
 ## Notes
 
