@@ -174,17 +174,47 @@ impl GpuContext {
             .unwrap_or(surface_caps.formats[0]);
         log::info!("Selected format: {:?}", format);
 
+        // Allow testing different present modes via environment variable
+        let present_mode = if cfg!(target_arch = "wasm32") {
+            PresentMode::Fifo  // WASM only supports Fifo
+        } else if let Ok(mode_str) = std::env::var("PRESENT_MODE") {
+            match mode_str.to_lowercase().as_str() {
+                "immediate" => {
+                    log::warn!("Using PresentMode::Immediate (no VSync) - EXPERIMENTAL");
+                    PresentMode::Immediate
+                }
+                "fifo" => {
+                    log::info!("Using PresentMode::Fifo (VSync blocking)");
+                    PresentMode::Fifo
+                }
+                "mailbox" => {
+                    log::info!("Using PresentMode::Mailbox (VSync non-blocking)");
+                    PresentMode::Mailbox
+                }
+                _ => {
+                    log::warn!("Unknown PRESENT_MODE '{}', using default", mode_str);
+                    if cfg!(target_os = "macos") {
+                        PresentMode::Fifo
+                    } else {
+                        PresentMode::Mailbox
+                    }
+                }
+            }
+        } else {
+            // Default behavior
+            if cfg!(target_os = "macos") {
+                PresentMode::Fifo
+            } else {
+                PresentMode::Mailbox
+            }
+        };
+
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width,
             height: size.height,
-            // WASM only supports Fifo (vsync), desktop can use Mailbox for lower latency
-            present_mode: if cfg!(target_arch = "wasm32") || cfg!(target_os = "macos") {
-                PresentMode::Fifo
-            } else {
-                PresentMode::Mailbox  // Fast but smooth - software frame limiter controls speed multiplier
-            },
+            present_mode,
             // Use Opaque alpha mode to ensure frames don't accumulate
             // Auto mode in WASM can cause compositing issues where frames blend together
             alpha_mode: CompositeAlphaMode::Opaque,
