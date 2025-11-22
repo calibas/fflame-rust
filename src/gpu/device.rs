@@ -133,17 +133,7 @@ impl GpuContext {
         // Check adapter features for timestamp query support
         let adapter_features = adapter.features();
         log::info!("Adapter features: {:?}", adapter_features);
-        log::info!("TIMESTAMP_QUERY supported: {}", adapter_features.contains(Features::TIMESTAMP_QUERY));
-        log::info!("TIMESTAMP_QUERY_INSIDE_ENCODERS supported: {}", adapter_features.contains(Features::TIMESTAMP_QUERY_INSIDE_ENCODERS));
-        log::info!("TIMESTAMP_QUERY_INSIDE_PASSES supported: {}", adapter_features.contains(Features::TIMESTAMP_QUERY_INSIDE_PASSES));
 
-        // Enable timestamp queries for profiling (desktop only)
-        #[cfg(not(target_arch = "wasm32"))]
-        let required_features = Features::CLEAR_TEXTURE
-            | Features::TIMESTAMP_QUERY
-            | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
-            | Features::TIMESTAMP_QUERY_INSIDE_PASSES;
-        #[cfg(target_arch = "wasm32")]
         let required_features = Features::CLEAR_TEXTURE;
 
         let (device, queue) = adapter.request_device(
