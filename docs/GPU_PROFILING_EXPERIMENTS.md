@@ -215,13 +215,76 @@ PRESENT_MODE=mailbox cargo run --release
 **Expected Result:**
 With `PRESENT_MODE=immediate`, frame interval should drop to ~2ms (actual work time), and GPU usage should be minimal.
 
-## Conclusion
+## Final Test Results - ROOT CAUSE FOUND
 
-The wgpu-profiler confirms our rendering is extremely efficient (~0.22ms per frame, 1.3% of frame time).
-The high GPU "usage" percentage is likely from:
-- VSync synchronization overhead
-- Windows DWM composition
-- Driver/OS-level work invisible to profiler
-- How GPU utilization % is calculated
+### Experiment 1: Unlimited Frame Rate + Immediate Mode
+```bash
+set DISABLE_FRAME_LIMIT=1
+set PRESENT_MODE=immediate
+```
 
-**Next step:** Run with profiling and check if `present()` time reveals the mystery.
+**Result:**
+- Frame interval: **4ms** (down from 17ms!)
+- GPU usage: **LOWER**
+- Conclusion: VSync adds ~13ms overhead per frame
+
+### Experiment 2: Skip present() Entirely
+```bash
+set SKIP_PRESENT=1
+```
+
+**Result:**
+- GPU usage: **Drops to 1/10th of normal**
+- CPU usage: **Increases** (tight event loop)
+- Screen: Blank (no presentation)
+- **SMOKING GUN:** `frame.present()` is the culprit!
+
+### Experiment 3: Active Rendering at 600 FPS
+**Observation:**
+- Rendering fractals at 600 FPS with UI updates
+- GPU usage: **LOWER than idle at 60 FPS**
+- Proves this isn't about "GPU scheduler misinterpretation"
+
+## Conclusion - Mystery Solved
+
+### Root Cause
+
+**`frame.present()` triggers significant OS compositor work:**
+- Desktop Window Manager (DWM) on Windows
+- WindowServer on macOS
+- Display composition, color conversion, cursor compositing
+- Multi-monitor synchronization
+- VSync coordination
+
+**This work is:**
+- ✅ Real GPU execution (not just metrics)
+- ✅ Happens in OS graphics stack
+- ❌ Invisible to wgpu-profiler (not in our command buffers)
+- ❌ Can't be optimized by our application
+
+### Why Idle Shows Higher GPU Usage
+
+**Idle at 60 FPS:**
+- App work: 0.28ms GPU, 1.8ms CPU
+- Compositor: 60 present() calls/sec
+- GPU: **Mostly doing compositor work** (inefficient usage)
+
+**Active rendering at 600 FPS:**
+- App work: Massive compute load
+- Compositor: 600 present() calls/sec
+- GPU: **Mostly doing app work** (efficient usage, compositor is small %)
+
+### The Solution
+
+**Event-driven rendering** (not polling at fixed FPS):
+1. **Rendering mode**: Continuous updates at target FPS
+2. **Idle + interaction**: One frame per UI event
+3. **Idle + no interaction**: Zero frames (ControlFlow::Wait)
+
+**Impact:**
+- Zero GPU usage when truly idle (no present() calls)
+- Zero CPU usage when idle (OS sleeps event loop)
+- Instant response to interaction
+- Eliminates unnecessary compositor overhead
+
+**Status:** To be implemented next.

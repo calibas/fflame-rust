@@ -1315,7 +1315,12 @@ impl App {
         self.gpu.profiler.end_frame().unwrap();
 
         let t5 = Instant::now();
-        frame.present();
+        // SKIP_PRESENT: Test if present() itself causes GPU overhead
+        if std::env::var("SKIP_PRESENT").is_err() {
+            frame.present();
+        } else {
+            log::warn!("Skipping frame.present() - screen will be blank!");
+        }
         self.metrics.record_present_time(t5.elapsed().as_secs_f64() * 1000.0);
 
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
