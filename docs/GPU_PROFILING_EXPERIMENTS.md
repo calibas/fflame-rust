@@ -176,6 +176,45 @@ CPU timings:
 **Hypothesis:**
 If `present()` time is high (e.g., 10-15ms when idle), that's where the mystery "GPU usage" comes from - it's not actual rendering work, but VSync/composition blocking.
 
+## Actual Test Results (2025-11-22)
+
+**Measured when idle with UI active (60 FPS mode):**
+```
+GPU work: 0.141ms (egui_render + fractal_tonemap)
+CPU work: ~1.8ms total (all operations)
+Frame interval: 17.25ms (~58 FPS)
+MYSTERY GAP: 15.5ms unaccounted for!
+```
+
+**Analysis:**
+- `present()` time: 0.142ms (NOT blocking - hypothesis disproven!)
+- `get_current_texture()`: 0.029ms (NOT blocking)
+- Total measured work: 1.8ms
+- **87% of frame time is unexplained** (15.5ms / 17.25ms)
+
+**New Theory:**
+The 15.5ms gap is the GPU/driver **waiting for VSync** between frames. Even though `present()` returns quickly (0.142ms), the GPU is kept awake in a "ready" state for the full 16.67ms frame period. This "time awake" shows as "GPU usage" even though no work is happening.
+
+**Windows is using PresentMode::Mailbox** (non-blocking VSync), but the GPU still waits for display refresh.
+
+## New Experiment: Test Without VSync
+
+Added `PRESENT_MODE` environment variable to test different modes:
+
+```bash
+# Test without VSync (should eliminate the 15.5ms gap)
+PRESENT_MODE=immediate cargo run --release
+
+# Test with blocking VSync
+PRESENT_MODE=fifo cargo run --release
+
+# Default (non-blocking VSync)
+PRESENT_MODE=mailbox cargo run --release
+```
+
+**Expected Result:**
+With `PRESENT_MODE=immediate`, frame interval should drop to ~2ms (actual work time), and GPU usage should be minimal.
+
 ## Conclusion
 
 The wgpu-profiler confirms our rendering is extremely efficient (~0.22ms per frame, 1.3% of frame time).
