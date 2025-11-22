@@ -314,6 +314,12 @@ impl EguiLayer {
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
         });
 
+        // Log egui repaint requests for performance investigation
+        let needs_repaint = self.ctx.has_requested_repaint();
+        if needs_repaint {
+            log::info!("egui requesting repaint");
+        }
+
         self.state
             .handle_platform_output(window, full_output.platform_output);
 
