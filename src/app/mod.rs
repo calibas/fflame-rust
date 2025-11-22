@@ -319,12 +319,20 @@ impl App {
         // 5. Submit and present
         // ============================================================================
 
+        // Comprehensive CPU-side profiling for GPU investigation
+        let t_get_texture_start = Instant::now();
         let frame = self.gpu.surface.get_current_texture()?;
-        let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
+        let t_get_texture = t_get_texture_start.elapsed().as_secs_f64() * 1000.0;
 
+        let t_create_view_start = Instant::now();
+        let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
+        let t_create_view = t_create_view_start.elapsed().as_secs_f64() * 1000.0;
+
+        let t_create_encoder_start = Instant::now();
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
+        let t_create_encoder = t_create_encoder_start.elapsed().as_secs_f64() * 1000.0;
 
         // ============================================================================
         // PHASE 1: Render UI First
@@ -1320,17 +1328,30 @@ impl App {
                 if self.rendering_complete && !frame_data.is_empty() {
                     log::info!("=== GPU Profiling (IDLE) ===");
                     log::info!("Frame has {} scopes", frame_data.len());
+
+                    // GPU timings (from wgpu-profiler)
+                    let mut total_gpu_ms = 0.0;
                     for (i, scope) in frame_data.iter().enumerate() {
-                        log::info!("Scope {}: label='{}', time={:?}", i, scope.label, scope.time);
                         if let Some(ref time_range) = scope.time {
-                            let duration_sec = time_range.end - time_range.start;
-                            let duration_ms = duration_sec * 1000.0;
-                            let duration_us = duration_sec * 1_000_000.0;
-                            log::info!("  {}: {:.3}ms ({:.1}µs)", scope.label, duration_ms, duration_us);
+                            let duration_ms = (time_range.end - time_range.start) * 1000.0;
+                            let duration_us = (time_range.end - time_range.start) * 1_000_000.0;
+                            log::info!("  GPU[{}] {}: {:.3}ms ({:.1}µs)", i, scope.label, duration_ms, duration_us);
+                            total_gpu_ms += duration_ms;
                         } else {
-                            log::info!("  {}: <no timing data>", scope.label);
+                            log::info!("  GPU[{}] {}: <no timing data>", i, scope.label);
                         }
                     }
+                    log::info!("  GPU TOTAL: {:.3}ms", total_gpu_ms);
+
+                    // CPU-side timings (from metrics)
+                    log::info!("CPU timings:");
+                    log::info!("  get_current_texture: {:.3}ms", t_get_texture);
+                    log::info!("  create_view: {:.3}ms", t_create_view);
+                    log::info!("  create_encoder: {:.3}ms", t_create_encoder);
+                    log::info!("  ui_render (CPU): {:.3}ms", self.metrics.ui_time_ms);
+                    log::info!("  submit (UI): {:.3}ms", self.metrics.submit_time_ms);
+                    log::info!("  present: {:.3}ms", self.metrics.present_time_ms);
+                    log::info!("  TOTAL frame: {:.3}ms", self.metrics.render_time_ms);
                 }
             } else {
                 log::trace!("No frame data available this frame");
