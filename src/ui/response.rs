@@ -36,6 +36,9 @@ pub struct UiResponse {
 
     // Fractal viewport size (for matching texture dimensions to panel)
     pub fractal_viewport_size: Option<(u32, u32)>,
+
+    // UI interaction state (for frame rate optimization)
+    pub needs_repaint: bool,
 }
 
 impl Default for UiResponse {
@@ -61,6 +64,7 @@ impl Default for UiResponse {
             open_palette_editor: false,
             open_config_dialog: false,
             fractal_viewport_size: None,
+            needs_repaint: false,
         }
     }
 }

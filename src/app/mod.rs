@@ -55,6 +55,7 @@ pub struct App {
     pub(super) use_overwrite_next_frame: bool,  // Persist overwrite mode for brief period after changes
     pub(super) last_param_change_time: Option<web_time::Instant>,  // Track when params last changed
     pub(super) rendering_complete: bool,  // True when rendering has finished (max_iterations reached)
+    pub(super) ui_needs_repaint: bool,  // Track if UI is requesting repaints (for frame rate boost)
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
@@ -156,6 +157,7 @@ impl App {
             use_overwrite_next_frame: false,
             last_param_change_time: None,
             rendering_complete: false,
+            ui_needs_repaint: false,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             export_width: 1920,  // Default export resolution
             export_height: 1080,
@@ -238,10 +240,27 @@ impl App {
                         max_iterations.map_or(true, |max| r.total_iterations() < max)
                     });
 
-                    // Use speed multiplier when actively rendering, otherwise default to 60 FPS
-                    let multiplier = if is_rendering { config.speed_multiplier } else { 1 };
-                    let target_fps = 60.0 * multiplier as f64;
+                    // Determine target frame rate based on activity:
+                    // - Rendering: Use speed multiplier (60-960 FPS)
+                    // - UI interaction: 60 FPS (smooth response)
+                    // - Truly idle: 10 FPS (minimal GPU usage)
+                    let (target_fps, mode) = if is_rendering {
+                        (60.0 * config.speed_multiplier as f64, "rendering")
+                    } else if app.ui_needs_repaint {
+                        (60.0, "ui_active")
+                    } else {
+                        (10.0, "idle")
+                    };
                     let target_frame_time = Duration::from_secs_f64(1.0 / target_fps);
+
+                    // Log frame rate mode changes
+                    static LAST_MODE: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+                    if let Ok(mut last) = LAST_MODE.lock() {
+                        if *last != Some(mode) {
+                            log::info!("Frame rate mode: {} (target {} FPS)", mode, target_fps);
+                            *last = Some(mode);
+                        }
+                    }
 
                     let now = Instant::now();
                     if let Some(last_frame) = app.last_frame_time {
@@ -381,6 +400,9 @@ impl App {
         }
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
+
+        // Track UI repaint requests for frame rate optimization
+        self.ui_needs_repaint = ui_response.needs_repaint;
 
         // Handle viewport resize immediately (before rendering)
         if let Some(viewport_size) = ui_response.fractal_viewport_size {

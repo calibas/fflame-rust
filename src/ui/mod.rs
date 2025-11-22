@@ -465,6 +465,7 @@ impl EguiLayer {
             open_palette_editor,
             open_config_dialog,
             fractal_viewport_size,
+            needs_repaint,
         }
     }
 }
