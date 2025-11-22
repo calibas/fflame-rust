@@ -691,26 +691,25 @@ impl FlameRenderer {
         // Area in fractal space (not pixel space!)
         let area = (width * height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: use iterations per frame for consistent brightness
-        // The key insight: brightness formula should be calibrated for the PER-FRAME density
-        // increment, not the total accumulated density.
+        // Sample density: Normalized reference value for consistent brightness
         //
-        // Each accumulation adds: NUM_WORKGROUPS × iterations_per_thread × batch_size iterations
-        // This gets distributed across all pixels, giving a consistent per-pixel density increase
-        // per frame. By calibrating sample_density to this per-frame rate, the brightness
-        // formula produces consistent results regardless of total accumulated iterations.
+        // KEY INSIGHT: bucket_count accumulation rate depends on iterations_per_thread!
+        // - More iterations per frame → more hits per frame → higher bucket_count growth rate
+        // - So sample_density must scale proportionally to match the hit rate
         //
-        // This solves the progressive rendering problem: instead of matching total accumulated
-        // density (which grows over time), we match the per-frame increment (which is constant).
-        const NUM_WORKGROUPS: u32 = 128;
-        let iterations_per_frame = (NUM_WORKGROUPS * iterations_per_thread * batch_size) as f32;
-        let pixel_area = (width * height) as f32;
-        let base_density = if pixel_area > 0.0 {
-            iterations_per_frame / pixel_area
-        } else {
-            1.0
-        };
-        let sample_density = base_density;
+        // SOLUTION: Use a reference value normalized to default iterations_per_thread (256)
+        // - Base value: 5000.0 (empirically chosen for good exposure)
+        //   - Much higher than Apophysis (50-100) because we generate ~100x more iterations per batch
+        // - Scale factor: (iterations_per_thread / 256.0)
+        //   - At default (256): sample_density = 5000.0 × 1.0 = 5000.0
+        //   - At half (128): sample_density = 5000.0 × 0.5 = 2500.0
+        //   - At double (512): sample_density = 5000.0 × 2.0 = 10000.0
+        //
+        // This ensures brightness remains consistent when changing iterations_per_thread:
+        // - Both bucket_count growth and sample_density scale together
+        // - The ratio stays constant → brightness stays constant
+        // - iterations_per_thread only affects render speed, not appearance
+        let sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0);
 
         let params = TonemapParams {
             exposure,
