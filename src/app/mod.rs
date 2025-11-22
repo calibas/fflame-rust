@@ -129,6 +129,8 @@ impl App {
             target_iterations_per_pixel: crate::config::DEFAULT_TARGET_ITERATIONS_PER_PIXEL as u32,
             iterations_per_thread: crate::config::DEFAULT_ITERATIONS_PER_THREAD,
             speed_multiplier: crate::config::DEFAULT_SPEED_MULTIPLIER,
+            vsync_enabled: true,
+            target_fps: 60.0,
         };
 
         let config_manager = ConfigManager::new(initial_config.clone());
@@ -254,32 +256,34 @@ impl App {
                         max_iterations.map_or(true, |max| r.total_iterations() < max)
                     });
 
+                    // Update present mode based on config
+                    app.gpu.set_present_mode(config.vsync_enabled);
+
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
                     if is_rendering {
-                        // Actively rendering fractals: continuous updates at target FPS
-                        let target_fps = 60.0 * config.speed_multiplier as f64;
-                        let target_frame_time = Duration::from_secs_f64(1.0 / target_fps);
-
-                        let now = Instant::now();
-                        if let Some(last_frame) = app.last_frame_time {
-                            let elapsed = now.duration_since(last_frame);
-                            if elapsed >= target_frame_time {
-                                window.request_redraw();
-                            } else {
-                                let wait_until = last_frame + target_frame_time;
-                                elwt.set_control_flow(ControlFlow::WaitUntil(wait_until));
-                            }
-                        } else {
+                        // Actively rendering fractals: continuous updates
+                        if config.vsync_enabled {
+                            // VSync enabled: render continuously, let VSync cap frame rate
                             window.request_redraw();
+                        } else {
+                            // VSync disabled: manually limit to target FPS
+                            let target_frame_time = Duration::from_secs_f32(1.0 / config.target_fps);
+                            let now = Instant::now();
+                            if let Some(last_frame) = app.last_frame_time {
+                                let elapsed = now.duration_since(last_frame);
+                                if elapsed >= target_frame_time {
+                                    window.request_redraw();
+                                } else {
+                                    let wait_until = last_frame + target_frame_time;
+                                    elwt.set_control_flow(ControlFlow::WaitUntil(wait_until));
+                                }
+                            } else {
+                                window.request_redraw();
+                            }
                         }
-                    } else if app.ui_needs_repaint {
-                        // UI needs update: render ONE frame
-                        window.request_redraw();
-                        app.ui_needs_repaint = false; // Clear flag after requesting
                     } else {
                         // Truly idle: sleep until event wakes us
-                        // VSync (Fifo mode) will cap frame rate at monitor refresh
                         elwt.set_control_flow(ControlFlow::Wait);
                     }
                 }
@@ -1204,8 +1208,6 @@ impl App {
             if !should_iterate && !self.rendering_complete {
                 self.rendering_complete = true;
                 log::debug!("Rendering complete: max_iterations reached");
-                // Force UI repaint to show completion state
-                self.ui_needs_repaint = true;
             }
 
             if should_iterate {

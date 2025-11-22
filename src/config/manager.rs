@@ -647,6 +647,8 @@ impl ConfigManager {
             ConfigPath::SpeedMultiplier => Ok(config.speed_multiplier.into()),
             ConfigPath::MaxIterations => Ok(config.max_iterations.into()),
             ConfigPath::DeterministicRng => Ok(config.deterministic_rng.into()),
+            ConfigPath::VsyncEnabled => Ok(config.vsync_enabled.into()),
+            ConfigPath::TargetFps => Ok(config.target_fps.into()),
 
             // Transforms
             ConfigPath::TransformCount => {
@@ -930,6 +932,12 @@ impl ConfigManager {
             }
             ConfigPath::DeterministicRng => {
                 self.current.deterministic_rng = value.try_into()?;
+            }
+            ConfigPath::VsyncEnabled => {
+                self.current.vsync_enabled = value.try_into()?;
+            }
+            ConfigPath::TargetFps => {
+                self.current.target_fps = value.try_into()?;
             }
 
             // Transforms

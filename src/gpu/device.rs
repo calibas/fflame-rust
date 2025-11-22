@@ -256,6 +256,21 @@ impl GpuContext {
         }
     }
 
+    /// Update present mode (VSync setting)
+    pub fn set_present_mode(&mut self, vsync_enabled: bool) {
+        let present_mode = if vsync_enabled {
+            PresentMode::Fifo  // VSync enabled - cap at monitor refresh rate
+        } else {
+            PresentMode::Immediate  // VSync disabled - render as fast as possible
+        };
+
+        if self.config.present_mode != present_mode {
+            self.config.present_mode = present_mode;
+            self.surface.configure(&self.device, &self.config);
+            log::info!("Updated present mode: {:?}", present_mode);
+        }
+    }
+
     pub fn begin_frame(&self) {
         // Placeholder: clear frame or begin compute passes
     }

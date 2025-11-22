@@ -58,6 +58,8 @@ pub enum ConfigPath {
     SpeedMultiplier,
     MaxIterations,
     DeterministicRng,
+    VsyncEnabled,
+    TargetFps,
 
     // ===== Transform-level changes (require iteration reset) =====
     TransformCount,
@@ -145,6 +147,8 @@ impl Display for ConfigPath {
             ConfigPath::SpeedMultiplier => write!(f, "Speed Multiplier"),
             ConfigPath::MaxIterations => write!(f, "Max Iterations"),
             ConfigPath::DeterministicRng => write!(f, "Deterministic RNG"),
+            ConfigPath::VsyncEnabled => write!(f, "VSync Enabled"),
+            ConfigPath::TargetFps => write!(f, "Target FPS"),
 
             // Transforms
             ConfigPath::TransformCount => write!(f, "Transform Count"),
@@ -222,17 +226,17 @@ pub enum ConfigValue {
 impl ConfigValue {
     /// Check if two values are approximately equal (for floats)
     pub fn approx_eq(&self, other: &Self) -> bool {
-        const EPSILON: f32 = 1e-6;
+        const EPSILON_F32: f32 = 1e-6;
 
         match (self, other) {
-            (ConfigValue::Float(a), ConfigValue::Float(b)) => (a - b).abs() < EPSILON,
+            (ConfigValue::Float(a), ConfigValue::Float(b)) => (a - b).abs() < EPSILON_F32,
             (ConfigValue::Vec2(x1, y1), ConfigValue::Vec2(x2, y2)) => {
-                (x1 - x2).abs() < EPSILON && (y1 - y2).abs() < EPSILON
+                (x1 - x2).abs() < EPSILON_F32 && (y1 - y2).abs() < EPSILON_F32
             }
             (ConfigValue::ColorRgb(a), ConfigValue::ColorRgb(b)) => a
                 .iter()
                 .zip(b.iter())
-                .all(|(x, y)| (x - y).abs() < EPSILON),
+                .all(|(x, y)| (x - y).abs() < EPSILON_F32),
             (ConfigValue::Int(a), ConfigValue::Int(b)) => a == b,
             (ConfigValue::UInt(a), ConfigValue::UInt(b)) => a == b,
             (ConfigValue::UInt64(a), ConfigValue::UInt64(b)) => a == b,
@@ -595,7 +599,9 @@ impl ConfigPath {
             | ConfigPath::Rotation
             | ConfigPath::CameraRotationX
             | ConfigPath::CameraRotationY
-            | ConfigPath::CameraZ => UpdateType::ViewOnly,
+            | ConfigPath::CameraZ
+            | ConfigPath::VsyncEnabled
+            | ConfigPath::TargetFps => UpdateType::ViewOnly,
 
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure
