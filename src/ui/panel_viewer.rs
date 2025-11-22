@@ -349,19 +349,28 @@ impl<'a> PanelViewer<'a> {
                     let mouse_offset_x = mouse_pos.x - center_x;
                     let mouse_offset_y = mouse_pos.y - center_y;
 
-                    // Convert to fractal space (account for current zoom and scale)
+                    // Convert to fractal space (account for current zoom, scale, and rotation)
                     let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
-                    let fractal_offset_x = mouse_offset_x / (scale * config.zoom);
-                    let fractal_offset_y = mouse_offset_y / (scale * config.zoom);
+
+                    // Apply rotation to convert screen space to fractal space
+                    let cos_r = (-config.rotation).cos();
+                    let sin_r = (-config.rotation).sin();
+                    let rotated_offset_x = mouse_offset_x * cos_r - mouse_offset_y * sin_r;
+                    let rotated_offset_y = mouse_offset_x * sin_r + mouse_offset_y * cos_r;
+
+                    let fractal_offset_x = rotated_offset_x / (scale * config.zoom);
+                    let fractal_offset_y = rotated_offset_y / (scale * config.zoom);
 
                     // Calculate the point in fractal space that the mouse is pointing at
                     let point_x = config.pan_x + fractal_offset_x;
                     let point_y = config.pan_y + fractal_offset_y;
 
-                    // Apply zoom and adjust pan
+                    // Apply zoom and adjust pan (also need rotation for new zoom level)
                     let new_zoom = (config.zoom * zoom_factor).clamp(0.01, 1000.0);
-                    let new_fractal_offset_x = mouse_offset_x / (scale * new_zoom);
-                    let new_fractal_offset_y = mouse_offset_y / (scale * new_zoom);
+                    let new_rotated_offset_x = mouse_offset_x * cos_r - mouse_offset_y * sin_r;
+                    let new_rotated_offset_y = mouse_offset_x * sin_r + mouse_offset_y * cos_r;
+                    let new_fractal_offset_x = new_rotated_offset_x / (scale * new_zoom);
+                    let new_fractal_offset_y = new_rotated_offset_y / (scale * new_zoom);
                     let new_pan_x = point_x - new_fractal_offset_x;
                     let new_pan_y = point_y - new_fractal_offset_y;
 
