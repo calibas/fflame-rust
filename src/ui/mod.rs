@@ -163,6 +163,7 @@ impl EguiLayer {
         window_size: winit::dpi::PhysicalSize<u32>,
         metrics: &crate::util::PerformanceMetrics,
         config_manager: &mut crate::config::ConfigManager,
+        system_settings: &mut crate::storage::SystemSettings,
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
         flame: &mut crate::scene::transforms::Flame,
         palette_library: &mut crate::scene::palette::PaletteLibrary,
@@ -253,6 +254,7 @@ impl EguiLayer {
                     context: panel_viewer::PanelContext {
                         // Core state
                         config_manager,
+                        system_settings,
                         flame,
 
                         // Libraries

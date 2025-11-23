@@ -21,10 +21,12 @@ use crate::scene::palette::PaletteLibrary;
 use crate::scene::presets::PresetLibrary;
 use crate::util::PerformanceMetrics;
 use crate::config::{FractalConfig, ConfigManager};
+use crate::storage::SystemSettings;
 
 pub struct App {
     // Core state management
     pub(super) config_manager: ConfigManager,  // Single source of truth for all config
+    pub(super) system_settings: SystemSettings,  // Device-specific settings (persisted)
 
     // GPU and rendering resources
     pub(super) gpu: GpuContext,
@@ -70,14 +72,22 @@ impl App {
         let gpu = GpuContext::new(&window).await.expect("GPU init failed");
         let egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
+        // Load system settings (device-specific preferences)
+        let system_settings = SystemSettings::load();
+
         // Load preset library and use first preset (with ALL its settings)
         let preset_library = PresetLibrary::new();
         let palette_library = PaletteLibrary::new();
 
         // Use entire FractalConfig from first preset (not just the flame!)
-        let initial_config = preset_library.get(0)
+        let mut initial_config = preset_library.get(0)
             .cloned()
             .unwrap_or_default();
+
+        // Override device-specific settings from SystemSettings
+        initial_config.iterations_per_thread = system_settings.iterations_per_thread;
+        initial_config.vsync_enabled = system_settings.vsync_enabled;
+        initial_config.target_fps = system_settings.target_fps;
 
         let flame = initial_config.flame.clone();
 
@@ -97,6 +107,7 @@ impl App {
 
         let mut app = Self {
             config_manager,
+            system_settings: system_settings.clone(),
             gpu,
             egui_layer,
             flame_renderer: Some(flame_renderer),
@@ -119,8 +130,8 @@ impl App {
             ui_needs_repaint: false,
             pending_redraws: 0,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
-            export_width: 1920,  // Default export resolution
-            export_height: 1080,
+            export_width: system_settings.default_export_width,
+            export_height: system_settings.default_export_height,
             use_custom_export_size: false,  // Default to viewport size
         };
 
@@ -338,6 +349,7 @@ impl App {
             self.gpu.size,
             &self.metrics,
             &mut self.config_manager,
+            &mut self.system_settings,
             self.flame_renderer.as_mut(),
             &mut self.flame,
             &mut self.palette_library,
