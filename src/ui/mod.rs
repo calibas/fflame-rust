@@ -427,12 +427,7 @@ impl EguiLayer {
             let _ = config_manager.request_reset();
         }
 
-        if let Some(speed) = menu_actions.rendering.set_speed {
-            let _ = config_manager.update_param(
-                ConfigPath::SpeedMultiplier,
-                speed.into()
-            );
-        }
+        // Speed multiplier removed - now use VSync and target_fps instead
 
         if let Some(ipt) = menu_actions.rendering.set_iterations_per_thread {
             let _ = config_manager.update_param(

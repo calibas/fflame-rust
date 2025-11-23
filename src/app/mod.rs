@@ -129,7 +129,6 @@ impl App {
             use_dynamic_blend: crate::config::DEFAULT_USE_DYNAMIC_BLEND,
             target_iterations_per_pixel: crate::config::DEFAULT_TARGET_ITERATIONS_PER_PIXEL as u32,
             iterations_per_thread: crate::config::DEFAULT_ITERATIONS_PER_THREAD,
-            speed_multiplier: crate::config::DEFAULT_SPEED_MULTIPLIER,
             vsync_enabled: true,
             target_fps: 60.0,
         };

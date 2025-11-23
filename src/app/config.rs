@@ -90,7 +90,6 @@ impl App {
 
         println!("Exporting at custom size: {}×{}", self.export_width, self.export_height);
         println!("  iterations_per_thread: {}", config.iterations_per_thread);
-        println!("  speed_multiplier: {}", config.speed_multiplier);
         println!("  max_iterations: {}", config.max_iterations);
         println!("  density_scale: {}", config.density_scale);
         println!("  histogram_color_scale: {}", config.histogram_color_scale);

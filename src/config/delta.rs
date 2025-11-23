@@ -55,7 +55,6 @@ pub enum ConfigPath {
     UseDynamicBlend,
     TargetIterationsPerPixel,
     IterationsPerThread,
-    SpeedMultiplier,
     MaxIterations,
     DeterministicRng,
     VsyncEnabled,
@@ -144,7 +143,6 @@ impl Display for ConfigPath {
             ConfigPath::UseDynamicBlend => write!(f, "Use Dynamic Blend"),
             ConfigPath::TargetIterationsPerPixel => write!(f, "Target Iterations Per Pixel"),
             ConfigPath::IterationsPerThread => write!(f, "Iterations Per Thread"),
-            ConfigPath::SpeedMultiplier => write!(f, "Speed Multiplier"),
             ConfigPath::MaxIterations => write!(f, "Max Iterations"),
             ConfigPath::DeterministicRng => write!(f, "Deterministic RNG"),
             ConfigPath::VsyncEnabled => write!(f, "VSync Enabled"),
@@ -632,8 +630,7 @@ impl ConfigPath {
             | ConfigPath::BlendFactor
             | ConfigPath::UseDynamicBlend
             | ConfigPath::TargetIterationsPerPixel
-            | ConfigPath::IterationsPerThread
-            | ConfigPath::SpeedMultiplier => UpdateType::IterationReset,
+            | ConfigPath::IterationsPerThread => UpdateType::IterationReset,
 
             // Transform/flame changes - full reset
             ConfigPath::TransformCount

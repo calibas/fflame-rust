@@ -50,9 +50,6 @@ pub struct FractalConfig {
     /// Iterations per thread (GPU workgroup performance tuning, default: 256)
     #[serde(default = "default_iterations_per_thread")]
     pub iterations_per_thread: u32,
-    /// Speed multiplier for frame rate (1x-16x, affects quality consistency, default: 1)
-    #[serde(default = "default_speed_multiplier")]
-    pub speed_multiplier: u32,
 
     /// VSync settings
     /// Enable VSync (locks frame rate to monitor refresh rate)
@@ -179,10 +176,6 @@ fn default_iterations_per_thread() -> u32 {
     super::defaults::DEFAULT_ITERATIONS_PER_THREAD
 }
 
-fn default_speed_multiplier() -> u32 {
-    super::defaults::DEFAULT_SPEED_MULTIPLIER
-}
-
 fn default_vsync_enabled() -> bool {
     true  // Enable VSync by default
 }
@@ -215,7 +208,6 @@ impl Default for FractalConfig {
             use_dynamic_blend: default_use_dynamic_blend(),
             target_iterations_per_pixel: 0,
             iterations_per_thread: default_iterations_per_thread(),
-            speed_multiplier: default_speed_multiplier(),
             vsync_enabled: default_vsync_enabled(),
             target_fps: default_target_fps(),
             color_mode: ColorMode::Palette,
