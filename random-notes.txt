@@ -307,3 +307,7 @@ CPU benchmarking currently seems like overkill.
 CPU isn't generally going to be the bottleneck, though we need to test if it is. GPU should be doing most of the work.
 Can we reduce the CPU benchmarking to focus on exactly what happens during batching? I don't want it to take so long.
 Keep the current CPU bencmarks, but only run them with the --full flag. The default mode should just focus on the important CPU benchmarks.
+
+
+
+register_native_texture shouldn't run every frame.

@@ -18,6 +18,7 @@ pub fn render_settings_content(
     flame_renderer: Option<&crate::renderer::compute_kernel::FlameRenderer>,
     paused: &mut bool,
     config_manager: &mut ConfigManager,
+    system_settings: &mut crate::storage::SystemSettings,
     open_config_dialog: &mut bool,
 ) {
     // Clone config to avoid borrow conflicts (allows mutation of config_manager in closures)
@@ -117,7 +118,7 @@ pub fn render_settings_content(
             ui.separator();
 
             // Render settings - Iterations per thread
-            let mut temp_iterations = config.iterations_per_thread;
+            let mut temp_iterations = system_settings.iterations_per_thread;
             let response = ui.add(egui::Slider::new(&mut temp_iterations, 64..=4096)
                 .text("Iterations per Thread"))
                 .on_hover_text(
@@ -127,6 +128,7 @@ pub fn render_settings_content(
                 );
 
             if response.changed() {
+                system_settings.iterations_per_thread = temp_iterations;
                 let _ = config_manager.update_param(
                     ConfigPath::IterationsPerThread,
                     temp_iterations.into()
@@ -135,6 +137,8 @@ pub fn render_settings_content(
 
             if response.drag_stopped() {
                 let _ = config_manager.force_commit_preview(&ConfigPath::IterationsPerThread);
+                // Save system settings when user finishes dragging
+                let _ = system_settings.save();
             }
 
             // Histogram color scale
@@ -275,24 +279,30 @@ pub fn render_settings_content(
             ui.separator();
 
             // VSync and frame rate settings
-            let mut vsync = config.vsync_enabled;
+            let mut vsync = system_settings.vsync_enabled;
             if ui.checkbox(&mut vsync, "Enable VSync").changed() {
+                system_settings.vsync_enabled = vsync;
                 let _ = config_manager.update_param(
                     ConfigPath::VsyncEnabled,
                     vsync.into()
                 );
+                // Save system settings immediately when checkbox changes
+                let _ = system_settings.save();
             }
 
             // Only show target FPS when VSync is disabled
-            if !config.vsync_enabled {
+            if !system_settings.vsync_enabled {
                 ui.horizontal(|ui| {
                     ui.label("Target FPS:");
-                    let mut target_fps = config.target_fps as f32;
+                    let mut target_fps = system_settings.target_fps;
                     if ui.add(egui::Slider::new(&mut target_fps, 10.0..=1000.0).suffix(" FPS")).changed() {
+                        system_settings.target_fps = target_fps;
                         let _ = config_manager.update_param(
                             ConfigPath::TargetFps,
                             target_fps.into()
                         );
+                        // Save system settings immediately when slider changes
+                        let _ = system_settings.save();
                     }
                 });
             }
@@ -318,11 +328,17 @@ pub fn render_settings_content(
             ui.add_enabled_ui(*use_custom_export_size, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Width:");
-                    ui.add(egui::DragValue::new(export_width).range(64..=8192).speed(10));
+                    if ui.add(egui::DragValue::new(export_width).range(64..=8192).speed(10)).changed() {
+                        system_settings.default_export_width = *export_width;
+                        let _ = system_settings.save();
+                    }
                 });
                 ui.horizontal(|ui| {
                     ui.label("Height:");
-                    ui.add(egui::DragValue::new(export_height).range(64..=8192).speed(10));
+                    if ui.add(egui::DragValue::new(export_height).range(64..=8192).speed(10)).changed() {
+                        system_settings.default_export_height = *export_height;
+                        let _ = system_settings.save();
+                    }
                 });
                 ui.label(format!("Export resolution: {}×{}", export_width, export_height));
             });

@@ -10,6 +10,7 @@ use super::workspace::PanelType;
 pub struct PanelContext<'a> {
     // Core state
     pub config_manager: &'a mut crate::config::ConfigManager,
+    pub system_settings: &'a mut crate::storage::SystemSettings,
     pub flame: &'a mut crate::scene::transforms::Flame,
 
     // Libraries
@@ -196,6 +197,7 @@ impl<'a> PanelViewer<'a> {
             self.context.flame_renderer,
             self.context.paused,
             self.context.config_manager,
+            self.context.system_settings,
             self.context.open_config_dialog,
         );
     }

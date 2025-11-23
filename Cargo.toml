@@ -32,7 +32,7 @@ png = "0.17"
 futures = "0.3"
 quick-xml = "0.36"
 rust-i18n = "3.1"
-directories = "5.0"
+directories = "6.0"
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
