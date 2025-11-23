@@ -3,6 +3,9 @@ use crate::scene::transforms::Flame;
 use crate::scene::palette::{ColorMode, Palette};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 
+/// Current config format version
+pub const CURRENT_CONFIG_VERSION: u32 = 1;
+
 /// Complete fractal configuration (excludes runtime-only settings)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FractalConfig {
@@ -232,14 +235,57 @@ impl Default for FractalConfig {
 }
 
 impl FractalConfig {
-    /// Export configuration to JSON string
+    /// Export configuration to JSON string with version header
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(self)
+        // Serialize to JSON value
+        let mut value = serde_json::to_value(self)?;
+
+        // Inject version at the top
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("version".to_string(), serde_json::json!(CURRENT_CONFIG_VERSION));
+
+            // Re-serialize with version first (serde_json preserves insertion order)
+            let mut ordered_obj = serde_json::Map::new();
+            ordered_obj.insert("version".to_string(), serde_json::json!(CURRENT_CONFIG_VERSION));
+            for (k, v) in obj.iter() {
+                if k != "version" {
+                    ordered_obj.insert(k.clone(), v.clone());
+                }
+            }
+            serde_json::to_string_pretty(&ordered_obj)
+        } else {
+            serde_json::to_string_pretty(&value)
+        }
     }
 
-    /// Import configuration from JSON string
+    /// Import configuration from JSON string with version checking
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(json)
+        // Parse to check version first
+        let value: serde_json::Value = serde_json::from_str(json)?;
+
+        // Check version if present
+        if let Some(version) = value.get("version").and_then(|v| v.as_u64()) {
+            let version = version as u32;
+
+            if version > CURRENT_CONFIG_VERSION {
+                let msg = format!(
+                    "Config version {} is newer than supported version {}. Please update the application.",
+                    version, CURRENT_CONFIG_VERSION
+                );
+                return Err(serde_json::Error::io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    msg
+                )));
+            }
+
+            // TODO: Add migration logic here when needed
+            // if version < CURRENT_CONFIG_VERSION {
+            //     value = migrate(value, version)?;
+            // }
+        }
+
+        // Deserialize (version field is ignored by struct)
+        serde_json::from_value(value)
     }
 
     /// Export to JSON file

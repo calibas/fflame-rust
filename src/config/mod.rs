@@ -19,6 +19,6 @@ pub use defaults::*;
 pub use delta::{
     AffineParam, ConfigChange, ConfigDelta, ConfigPath, ConfigValue, SnapshotData, UpdateType,
 };
-pub use fractal_config::FractalConfig;
+pub use fractal_config::{FractalConfig, CURRENT_CONFIG_VERSION};
 pub use manager::{ConfigError, ConfigManager, UpdateAction};
 pub use slider::{ConfigSlider, ConfigSliderResult, ConfigSliderUi, LazyUndoUi};
