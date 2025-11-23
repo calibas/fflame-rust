@@ -52,7 +52,7 @@ pub fn render_variation_params(
             &crate::variations::global_registry(),
         );
 
-        let (param_changed, dragged, drag_stopped) = match &param.param_type {
+        let (param_changed, drag_stopped) = match &param.param_type {
             ParamType::Float => render_float_param(ui, param, &mut param_value),
             ParamType::UnlimitedFloat => render_unlimited_float_param(ui, param, &mut param_value),
             ParamType::Integer => render_integer_param(ui, param, &mut param_value),
@@ -85,7 +85,7 @@ pub fn render_variation_params(
 
 /// Render a float parameter slider
 /// Returns (changed, dragged, drag_stopped)
-fn render_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool, bool) {
+fn render_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let min = param.min_value.unwrap_or(-10.0);
     let max = param.max_value.unwrap_or(10.0);
     let response = ui.add(
@@ -93,24 +93,24 @@ fn render_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut
             .text(&param.display_name)
             .step_by(0.01),
     );
-    (response.changed(), response.dragged(), response.drag_stopped())
+    (response.changed(), response.drag_stopped())
 }
 
 /// Render an integer parameter slider
 /// Returns (changed, dragged, drag_stopped)
-fn render_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool, bool) {
+fn render_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let min = param.min_value.unwrap_or(1.0) as i32;
     let max = param.max_value.unwrap_or(10.0) as i32;
     let mut int_val = *value as i32;
     let response = ui.add(egui::Slider::new(&mut int_val, min..=max).text(&param.display_name));
     *value = int_val as f32;
-    (response.changed(), response.dragged(), response.drag_stopped())
+    (response.changed(), response.drag_stopped())
 }
 
 /// Render an unlimited integer parameter (full i32 range)
 /// Uses min/max as slider range (default -100 to 100), but allows typing any i32 value
 /// Returns (changed, dragged, drag_stopped)
-fn render_unlimited_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool, bool) {
+fn render_unlimited_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let min = param.min_value.unwrap_or(-100.0) as i32;
     let max = param.max_value.unwrap_or(100.0) as i32;
     let mut int_val = *value as i32;
@@ -128,22 +128,22 @@ fn render_unlimited_integer_param(ui: &mut egui::Ui, param: &VariationParameter,
         *value = int_val as f32;
     }
 
-    (response.changed(), response.dragged(), response.drag_stopped())
+    (response.changed(), response.drag_stopped())
 }
 
 /// Render an angle parameter slider (displays degrees, stores as value)
 /// Returns (changed, dragged, drag_stopped)
-fn render_angle_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool, bool) {
+fn render_angle_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let min = param.min_value.unwrap_or(0.0);
     let max = param.max_value.unwrap_or(360.0);
     let response = ui.add(egui::Slider::new(value, min..=max).text(&param.display_name).suffix("°"));
-    (response.changed(), response.dragged(), response.drag_stopped())
+    (response.changed(), response.drag_stopped())
 }
 
 /// Render an unlimited float parameter (full f32 range)
 /// Uses min/max as slider range (default -10.0 to 10.0), but allows typing any f32 value
 /// Returns (changed, dragged, drag_stopped)
-fn render_unlimited_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool, bool) {
+fn render_unlimited_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let min = param.min_value.unwrap_or(-10.0);
     let max = param.max_value.unwrap_or(10.0);
 
@@ -158,25 +158,25 @@ fn render_unlimited_float_param(ui: &mut egui::Ui, param: &VariationParameter, v
         *value = value.clamp(f32::MIN, f32::MAX);
     }
 
-    (response.changed(), response.dragged(), response.drag_stopped())
+    (response.changed(), response.drag_stopped())
 }
 
 /// Render a boolean parameter (checkbox)
 /// Returns (changed, dragged=false, drag_stopped=false)
-fn render_boolean_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool, bool) {
+fn render_boolean_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let mut checked = *value > 0.5;
     let response = ui.checkbox(&mut checked, &param.display_name);
     *value = if checked { 1.0 } else { 0.0 };
-    (response.changed(), false, false)  // Checkboxes don't have drag states
+    (response.changed(), false)  // Checkboxes don't have drag states
 }
 
 /// Render an enum parameter (dropdown/combobox)
 /// Returns (changed, dragged=false, drag_stopped=false)
-fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32, choices: &[String]) -> (bool, bool, bool) {
+fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32, choices: &[String]) -> (bool, bool) {
     if choices.is_empty() {
         // Fallback if no choices provided
         ui.label(format!("{}: (no choices)", param.display_name));
-        return (false, false, false);
+        return (false, false);
     }
 
     let current_idx = (*value as usize).min(choices.len().saturating_sub(1));
@@ -197,7 +197,7 @@ fn render_enum_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut 
         *value = selected as f32;
     }
 
-    (changed, false, false)  // Dropdowns don't have drag states
+    (changed, false)  // Dropdowns don't have drag states
 }
 
 /// Render parameter controls for an active variation on the final transform
@@ -233,7 +233,7 @@ pub fn render_variation_params_final(
             &crate::variations::global_registry(),
         );
 
-        let (param_changed, dragged, drag_stopped) = match &param.param_type {
+        let (param_changed, drag_stopped) = match &param.param_type {
             ParamType::Float => render_float_param(ui, param, &mut param_value),
             ParamType::UnlimitedFloat => render_unlimited_float_param(ui, param, &mut param_value),
             ParamType::Integer => render_integer_param(ui, param, &mut param_value),
