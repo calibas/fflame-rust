@@ -644,7 +644,6 @@ impl ConfigManager {
                 Ok(config.target_iterations_per_pixel.into())
             }
             ConfigPath::IterationsPerThread => Ok(config.iterations_per_thread.into()),
-            ConfigPath::SpeedMultiplier => Ok(config.speed_multiplier.into()),
             ConfigPath::MaxIterations => Ok(config.max_iterations.into()),
             ConfigPath::DeterministicRng => Ok(config.deterministic_rng.into()),
             ConfigPath::VsyncEnabled => Ok(config.vsync_enabled.into()),
@@ -923,9 +922,6 @@ impl ConfigManager {
             }
             ConfigPath::IterationsPerThread => {
                 self.current.iterations_per_thread = value.try_into()?;
-            }
-            ConfigPath::SpeedMultiplier => {
-                self.current.speed_multiplier = value.try_into()?;
             }
             ConfigPath::MaxIterations => {
                 self.current.max_iterations = value.try_into()?;

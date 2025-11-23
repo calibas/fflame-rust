@@ -274,43 +274,6 @@ pub fn render_settings_content(
 
             ui.separator();
 
-            // Speed multiplier for frame rate (1x = 60 FPS, 2x = 120 FPS, etc.)
-            ui.horizontal(|ui| {
-                ui.label("Speed:");
-                if ui.selectable_label(config.speed_multiplier == 1, "1x").clicked() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::SpeedMultiplier,
-                        1u32.into()
-                    );
-                }
-                if ui.selectable_label(config.speed_multiplier == 2, "2x").clicked() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::SpeedMultiplier,
-                        2u32.into()
-                    );
-                }
-                if ui.selectable_label(config.speed_multiplier == 4, "4x").clicked() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::SpeedMultiplier,
-                        4u32.into()
-                    );
-                }
-                if ui.selectable_label(config.speed_multiplier == 8, "8x").clicked() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::SpeedMultiplier,
-                        8u32.into()
-                    );
-                }
-                if ui.selectable_label(config.speed_multiplier == 16, "16x").clicked() {
-                    let _ = config_manager.update_param(
-                        ConfigPath::SpeedMultiplier,
-                        16u32.into()
-                    );
-                }
-            });
-
-            ui.separator();
-
             // VSync and frame rate settings
             let mut vsync = config.vsync_enabled;
             if ui.checkbox(&mut vsync, "Enable VSync").changed() {

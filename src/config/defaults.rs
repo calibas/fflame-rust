@@ -27,7 +27,6 @@ pub const DEFAULT_USE_DYNAMIC_BLEND: bool = true; // Clamped exponential: 0.8 â†
 
 // Performance
 pub const DEFAULT_ITERATIONS_PER_THREAD: u32 = 256;
-pub const DEFAULT_SPEED_MULTIPLIER: u32 = 1;
 pub const DEFAULT_TARGET_ITERATIONS_PER_PIXEL: u64 = 0; // Disabled
 
 // Other

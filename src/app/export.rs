@@ -7,7 +7,6 @@ pub async fn export_headless_wasm(
     width: u32,
     height: u32,
     iterations_per_thread: u32,
-    _speed_multiplier: u32, // Reserved for future use
 ) -> Result<Vec<u8>, String> {
     use crate::renderer::compute_kernel::FlameRenderer;
     use crate::scene::palette::PaletteLibrary;
@@ -181,7 +180,6 @@ pub async fn export_headless(
     height: u32,
     test_category: Option<String>,
     iterations_per_thread: u32,
-    _speed_multiplier: u32,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     use crate::renderer::compute_kernel::FlameRenderer;
     use crate::scene::palette::PaletteLibrary;
