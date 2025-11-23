@@ -4,6 +4,7 @@ use std::fs;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let flames = vec![
+        create_jdisc_sea_flame(),
         create_simple_flame(),
         create_spherical_flame(),
         create_spiral_flame(),

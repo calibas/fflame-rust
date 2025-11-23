@@ -340,7 +340,7 @@ impl Palette {
     }
 
     /// Create palette from compact hex string format
-    fn from_hex_string(name: String, hex_colors: &str, locked: bool) -> Result<Self, String> {
+    pub fn from_hex_string(name: String, hex_colors: &str, locked: bool) -> Result<Self, String> {
         let stops: Result<Vec<ColorStop>, String> = hex_colors.split(',')
             .enumerate()
             .map(|(i, hex)| {
