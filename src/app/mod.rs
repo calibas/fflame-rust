@@ -54,6 +54,9 @@ pub struct App {
     pub(super) frames_since_accumulation: u32,
     pub(super) use_overwrite_next_frame: bool,  // Persist overwrite mode for brief period after changes
     pub(super) last_param_change_time: Option<web_time::Instant>,  // Track when params last changed
+    pub(super) rendering_complete: bool,  // True when rendering has finished (max_iterations reached)
+    pub(super) ui_needs_repaint: bool,  // Track if UI is requesting repaints (for frame rate boost)
+    pub(super) pending_redraws: u32,  // Counter for queued redraws (for UI animations after input)
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
@@ -127,6 +130,8 @@ impl App {
             target_iterations_per_pixel: crate::config::DEFAULT_TARGET_ITERATIONS_PER_PIXEL as u32,
             iterations_per_thread: crate::config::DEFAULT_ITERATIONS_PER_THREAD,
             speed_multiplier: crate::config::DEFAULT_SPEED_MULTIPLIER,
+            vsync_enabled: true,
+            target_fps: 60.0,
         };
 
         let config_manager = ConfigManager::new(initial_config.clone());
@@ -154,6 +159,9 @@ impl App {
             frames_since_accumulation: 0,
             use_overwrite_next_frame: false,
             last_param_change_time: None,
+            rendering_complete: false,
+            ui_needs_repaint: false,
+            pending_redraws: 0,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             export_width: 1920,  // Default export resolution
             export_height: 1080,
@@ -166,6 +174,26 @@ impl App {
                 Event::WindowEvent { event, window_id } if window_id == window.id() => {
                     // Let egui handle events first
                     let consumed = app.egui_layer.handle_event(&event, &window);
+
+                    // Request redraw for events that need visual updates
+                    // This wakes from ControlFlow::Wait when user interacts
+                    match &event {
+                        WindowEvent::CursorMoved { .. } |
+                        WindowEvent::MouseInput { .. } |
+                        WindowEvent::MouseWheel { .. } |
+                        WindowEvent::KeyboardInput { .. } => {
+                            // Queue 15 frames for UI animations (hover effects, transitions, etc.)
+                            app.pending_redraws = 15;
+                            window.request_redraw();
+                        }
+                        WindowEvent::Resized(_) |
+                        WindowEvent::ScaleFactorChanged { .. } => {
+                            // Window events need just 1 frame
+                            app.pending_redraws = 1;
+                            window.request_redraw();
+                        }
+                        _ => {}
+                    }
 
                     match event {
                         WindowEvent::CloseRequested => {
@@ -236,25 +264,48 @@ impl App {
                         max_iterations.map_or(true, |max| r.total_iterations() < max)
                     });
 
-                    // Use speed multiplier when actively rendering, otherwise default to 60 FPS
-                    let multiplier = if is_rendering { config.speed_multiplier } else { 1 };
-                    let target_fps = 60.0 * multiplier as f64;
-                    let target_frame_time = Duration::from_secs_f64(1.0 / target_fps);
+                    // Update present mode based on config
+                    app.gpu.set_present_mode(config.vsync_enabled);
 
-                    let now = Instant::now();
-                    if let Some(last_frame) = app.last_frame_time {
-                        let elapsed = now.duration_since(last_frame);
-                        if elapsed >= target_frame_time {
-                            // Time for next frame, request redraw
+                    // EVENT-DRIVEN RENDERING:
+                    // Only render when something actually changes
+                    if is_rendering || app.pending_redraws > 0 {
+                        // Actively rendering fractals OR UI animations pending
+                        if config.vsync_enabled {
+                            // VSync enabled: render continuously, let VSync cap frame rate
                             window.request_redraw();
                         } else {
-                            // Wait until next frame is due
-                            let wait_until = last_frame + target_frame_time;
-                            elwt.set_control_flow(ControlFlow::WaitUntil(wait_until));
+                            // VSync disabled: manually limit to target FPS
+                            let target_frame_time = Duration::from_secs_f32(1.0 / config.target_fps);
+                            let now = Instant::now();
+                            if let Some(last_frame) = app.last_frame_time {
+                                let elapsed = now.duration_since(last_frame);
+                                if elapsed >= target_frame_time {
+                                    window.request_redraw();
+                                } else {
+                                    let wait_until = last_frame + target_frame_time;
+                                    elwt.set_control_flow(ControlFlow::WaitUntil(wait_until));
+                                }
+                            } else {
+                                window.request_redraw();
+                            }
+                        }
+
+                        // Decrement pending redraws counter after requesting next frame
+                        // AboutToWait fires AFTER RedrawRequested, so we're counting frames that just drew
+                        // While actively rendering, keep counter at minimum 1 for UI responsiveness
+                        if app.pending_redraws > 0 {
+                            if is_rendering {
+                                // Keep at least 1 while rendering for smooth UI
+                                app.pending_redraws = app.pending_redraws.saturating_sub(1).max(1);
+                            } else {
+                                // Not rendering: count down to 0 normally
+                                app.pending_redraws -= 1;
+                            }
                         }
                     } else {
-                        // First frame, render immediately
-                        window.request_redraw();
+                        // Truly idle: sleep until event wakes us
+                        elwt.set_control_flow(ControlFlow::Wait);
                     }
                 }
                 _ => {}
@@ -278,6 +329,15 @@ impl App {
         }
 
         let render_start = Instant::now();
+
+        // Log frame timing for GPU usage investigation
+        // if let Some(last_frame) = self.last_frame_time {
+        //     let frame_time = render_start.duration_since(last_frame);
+        //     log::info!("Frame interval: {:.3}ms (rendering_complete={})",
+        //         frame_time.as_secs_f64() * 1000.0,
+        //         self.rendering_complete);
+        // }
+
         self.last_frame_time = Some(render_start);
 
         // ============================================================================
@@ -291,7 +351,6 @@ impl App {
 
         let frame = self.gpu.surface.get_current_texture()?;
         let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
-
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
@@ -337,7 +396,11 @@ impl App {
             &mut self.export_height,
             &mut self.use_custom_export_size,
         );
+
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
+
+        // Track UI repaint requests for frame rate optimization
+        self.ui_needs_repaint = ui_response.needs_repaint;
 
         // Handle viewport resize immediately (before rendering)
         if let Some(viewport_size) = ui_response.fractal_viewport_size {
@@ -386,6 +449,7 @@ impl App {
 
         // Submit UI rendering (must happen before we start processing responses)
         let t_submit = Instant::now();
+
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
@@ -1038,11 +1102,13 @@ impl App {
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                     self.frames_since_accumulation = 0;
+                    self.rendering_complete = false;  // Reset completion flag
                 } else if has_view_or_color_change && renderer.total_iterations() >= update_config.max_iterations {
                     // View/color changes when fractal has stopped iterating:
                     // Reset counter to restart iteration (smooth transition via overwrite mode)
                     renderer.reset_iteration_counter();
                     self.frames_since_accumulation = 0;
+                    self.rendering_complete = false;  // Reset completion flag
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
@@ -1074,6 +1140,7 @@ impl App {
                 if was_overwrite && !self.use_overwrite_next_frame {
                     if let Some(ref mut renderer) = self.flame_renderer {
                         renderer.reset_iteration_counter();
+                        self.rendering_complete = false;  // Reset completion flag
                         log::debug!("Overwrite window expired → reset iteration counter for clean rebuild");
                     }
                 }
@@ -1114,6 +1181,12 @@ impl App {
             let should_iterate = !self.paused &&
                 max_iterations.map_or(true, |max| renderer.total_iterations() < max);
 
+            // Mark rendering as complete the frame after max_iterations is reached
+            if !should_iterate && !self.rendering_complete {
+                self.rendering_complete = true;
+                log::debug!("Rendering complete: max_iterations reached");
+            }
+
             if should_iterate {
                 const NUM_WORKGROUPS: u32 = 128;
 
@@ -1129,9 +1202,11 @@ impl App {
                 // 1. Compute new samples with fresh random seed
                 // Clear histogram only when starting a new batch (frame 1 of batch)
                 let clear_histogram = self.frames_since_accumulation == 1;
+
                 let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, NUM_WORKGROUPS,
                     final_config.iterations_per_thread, final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
                     final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram);
+
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
 
                 let t_accumulate = Instant::now();
@@ -1141,7 +1216,9 @@ impl App {
                     // accumulated samples from all frames in the batch
                     // Pass total samples for proper blend_factor calculation
                     let total_samples_in_batch = samples_this_frame * batch_size as u64;
+
                     renderer.accumulate_pass(&mut render_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+
                     self.frames_since_accumulation = 0;
                     self.metrics.record_accumulate_time(t_accumulate.elapsed().as_secs_f64() * 1000.0);
                 } else {
@@ -1151,7 +1228,7 @@ impl App {
                 self.metrics.record_compute_time(0.0);
                 self.metrics.record_accumulate_time(0.0);
             }
-
+            
             let t_tonemap = Instant::now();
             // 3. Update accumulation parameters from config
             renderer.set_low_density_smoothing(final_config.low_density_smoothing);
@@ -1175,19 +1252,24 @@ impl App {
 
             // Render to internal fractal texture
             renderer.tonemap_pass(&mut render_encoder);
+
             self.metrics.record_tonemap_time(t_tonemap.elapsed().as_secs_f64() * 1000.0);
         }
 
         // Submit rendering commands
         let t_submit = Instant::now();
+
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
         let t5 = Instant::now();
+
         frame.present();
+
         self.metrics.record_present_time(t5.elapsed().as_secs_f64() * 1000.0);
 
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
+
 
         Ok(())
     }

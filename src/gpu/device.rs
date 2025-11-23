@@ -130,10 +130,16 @@ impl GpuContext {
 
         log::info!("Requesting device with limits: {:?}", limits);
 
+        // Check adapter features for timestamp query support
+        let adapter_features = adapter.features();
+        log::info!("Adapter features: {:?}", adapter_features);
+
+        let required_features = Features::CLEAR_TEXTURE;
+
         let (device, queue) = adapter.request_device(
             &DeviceDescriptor {
                 label: Some("Main GPU Device"),
-                required_features: Features::CLEAR_TEXTURE,
+                required_features,
                 required_limits: limits,
                 memory_hints: Default::default(),
                 experimental_features: Default::default(),
@@ -156,17 +162,44 @@ impl GpuContext {
             .unwrap_or(surface_caps.formats[0]);
         log::info!("Selected format: {:?}", format);
 
+        // Allow testing different present modes via environment variable
+        // let present_mode = if cfg!(target_arch = "wasm32") {
+        //     PresentMode::Fifo  // WASM only supports Fifo
+        // } else if let Ok(mode_str) = std::env::var("PRESENT_MODE") {
+        //     match mode_str.to_lowercase().as_str() {
+        //         "immediate" => {
+        //             log::warn!("Using PresentMode::Immediate (no VSync) - EXPERIMENTAL");
+        //             PresentMode::Immediate
+        //         }
+        //         "fifo" => {
+        //             log::info!("Using PresentMode::Fifo (VSync blocking)");
+        //             PresentMode::Fifo
+        //         }
+        //         "mailbox" => {
+        //             log::info!("Using PresentMode::Mailbox (VSync non-blocking)");
+        //             PresentMode::Mailbox
+        //         }
+        //         _ => {
+        //             log::warn!("Unknown PRESENT_MODE '{}', using default", mode_str);
+        //             if cfg!(target_os = "macos") {
+        //                 PresentMode::Fifo
+        //             } else {
+        //                 PresentMode::Mailbox
+        //             }
+        //         }
+        //     }
+        // } else {
+        //     // Default: Use Fifo (true VSync) to cap at monitor refresh rate
+        //     PresentMode::Fifo
+        // };
+        let present_mode = PresentMode::Fifo;
+
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width,
             height: size.height,
-            // WASM only supports Fifo (vsync), desktop can use Mailbox for lower latency
-            present_mode: if cfg!(target_arch = "wasm32") || cfg!(target_os = "macos") {
-                PresentMode::Fifo
-            } else {
-                PresentMode::Mailbox  // Fast but smooth - software frame limiter controls speed multiplier
-            },
+            present_mode,
             // Use Opaque alpha mode to ensure frames don't accumulate
             // Auto mode in WASM can cause compositing issues where frames blend together
             alpha_mode: CompositeAlphaMode::Opaque,
@@ -180,7 +213,14 @@ impl GpuContext {
         surface.configure(&device, &config);
         log::info!("✓ Surface configured successfully");
 
-        Ok(Self { instance, surface, device, queue, config, size })
+        Ok(Self {
+            instance,
+            surface,
+            device,
+            queue,
+            config,
+            size,
+        })
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -189,6 +229,21 @@ impl GpuContext {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+        }
+    }
+
+    /// Update present mode (VSync setting)
+    pub fn set_present_mode(&mut self, vsync_enabled: bool) {
+        let present_mode = if vsync_enabled {
+            PresentMode::Fifo  // VSync enabled - cap at monitor refresh rate
+        } else {
+            PresentMode::Immediate  // VSync disabled - render as fast as possible
+        };
+
+        if self.config.present_mode != present_mode {
+            self.config.present_mode = present_mode;
+            self.surface.configure(&self.device, &self.config);
+            log::info!("Updated present mode: {:?}", present_mode);
         }
     }
 

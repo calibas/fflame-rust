@@ -207,7 +207,7 @@ impl EguiLayer {
         // Export
         let mut png_export_with_background = false;
         let mut png_export_transparent = false;
-        let mut png_export_requested = false;
+        // let mut png_export_requested = false;
 
         // Panel open requests
         let mut open_palette_editor = false;
@@ -313,6 +313,9 @@ impl EguiLayer {
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
         });
+
+        // Log egui repaint requests for performance investigation
+        let needs_repaint = self.ctx.has_requested_repaint();
 
         self.state
             .handle_platform_output(window, full_output.platform_output);
@@ -449,7 +452,6 @@ impl EguiLayer {
             palette_save_file,
             palette_import_json,
             palette_load_file,
-            palette_imported: None,
             undo_requested,
             redo_requested,
             png_export_with_background,
@@ -459,6 +461,7 @@ impl EguiLayer {
             open_palette_editor,
             open_config_dialog,
             fractal_viewport_size,
+            needs_repaint,
         }
     }
 }
