@@ -233,7 +233,7 @@ impl WasmApi {
         let config = self.config.as_ref()
             .ok_or_else(|| JsValue::from_str("No config loaded"))?;
 
-        let png_data = export_headless_wasm(config, width, height, iterations_per_thread, 1)
+        let png_data = export_headless_wasm(config, width, height, iterations_per_thread)
             .await
             .map_err(|e| JsValue::from_str(&e))?;
 
