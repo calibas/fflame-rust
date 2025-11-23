@@ -23,16 +23,14 @@ pub struct ColorStop {
 }
 
 /// Palette definition with gradient stops
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Palette {
     pub name: String,
     pub stops: Vec<ColorStop>,
     /// If true, palette is in fixed 256-color mode (positions locked)
-    #[serde(default)]
     pub locked: bool,
     /// If true, palette is built-in and should not be edited directly (create copy instead)
     /// This flag is ONLY set at runtime in PaletteLibrary, never serialized
-    #[serde(skip)]
     pub built_in: bool,
 }
 
@@ -316,6 +314,158 @@ impl Palette {
         }
 
         best_position
+    }
+
+    /// Check if palette is in indexed 256-color mode (for compact serialization)
+    fn is_indexed_256(&self) -> bool {
+        if self.stops.len() != 256 {
+            return false;
+        }
+
+        // Check if all stops are at exact positions i/255.0
+        self.stops.iter().enumerate().all(|(i, stop)| {
+            (stop.position - i as f32 / 255.0).abs() < 0.001
+        })
+    }
+
+    /// Convert stops to compact hex string format (for indexed palettes)
+    fn to_hex_string(&self) -> String {
+        self.stops.iter()
+            .map(|stop| format!("{:02X}{:02X}{:02X}",
+                (stop.color[0] * 255.0).round() as u8,
+                (stop.color[1] * 255.0).round() as u8,
+                (stop.color[2] * 255.0).round() as u8))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// Create palette from compact hex string format
+    fn from_hex_string(name: String, hex_colors: &str, locked: bool) -> Result<Self, String> {
+        let stops: Result<Vec<ColorStop>, String> = hex_colors.split(',')
+            .enumerate()
+            .map(|(i, hex)| {
+                if hex.len() != 6 {
+                    return Err(format!("Invalid hex color '{}' at index {}", hex, i));
+                }
+
+                let r = u8::from_str_radix(&hex[0..2], 16)
+                    .map_err(|_| format!("Invalid red component in '{}'", hex))? as f32 / 255.0;
+                let g = u8::from_str_radix(&hex[2..4], 16)
+                    .map_err(|_| format!("Invalid green component in '{}'", hex))? as f32 / 255.0;
+                let b = u8::from_str_radix(&hex[4..6], 16)
+                    .map_err(|_| format!("Invalid blue component in '{}'", hex))? as f32 / 255.0;
+
+                Ok(ColorStop {
+                    position: i as f32 / 255.0,
+                    color: [r, g, b],
+                })
+            })
+            .collect();
+
+        Ok(Palette {
+            name,
+            stops: stops?,
+            locked,
+            built_in: false,
+        })
+    }
+}
+
+// Custom serialization/deserialization for compact indexed palette format
+impl serde::Serialize for Palette {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        // Check if this is an indexed 256-color palette
+        if self.is_indexed_256() {
+            // Serialize in compact hex format
+            let mut state = serializer.serialize_struct("Palette", 3)?;
+            state.serialize_field("name", &self.name)?;
+            state.serialize_field("indexed_colors", &self.to_hex_string())?;
+            state.serialize_field("locked", &self.locked)?;
+            state.end()
+        } else {
+            // Serialize as gradient with stops (legacy format)
+            let mut state = serializer.serialize_struct("Palette", 3)?;
+            state.serialize_field("name", &self.name)?;
+            state.serialize_field("stops", &self.stops)?;
+            state.serialize_field("locked", &self.locked)?;
+            state.end()
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Palette {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        struct PaletteVisitor;
+
+        impl<'de> Visitor<'de> for PaletteVisitor {
+            type Value = Palette;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a palette with either 'indexed_colors' or 'stops'")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut name: Option<String> = None;
+                let mut indexed_colors: Option<String> = None;
+                let mut stops: Option<Vec<ColorStop>> = None;
+                let mut locked: Option<bool> = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "name" => {
+                            name = Some(map.next_value()?);
+                        }
+                        "indexed_colors" => {
+                            indexed_colors = Some(map.next_value()?);
+                        }
+                        "stops" => {
+                            stops = Some(map.next_value()?);
+                        }
+                        "locked" => {
+                            locked = Some(map.next_value()?);
+                        }
+                        _ => {
+                            // Skip unknown fields
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+
+                let name = name.ok_or_else(|| de::Error::missing_field("name"))?;
+                let locked = locked.unwrap_or(false);
+
+                // Try compact format first, fallback to legacy stops format
+                if let Some(hex_string) = indexed_colors {
+                    Palette::from_hex_string(name, &hex_string, locked)
+                        .map_err(de::Error::custom)
+                } else if let Some(stops) = stops {
+                    Ok(Palette {
+                        name,
+                        stops,
+                        locked,
+                        built_in: false,
+                    })
+                } else {
+                    Err(de::Error::missing_field("indexed_colors or stops"))
+                }
+            }
+        }
+
+        deserializer.deserialize_struct("Palette", &["name", "indexed_colors", "stops", "locked"], PaletteVisitor)
     }
 }
 
@@ -655,6 +805,130 @@ mod tests {
         // Should be close (within sampling resolution)
         assert!((found_pos - original_pos).abs() < 0.01,
             "Roundtrip failed: {} -> {:?} -> {}", original_pos, color, found_pos);
+    }
+
+    #[test]
+    fn test_compact_serialization_indexed() {
+        // Create an indexed 256-color palette
+        let mut stops = Vec::with_capacity(256);
+        for i in 0..256 {
+            stops.push(ColorStop {
+                position: i as f32 / 255.0,
+                color: [
+                    (i as f32 / 255.0),
+                    ((255 - i) as f32 / 255.0),
+                    0.5,
+                ],
+            });
+        }
+
+        let palette = Palette {
+            name: "Test Indexed".to_string(),
+            stops,
+            locked: true,
+            built_in: false,
+        };
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&palette).unwrap();
+
+        // Should use compact format (contains "indexed_colors")
+        assert!(json.contains("indexed_colors"), "Should use compact format");
+        assert!(!json.contains("stops"), "Should not contain 'stops' field");
+
+        // Deserialize back
+        let loaded: Palette = serde_json::from_str(&json).unwrap();
+
+        // Should match original
+        assert_eq!(loaded.name, palette.name);
+        assert_eq!(loaded.stops.len(), 256);
+        assert_eq!(loaded.locked, true);
+
+        // Check a few color values (with rounding tolerance)
+        for i in [0, 64, 128, 192, 255] {
+            let orig_color = palette.stops[i].color;
+            let loaded_color = loaded.stops[i].color;
+            for c in 0..3 {
+                assert!((orig_color[c] - loaded_color[c]).abs() < 0.01,
+                    "Color mismatch at index {} component {}: {} vs {}",
+                    i, c, orig_color[c], loaded_color[c]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_compact_serialization_gradient() {
+        // Create a gradient palette (not indexed)
+        let palette = Palette::fire();
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&palette).unwrap();
+
+        // Should use legacy format (contains "stops")
+        assert!(json.contains("stops"), "Should use legacy format with stops");
+        assert!(!json.contains("indexed_colors"), "Should not use compact format");
+
+        // Deserialize back
+        let loaded: Palette = serde_json::from_str(&json).unwrap();
+
+        // Should match original
+        assert_eq!(loaded.name, palette.name);
+        assert_eq!(loaded.stops.len(), palette.stops.len());
+    }
+
+    #[test]
+    fn test_backward_compatibility_legacy_format() {
+        // Test that old JSON format still loads correctly
+        let legacy_json = r#"{
+            "name": "Legacy Palette",
+            "stops": [
+                {"position": 0.0, "color": [1.0, 0.0, 0.0]},
+                {"position": 0.5, "color": [0.0, 1.0, 0.0]},
+                {"position": 1.0, "color": [0.0, 0.0, 1.0]}
+            ],
+            "locked": false
+        }"#;
+
+        let loaded: Palette = serde_json::from_str(legacy_json).unwrap();
+
+        assert_eq!(loaded.name, "Legacy Palette");
+        assert_eq!(loaded.stops.len(), 3);
+        assert_eq!(loaded.locked, false);
+        assert_eq!(loaded.stops[0].color, [1.0, 0.0, 0.0]);
+        assert_eq!(loaded.stops[2].color, [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_compact_format_size() {
+        // Create indexed palette
+        let mut stops = Vec::with_capacity(256);
+        for i in 0..256 {
+            stops.push(ColorStop {
+                position: i as f32 / 255.0,
+                color: [(i as f32 / 255.0), 0.5, 0.5],
+            });
+        }
+
+        let palette = Palette {
+            name: "Size Test".to_string(),
+            stops,
+            locked: true,
+            built_in: false,
+        };
+
+        let compact_json = serde_json::to_string(&palette).unwrap();
+
+        // Create same palette but force legacy format by making it non-indexed
+        let mut legacy_palette = palette.clone();
+        legacy_palette.stops[100].position = 0.5; // Break indexing
+
+        let legacy_json = serde_json::to_string(&legacy_palette).unwrap();
+
+        // Compact should be much smaller
+        println!("Compact size: {} bytes", compact_json.len());
+        println!("Legacy size: {} bytes", legacy_json.len());
+        assert!(compact_json.len() < legacy_json.len() / 2,
+            "Compact format should be at least 50% smaller");
     }
 }
 
