@@ -17,11 +17,10 @@ use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
 use crate::renderer::FlameRenderer;
 use crate::scene::transforms::Flame;
-use crate::scene::palette::{PaletteLibrary, Palette, ColorMode};
+use crate::scene::palette::PaletteLibrary;
 use crate::scene::presets::PresetLibrary;
 use crate::util::PerformanceMetrics;
 use crate::config::{FractalConfig, ConfigManager};
-use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 
 pub struct App {
     // Core state management
@@ -71,10 +70,16 @@ impl App {
         let gpu = GpuContext::new(&window).await.expect("GPU init failed");
         let egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
-        // Load preset library and use first preset
+        // Load preset library and use first preset (with ALL its settings)
         let preset_library = PresetLibrary::new();
-        let initial_preset = preset_library.get(0).map(|p| p.flame.clone()).unwrap_or_default();
-        let flame = initial_preset;
+        let palette_library = PaletteLibrary::new();
+
+        // Use entire FractalConfig from first preset (not just the flame!)
+        let initial_config = preset_library.get(0)
+            .cloned()
+            .unwrap_or_default();
+
+        let flame = initial_config.flame.clone();
 
         let flame_renderer = FlameRenderer::new(
             &gpu.device,
@@ -84,54 +89,6 @@ impl App {
             gpu.size.height,
             &flame,
         );
-
-        let palette_library = PaletteLibrary::new();
-
-        // Use palette from library (no need to duplicate)
-        let initial_palette = palette_library.get(1)
-            .cloned()
-            .unwrap_or_else(|| Palette::grayscale());
-
-        // Create initial config for undo history
-        let initial_config = FractalConfig {
-            flame: flame.clone(),
-            zoom: 1.0,
-            pan_x: 0.0,
-            pan_y: 0.0,
-            rotation: 0.0,
-            camera_rotation_x: 0.0,
-            camera_rotation_y: 0.0,
-            camera_z: 0.0,
-            density_scale: 1.0,
-            speed_factor: crate::config::DEFAULT_SPEED_FACTOR,
-            max_iterations: crate::config::DEFAULT_MAX_ITERATIONS,
-            color_mode: ColorMode::Palette,
-            palette_index: 1,
-            palette: Some(initial_palette),
-            palette_rotation: 0.0,
-            background_color: [0.0, 0.0, 0.0],
-            tonemap_mode: ToneMapMode::Logarithmic,
-            tonemap_curve: ToneCurve::linear(),
-            use_curve: true,
-            exposure: crate::config::DEFAULT_EXPOSURE,
-            gamma: crate::config::DEFAULT_GAMMA,
-            brightness: 1.0,
-            vibrancy: 1.0,
-            saturation: crate::config::defaults::DEFAULT_SATURATION,
-            hue_shift: crate::config::defaults::DEFAULT_HUE_SHIFT,
-            value_scale: crate::config::defaults::DEFAULT_VALUE_SCALE,
-            gamma_threshold: crate::config::defaults::DEFAULT_GAMMA_THRESHOLD,
-            deterministic_rng: false,
-            histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
-            low_density_smoothing: crate::config::DEFAULT_LOW_DENSITY_SMOOTHING,
-            density_compression_strength: crate::config::DEFAULT_DENSITY_COMPRESSION,
-            blend_factor: crate::config::DEFAULT_BLEND_FACTOR,
-            use_dynamic_blend: crate::config::DEFAULT_USE_DYNAMIC_BLEND,
-            target_iterations_per_pixel: crate::config::DEFAULT_TARGET_ITERATIONS_PER_PIXEL as u32,
-            iterations_per_thread: crate::config::DEFAULT_ITERATIONS_PER_THREAD,
-            vsync_enabled: true,
-            target_fps: 60.0,
-        };
 
         let config_manager = ConfigManager::new(initial_config.clone());
 
