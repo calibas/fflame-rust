@@ -25,7 +25,7 @@ Settings that apply globally to the application on this device:
 - `vsync_enabled: bool` (default: true)
 - `target_fps: f32` (default: 60.0, when VSync off)
 - `iterations_per_thread: u32` (default: 256) - GPU performance tuning
-- `speed_multiplier: u32` (default: 1) - Frame rate multiplier
+
 - `accumulation_batch_size: u32` (default: 4) - GPU batching
 
 **UI/UX:**
