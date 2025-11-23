@@ -162,6 +162,68 @@ Ephemeral state that persists across sessions but isn't "settings":
 - Panel visibility states
 - Last selected preset/palette indices
 
+## Versioning Strategy
+
+All stored data structures include version fields for backward compatibility:
+
+### Version Numbers
+
+- **System Settings**: `CURRENT_SETTINGS_VERSION = 1`
+- **FractalConfig**: `CURRENT_CONFIG_VERSION = 1` (✅ Implemented in v0.1.0)
+- **Palette Format**: `CURRENT_PALETTE_VERSION = 1` (✅ Implemented: compact hex format)
+- **Workspace Layout**: `CURRENT_WORKSPACE_VERSION = 1`
+
+### Serialization Format
+
+All JSON structures include version at the top:
+
+```json
+{
+  "version": 1,
+  "vsync_enabled": true,
+  "target_fps": 60.0,
+  ...
+}
+```
+
+### Migration Strategy
+
+1. **On Load**: Check version field
+   - If missing → assume version 0 (pre-versioning)
+   - If `version > CURRENT_VERSION` → reject with error
+   - If `version < CURRENT_VERSION` → apply migration chain
+
+2. **On Save**: Always write current version
+   - `to_json()` injects current version
+   - Old files are upgraded on first load
+
+3. **Migration Chain**: Sequential upgrades
+   ```rust
+   while loaded_version < CURRENT_VERSION {
+       data = match loaded_version {
+           0 => migrate_v0_to_v1(data)?,
+           1 => migrate_v1_to_v2(data)?,
+           // Add new migrations here
+           _ => return Err("Unknown version"),
+       };
+   }
+   ```
+
+### When to Bump Version
+
+**Breaking changes requiring migration:**
+- Renaming fields
+- Removing fields
+- Changing data types
+- Changing structure
+
+**Non-breaking changes (no bump needed):**
+- Adding fields with `#[serde(default)]`
+- Bug fixes
+- Internal logic changes
+
+See [config-versioning.md](config-versioning.md) for complete migration framework.
+
 ## Storage Architecture
 
 ### File Structure (Desktop)
