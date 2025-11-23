@@ -1,3 +1,4 @@
+# pylint: skip-file
 #!/usr/bin/env python3
 """
 Unified Performance Benchmark Suite
@@ -789,7 +790,7 @@ class UnifiedBenchmarkRunner:
         delta2_str = "—"
 
         if prev1_ops_sec:
-            delta1 = ((current_ops_sec - prev1_ops_sec) / prev1_ops_sec) * 100.0
+            delta1 = ((prev1_ops_sec - current_ops_sec) / current_ops_sec) * 100.0
             color = Colors.ENDC
             if delta1 > 10.0:
                 color = Colors.FAIL
@@ -800,7 +801,7 @@ class UnifiedBenchmarkRunner:
             delta1_str = f"{color}{delta1:+.1f}%{Colors.ENDC}"
 
         if prev2_ops_sec:
-            delta2 = ((current_ops_sec - prev2_ops_sec) / prev2_ops_sec) * 100.0
+            delta2 = ((prev2_ops_sec - current_ops_sec) / current_ops_sec) * 100.0
             color = Colors.ENDC
             if delta2 > 10.0:
                 color = Colors.FAIL
@@ -827,7 +828,7 @@ class UnifiedBenchmarkRunner:
         print(f"  {'ops/sec':<20} {current_ops_str:<20} {prev1_ops_str:<20} {prev2_ops_str:<20}")
 
         # Delta row
-        print(f"  {'Delta vs Current':<20} {'—':<20} {delta1_str:<20} {delta2_str:<20}")
+        print(f"  {'Delta vs Current':<20} {'—':<20} {delta1_str:<29} {delta2_str:<29}")
 
         print()
 
