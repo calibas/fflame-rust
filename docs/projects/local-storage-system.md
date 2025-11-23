@@ -89,7 +89,46 @@ User-created or imported color palettes:
 - Import from `.palette` files
 - Export individual palettes
 
-#### 4. Auto-Backup System
+#### 4. Custom Workspace Library
+User-created workspace layouts for different workflows:
+
+**Structure:**
+```json
+{
+  "name": "My Layout",
+  "description": "Custom layout for editing complex fractals",
+  "category": "Custom" | "Built-in",
+  "created_date": "2025-11-22T12:34:56Z",
+  "layout": { /* egui_dock DockState JSON */ }
+}
+```
+
+**Features:**
+- Save current workspace layout with custom name
+- Load saved layouts instantly
+- Built-in layouts: "Beginner", "Standard", "Advanced", "Export"
+- Custom user layouts stored persistently
+- Import/export workspace files (`.workspace` extension)
+- Duplicate and modify existing layouts
+
+**Use Cases:**
+- **Beginner Layout**: Simple UI with only essential panels
+- **Standard Layout**: Default balanced layout (current)
+- **Advanced Layout**: All panels visible, technical controls exposed
+- **Export Layout**: Focused on export settings and preview
+- **User Custom**: "My 3D Workflow", "Color Grading Setup", etc.
+
+**Storage:**
+- Desktop: `{app_data}/workspaces/*.workspace`
+- WASM: IndexedDB (workspace data is small, ~5-10KB per layout)
+
+**UI Integration:**
+- "Window → Save Workspace..." menu item
+- "Window → Load Workspace" submenu with saved layouts
+- Workspace manager panel (optional, future)
+- Quick-switch workspace dropdown in menu bar (future)
+
+#### 5. Auto-Backup System
 Automatic snapshots of work to prevent data loss:
 
 **Backup Types:**
@@ -138,6 +177,10 @@ Ephemeral state that persists across sessions but isn't "settings":
   ├── custom_palettes\        # User palette library
   │   ├── sunset.palette
   │   └── index.json
+  ├── workspaces\             # Custom workspace layouts
+  │   ├── my_3d_workflow.workspace
+  │   ├── color_grading.workspace
+  │   └── index.json          # Metadata (name, description, dates)
   └── backups\                # Auto-backups
       ├── auto_save_001.fflame
       ├── auto_save_002.fflame
@@ -169,13 +212,14 @@ fn app_data_dir() -> PathBuf {
 localStorage.setItem('fflame_settings', JSON.stringify(settings));
 ```
 
-**IndexedDB** (for larger data: fractals, backups):
+**IndexedDB** (for larger data: fractals, palettes, workspaces, backups):
 ```javascript
 // Database: 'fractal_flame_wgpu'
 // Stores:
 //   - 'settings' (key-value)
 //   - 'custom_fractals' (id, name, config, metadata)
 //   - 'custom_palettes' (id, name, palette, metadata)
+//   - 'custom_workspaces' (id, name, layout, metadata)
 //   - 'backups' (id, timestamp, config)
 ```
 
@@ -205,8 +249,9 @@ localStorage.setItem('fflame_settings', JSON.stringify(settings));
 ### Phase 3: Custom Libraries
 1. Implement custom fractal save/load
 2. Implement custom palette save/load
-3. Add UI for browsing/managing libraries
-4. Add search/filter/sort capabilities
+3. Implement custom workspace save/load
+4. Add UI for browsing/managing libraries
+5. Add search/filter/sort capabilities
 
 ### Phase 4: Auto-Backup
 1. Implement periodic auto-save (tokio timer on desktop, setInterval on WASM)
@@ -269,6 +314,28 @@ pub struct FractalMetadata {
 pub struct LibraryEntry {
     pub metadata: FractalMetadata,
     pub config: FractalConfig,
+}
+```
+
+### WorkspaceMetadata (for workspace library)
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceMetadata {
+    pub id: String,  // UUID
+    pub name: String,
+    pub description: Option<String>,
+    pub category: String,  // "Built-in" | "Custom"
+    pub created: DateTime<Utc>,
+    pub modified: DateTime<Utc>,
+}
+```
+
+### WorkspaceEntry
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceEntry {
+    pub metadata: WorkspaceMetadata,
+    pub layout: egui_dock::DockState<PanelKind>,  // Serializable workspace layout
 }
 ```
 
