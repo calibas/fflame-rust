@@ -54,6 +54,14 @@ pub struct FractalConfig {
     #[serde(default = "default_speed_multiplier")]
     pub speed_multiplier: u32,
 
+    /// VSync settings
+    /// Enable VSync (locks frame rate to monitor refresh rate)
+    #[serde(default = "default_vsync_enabled")]
+    pub vsync_enabled: bool,
+    /// Target FPS when VSync is disabled (only used if vsync_enabled = false)
+    #[serde(default = "default_target_fps")]
+    pub target_fps: f32,
+
     /// Color settings
     pub color_mode: ColorMode,
     pub palette_index: usize,
@@ -175,6 +183,14 @@ fn default_speed_multiplier() -> u32 {
     super::defaults::DEFAULT_SPEED_MULTIPLIER
 }
 
+fn default_vsync_enabled() -> bool {
+    true  // Enable VSync by default
+}
+
+fn default_target_fps() -> f32 {
+    60.0  // Default to 60 FPS when VSync is disabled
+}
+
 impl Default for FractalConfig {
     fn default() -> Self {
         use crate::scene::transforms::Flame;
@@ -200,6 +216,8 @@ impl Default for FractalConfig {
             target_iterations_per_pixel: 0,
             iterations_per_thread: default_iterations_per_thread(),
             speed_multiplier: default_speed_multiplier(),
+            vsync_enabled: default_vsync_enabled(),
+            target_fps: default_target_fps(),
             color_mode: ColorMode::Palette,
             palette_index: 0,
             palette: None,
