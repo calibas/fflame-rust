@@ -207,7 +207,7 @@ impl EguiLayer {
         // Export
         let mut png_export_with_background = false;
         let mut png_export_transparent = false;
-        let mut png_export_requested = false;
+        // let mut png_export_requested = false;
 
         // Panel open requests
         let mut open_palette_editor = false;
@@ -452,7 +452,6 @@ impl EguiLayer {
             palette_save_file,
             palette_import_json,
             palette_load_file,
-            palette_imported: None,
             undo_requested,
             redo_requested,
             png_export_with_background,
