@@ -163,7 +163,6 @@ impl EguiLayer {
         window_size: winit::dpi::PhysicalSize<u32>,
         metrics: &crate::util::PerformanceMetrics,
         config_manager: &mut crate::config::ConfigManager,
-        system_settings: &mut crate::storage::SystemSettings,
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
         flame: &mut crate::scene::transforms::Flame,
         palette_library: &mut crate::scene::palette::PaletteLibrary,
@@ -254,7 +253,6 @@ impl EguiLayer {
                     context: panel_viewer::PanelContext {
                         // Core state
                         config_manager,
-                        system_settings,
                         flame,
 
                         // Libraries
@@ -432,8 +430,10 @@ impl EguiLayer {
         // Speed multiplier removed - now use VSync and target_fps instead
 
         if let Some(ipt) = menu_actions.rendering.set_iterations_per_thread {
-            system_settings.iterations_per_thread = ipt;
-            let _ = system_settings.save();
+            let _ = config_manager.update_system_setting(
+                crate::config::ConfigPath::SystemIterationsPerThread,
+                ipt.into()
+            );
         }
 
         UiResponse {
