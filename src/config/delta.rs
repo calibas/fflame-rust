@@ -85,6 +85,14 @@ pub enum ConfigPath {
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
     PerspectiveStrength,
+
+    // ===== System Settings (device-specific, not tracked for undo) =====
+    SystemIterationsPerThread,
+    SystemVsyncEnabled,
+    SystemTargetFps,
+    SystemExportWidth,
+    SystemExportHeight,
+    SystemLanguage,
 }
 
 /// Affine transformation parameter (a, b, c, d, e, f, g)
@@ -193,6 +201,14 @@ impl Display for ConfigPath {
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
             ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
+
+            // System Settings
+            ConfigPath::SystemIterationsPerThread => write!(f, "System: Iterations Per Thread"),
+            ConfigPath::SystemVsyncEnabled => write!(f, "System: VSync Enabled"),
+            ConfigPath::SystemTargetFps => write!(f, "System: Target FPS"),
+            ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
+            ConfigPath::SystemExportHeight => write!(f, "System: Export Height"),
+            ConfigPath::SystemLanguage => write!(f, "System: Language"),
         }
     }
 }
@@ -642,6 +658,11 @@ impl ConfigPath {
             | ConfigPath::PerspectiveStrength
             | ConfigPath::MaxIterations
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
+
+            // System Settings
+            ConfigPath::SystemIterationsPerThread => UpdateType::IterationReset,
+            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps => UpdateType::ViewOnly,
+            ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage => UpdateType::None,
         }
     }
 }
