@@ -233,7 +233,12 @@ impl GpuContext {
     }
 
     /// Update present mode (VSync setting)
+    /// Note: WASM only supports Fifo (VSync always enabled)
     pub fn set_present_mode(&mut self, vsync_enabled: bool) {
+        #[cfg(target_arch = "wasm32")]
+        let present_mode = PresentMode::Fifo;  // WASM only supports Fifo
+
+        #[cfg(not(target_arch = "wasm32"))]
         let present_mode = if vsync_enabled {
             PresentMode::Fifo  // VSync enabled - cap at monitor refresh rate
         } else {

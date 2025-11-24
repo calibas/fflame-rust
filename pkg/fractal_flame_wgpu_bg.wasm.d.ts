@@ -1,6 +1,7 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const wasm_main: () => void;
 export const __wbg_wasmapi_free: (a: number, b: number) => void;
 export const wasmapi_export_png: (a: number, b: number, c: number, d: number) => any;
 export const wasmapi_get_config_json: (a: number) => [number, number, number, number];
@@ -14,7 +15,6 @@ export const wasmapi_load_config_json: (a: number, b: number, c: number) => [num
 export const wasmapi_load_preset: (a: number, b: number, c: number) => [number, number];
 export const wasmapi_new: () => number;
 export const wasmapi_set_target_iterations: (a: number, b: number) => void;
-export const wasm_main: () => void;
 export const __externref_table_alloc: () => number;
 export const __wbindgen_export_1: WebAssembly.Table;
 export const __wbindgen_exn_store: (a: number) => void;
@@ -23,10 +23,10 @@ export const __wbindgen_realloc: (a: number, b: number, c: number, d: number) =>
 export const __wbindgen_free: (a: number, b: number, c: number) => void;
 export const __wbindgen_export_6: WebAssembly.Table;
 export const __externref_table_dealloc: (a: number) => void;
-export const closure1811_externref_shim: (a: number, b: number, c: any) => void;
-export const closure1898_externref_shim: (a: number, b: number, c: any) => void;
+export const closure1799_externref_shim: (a: number, b: number, c: any) => void;
+export const closure1886_externref_shim: (a: number, b: number, c: any) => void;
 export const wasm_bindgen__convert__closures_____invoke__h896ba810511a8433: (a: number, b: number) => void;
 export const wasm_bindgen__convert__closures_____invoke__h4583a70ca8243b02: (a: number, b: number) => void;
-export const closure1818_externref_shim: (a: number, b: number, c: any, d: any) => void;
-export const closure1911_externref_shim: (a: number, b: number, c: any, d: any) => void;
+export const closure1806_externref_shim: (a: number, b: number, c: any, d: any) => void;
+export const closure1899_externref_shim: (a: number, b: number, c: any, d: any) => void;
 export const __wbindgen_start: () => void;

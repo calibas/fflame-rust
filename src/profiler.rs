@@ -127,7 +127,7 @@ impl GpuProfiler {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            rx.await.ok()?;
+            let _ = rx.await.ok()?;
         }
 
         // Read the data
