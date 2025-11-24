@@ -403,9 +403,6 @@ impl PresetLibrary {
                     blend_factor: 0.1,
                     use_dynamic_blend: true,
                     target_iterations_per_pixel: 0,
-                    iterations_per_thread: 256,
-                    vsync_enabled: true,
-                    target_fps: 60.0,
                 }
             },
             Self::flame_to_config(create_simple_flame()),
@@ -454,9 +451,6 @@ impl PresetLibrary {
                     blend_factor: 0.1,
                     use_dynamic_blend: true,
                     target_iterations_per_pixel: 0,
-                    iterations_per_thread: 256,
-                    vsync_enabled: true,
-                    target_fps: 60.0,
                 }
             },
         ];
@@ -521,9 +515,6 @@ impl PresetLibrary {
             blend_factor: 0.1,
             use_dynamic_blend: true,
             target_iterations_per_pixel: 0,
-            iterations_per_thread: 256,
-            vsync_enabled: true,
-            target_fps: 60.0,
         }
     }
 

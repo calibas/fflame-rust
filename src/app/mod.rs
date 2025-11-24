@@ -80,14 +80,12 @@ impl App {
         let palette_library = PaletteLibrary::new();
 
         // Use entire FractalConfig from first preset (not just the flame!)
-        let mut initial_config = preset_library.get(0)
+        let initial_config = preset_library.get(0)
             .cloned()
             .unwrap_or_default();
 
-        // Override device-specific settings from SystemSettings
-        initial_config.iterations_per_thread = system_settings.iterations_per_thread;
-        initial_config.vsync_enabled = system_settings.vsync_enabled;
-        initial_config.target_fps = system_settings.target_fps;
+        // Note: Device-specific settings (iterations_per_thread, vsync_enabled, target_fps)
+        // are now in SystemSettings, not FractalConfig
 
         let flame = initial_config.flame.clone();
 
@@ -231,19 +229,19 @@ impl App {
                         max_iterations.map_or(true, |max| r.total_iterations() < max)
                     });
 
-                    // Update present mode based on config
-                    app.gpu.set_present_mode(config.vsync_enabled);
+                    // Update present mode based on system settings
+                    app.gpu.set_present_mode(app.system_settings.vsync_enabled);
 
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
                     if is_rendering || app.pending_redraws > 0 {
                         // Actively rendering fractals OR UI animations pending
-                        if config.vsync_enabled {
+                        if app.system_settings.vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
                             window.request_redraw();
                         } else {
                             // VSync disabled: manually limit to target FPS
-                            let target_frame_time = Duration::from_secs_f32(1.0 / config.target_fps);
+                            let target_frame_time = Duration::from_secs_f32(1.0 / app.system_settings.target_fps);
                             let now = Instant::now();
                             if let Some(last_frame) = app.last_frame_time {
                                 let elapsed = now.duration_since(last_frame);
@@ -384,7 +382,7 @@ impl App {
                         label: Some("Viewport Resize Encoder"),
                     });
                     renderer.resize(&self.gpu.device, &mut resize_encoder, &self.gpu.queue, viewport_size.0, viewport_size.1,
-                        &self.flame, resize_config.iterations_per_thread, resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
+                        &self.flame, self.system_settings.iterations_per_thread, resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
                     self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
 
@@ -394,14 +392,14 @@ impl App {
                     if let Some(palette) = palette {
                         renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, resize_config.palette_rotation);
                     }
-                    renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, resize_config.iterations_per_thread,
+                    renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.system_settings.iterations_per_thread,
                         resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
 
                     // Restore tonemap parameters after buffer recreation (not in live preview mode)
                     renderer.update_tonemap(&self.gpu.queue, resize_config.tonemap_mode, resize_config.use_curve, resize_config.exposure, resize_config.gamma,
                         resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.saturation, resize_config.hue_shift, resize_config.value_scale,
-                        viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, resize_config.iterations_per_thread, 1, false);
+                        viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, self.system_settings.iterations_per_thread, 1, false);
                     renderer.update_curve_lut(&self.gpu.queue, &resize_config.tonemap_curve);
 
                     // Re-register texture with egui after resize (new texture view created)
@@ -899,7 +897,7 @@ impl App {
                                 height,
                                 total_iterations,
                                 render_time_ms,
-                                export_config.iterations_per_thread,
+                                self.system_settings.iterations_per_thread,
                                 export_config.speed_factor,
                                 &export_config,
                             );
@@ -944,7 +942,7 @@ impl App {
                 if let Some(ref renderer) = self.flame_renderer {
                     let total_iterations = renderer.total_iterations();
                     let render_time_ms = self.metrics.render_time_ms;
-                    let iterations_per_thread = export_config.iterations_per_thread;
+                    let iterations_per_thread = self.system_settings.iterations_per_thread;
                     let speed_factor = export_config.speed_factor;
                     let background_color = export_config.background_color;
 
@@ -1020,14 +1018,14 @@ impl App {
                 // Update flame if UpdateAction indicates (includes preview mode live updates)
                 if actions.update_flame {
                     renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame,
-                        update_config.iterations_per_thread, update_config.zoom, update_config.pan_x, update_config.pan_y,
+                        self.system_settings.iterations_per_thread, update_config.zoom, update_config.pan_x, update_config.pan_y,
                         update_config.rotation, update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                 }
 
                 // Update view parameters (includes view changes and iteration changes)
                 if actions.update_view || view_changed_by_keyboard {
                     renderer.set_deterministic_rng(update_config.deterministic_rng);
-                    renderer.update_iterations(&self.gpu.queue, update_config.iterations_per_thread,
+                    renderer.update_iterations(&self.gpu.queue, self.system_settings.iterations_per_thread,
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                 }
@@ -1044,7 +1042,7 @@ impl App {
 
                     // Update color mode in GPU params (ColorMode changes trigger update_palette)
                     renderer.set_color_mode(&self.gpu.queue, update_config.color_mode,
-                        update_config.iterations_per_thread, update_config.zoom, update_config.pan_x,
+                        self.system_settings.iterations_per_thread, update_config.zoom, update_config.pan_x,
                         update_config.pan_y, update_config.rotation, update_config.camera_rotation_x,
                         update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                 }
@@ -1066,7 +1064,7 @@ impl App {
 
                 if should_full_reset {
                     // Structural changes: Clear buffer and reset counters (blank frame expected)
-                    renderer.reset(&mut update_encoder, &self.gpu.queue, update_config.iterations_per_thread,
+                    renderer.reset(&mut update_encoder, &self.gpu.queue, self.system_settings.iterations_per_thread,
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                     self.frames_since_accumulation = 0;
@@ -1172,7 +1170,7 @@ impl App {
                 let clear_histogram = self.frames_since_accumulation == 1;
 
                 let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, NUM_WORKGROUPS,
-                    final_config.iterations_per_thread, final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
+                    self.system_settings.iterations_per_thread, final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
                     final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram);
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
@@ -1216,7 +1214,7 @@ impl App {
                 final_config.exposure, final_config.gamma, final_config.gamma_threshold, final_config.brightness,
                 final_config.vibrancy, final_config.saturation, final_config.hue_shift, final_config.value_scale,
                 renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations, final_config.zoom,
-                final_config.iterations_per_thread, batch_size_for_tonemap, is_live_preview);
+                self.system_settings.iterations_per_thread, batch_size_for_tonemap, is_live_preview);
 
             // Render to internal fractal texture
             renderer.tonemap_pass(&mut render_encoder);
