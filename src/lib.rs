@@ -19,6 +19,7 @@ pub mod png_metadata;
 pub mod apophysis_xml;
 pub mod i18n;
 pub mod animation;
+pub mod storage;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
 mod shader_builder_v2;
 mod shader_cache;
@@ -114,8 +115,8 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
             height.unwrap_or(1080),
         );
 
-        // Use config's iterations_per_thread or CLI override
-        let ipt = iterations_per_thread.unwrap_or(config.iterations_per_thread);
+        // Use CLI override or default (device-specific setting not in FractalConfig)
+        let ipt = iterations_per_thread.unwrap_or(crate::config::defaults::DEFAULT_ITERATIONS_PER_THREAD);
 
         // Call the existing PNG export logic from app
         // We'll need to add a headless export helper

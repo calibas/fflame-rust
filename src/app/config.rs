@@ -49,7 +49,7 @@ impl App {
             });
 
             if let Some(palette) = config.palette.as_ref().or_else(|| self.palette_library.get(config.palette_index)) {
-                renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, config.iterations_per_thread);
+                renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, self.config_manager.system_settings().iterations_per_thread);
             }
 
             self.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -89,7 +89,7 @@ impl App {
         use std::time::Instant;
 
         println!("Exporting at custom size: {}×{}", self.export_width, self.export_height);
-        println!("  iterations_per_thread: {}", config.iterations_per_thread);
+        println!("  iterations_per_thread: {}", self.config_manager.system_settings().iterations_per_thread);
         println!("  max_iterations: {}", config.max_iterations);
         println!("  density_scale: {}", config.density_scale);
         println!("  histogram_color_scale: {}", config.histogram_color_scale);
@@ -119,7 +119,7 @@ impl App {
             .or_else(|| self.palette_library.get(config.palette_index))
             .expect("No palette found");
 
-        temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, config.iterations_per_thread);
+        temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, self.config_manager.system_settings().iterations_per_thread);
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
         // Render frames until we reach max_iterations
@@ -147,7 +147,7 @@ impl App {
                 &mut encoder,
                 &self.gpu.queue,
                 NUM_WORKGROUPS,
-                config.iterations_per_thread, // CHANGED: Use full value like viewport
+                self.config_manager.system_settings().iterations_per_thread, // CHANGED: Use full value like viewport
                 config.zoom,
                 config.pan_x,
                 config.pan_y,
@@ -159,7 +159,7 @@ impl App {
                 clear_histogram, // CHANGED: Conditional clear like viewport
             );
 
-            let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * config.iterations_per_thread as u64;
+            let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * self.config_manager.system_settings().iterations_per_thread as u64;
             total_rendered += samples_this_frame;
             batch_frame_count += 1;
 
@@ -215,7 +215,7 @@ impl App {
                     height,
                     total_rendered,
                     export_render_time,
-                    config.iterations_per_thread,
+                    self.config_manager.system_settings().iterations_per_thread,
                     config.speed_factor,
                     &config,
                 );

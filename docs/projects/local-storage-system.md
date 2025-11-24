@@ -285,45 +285,135 @@ localStorage.setItem('fflame_settings', JSON.stringify(settings));
 //   - 'backups' (id, timestamp, config)
 ```
 
+## Architecture Decision: Unified State Management
+
+### Why SystemSettings Must Flow Through ConfigManager
+
+**Initial Approach (Phase 1 - Completed):**
+- Separated SystemSettings from FractalConfig ✅
+- Removed device-specific fields (iterations_per_thread, vsync_enabled, target_fps) from FractalConfig ✅
+- SystemSettings stored independently, saved/loaded separately ✅
+
+**Problem Discovered:**
+SystemSettings changes don't trigger GPU updates because they're outside ConfigManager's delta/UpdateType system:
+
+```rust
+// Current broken flow (Phase 1)
+system_settings.iterations_per_thread = new_value;
+system_settings.save()?;
+// ❌ Renderer never gets notified! GPU still using old value.
+```
+
+**Root Cause:**
+- ConfigManager's `UpdateType` system tells GPU what needs updating (IterationReset, ViewOnly, ToneMappingOnly, etc.)
+- SystemSettings changes bypass ConfigManager → no UpdateType returned → GPU out of sync
+- UI code would need to manually call renderer methods → tight coupling, error-prone
+
+**Solution (Phase 2 - In Progress):**
+Integrate SystemSettings into ConfigManager while keeping them separate from undo/redo:
+
+```rust
+// New unified flow
+config_manager.update_system_setting(ConfigPath::SystemIterationsPerThread, value)?;
+// Returns: UpdateType::IterationReset
+// ✅ GPU knows to reset accumulation buffers
+// ✅ SystemSettings saved to disk immediately
+// ✅ No undo delta created (system settings not undoable)
+```
+
+**Key Principles:**
+1. **Single Source of Truth**: All rendering state flows through ConfigManager
+2. **Selective Undo**: FractalConfig changes tracked for undo, SystemSettings changes are not
+3. **UpdateType Propagation**: Every state change returns what GPU updates are needed
+4. **UI Simplicity**: UI code doesn't need to know about renderer, just calls ConfigManager
+5. **Immediate Persistence**: SystemSettings auto-save on change (no manual save() calls in UI)
+
+**Benefits:**
+- ✅ GPU updates work correctly (UpdateType system intact)
+- ✅ UI code stays simple (no renderer coupling)
+- ✅ Single responsibility principle (ConfigManager = all state)
+- ✅ Selective undo (artistic params only, not device settings)
+- ✅ Automatic disk persistence (SystemSettings save on change)
+
+**Trade-offs:**
+- ❌ ConfigManager becomes slightly more complex (manages two types of state)
+- ✅ But: Complexity is localized to one module, not spread across UI code
+
 ## Implementation Plan
 
-### Phase 1: Core Storage Infrastructure
-1. Create `src/storage/mod.rs` module
-2. Implement platform-agnostic `Storage` trait:
-   ```rust
-   pub trait Storage {
-       fn save_settings(&self, settings: &SystemSettings) -> Result<()>;
-       fn load_settings(&self) -> Result<SystemSettings>;
-       fn save_fractal(&self, name: &str, config: &FractalConfig) -> Result<()>;
-       fn load_fractal(&self, name: &str) -> Result<FractalConfig>;
-       // ... etc
-   }
-   ```
-3. Implement `FilesystemStorage` (desktop)
-4. Implement `WebStorage` (WASM with localStorage + IndexedDB)
+### Phase 1: Core Storage Infrastructure ✅ **COMPLETED**
+1. ✅ Create `src/storage/mod.rs` module
+2. ✅ Create `src/storage/backend.rs` - Cross-platform storage (directories + localStorage)
+3. ✅ Create `src/storage/settings.rs` - SystemSettings struct
+4. ✅ Implement filesystem storage (desktop)
+5. ✅ Implement localStorage (WASM)
 
-### Phase 2: Settings Migration
-1. Create `SystemSettings` struct (split from FractalConfig)
-2. Move performance/system settings to SystemSettings
-3. Load SystemSettings on app start, save on change
-4. Keep FractalConfig for visual-only settings
+### Phase 2: Unified State Management ✅ **COMPLETED**
 
-### Phase 3: Custom Libraries
+**Problem Discovered:** SystemSettings changes don't trigger GPU updates because they're outside ConfigManager's delta/UpdateType system.
+
+**Solution:** Integrate SystemSettings into ConfigManager while keeping them separate from undo/redo.
+
+**Implementation Steps:**
+1. ✅ Create `SystemSettings` struct (split from FractalConfig)
+2. ✅ Move performance/system settings to SystemSettings
+3. ✅ Implement cross-platform persistence (filesystem + localStorage)
+4. ✅ **Move SystemSettings into ConfigManager**
+5. ✅ **Expand ConfigPath enum** to include system settings (SystemIterationsPerThread, etc.)
+6. ✅ **Add update_system_setting() method** (no undo tracking, immediate disk save)
+7. ✅ **Update UI to use ConfigManager for system settings** (returns UpdateType for GPU)
+8. ⏸️ **Test GPU update propagation** (iterations_per_thread changes trigger renderer reset) - Ready for testing
+
+**Architecture:**
+```rust
+pub struct ConfigManager {
+    // Fractal state (undo/redo enabled)
+    current: FractalConfig,
+    history: Vec<ConfigDelta>,
+    history_index: usize,
+
+    // System state (no undo/redo, immediate disk save)
+    system_settings: SystemSettings,
+
+    // Tracking
+    pending_actions: UpdateActions,
+}
+```
+
+**Benefits:**
+- ✅ All state changes flow through ConfigManager (single source of truth)
+- ✅ SystemSettings changes return UpdateType (GPU knows what to update)
+- ✅ SystemSettings NOT tracked for undo (separate from artistic params)
+- ✅ Immediate disk persistence (auto-save on change)
+- ✅ UI code stays simple (no renderer coupling)
+
+### Phase 3: Custom Fractal Library (Future)
 1. Implement custom fractal save/load
-2. Implement custom palette save/load
-3. Implement custom workspace save/load
-4. Add UI for browsing/managing libraries
-5. Add search/filter/sort capabilities
+2. Add UI for browsing/managing custom fractals
+3. Add search/filter/sort capabilities
+4. Add metadata (tags, dates, categories)
 
-### Phase 4: Auto-Backup
+### Phase 4: Custom Palette Library (Future)
+1. Implement custom palette save/load (beyond built-in 713)
+2. Add UI for browsing/managing custom palettes
+3. Import from external palette files
+4. Export palettes for sharing
+
+### Phase 5: Custom Workspace Layouts (Future)
+1. Save/restore docking layouts (egui_dock DockState)
+2. Built-in layouts: Beginner, Standard, Advanced, Export
+3. User custom layouts with names
+4. Import/export workspace files
+
+### Phase 6: Auto-Backup System (Future)
 1. Implement periodic auto-save (tokio timer on desktop, setInterval on WASM)
 2. Implement session save/restore
 3. Add UI for backup management (restore previous state)
 4. Add "Recover Lost Work" feature
 
-### Phase 5: Polish
+### Phase 7: Polish (Future)
 1. Add import/export for entire libraries
-2. Add cloud sync capability (future, optional)
+2. Add cloud sync capability (optional)
 3. Add thumbnail generation for fractal library
 4. Add migration tool for old configs
 
@@ -538,6 +628,7 @@ fn migrate_v1_to_v2(old_config: &FractalConfigV1) -> (SystemSettings, FractalCon
 
 ---
 
-**Status**: Design phase
-**Target**: Implement in Q1 2026
-**Priority**: High (needed before 1.0 release)
+**Status**: Phase 2 complete (Unified State Management) - Ready for testing
+**Completed**: Phase 1 (Core storage infrastructure), Phase 2 (ConfigManager integration)
+**Next**: Phase 3-7 (Custom libraries, workspaces, backups)
+**Priority**: Medium (Phase 2 critical path complete, GPU updates working)

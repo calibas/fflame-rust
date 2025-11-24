@@ -54,11 +54,8 @@ pub enum ConfigPath {
     BlendFactor,
     UseDynamicBlend,
     TargetIterationsPerPixel,
-    IterationsPerThread,
     MaxIterations,
     DeterministicRng,
-    VsyncEnabled,
-    TargetFps,
 
     // ===== Transform-level changes (require iteration reset) =====
     TransformCount,
@@ -88,6 +85,14 @@ pub enum ConfigPath {
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
     PerspectiveStrength,
+
+    // ===== System Settings (device-specific, not tracked for undo) =====
+    SystemIterationsPerThread,
+    SystemVsyncEnabled,
+    SystemTargetFps,
+    SystemExportWidth,
+    SystemExportHeight,
+    SystemLanguage,
 }
 
 /// Affine transformation parameter (a, b, c, d, e, f, g)
@@ -142,11 +147,8 @@ impl Display for ConfigPath {
             ConfigPath::BlendFactor => write!(f, "Blend Factor"),
             ConfigPath::UseDynamicBlend => write!(f, "Use Dynamic Blend"),
             ConfigPath::TargetIterationsPerPixel => write!(f, "Target Iterations Per Pixel"),
-            ConfigPath::IterationsPerThread => write!(f, "Iterations Per Thread"),
             ConfigPath::MaxIterations => write!(f, "Max Iterations"),
             ConfigPath::DeterministicRng => write!(f, "Deterministic RNG"),
-            ConfigPath::VsyncEnabled => write!(f, "VSync Enabled"),
-            ConfigPath::TargetFps => write!(f, "Target FPS"),
 
             // Transforms
             ConfigPath::TransformCount => write!(f, "Transform Count"),
@@ -199,6 +201,14 @@ impl Display for ConfigPath {
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
             ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
+
+            // System Settings
+            ConfigPath::SystemIterationsPerThread => write!(f, "System: Iterations Per Thread"),
+            ConfigPath::SystemVsyncEnabled => write!(f, "System: VSync Enabled"),
+            ConfigPath::SystemTargetFps => write!(f, "System: Target FPS"),
+            ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
+            ConfigPath::SystemExportHeight => write!(f, "System: Export Height"),
+            ConfigPath::SystemLanguage => write!(f, "System: Language"),
         }
     }
 }
@@ -597,9 +607,7 @@ impl ConfigPath {
             | ConfigPath::Rotation
             | ConfigPath::CameraRotationX
             | ConfigPath::CameraRotationY
-            | ConfigPath::CameraZ
-            | ConfigPath::VsyncEnabled
-            | ConfigPath::TargetFps => UpdateType::ViewOnly,
+            | ConfigPath::CameraZ => UpdateType::ViewOnly,
 
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure
@@ -629,8 +637,7 @@ impl ConfigPath {
             | ConfigPath::DensityCompressionStrength
             | ConfigPath::BlendFactor
             | ConfigPath::UseDynamicBlend
-            | ConfigPath::TargetIterationsPerPixel
-            | ConfigPath::IterationsPerThread => UpdateType::IterationReset,
+            | ConfigPath::TargetIterationsPerPixel => UpdateType::IterationReset,
 
             // Transform/flame changes - full reset
             ConfigPath::TransformCount
@@ -651,6 +658,11 @@ impl ConfigPath {
             | ConfigPath::PerspectiveStrength
             | ConfigPath::MaxIterations
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
+
+            // System Settings
+            ConfigPath::SystemIterationsPerThread => UpdateType::IterationReset,
+            ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps => UpdateType::ViewOnly,
+            ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage => UpdateType::None,
         }
     }
 }
