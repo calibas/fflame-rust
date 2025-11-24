@@ -287,9 +287,6 @@ fn parse_flame_element(
         blend_factor: 0.1,
         use_dynamic_blend: true,
         target_iterations_per_pixel: 0,
-        iterations_per_thread: 256,
-        vsync_enabled: true,
-        target_fps: 60.0,
     })
 }
 

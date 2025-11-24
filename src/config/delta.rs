@@ -54,11 +54,8 @@ pub enum ConfigPath {
     BlendFactor,
     UseDynamicBlend,
     TargetIterationsPerPixel,
-    IterationsPerThread,
     MaxIterations,
     DeterministicRng,
-    VsyncEnabled,
-    TargetFps,
 
     // ===== Transform-level changes (require iteration reset) =====
     TransformCount,
@@ -142,11 +139,8 @@ impl Display for ConfigPath {
             ConfigPath::BlendFactor => write!(f, "Blend Factor"),
             ConfigPath::UseDynamicBlend => write!(f, "Use Dynamic Blend"),
             ConfigPath::TargetIterationsPerPixel => write!(f, "Target Iterations Per Pixel"),
-            ConfigPath::IterationsPerThread => write!(f, "Iterations Per Thread"),
             ConfigPath::MaxIterations => write!(f, "Max Iterations"),
             ConfigPath::DeterministicRng => write!(f, "Deterministic RNG"),
-            ConfigPath::VsyncEnabled => write!(f, "VSync Enabled"),
-            ConfigPath::TargetFps => write!(f, "Target FPS"),
 
             // Transforms
             ConfigPath::TransformCount => write!(f, "Transform Count"),
@@ -597,9 +591,7 @@ impl ConfigPath {
             | ConfigPath::Rotation
             | ConfigPath::CameraRotationX
             | ConfigPath::CameraRotationY
-            | ConfigPath::CameraZ
-            | ConfigPath::VsyncEnabled
-            | ConfigPath::TargetFps => UpdateType::ViewOnly,
+            | ConfigPath::CameraZ => UpdateType::ViewOnly,
 
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure
@@ -629,8 +621,7 @@ impl ConfigPath {
             | ConfigPath::DensityCompressionStrength
             | ConfigPath::BlendFactor
             | ConfigPath::UseDynamicBlend
-            | ConfigPath::TargetIterationsPerPixel
-            | ConfigPath::IterationsPerThread => UpdateType::IterationReset,
+            | ConfigPath::TargetIterationsPerPixel => UpdateType::IterationReset,
 
             // Transform/flame changes - full reset
             ConfigPath::TransformCount

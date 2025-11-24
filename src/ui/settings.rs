@@ -129,14 +129,9 @@ pub fn render_settings_content(
 
             if response.changed() {
                 system_settings.iterations_per_thread = temp_iterations;
-                let _ = config_manager.update_param(
-                    ConfigPath::IterationsPerThread,
-                    temp_iterations.into()
-                );
             }
 
             if response.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::IterationsPerThread);
                 // Save system settings when user finishes dragging
                 let _ = system_settings.save();
             }
@@ -282,10 +277,6 @@ pub fn render_settings_content(
             let mut vsync = system_settings.vsync_enabled;
             if ui.checkbox(&mut vsync, "Enable VSync").changed() {
                 system_settings.vsync_enabled = vsync;
-                let _ = config_manager.update_param(
-                    ConfigPath::VsyncEnabled,
-                    vsync.into()
-                );
                 // Save system settings immediately when checkbox changes
                 let _ = system_settings.save();
             }
@@ -297,10 +288,6 @@ pub fn render_settings_content(
                     let mut target_fps = system_settings.target_fps;
                     if ui.add(egui::Slider::new(&mut target_fps, 10.0..=1000.0).suffix(" FPS")).changed() {
                         system_settings.target_fps = target_fps;
-                        let _ = config_manager.update_param(
-                            ConfigPath::TargetFps,
-                            target_fps.into()
-                        );
                         // Save system settings immediately when slider changes
                         let _ = system_settings.save();
                     }

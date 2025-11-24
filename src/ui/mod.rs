@@ -432,10 +432,8 @@ impl EguiLayer {
         // Speed multiplier removed - now use VSync and target_fps instead
 
         if let Some(ipt) = menu_actions.rendering.set_iterations_per_thread {
-            let _ = config_manager.update_param(
-                ConfigPath::IterationsPerThread,
-                ipt.into()
-            );
+            system_settings.iterations_per_thread = ipt;
+            let _ = system_settings.save();
         }
 
         UiResponse {
