@@ -164,6 +164,10 @@ All panels can be:
 - Center View button (zoom=1, pan=0, rotation=0)
 
 **Rendering Settings:**
+- **System Settings** (device-specific, persist across sessions):
+  - VSync checkbox (desktop only) - Toggle vertical sync (locks FPS to monitor refresh)
+  - Target FPS slider (desktop only, when VSync off) - 10 to 1000 Hz
+  - WASM: VSync always enabled (WebGPU Fifo mode required), controls hidden
 - Workgroups slider (1 to 512) - Parallel compute units
 - Iterations/Thread slider (16 to 4096) - Samples per thread
 - Speed multiplier (1x/2x/4x/8x/16x) - Frame rate or chunking

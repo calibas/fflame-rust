@@ -411,25 +411,32 @@ The `ConfigManager` is the central gateway for all configuration changes. It pro
 
 ```rust
 pub struct ConfigManager {
-    current: FractalConfig,              // Current state
+    // Fractal configuration (undo/redo enabled)
+    current: FractalConfig,              // Current fractal state
     undo_history: Vec<ConfigChange>,     // Undo history (max 50)
     redo_history: Vec<ConfigChange>,     // Redo history
     last_change_time: Option<Instant>,   // For coalescing window
     modify_session: Option<ModifySession>, // Batch update tracking
+
+    // System settings (no undo/redo, persistent across sessions)
+    system_settings: SystemSettings,     // Device-specific settings
+    pending_actions: UpdateActions,      // GPU update tracking
 }
 
 impl ConfigManager {
-    pub fn new(initial_config: FractalConfig) -> Self {
+    pub fn new(initial_config: FractalConfig, system_settings: SystemSettings) -> Self {
         Self {
             current: initial_config,
             undo_history: Vec::new(),
             redo_history: Vec::new(),
             last_change_time: None,
             modify_session: None,
+            system_settings,
+            pending_actions: UpdateActions::default(),
         }
     }
 
-    // Main entry point for parameter updates
+    // Main entry point for fractal parameter updates (undo/redo enabled)
     pub fn update_param(
         &mut self,
         path: ConfigPath,
@@ -455,6 +462,19 @@ impl ConfigManager {
         Ok(update_type)
     }
 
+    // System settings updates (no undo/redo, immediate disk save)
+    pub fn update_system_setting(
+        &mut self,
+        path: ConfigPath,
+        new_value: ConfigValue,
+    ) -> Result<UpdateType, ConfigError> {
+        // 1. Apply change to system_settings
+        // 2. Save to disk immediately (cross-platform storage)
+        // 3. Return UpdateType for GPU sync
+        // 4. NO undo delta created
+        /* ... */
+    }
+
     // Batch updates for multi-param changes
     pub fn update_batch(
         &mut self,
@@ -462,11 +482,79 @@ impl ConfigManager {
         description: &str,
     ) -> Result<UpdateType, ConfigError> { /* ... */ }
 
-    // Undo/redo operations
+    // Undo/redo operations (fractal params only, not system settings)
     pub fn undo(&mut self) -> Option<ConfigChange> { /* ... */ }
     pub fn redo(&mut self) -> Option<ConfigChange> { /* ... */ }
 }
 ```
+
+### SystemSettings Integration (Added 2025-11-23, PR #27)
+
+**Problem Solved:** Device-specific settings (VSync, FPS, iterations per thread) were mixed with artistic parameters in `FractalConfig`, causing issues:
+- System settings shouldn't be tracked in undo/redo history
+- System settings should persist across app restarts
+- GPU updates weren't propagated when system settings changed
+
+**Solution:** Separate `SystemSettings` struct managed by ConfigManager but excluded from undo/redo:
+
+```rust
+// src/storage/settings.rs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemSettings {
+    // Performance & Rendering
+    pub vsync_enabled: bool,              // VSync toggle (default: true)
+    pub target_fps: f32,                  // FPS when VSync off (default: 60.0)
+    pub iterations_per_thread: u32,       // GPU tuning (default: 256)
+
+    // UI/UX
+    pub language: String,                 // ISO 639-1 code (default: "en")
+
+    // Export Defaults
+    pub default_export_width: u32,        // PNG export width (default: 1920)
+    pub default_export_height: u32,       // PNG export height (default: 1080)
+    pub use_custom_export_size: bool,     // Use custom vs viewport size
+
+    // File Paths (desktop only)
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub recent_files: Vec<String>,        // Recent file paths (max 10)
+}
+```
+
+**Storage Backend** ([src/storage/backend.rs](../../src/storage/backend.rs)):
+- **Desktop**: JSON files in platform-specific user data directory
+  - Windows: `%APPDATA%\FractalFlame\system_settings.json`
+  - macOS: `~/Library/Application Support/FractalFlame/system_settings.json`
+  - Linux: `~/.config/FractalFlame/system_settings.json`
+- **WASM**: Browser localStorage (5-10 MB quota)
+
+**Usage Pattern:**
+```rust
+// UI code updates system setting
+if response.changed() {
+    let update_type = config_manager.update_system_setting(
+        ConfigPath::SystemIterationsPerThread,
+        new_value.into()
+    )?;
+    // Returns UpdateType::IterationReset for GPU sync
+    // Settings automatically saved to disk
+    // No undo delta created
+}
+```
+
+**Key Benefits:**
+- ✅ System settings persist across sessions
+- ✅ GPU updates work correctly (UpdateType propagation)
+- ✅ No undo/redo for device settings (correct UX)
+- ✅ Automatic disk persistence (no manual save() calls)
+- ✅ UI code stays simple (same pattern as fractal params)
+
+**VSync Handling:**
+- **Desktop**: User can toggle VSync on/off, set custom target FPS (10-1000 Hz)
+- **WASM**: VSync always enabled (WebGPU Fifo mode required), controls hidden in UI
+- Settings persist across app restarts
+
+**See Also:**
+- [docs/projects/local-storage-system.md](../../docs/projects/local-storage-system.md) - Complete design document
 
 ### ConfigPath - Type-Safe Parameter Identification
 
@@ -500,7 +588,7 @@ pub enum ConfigPath {
     SpeedFactor,
     BackgroundColor,
 
-    // Rendering settings
+    // Rendering settings (fractal params, undo/redo enabled)
     IterationsPerThread,
     SpeedMultiplier,
     HistogramColorScale,
@@ -511,6 +599,15 @@ pub enum ConfigPath {
     TargetIterationsPerPixel,
     MaxIterations,
     DeterministicRng,
+
+    // System settings (device-specific, no undo/redo, persistent)
+    SystemVSyncEnabled,
+    SystemTargetFPS,
+    SystemIterationsPerThread,
+    SystemLanguage,
+    SystemExportWidth,
+    SystemExportHeight,
+    SystemUseCustomExportSize,
 
     // Transform-level (reset + recompute)
     TransformCount,
@@ -1106,8 +1203,8 @@ pub fn import_config(&mut self, config: FractalConfig) {
 
 ---
 
-**Last Updated:** 2025-11-17
-**Related Docs:** [ARCHITECTURE.md](../ARCHITECTURE.md), [TRANSFORMS.md](TRANSFORMS.md), [UI.md](UI.md), [EXPORT.md](EXPORT.md)
+**Last Updated:** 2025-11-24
+**Related Docs:** [ARCHITECTURE.md](../ARCHITECTURE.md), [TRANSFORMS.md](TRANSFORMS.md), [UI.md](UI.md), [EXPORT.md](EXPORT.md), [local-storage-system.md](../../docs/projects/local-storage-system.md)
 
 **Major Changes:**
 
