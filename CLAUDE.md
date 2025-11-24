@@ -46,11 +46,16 @@
     - `config.rs` - Config export/import (legacy, being phased out)
     - `export.rs` - Headless PNG export for CLI
   - `src/config/` - **Delta-based state management system** (Added 2025-10-31)
-    - `manager.rs` - ConfigManager with undo/redo (1,237 lines)
+    - `manager.rs` - ConfigManager with undo/redo + system settings integration
     - `delta.rs` - ConfigPath, ConfigValue, ConfigDelta enums (568 lines)
     - `slider.rs` - UI helpers: config_slider (299 lines)
-    - `fractal_config.rs` - FractalConfig struct (complete state)
+    - `fractal_config.rs` - FractalConfig struct (per-fractal state)
     - `defaults.rs` - Default value constants (single source of truth)
+  - `src/storage/` - **Local storage system** (Added 2025-11-23, PR #27)
+    - `settings.rs` - SystemSettings struct (device-specific settings)
+    - `backend.rs` - Cross-platform storage (filesystem + localStorage)
+    - Persists VSync, target FPS, iterations per thread, export defaults
+    - Desktop: User data directory, WASM: browser localStorage
   - `src/renderer/compute_kernel.rs` - GPU rendering orchestration
   - `src/scene/transforms.rs` - Flame algorithm (CPU + GPU)
   - `src/ui/` - **Dockable panel UI system** (Migrated to egui_dock 2025-11-13)
@@ -200,6 +205,34 @@
   - ❌ No support: Arabic/Hebrew (RTL languages)
   - For full CJK: Add Noto Sans CJK font via egui FontDefinitions
 - **See**: [docs/main/I18N.md](docs/main/I18N.md) for translation guide
+
+### System Settings & Local Storage (Added 2025-11-23, PR #27)
+- **Architecture**: Unified state management through ConfigManager
+  - **FractalConfig**: Per-fractal artistic parameters (undo/redo enabled)
+  - **SystemSettings**: Device-specific settings (no undo, persistent across sessions)
+  - Both managed by ConfigManager for consistent GPU update propagation
+- **System Settings** (device-specific, persisted to disk):
+  - **Performance**: VSync, target FPS, iterations per thread
+  - **UI/UX**: Language preference (saved for next session)
+  - **Export Defaults**: Width, height, use custom size flag
+  - **File Paths** (desktop only): Recent files list
+- **VSync Configuration**:
+  - **Desktop**: Toggle VSync on/off, set custom target FPS (10-1000 Hz)
+  - **WASM**: VSync always enabled (WebGPU Fifo mode required), controls hidden
+  - Settings persist across app restarts via local storage
+- **Storage Backend**:
+  - **Desktop**: JSON files in platform-specific user data directory
+    - Windows: `%APPDATA%\FractalFlame\system_settings.json`
+    - macOS: `~/Library/Application Support/FractalFlame/system_settings.json`
+    - Linux: `~/.config/FractalFlame/system_settings.json`
+  - **WASM**: Browser localStorage (5-10 MB quota)
+  - Cross-platform API via `src/storage/backend.rs`
+- **ConfigManager Integration**:
+  - All system settings changes flow through `config_manager.update_system_setting()`
+  - Returns `UpdateType` for GPU synchronization (e.g., iterations per thread → reset accumulation)
+  - Automatic disk persistence (no manual save() calls needed)
+  - System settings excluded from undo/redo history
+- **See**: [docs/projects/local-storage-system.md](docs/projects/local-storage-system.md) for complete design
 
 ### Important Implementation Details
 - Using **ping-pong accumulation** (not atomic) for better performance

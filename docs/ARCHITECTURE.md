@@ -224,13 +224,28 @@ fractal_flame_wgpu/
 │                               - Enables variation plugins (future)
 │
 ├── State Management - **See [CONFIG.md](main/CONFIG.md)** for complete documentation
-│   └── config/
-│       ├── mod.rs              Module exports and re-exports
-│       ├── defaults.rs         Default value constants (single source of truth)
-│       ├── fractal_config.rs   FractalConfig (complete state), JSON serialization
-│       ├── delta.rs            ConfigPath, ConfigValue, ConfigDelta enums
-│       ├── manager.rs          ConfigManager (delta-based state, undo/redo, coalescing)
-│       └── slider.rs           Slider/DragValue UI helpers
+│   ├── config/
+│   │   ├── mod.rs              Module exports and re-exports
+│   │   ├── defaults.rs         Default value constants (single source of truth)
+│   │   ├── fractal_config.rs   FractalConfig (per-fractal artistic state), JSON serialization
+│   │   ├── delta.rs            ConfigPath, ConfigValue, ConfigDelta enums
+│   │   ├── manager.rs          ConfigManager (unified state, undo/redo, coalescing)
+│   │   │                       - Manages FractalConfig (undo/redo enabled)
+│   │   │                       - Manages SystemSettings (no undo, persistent)
+│   │   │                       - update_param() for fractal changes
+│   │   │                       - update_system_setting() for device settings
+│   │   │                       - Returns UpdateType for GPU synchronization
+│   │   └── slider.rs           Slider/DragValue UI helpers
+│   ├── storage/                Local storage system (Added 2025-11-23, PR #27)
+│   │   ├── mod.rs              Module exports
+│   │   ├── settings.rs         SystemSettings struct (device-specific settings)
+│   │   │                       - VSync, target FPS, iterations per thread
+│   │   │                       - Language preference, export defaults
+│   │   │                       - Recent files (desktop only)
+│   │   └── backend.rs          Cross-platform storage implementation
+│   │                           - Desktop: JSON files in user data directory
+│   │                           - WASM: browser localStorage
+│   │                           - StorageBackend trait for platform abstraction
 │   └── png_metadata.rs         PNG metadata embedding, tEXt chunks
 │
 ├── Profiling & Version Tracking
