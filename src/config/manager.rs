@@ -191,6 +191,7 @@ impl UpdateAction {
 
 /// Central manager for configuration state and undo/redo
 pub struct ConfigManager {
+    // ===== Fractal State (undo/redo enabled) =====
     /// Current configuration (last captured state)
     current: FractalConfig,
 
@@ -212,6 +213,14 @@ pub struct ConfigManager {
     /// Maximum undo history
     max_undo_depth: usize,
 
+    // ===== System State (no undo/redo, immediate disk save) =====
+    /// System settings - device-specific preferences
+    /// Changes to these settings:
+    /// - Do NOT create undo deltas
+    /// - Save to disk immediately
+    /// - Still return UpdateType for GPU synchronization
+    system_settings: crate::storage::SystemSettings,
+
     /// Pending actions accumulated since last get_pending_actions() call
     /// This tracks what GPU updates are needed based on recent changes
     pending_actions: UpdateAction,
@@ -232,12 +241,16 @@ struct ModifySession {
 
 impl ConfigManager {
     pub fn new(config: FractalConfig) -> Self {
+        // Load system settings from disk (or use defaults)
+        let system_settings = crate::storage::SystemSettings::load();
+
         Self {
             current: config,
             preview: None,
             history: Vec::new(),
             position: 0,  // Start at beginning (no history yet)
             max_undo_depth: 500,  // ~5MB max memory (500 states × ~10KB each)
+            system_settings,
             pending_actions: UpdateAction::none(),
             modify_session: None,
         }
@@ -791,6 +804,17 @@ impl ConfigManager {
             // Flame
             ConfigPath::RenderMode => Ok(config.flame.render_mode.into()),
             ConfigPath::PerspectiveStrength => Ok(config.flame.perspective_strength.into()),
+
+            // System Settings - These should NOT be called via get_value (they're not in FractalConfig)
+            // Use config_manager.system_settings() instead
+            ConfigPath::SystemIterationsPerThread
+            | ConfigPath::SystemVsyncEnabled
+            | ConfigPath::SystemTargetFps
+            | ConfigPath::SystemExportWidth
+            | ConfigPath::SystemExportHeight
+            | ConfigPath::SystemLanguage => {
+                panic!("System settings should not be accessed via get_value(). Use config_manager.system_settings() instead.");
+            }
         }
     }
 
@@ -1095,6 +1119,17 @@ impl ConfigManager {
             ConfigPath::PerspectiveStrength => {
                 self.current.flame.perspective_strength = value.try_into()?;
             }
+
+            // System Settings - These should NOT be called via apply_value (they're not in FractalConfig)
+            // Use config_manager.update_system_setting() instead
+            ConfigPath::SystemIterationsPerThread
+            | ConfigPath::SystemVsyncEnabled
+            | ConfigPath::SystemTargetFps
+            | ConfigPath::SystemExportWidth
+            | ConfigPath::SystemExportHeight
+            | ConfigPath::SystemLanguage => {
+                panic!("System settings should not be modified via apply_value(). Use config_manager.update_system_setting() instead.");
+            }
         }
 
         Ok(())
@@ -1155,6 +1190,17 @@ impl ConfigManager {
     /// Get mutable config (for operations that need it - use sparingly!)
     pub fn config_mut(&mut self) -> &mut FractalConfig {
         &mut self.current
+    }
+
+    /// Get system settings (read-only)
+    /// System settings are device-specific preferences that don't belong in FractalConfig
+    pub fn system_settings(&self) -> &crate::storage::SystemSettings {
+        &self.system_settings
+    }
+
+    /// Get mutable system settings (for operations that need it)
+    pub fn system_settings_mut(&mut self) -> &mut crate::storage::SystemSettings {
+        &mut self.system_settings
     }
 
     /// Load a complete config (e.g., preset, imported file)
