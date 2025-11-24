@@ -270,27 +270,37 @@ pub fn render_settings_content(
 
             ui.separator();
 
-            // VSync and frame rate settings
-            let mut vsync = config_manager.system_settings().vsync_enabled;
-            if ui.checkbox(&mut vsync, "Enable VSync").changed() {
-                let _ = config_manager.update_system_setting(
-                    crate::config::ConfigPath::SystemVsyncEnabled,
-                    vsync.into()
-                );
+            // VSync and frame rate settings (Desktop only - WASM always uses VSync)
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let mut vsync = config_manager.system_settings().vsync_enabled;
+                if ui.checkbox(&mut vsync, "Enable VSync").changed() {
+                    let _ = config_manager.update_system_setting(
+                        crate::config::ConfigPath::SystemVsyncEnabled,
+                        vsync.into()
+                    );
+                }
+
+                // Only show target FPS when VSync is disabled
+                if !config_manager.system_settings().vsync_enabled {
+                    ui.horizontal(|ui| {
+                        ui.label("Target FPS:");
+                        let mut target_fps = config_manager.system_settings().target_fps;
+                        if ui.add(egui::Slider::new(&mut target_fps, 10.0..=1000.0).suffix(" FPS")).changed() {
+                            let _ = config_manager.update_system_setting(
+                                crate::config::ConfigPath::SystemTargetFps,
+                                target_fps.into()
+                            );
+                        }
+                    });
+                }
             }
 
-            // Only show target FPS when VSync is disabled
-            if !config_manager.system_settings().vsync_enabled {
-                ui.horizontal(|ui| {
-                    ui.label("Target FPS:");
-                    let mut target_fps = config_manager.system_settings().target_fps;
-                    if ui.add(egui::Slider::new(&mut target_fps, 10.0..=1000.0).suffix(" FPS")).changed() {
-                        let _ = config_manager.update_system_setting(
-                            crate::config::ConfigPath::SystemTargetFps,
-                            target_fps.into()
-                        );
-                    }
-                });
+            #[cfg(target_arch = "wasm32")]
+            {
+                ui.label("VSync: Always Enabled (WebGPU limitation)");
+                ui.add_enabled(false, egui::Checkbox::new(&mut true, "Enable VSync"))
+                    .on_disabled_hover_text("WebGPU only supports VSync mode (Fifo present mode)");
             }
         });
 
