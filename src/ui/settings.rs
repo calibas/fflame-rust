@@ -18,7 +18,6 @@ pub fn render_settings_content(
     flame_renderer: Option<&crate::renderer::compute_kernel::FlameRenderer>,
     paused: &mut bool,
     config_manager: &mut ConfigManager,
-    system_settings: &mut crate::storage::SystemSettings,
     open_config_dialog: &mut bool,
 ) {
     // Clone config to avoid borrow conflicts (allows mutation of config_manager in closures)
@@ -118,7 +117,7 @@ pub fn render_settings_content(
             ui.separator();
 
             // Render settings - Iterations per thread
-            let mut temp_iterations = system_settings.iterations_per_thread;
+            let mut temp_iterations = config_manager.system_settings().iterations_per_thread;
             let response = ui.add(egui::Slider::new(&mut temp_iterations, 64..=4096)
                 .text("Iterations per Thread"))
                 .on_hover_text(
@@ -128,12 +127,10 @@ pub fn render_settings_content(
                 );
 
             if response.changed() {
-                system_settings.iterations_per_thread = temp_iterations;
-            }
-
-            if response.drag_stopped() {
-                // Save system settings when user finishes dragging
-                let _ = system_settings.save();
+                let _ = config_manager.update_system_setting(
+                    crate::config::ConfigPath::SystemIterationsPerThread,
+                    temp_iterations.into()
+                );
             }
 
             // Histogram color scale
@@ -274,22 +271,24 @@ pub fn render_settings_content(
             ui.separator();
 
             // VSync and frame rate settings
-            let mut vsync = system_settings.vsync_enabled;
+            let mut vsync = config_manager.system_settings().vsync_enabled;
             if ui.checkbox(&mut vsync, "Enable VSync").changed() {
-                system_settings.vsync_enabled = vsync;
-                // Save system settings immediately when checkbox changes
-                let _ = system_settings.save();
+                let _ = config_manager.update_system_setting(
+                    crate::config::ConfigPath::SystemVsyncEnabled,
+                    vsync.into()
+                );
             }
 
             // Only show target FPS when VSync is disabled
-            if !system_settings.vsync_enabled {
+            if !config_manager.system_settings().vsync_enabled {
                 ui.horizontal(|ui| {
                     ui.label("Target FPS:");
-                    let mut target_fps = system_settings.target_fps;
+                    let mut target_fps = config_manager.system_settings().target_fps;
                     if ui.add(egui::Slider::new(&mut target_fps, 10.0..=1000.0).suffix(" FPS")).changed() {
-                        system_settings.target_fps = target_fps;
-                        // Save system settings immediately when slider changes
-                        let _ = system_settings.save();
+                        let _ = config_manager.update_system_setting(
+                            crate::config::ConfigPath::SystemTargetFps,
+                            target_fps.into()
+                        );
                     }
                 });
             }
@@ -316,15 +315,19 @@ pub fn render_settings_content(
                 ui.horizontal(|ui| {
                     ui.label("Width:");
                     if ui.add(egui::DragValue::new(export_width).range(64..=8192).speed(10)).changed() {
-                        system_settings.default_export_width = *export_width;
-                        let _ = system_settings.save();
+                        let _ = config_manager.update_system_setting(
+                            crate::config::ConfigPath::SystemExportWidth,
+                            (*export_width).into()
+                        );
                     }
                 });
                 ui.horizontal(|ui| {
                     ui.label("Height:");
                     if ui.add(egui::DragValue::new(export_height).range(64..=8192).speed(10)).changed() {
-                        system_settings.default_export_height = *export_height;
-                        let _ = system_settings.save();
+                        let _ = config_manager.update_system_setting(
+                            crate::config::ConfigPath::SystemExportHeight,
+                            (*export_height).into()
+                        );
                     }
                 });
                 ui.label(format!("Export resolution: {}×{}", export_width, export_height));
