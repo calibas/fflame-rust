@@ -336,6 +336,73 @@ impl ConfigManager {
         Ok(update_type)
     }
 
+    /// Update a system setting (device-specific preference)
+    ///
+    /// System settings are NOT tracked for undo/redo (they're device preferences, not artistic choices).
+    /// However, they DO return UpdateType so the GPU knows what needs updating.
+    /// Changes are saved to disk immediately.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Change iterations per thread (triggers IterationReset)
+    /// config_manager.update_system_setting(
+    ///     ConfigPath::SystemIterationsPerThread,
+    ///     256.into()
+    /// )?;
+    /// ```
+    pub fn update_system_setting(
+        &mut self,
+        path: ConfigPath,
+        new_value: ConfigValue,
+    ) -> Result<UpdateType, ConfigError> {
+        // Verify this is a System* path
+        match &path {
+            ConfigPath::SystemIterationsPerThread => {
+                let value: u32 = new_value.try_into()?;
+                self.system_settings.iterations_per_thread = value;
+            }
+            ConfigPath::SystemVsyncEnabled => {
+                let value: bool = new_value.try_into()?;
+                self.system_settings.vsync_enabled = value;
+            }
+            ConfigPath::SystemTargetFps => {
+                let value: f32 = new_value.try_into()?;
+                self.system_settings.target_fps = value;
+            }
+            ConfigPath::SystemExportWidth => {
+                let value: u32 = new_value.try_into()?;
+                self.system_settings.default_export_width = value;
+            }
+            ConfigPath::SystemExportHeight => {
+                let value: u32 = new_value.try_into()?;
+                self.system_settings.default_export_height = value;
+            }
+            ConfigPath::SystemLanguage => {
+                // Extract String from ConfigValue manually
+                let value = match new_value {
+                    ConfigValue::String(s) => s,
+                    _ => return Err(ConfigError::TypeMismatch),
+                };
+                self.system_settings.language = value;
+            }
+            _ => {
+                return Err(ConfigError::InvalidPath(
+                    "Not a system setting path. Use update_param() for FractalConfig changes.".to_string()
+                ));
+            }
+        }
+
+        // Save to disk immediately (system settings persist across sessions)
+        self.system_settings.save()
+            .map_err(|e| ConfigError::InvalidPath(format!("Failed to save system settings: {}", e)))?;
+
+        // Determine what GPU updates are needed and record them
+        let update_type = path.update_type();
+        self.record_action(update_type);
+
+        Ok(update_type)
+    }
+
     /// Undo last change
     pub fn undo(&mut self) -> Result<UpdateType, ConfigError> {
         // Clear preview mode before undo (if active)
@@ -1441,6 +1508,7 @@ pub enum ConfigError {
     EmptyUndoStack,
     EmptyRedoStack,
     ReadOnlyParameter,
+    InvalidPath(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -1452,6 +1520,7 @@ impl std::fmt::Display for ConfigError {
             ConfigError::EmptyUndoStack => write!(f, "Nothing to undo"),
             ConfigError::EmptyRedoStack => write!(f, "Nothing to redo"),
             ConfigError::ReadOnlyParameter => write!(f, "Parameter is read-only"),
+            ConfigError::InvalidPath(msg) => write!(f, "Invalid config path: {}", msg),
         }
     }
 }
