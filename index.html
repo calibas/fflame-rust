@@ -158,7 +158,35 @@
                 // Hide loading screen
                 document.getElementById('loading').classList.add('hidden');
 
+                // Add window resize listener to trigger canvas resize
+                // winit only responds to canvas element resize, not window resize
+                // So we set canvas CSS to 100% width/height and nudge dimensions
+                let resizeTimeout;
+                window.addEventListener('resize', () => {
+                    clearTimeout(resizeTimeout);
+                    resizeTimeout = setTimeout(() => {
+                        const canvas = document.getElementById('canvas');
+                        if (canvas) {
+                            // Set canvas CSS to fill window
+                            canvas.style.width = '100%';
+                            canvas.style.height = '100%';
+
+                            // Temporarily add 1px to width to trigger winit's ResizeObserver
+                            const currentWidth = canvas.width;
+                            canvas.width = currentWidth + 1;
+
+                            // Let winit detect the change and handle proper resize
+                            requestAnimationFrame(() => {
+                                // winit will have seen the change and scheduled resize
+                                // The actual size will be corrected by winit's resize logic
+                            });
+                            console.log('Window resized - triggered canvas resize');
+                        }
+                    }, 100); // Debounce to avoid excessive calls
+                });
+
                 console.log('Fractal Flame Renderer initialized successfully!');
+                console.log('Window resize listener installed - canvas will auto-resize');
             } catch (error) {
                 console.error('Failed to initialize:', error);
                 document.getElementById('loading').innerHTML =
