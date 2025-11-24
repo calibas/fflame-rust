@@ -191,6 +191,7 @@ impl UpdateAction {
 
 /// Central manager for configuration state and undo/redo
 pub struct ConfigManager {
+    // ===== Fractal State (undo/redo enabled) =====
     /// Current configuration (last captured state)
     current: FractalConfig,
 
@@ -212,6 +213,14 @@ pub struct ConfigManager {
     /// Maximum undo history
     max_undo_depth: usize,
 
+    // ===== System State (no undo/redo, immediate disk save) =====
+    /// System settings - device-specific preferences
+    /// Changes to these settings:
+    /// - Do NOT create undo deltas
+    /// - Save to disk immediately
+    /// - Still return UpdateType for GPU synchronization
+    system_settings: crate::storage::SystemSettings,
+
     /// Pending actions accumulated since last get_pending_actions() call
     /// This tracks what GPU updates are needed based on recent changes
     pending_actions: UpdateAction,
@@ -232,12 +241,16 @@ struct ModifySession {
 
 impl ConfigManager {
     pub fn new(config: FractalConfig) -> Self {
+        // Load system settings from disk (or use defaults)
+        let system_settings = crate::storage::SystemSettings::load();
+
         Self {
             current: config,
             preview: None,
             history: Vec::new(),
             position: 0,  // Start at beginning (no history yet)
             max_undo_depth: 500,  // ~5MB max memory (500 states × ~10KB each)
+            system_settings,
             pending_actions: UpdateAction::none(),
             modify_session: None,
         }
@@ -320,6 +333,73 @@ impl ConfigManager {
         }
 
         self.record_action(update_type);
+        Ok(update_type)
+    }
+
+    /// Update a system setting (device-specific preference)
+    ///
+    /// System settings are NOT tracked for undo/redo (they're device preferences, not artistic choices).
+    /// However, they DO return UpdateType so the GPU knows what needs updating.
+    /// Changes are saved to disk immediately.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Change iterations per thread (triggers IterationReset)
+    /// config_manager.update_system_setting(
+    ///     ConfigPath::SystemIterationsPerThread,
+    ///     256.into()
+    /// )?;
+    /// ```
+    pub fn update_system_setting(
+        &mut self,
+        path: ConfigPath,
+        new_value: ConfigValue,
+    ) -> Result<UpdateType, ConfigError> {
+        // Verify this is a System* path
+        match &path {
+            ConfigPath::SystemIterationsPerThread => {
+                let value: u32 = new_value.try_into()?;
+                self.system_settings.iterations_per_thread = value;
+            }
+            ConfigPath::SystemVsyncEnabled => {
+                let value: bool = new_value.try_into()?;
+                self.system_settings.vsync_enabled = value;
+            }
+            ConfigPath::SystemTargetFps => {
+                let value: f32 = new_value.try_into()?;
+                self.system_settings.target_fps = value;
+            }
+            ConfigPath::SystemExportWidth => {
+                let value: u32 = new_value.try_into()?;
+                self.system_settings.default_export_width = value;
+            }
+            ConfigPath::SystemExportHeight => {
+                let value: u32 = new_value.try_into()?;
+                self.system_settings.default_export_height = value;
+            }
+            ConfigPath::SystemLanguage => {
+                // Extract String from ConfigValue manually
+                let value = match new_value {
+                    ConfigValue::String(s) => s,
+                    _ => return Err(ConfigError::TypeMismatch),
+                };
+                self.system_settings.language = value;
+            }
+            _ => {
+                return Err(ConfigError::InvalidPath(
+                    "Not a system setting path. Use update_param() for FractalConfig changes.".to_string()
+                ));
+            }
+        }
+
+        // Save to disk immediately (system settings persist across sessions)
+        self.system_settings.save()
+            .map_err(|e| ConfigError::InvalidPath(format!("Failed to save system settings: {}", e)))?;
+
+        // Determine what GPU updates are needed and record them
+        let update_type = path.update_type();
+        self.record_action(update_type);
+
         Ok(update_type)
     }
 
@@ -643,11 +723,8 @@ impl ConfigManager {
             ConfigPath::TargetIterationsPerPixel => {
                 Ok(config.target_iterations_per_pixel.into())
             }
-            ConfigPath::IterationsPerThread => Ok(config.iterations_per_thread.into()),
             ConfigPath::MaxIterations => Ok(config.max_iterations.into()),
             ConfigPath::DeterministicRng => Ok(config.deterministic_rng.into()),
-            ConfigPath::VsyncEnabled => Ok(config.vsync_enabled.into()),
-            ConfigPath::TargetFps => Ok(config.target_fps.into()),
 
             // Transforms
             ConfigPath::TransformCount => {
@@ -794,6 +871,17 @@ impl ConfigManager {
             // Flame
             ConfigPath::RenderMode => Ok(config.flame.render_mode.into()),
             ConfigPath::PerspectiveStrength => Ok(config.flame.perspective_strength.into()),
+
+            // System Settings - These should NOT be called via get_value (they're not in FractalConfig)
+            // Use config_manager.system_settings() instead
+            ConfigPath::SystemIterationsPerThread
+            | ConfigPath::SystemVsyncEnabled
+            | ConfigPath::SystemTargetFps
+            | ConfigPath::SystemExportWidth
+            | ConfigPath::SystemExportHeight
+            | ConfigPath::SystemLanguage => {
+                panic!("System settings should not be accessed via get_value(). Use config_manager.system_settings() instead.");
+            }
         }
     }
 
@@ -920,20 +1008,11 @@ impl ConfigManager {
             ConfigPath::TargetIterationsPerPixel => {
                 self.current.target_iterations_per_pixel = value.try_into()?;
             }
-            ConfigPath::IterationsPerThread => {
-                self.current.iterations_per_thread = value.try_into()?;
-            }
             ConfigPath::MaxIterations => {
                 self.current.max_iterations = value.try_into()?;
             }
             ConfigPath::DeterministicRng => {
                 self.current.deterministic_rng = value.try_into()?;
-            }
-            ConfigPath::VsyncEnabled => {
-                self.current.vsync_enabled = value.try_into()?;
-            }
-            ConfigPath::TargetFps => {
-                self.current.target_fps = value.try_into()?;
             }
 
             // Transforms
@@ -1107,6 +1186,17 @@ impl ConfigManager {
             ConfigPath::PerspectiveStrength => {
                 self.current.flame.perspective_strength = value.try_into()?;
             }
+
+            // System Settings - These should NOT be called via apply_value (they're not in FractalConfig)
+            // Use config_manager.update_system_setting() instead
+            ConfigPath::SystemIterationsPerThread
+            | ConfigPath::SystemVsyncEnabled
+            | ConfigPath::SystemTargetFps
+            | ConfigPath::SystemExportWidth
+            | ConfigPath::SystemExportHeight
+            | ConfigPath::SystemLanguage => {
+                panic!("System settings should not be modified via apply_value(). Use config_manager.update_system_setting() instead.");
+            }
         }
 
         Ok(())
@@ -1167,6 +1257,17 @@ impl ConfigManager {
     /// Get mutable config (for operations that need it - use sparingly!)
     pub fn config_mut(&mut self) -> &mut FractalConfig {
         &mut self.current
+    }
+
+    /// Get system settings (read-only)
+    /// System settings are device-specific preferences that don't belong in FractalConfig
+    pub fn system_settings(&self) -> &crate::storage::SystemSettings {
+        &self.system_settings
+    }
+
+    /// Get mutable system settings (for operations that need it)
+    pub fn system_settings_mut(&mut self) -> &mut crate::storage::SystemSettings {
+        &mut self.system_settings
     }
 
     /// Load a complete config (e.g., preset, imported file)
@@ -1407,6 +1508,7 @@ pub enum ConfigError {
     EmptyUndoStack,
     EmptyRedoStack,
     ReadOnlyParameter,
+    InvalidPath(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -1418,6 +1520,7 @@ impl std::fmt::Display for ConfigError {
             ConfigError::EmptyUndoStack => write!(f, "Nothing to undo"),
             ConfigError::EmptyRedoStack => write!(f, "Nothing to redo"),
             ConfigError::ReadOnlyParameter => write!(f, "Parameter is read-only"),
+            ConfigError::InvalidPath(msg) => write!(f, "Invalid config path: {}", msg),
         }
     }
 }

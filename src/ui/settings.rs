@@ -117,7 +117,7 @@ pub fn render_settings_content(
             ui.separator();
 
             // Render settings - Iterations per thread
-            let mut temp_iterations = config.iterations_per_thread;
+            let mut temp_iterations = config_manager.system_settings().iterations_per_thread;
             let response = ui.add(egui::Slider::new(&mut temp_iterations, 64..=4096)
                 .text("Iterations per Thread"))
                 .on_hover_text(
@@ -127,14 +127,10 @@ pub fn render_settings_content(
                 );
 
             if response.changed() {
-                let _ = config_manager.update_param(
-                    ConfigPath::IterationsPerThread,
+                let _ = config_manager.update_system_setting(
+                    crate::config::ConfigPath::SystemIterationsPerThread,
                     temp_iterations.into()
                 );
-            }
-
-            if response.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::IterationsPerThread);
             }
 
             // Histogram color scale
@@ -275,22 +271,22 @@ pub fn render_settings_content(
             ui.separator();
 
             // VSync and frame rate settings
-            let mut vsync = config.vsync_enabled;
+            let mut vsync = config_manager.system_settings().vsync_enabled;
             if ui.checkbox(&mut vsync, "Enable VSync").changed() {
-                let _ = config_manager.update_param(
-                    ConfigPath::VsyncEnabled,
+                let _ = config_manager.update_system_setting(
+                    crate::config::ConfigPath::SystemVsyncEnabled,
                     vsync.into()
                 );
             }
 
             // Only show target FPS when VSync is disabled
-            if !config.vsync_enabled {
+            if !config_manager.system_settings().vsync_enabled {
                 ui.horizontal(|ui| {
                     ui.label("Target FPS:");
-                    let mut target_fps = config.target_fps as f32;
+                    let mut target_fps = config_manager.system_settings().target_fps;
                     if ui.add(egui::Slider::new(&mut target_fps, 10.0..=1000.0).suffix(" FPS")).changed() {
-                        let _ = config_manager.update_param(
-                            ConfigPath::TargetFps,
+                        let _ = config_manager.update_system_setting(
+                            crate::config::ConfigPath::SystemTargetFps,
                             target_fps.into()
                         );
                     }
@@ -318,11 +314,21 @@ pub fn render_settings_content(
             ui.add_enabled_ui(*use_custom_export_size, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Width:");
-                    ui.add(egui::DragValue::new(export_width).range(64..=8192).speed(10));
+                    if ui.add(egui::DragValue::new(export_width).range(64..=8192).speed(10)).changed() {
+                        let _ = config_manager.update_system_setting(
+                            crate::config::ConfigPath::SystemExportWidth,
+                            (*export_width).into()
+                        );
+                    }
                 });
                 ui.horizontal(|ui| {
                     ui.label("Height:");
-                    ui.add(egui::DragValue::new(export_height).range(64..=8192).speed(10));
+                    if ui.add(egui::DragValue::new(export_height).range(64..=8192).speed(10)).changed() {
+                        let _ = config_manager.update_system_setting(
+                            crate::config::ConfigPath::SystemExportHeight,
+                            (*export_height).into()
+                        );
+                    }
                 });
                 ui.label(format!("Export resolution: {}×{}", export_width, export_height));
             });

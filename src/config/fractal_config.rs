@@ -50,17 +50,6 @@ pub struct FractalConfig {
     /// Per-pixel iteration limit (0 = disabled, default: 0)
     #[serde(default)]
     pub target_iterations_per_pixel: u32,
-    /// Iterations per thread (GPU workgroup performance tuning, default: 256)
-    #[serde(default = "default_iterations_per_thread")]
-    pub iterations_per_thread: u32,
-
-    /// VSync settings
-    /// Enable VSync (locks frame rate to monitor refresh rate)
-    #[serde(default = "default_vsync_enabled")]
-    pub vsync_enabled: bool,
-    /// Target FPS when VSync is disabled (only used if vsync_enabled = false)
-    #[serde(default = "default_target_fps")]
-    pub target_fps: f32,
 
     /// Color settings
     pub color_mode: ColorMode,
@@ -175,18 +164,6 @@ fn default_use_dynamic_blend() -> bool {
     super::defaults::DEFAULT_USE_DYNAMIC_BLEND
 }
 
-fn default_iterations_per_thread() -> u32 {
-    super::defaults::DEFAULT_ITERATIONS_PER_THREAD
-}
-
-fn default_vsync_enabled() -> bool {
-    true  // Enable VSync by default
-}
-
-fn default_target_fps() -> f32 {
-    60.0  // Default to 60 FPS when VSync is disabled
-}
-
 impl Default for FractalConfig {
     fn default() -> Self {
         use crate::scene::transforms::Flame;
@@ -210,9 +187,6 @@ impl Default for FractalConfig {
             blend_factor: default_blend_factor(),
             use_dynamic_blend: default_use_dynamic_blend(),
             target_iterations_per_pixel: 0,
-            iterations_per_thread: default_iterations_per_thread(),
-            vsync_enabled: default_vsync_enabled(),
-            target_fps: default_target_fps(),
             color_mode: ColorMode::Palette,
             palette_index: 0,
             palette: None,
