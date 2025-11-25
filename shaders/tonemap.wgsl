@@ -275,32 +275,13 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let should_apply_curve = tonemap_params.use_curve != 0u && bucket_count > 0.001;
     var fractal_color = select(color, vec3<f32>(curve_r, curve_g, curve_b), should_apply_curve);
 
-    // Map density to alpha using density_scale
-    // The density represents how many samples hit this pixel
-    // density_scale controls transparency: higher = more opaque
-    let output_alpha = clamp(bucket_count * 0.01 * tonemap_params.density_scale, 0.0, 1.0);
+    // Map density to alpha for compositing with background
+    // density_scale controls how quickly fractal becomes opaque
+    let fractal_alpha = clamp(bucket_count * 0.01 * tonemap_params.density_scale, 0.0, 1.0);
 
-    // Old Transparent Export (Doesn't currently work)
-    // Check if background is black (transparent export mode)
-    // let bg_sum = tonemap_params.background_color.r + tonemap_params.background_color.g + tonemap_params.background_color.b;
-    // let is_transparent_mode = bg_sum < 0.001;
-    // let is_transparent_mode = false;
-
-    // Composite: background * (1 - alpha) + tone_curved_fractal * alpha
-    // This ensures tone curve only affects the fractal layer, not the background
-    // let final_color = select(
-    //     tonemap_params.background_color * (1.0 - output_alpha) + fractal_color * output_alpha,  // Normal mode: manual blend
-    //     fractal_color,                                                                             // Transparent mode: just fractal
-    //     is_transparent_mode
-    // );
-    // let final_color = tonemap_params.background_color * (1.0 - output_alpha) + fractal_color * output_alpha;
-    // let final_alpha = select(1.0, output_alpha, is_transparent_mode);
-    
-    // Output fractal color with density-based alpha
-    // The panel background (set in panel_viewer.rs) will show through transparent areas
-    // Use select() to choose between background and fractal based on is_empty flag
-    // This avoids early return which breaks uniform control flow for Chrome WebGPU
-    let final_color = select(fractal_color, tonemap_params.background_color, is_empty);
+    // Alpha composite: background * (1 - alpha) + fractal * alpha
+    // This properly blends fractal over background based on accumulated density
+    let final_color = tonemap_params.background_color * (1.0 - fractal_alpha) + fractal_color * fractal_alpha;
     let final_alpha = 1.0;
 
     // Convert from linear to sRGB for display
