@@ -42,6 +42,9 @@ pub struct UiResponse {
 
     // Preset selection from library
     pub selected_preset_config: Option<crate::config::FractalConfig>,
+
+    // File browser requests
+    pub file_browser_open_requested: bool,
 }
 
 impl Default for UiResponse {
@@ -69,6 +72,7 @@ impl Default for UiResponse {
             fractal_viewport_size: None,
             needs_repaint: false,
             selected_preset_config: None,
+            file_browser_open_requested: false,
         }
     }
 }

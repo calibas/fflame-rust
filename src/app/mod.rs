@@ -677,6 +677,45 @@ impl App {
             }
         }
 
+        // Handle file browser open request
+        if ui_response.file_browser_open_requested {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Desktop: synchronous file dialog
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Fractal Flame Config", &["fflame"])
+                    .pick_file()
+                {
+                    self.egui_layer.load_file_into_browser(path);
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // WASM: async file dialog - load into egui memory
+                let ctx = self.egui_layer.ctx.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Some(file_handle) = rfd::AsyncFileDialog::new()
+                        .add_filter("Fractal Flame", &["fflame"])
+                        .pick_file()
+                        .await
+                    {
+                        let contents = file_handle.read().await;
+                        let json = String::from_utf8_lossy(&contents).to_string();
+
+                        // Store the JSON in egui memory for pickup on next frame
+                        ctx.data_mut(|data| {
+                            data.insert_temp(
+                                egui::Id::new("pending_file_browser_json"),
+                                json
+                            );
+                        });
+                        ctx.request_repaint();
+                    }
+                });
+            }
+        }
+
         // Handle palette export to clipboard
         if let Some(palette) = ui_response.palette_export_json {
             if let Ok(json) = serde_json::to_string_pretty(&palette) {
@@ -1239,6 +1278,17 @@ impl App {
         // This is blocking but only ~1-2 seconds per thumbnail
         if self.egui_layer.preset_library_needs_thumbnails() {
             self.egui_layer.generate_preset_thumbnail(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &self.palette_library,
+            );
+            // Request immediate repaint to continue generation next frame
+            window.request_redraw();
+        }
+
+        // Generate one thumbnail for file browser if needed (one per frame)
+        if self.egui_layer.file_browser_needs_thumbnails() {
+            self.egui_layer.generate_file_browser_thumbnail(
                 &self.gpu.device,
                 &self.gpu.queue,
                 &self.palette_library,

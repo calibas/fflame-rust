@@ -172,3 +172,59 @@ fn test_palette_interpolation() {
         assert!(color[2] >= 0.0 && color[2] <= 1.0);
     }
 }
+
+#[test]
+fn test_multi_config_file_loading() {
+    // Test that multi-config .fflame files can be loaded
+    use fractal_flame_wgpu::config::FractalConfig;
+    use std::path::Path;
+
+    let test_file = Path::new("tests/test_configs/multi_config.fflame");
+    let configs = FractalConfig::load_multi_from_file(test_file)
+        .expect("Failed to load multi-config file");
+
+    // Should have 3 configs
+    assert_eq!(configs.len(), 3, "Expected 3 configs in test file");
+
+    // Verify first config
+    assert_eq!(configs[0].flame.name, "Test Flame 1 - Simple");
+    assert_eq!(configs[0].flame.transforms.len(), 1);
+    assert_eq!(configs[0].zoom, 1.5);
+
+    // Verify second config
+    assert_eq!(configs[1].flame.name, "Test Flame 2 - Sinusoidal");
+    assert_eq!(configs[1].zoom, 2.0);
+    assert_eq!(configs[1].exposure, 1.2);
+
+    // Verify third config
+    assert_eq!(configs[2].flame.name, "Test Flame 3 - Spherical");
+    assert_eq!(configs[2].flame.transforms.len(), 2);
+    assert_eq!(configs[2].gamma, 2.0);
+}
+
+#[test]
+fn test_single_config_file_as_multi() {
+    // Test that single-config files work with multi-config API
+    use fractal_flame_wgpu::config::FractalConfig;
+    use std::path::Path;
+
+    // Use an existing single-config file from visual tests
+    let test_dir = Path::new("tests/visual/configs");
+    if test_dir.exists() {
+        // Find any .fflame file
+        for entry in std::fs::read_dir(test_dir).unwrap() {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                if path.extension().map(|ext| ext == "fflame").unwrap_or(false) {
+                    let configs = FractalConfig::load_multi_from_file(&path)
+                        .expect("Failed to load single-config file");
+
+                    // Single-config files should return vec with 1 element
+                    assert_eq!(configs.len(), 1, "Single-config file should return 1 config");
+                    assert!(!configs[0].flame.name.is_empty(), "Config should have a name");
+                    return; // Only need to test one file
+                }
+            }
+        }
+    }
+}
