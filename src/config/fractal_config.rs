@@ -387,6 +387,115 @@ impl FractalConfig {
         let json = std::fs::read_to_string(path)?;
         Ok(Self::from_json(&json)?)
     }
+
+    /// Import multiple configurations from JSON string
+    /// Supports both single object (backward compatible) and JSON array formats
+    pub fn from_json_multi(json: &str) -> Result<Vec<Self>, serde_json::Error> {
+        // Parse as generic JSON value to detect format
+        let value: serde_json::Value = serde_json::from_str(json)?;
+
+        if value.is_array() {
+            // Array format: multiple configs
+            let configs: Vec<serde_json::Value> = serde_json::from_value(value)?;
+            configs
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    Self::from_json_value(v).map_err(|e| {
+                        serde_json::Error::io(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            format!("Error in config[{}]: {}", i, e),
+                        ))
+                    })
+                })
+                .collect()
+        } else if value.is_object() {
+            // Single object format (backward compatible)
+            Ok(vec![Self::from_json_value(value)?])
+        } else {
+            Err(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Expected JSON object or array",
+            )))
+        }
+    }
+
+    /// Import a single configuration from JSON value (internal helper)
+    fn from_json_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
+        // Check version if present
+        let version = value.get("version")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(0);
+
+        if version > CURRENT_CONFIG_VERSION {
+            let msg = format!(
+                "Config version {} is newer than supported version {}. Please update the application.",
+                version, CURRENT_CONFIG_VERSION
+            );
+            return Err(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                msg,
+            )));
+        }
+
+        // Deserialize first (serde defaults will apply)
+        let mut config: Self = serde_json::from_value(value)?;
+
+        // Apply migrations if needed
+        if version < CURRENT_CONFIG_VERSION {
+            config = Self::migrate(config, version)?;
+        }
+
+        Ok(config)
+    }
+
+    /// Export multiple configurations to JSON array string
+    pub fn to_json_array(configs: &[Self]) -> Result<String, serde_json::Error> {
+        let values: Result<Vec<serde_json::Value>, _> = configs
+            .iter()
+            .map(|config| {
+                let mut value = serde_json::to_value(config)?;
+                if let Some(obj) = value.as_object_mut() {
+                    let defaults = Self::default();
+                    Self::remove_default_fields(obj, config, &defaults);
+
+                    // Build ordered object with version first
+                    let mut ordered_obj = serde_json::Map::new();
+                    ordered_obj.insert("version".to_string(), serde_json::json!(CURRENT_CONFIG_VERSION));
+
+                    // Add flame first (always required), then other non-default fields
+                    if let Some(flame) = obj.remove("flame") {
+                        ordered_obj.insert("flame".to_string(), flame);
+                    }
+                    for (k, v) in obj.iter() {
+                        if k != "version" {
+                            ordered_obj.insert(k.clone(), v.clone());
+                        }
+                    }
+                    Ok(serde_json::Value::Object(ordered_obj))
+                } else {
+                    Ok(value)
+                }
+            })
+            .collect();
+
+        serde_json::to_string_pretty(&values?)
+    }
+
+    /// Load multiple configurations from file
+    /// Supports both single object and JSON array formats
+    pub fn load_multi_from_file(path: &std::path::Path) -> Result<Vec<Self>, Box<dyn std::error::Error>> {
+        let json = std::fs::read_to_string(path)?;
+        Ok(Self::from_json_multi(&json)?)
+    }
+
+    /// Save multiple configurations to file as JSON array
+    pub fn save_multi_to_file(configs: &[Self], path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+        let json = Self::to_json_array(configs)?;
+        std::fs::write(path, json)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -482,5 +591,113 @@ mod tests {
         let json = r#"{"version": 1, "flame": {"name": "test", "transforms": []}}"#;
         let result = FractalConfig::from_json(json);
         assert!(result.is_ok());
+    }
+
+    // Multi-config tests
+
+    #[test]
+    fn test_from_json_multi_single_object() {
+        // Single object format should return vec with one element
+        let json = r#"{"version": 1, "flame": {"name": "test", "transforms": []}}"#;
+        let configs = FractalConfig::from_json_multi(json).unwrap();
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].flame.name, "test");
+    }
+
+    #[test]
+    fn test_from_json_multi_array() {
+        // Array format should return all configs
+        let json = r#"[
+            {"version": 1, "flame": {"name": "config1", "transforms": []}},
+            {"version": 1, "flame": {"name": "config2", "transforms": []}}
+        ]"#;
+        let configs = FractalConfig::from_json_multi(json).unwrap();
+        assert_eq!(configs.len(), 2);
+        assert_eq!(configs[0].flame.name, "config1");
+        assert_eq!(configs[1].flame.name, "config2");
+    }
+
+    #[test]
+    fn test_from_json_multi_empty_array() {
+        let json = "[]";
+        let configs = FractalConfig::from_json_multi(json).unwrap();
+        assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn test_from_json_multi_invalid_format() {
+        // Neither object nor array
+        let json = "\"just a string\"";
+        let result = FractalConfig::from_json_multi(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_to_json_array() {
+        let mut config1 = FractalConfig::default();
+        config1.flame.name = "first".to_string();
+        config1.zoom = 2.0;
+
+        let mut config2 = FractalConfig::default();
+        config2.flame.name = "second".to_string();
+        config2.exposure = 1.5;
+
+        let json = FractalConfig::to_json_array(&[config1, config2]).unwrap();
+
+        // Should be a JSON array
+        assert!(json.starts_with('['));
+        assert!(json.ends_with(']'));
+
+        // Both configs should be present
+        assert!(json.contains("\"first\""));
+        assert!(json.contains("\"second\""));
+
+        // Non-default values should be included
+        assert!(json.contains("\"zoom\": 2"));
+        assert!(json.contains("\"exposure\": 1.5"));
+    }
+
+    #[test]
+    fn test_multi_config_roundtrip() {
+        let mut config1 = FractalConfig::default();
+        config1.flame.name = "alpha".to_string();
+        config1.zoom = 3.0;
+
+        let mut config2 = FractalConfig::default();
+        config2.flame.name = "beta".to_string();
+        config2.gamma = 1.8;
+
+        let json = FractalConfig::to_json_array(&[config1.clone(), config2.clone()]).unwrap();
+        let loaded = FractalConfig::from_json_multi(&json).unwrap();
+
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].flame.name, "alpha");
+        assert_eq!(loaded[0].zoom, 3.0);
+        assert_eq!(loaded[1].flame.name, "beta");
+        assert_eq!(loaded[1].gamma, 1.8);
+    }
+
+    #[test]
+    fn test_multi_config_array_migration() {
+        // Array with pre-versioned configs (no version field)
+        let json = r#"[
+            {"flame": {"name": "old1", "transforms": []}},
+            {"flame": {"name": "old2", "transforms": []}}
+        ]"#;
+        let configs = FractalConfig::from_json_multi(json).unwrap();
+        assert_eq!(configs.len(), 2);
+        // Should have been migrated from v0 to v1
+    }
+
+    #[test]
+    fn test_multi_config_array_future_version_rejected() {
+        // Array with future version should fail
+        let json = r#"[
+            {"version": 1, "flame": {"name": "ok", "transforms": []}},
+            {"version": 999, "flame": {"name": "future", "transforms": []}}
+        ]"#;
+        let result = FractalConfig::from_json_multi(json);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("config[1]"));
     }
 }

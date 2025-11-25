@@ -23,6 +23,8 @@ pub enum PanelType {
     PaletteLibrary,
     /// Preset library (browse and select presets with thumbnails)
     PresetLibrary,
+    /// File browser (load .fflame files with thumbnail preview)
+    FileBrowser,
     /// Camera/navigation (zoom, pan, rotation, 3D camera)
     View,
     /// Performance/quality (iterations, accumulation, speed)
@@ -47,6 +49,7 @@ impl std::fmt::Display for PanelType {
             PanelType::PaletteEditor => write!(f, "Palette Editor"),
             PanelType::PaletteLibrary => write!(f, "Palette Library"),
             PanelType::PresetLibrary => write!(f, "Preset Library"),
+            PanelType::FileBrowser => write!(f, "File Browser"),
             PanelType::View => write!(f, "View"),
             PanelType::Rendering => write!(f, "Rendering"),
             PanelType::History => write!(f, "History"),

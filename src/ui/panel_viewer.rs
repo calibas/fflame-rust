@@ -62,6 +62,10 @@ pub struct PanelContext<'a> {
     // Preset library panel state
     pub preset_library_panel: &'a mut Option<super::preset_library::PresetLibraryPanel>,
     pub selected_preset_config: &'a mut Option<crate::config::FractalConfig>,
+
+    // File browser panel state
+    pub file_browser_panel: &'a mut Option<super::file_browser::FileBrowserPanel>,
+    pub file_browser_open_requested: &'a mut bool,
 }
 
 /// Viewer for rendering each panel type
@@ -116,6 +120,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::PresetLibrary => {
                 self.render_preset_library_panel(ui);
+            }
+            PanelType::FileBrowser => {
+                self.render_file_browser_panel(ui);
             }
         }
     }
@@ -421,6 +428,28 @@ impl<'a> PanelViewer<'a> {
             let response = panel.render(ui);
 
             // Handle selection
+            if let Some(config) = response.selected {
+                *self.context.selected_preset_config = Some(config);
+            }
+        }
+    }
+
+    /// Render File Browser panel (browse and load .fflame files)
+    fn render_file_browser_panel(&mut self, ui: &mut egui::Ui) {
+        // Initialize panel if not already created
+        if self.context.file_browser_panel.is_none() {
+            *self.context.file_browser_panel = Some(super::file_browser::FileBrowserPanel::new());
+        }
+
+        if let Some(panel) = self.context.file_browser_panel.as_mut() {
+            let response = panel.render(ui);
+
+            // Handle file open request
+            if panel.take_open_file_request() {
+                *self.context.file_browser_open_requested = true;
+            }
+
+            // Handle selection (load the config)
             if let Some(config) = response.selected {
                 *self.context.selected_preset_config = Some(config);
             }

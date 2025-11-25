@@ -439,7 +439,7 @@ impl<'de> Deserialize<'de> for Transform {
                     variations: variations.ok_or_else(|| de::Error::missing_field("variations"))?,
                     variation_params: variation_params.unwrap_or_else(HashMap::new), // Default to empty if missing
                     color: color.ok_or_else(|| de::Error::missing_field("color"))?,
-                    color_speed: color_speed.ok_or_else(|| de::Error::missing_field("color_speed"))?,
+                    color_speed: color_speed.unwrap_or(0.0), // Default to 0.0 for backward compatibility
                     opacity: opacity.unwrap_or(1.0), // Default to 1.0 for backward compatibility
                 })
             }

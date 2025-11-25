@@ -239,6 +239,11 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::PresetLibrary);
                 }
 
+                let file_browser_open = workspace.panel_exists(super::workspace::PanelType::FileBrowser);
+                if ui.selectable_label(file_browser_open, "📂 File Browser").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::FileBrowser);
+                }
+
                 // Config Import/Export opens as floating window in docking system
                 let config_dialog_open = workspace.panel_exists(super::workspace::PanelType::ConfigDialog);
                 if ui.selectable_label(config_dialog_open, "📄 Config Import/Export").clicked() {

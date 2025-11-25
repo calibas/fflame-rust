@@ -1,0 +1,84 @@
+[
+  {
+    "version": 1,
+    "flame": {
+      "name": "Test Flame 1 - Simple",
+      "transforms": [
+        {
+          "a": 0.5,
+          "b": 0.0,
+          "c": 0.0,
+          "d": 0.5,
+          "e": 0.5,
+          "f": 0.0,
+          "color": 0.0,
+          "weight": 1.0,
+          "variations": {
+            "linear": 1.0
+          }
+        }
+      ]
+    },
+    "zoom": 1.5
+  },
+  {
+    "version": 1,
+    "flame": {
+      "name": "Test Flame 2 - Sinusoidal",
+      "transforms": [
+        {
+          "a": 0.7,
+          "b": 0.0,
+          "c": 0.0,
+          "d": 0.7,
+          "e": 0.0,
+          "f": 0.0,
+          "color": 0.5,
+          "weight": 1.0,
+          "variations": {
+            "sinusoidal": 0.8,
+            "linear": 0.2
+          }
+        }
+      ]
+    },
+    "zoom": 2.0,
+    "exposure": 1.2
+  },
+  {
+    "version": 1,
+    "flame": {
+      "name": "Test Flame 3 - Spherical",
+      "transforms": [
+        {
+          "a": 0.3,
+          "b": 0.0,
+          "c": 0.0,
+          "d": 0.3,
+          "e": 0.5,
+          "f": 0.5,
+          "color": 1.0,
+          "weight": 0.5,
+          "variations": {
+            "spherical": 1.0
+          }
+        },
+        {
+          "a": 0.5,
+          "b": 0.0,
+          "c": 0.0,
+          "d": 0.5,
+          "e": -0.5,
+          "f": -0.5,
+          "color": 0.0,
+          "weight": 0.5,
+          "variations": {
+            "linear": 1.0
+          }
+        }
+      ]
+    },
+    "zoom": 1.0,
+    "gamma": 2.0
+  }
+]

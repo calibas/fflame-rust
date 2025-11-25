@@ -1,4 +1,5 @@
 mod config_dialog;
+pub mod file_browser;
 mod font_loader;
 mod formatting;
 pub mod fractal_gallery;
@@ -48,6 +49,9 @@ pub struct EguiLayer {
     // Preset library panel state
     preset_library_panel: Option<preset_library::PresetLibraryPanel>,
     selected_preset_config: Option<crate::config::FractalConfig>,
+
+    // File browser panel state
+    file_browser_panel: Option<file_browser::FileBrowserPanel>,
 }
 
 impl EguiLayer {
@@ -83,6 +87,7 @@ impl EguiLayer {
             fractal_texture_height: 0,
             preset_library_panel: None,
             selected_preset_config: None,
+            file_browser_panel: None,
         }
     }
 
@@ -224,6 +229,9 @@ impl EguiLayer {
         // Fractal viewport size tracking
         let mut fractal_viewport_size = None;
 
+        // File browser
+        let mut file_browser_open_requested = false;
+
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
         let menu_state = MenuState {
@@ -313,6 +321,10 @@ impl EguiLayer {
                         // Preset library panel state
                         preset_library_panel: &mut self.preset_library_panel,
                         selected_preset_config: &mut self.selected_preset_config,
+
+                        // File browser panel state
+                        file_browser_panel: &mut self.file_browser_panel,
+                        file_browser_open_requested: &mut file_browser_open_requested,
                     },
                 });
 
@@ -473,6 +485,7 @@ impl EguiLayer {
             fractal_viewport_size,
             needs_repaint,
             selected_preset_config,
+            file_browser_open_requested,
         }
     }
 
@@ -499,6 +512,44 @@ impl EguiLayer {
             })
         } else {
             true // No panel, nothing to generate
+        }
+    }
+
+    /// Check if file browser panel needs thumbnail generation
+    pub fn file_browser_needs_thumbnails(&self) -> bool {
+        if let Some(ref panel) = self.file_browser_panel {
+            panel.is_generating()
+        } else {
+            false
+        }
+    }
+
+    /// Generate one thumbnail for the file browser (call once per frame)
+    /// Returns true if generation is complete
+    pub fn generate_file_browser_thumbnail(
+        &mut self,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+        palette_library: &crate::scene::palette::PaletteLibrary,
+    ) -> bool {
+        if let Some(ref mut panel) = self.file_browser_panel {
+            panel.generate_one_thumbnail(&self.ctx, |config| {
+                crate::renderer::render_thumbnail(device, queue, config, palette_library)
+            })
+        } else {
+            true // No panel, nothing to generate
+        }
+    }
+
+    /// Load a file into the file browser panel
+    pub fn load_file_into_browser(&mut self, path: std::path::PathBuf) {
+        // Initialize panel if not already created
+        if self.file_browser_panel.is_none() {
+            self.file_browser_panel = Some(file_browser::FileBrowserPanel::new());
+        }
+
+        if let Some(ref mut panel) = self.file_browser_panel {
+            panel.load_file(path);
         }
     }
 }
