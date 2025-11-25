@@ -552,4 +552,21 @@ impl EguiLayer {
             panel.load_file(path);
         }
     }
+
+    /// Load configs directly into the file browser panel
+    pub fn load_configs_into_browser(&mut self, configs: Vec<crate::config::FractalConfig>, source_name: &str) {
+        // Initialize panel if not already created
+        if self.file_browser_panel.is_none() {
+            self.file_browser_panel = Some(file_browser::FileBrowserPanel::new());
+        }
+
+        if let Some(ref mut panel) = self.file_browser_panel {
+            panel.load_configs(configs, source_name);
+        }
+    }
+
+    /// Open the File Browser panel in the workspace
+    pub fn open_file_browser_panel(&self, workspace: &mut workspace::Workspace) {
+        workspace.open_floating_panel(workspace::PanelType::FileBrowser);
+    }
 }

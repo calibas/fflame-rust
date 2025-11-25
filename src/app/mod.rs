@@ -561,12 +561,38 @@ impl App {
                     .add_filter("Fractal Flame Config", &["fflame"])
                     .pick_file()
                 {
-                    match FractalConfig::load_from_file(&path) {
-                        Ok(config) => {
-                            if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
-                                eprintln!("Failed to load config: {}", e);
+                    match FractalConfig::load_multi_from_file(&path) {
+                        Ok(configs) => {
+                            if configs.is_empty() {
+                                eprintln!("No configurations found in file");
+                            } else if configs.len() == 1 {
+                                // Single config: load directly
+                                let config = configs.into_iter().next().unwrap();
+                                if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
+                                    eprintln!("Failed to load config: {}", e);
+                                } else {
+                                    println!("Config loaded from: {}", path.display());
+                                }
                             } else {
-                                println!("Config loaded from: {}", path.display());
+                                // Multiple configs: load first one and open File Browser
+                                let filename = path.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("file")
+                                    .to_string();
+                                println!("Found {} configs in {}, loading first and opening File Browser", configs.len(), filename);
+
+                                // Load all configs into File Browser
+                                self.egui_layer.load_configs_into_browser(configs.clone(), &filename);
+
+                                // Load the first config
+                                let first_config = configs.into_iter().next().unwrap();
+                                if let Err(e) = self.load_config_with_undo(first_config, "Load Config".to_string()) {
+                                    eprintln!("Failed to load config: {}", e);
+                                }
+
+                                // Open the File Browser panel
+                                use crate::ui::workspace::PanelType;
+                                self.workspace.open_floating_panel(PanelType::FileBrowser);
                             }
                         }
                         Err(e) => {
@@ -621,13 +647,25 @@ impl App {
                                             println!("Imported Apophysis flame from: {}", path.display());
                                         }
                                     } else {
-                                        // Multiple flames: let user choose
-                                        // TODO: Add multi-flame selection dialog
-                                        println!("Found {} flames, importing first one", configs.len());
-                                        let config = configs.into_iter().next().unwrap();
-                                        if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
+                                        // Multiple flames: load first one and open File Browser
+                                        let filename = path.file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or("file")
+                                            .to_string();
+                                        println!("Found {} flames in {}, loading first and opening File Browser", configs.len(), filename);
+
+                                        // Load all configs into File Browser
+                                        self.egui_layer.load_configs_into_browser(configs.clone(), &filename);
+
+                                        // Load the first config
+                                        let first_config = configs.into_iter().next().unwrap();
+                                        if let Err(e) = self.load_config_with_undo(first_config, "Import Apophysis Flame".to_string()) {
                                             eprintln!("Failed to import flame: {}", e);
                                         }
+
+                                        // Open the File Browser panel
+                                        use crate::ui::workspace::PanelType;
+                                        self.workspace.open_floating_panel(PanelType::FileBrowser);
                                     }
                                 }
                                 Err(e) => {
