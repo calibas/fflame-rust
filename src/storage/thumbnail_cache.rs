@@ -5,10 +5,23 @@
 //! - WASM: Memory-only cache (regenerate each session)
 
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 use crate::config::FractalConfig;
+
+/// FNV-1a 64-bit hash - fast, simple, and stable across program runs
+/// Unlike DefaultHasher (SipHash), this produces deterministic output
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
+
+fn fnv1a_hash(data: &[u8]) -> u64 {
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in data {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
 
 /// Thumbnail disk/memory cache
 pub struct ThumbnailCache {
@@ -119,16 +132,15 @@ impl ThumbnailCache {
     }
 
     /// Generate hash from FractalConfig
-    /// Uses DefaultHasher (SipHash) - fast, no external dependency
+    /// Uses FNV-1a hash - fast, simple, and stable across program runs
+    /// (DefaultHasher/SipHash is randomly seeded per-run for DoS protection)
     pub fn config_hash(config: &FractalConfig) -> String {
-        use std::collections::hash_map::DefaultHasher;
-
         // Serialize to JSON for consistent hashing
         let json = serde_json::to_string(config).unwrap_or_default();
 
-        let mut hasher = DefaultHasher::new();
-        json.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())
+        // FNV-1a 64-bit hash (stable, deterministic)
+        let hash = fnv1a_hash(json.as_bytes());
+        format!("{:016x}", hash)
     }
 
     /// Get the number of cached thumbnails
