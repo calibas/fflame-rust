@@ -73,6 +73,19 @@ impl FileBrowserPanel {
         }
     }
 
+    /// Load configs directly (e.g., from Apophysis import)
+    pub fn load_configs(&mut self, configs: Vec<FractalConfig>, source_name: &str) {
+        self.error_message = None;
+        self.current_file = None;
+
+        if configs.is_empty() {
+            self.error_message = Some("No configurations provided".to_string());
+        } else {
+            log::info!("Loaded {} config(s) from {}", configs.len(), source_name);
+            self.gallery = FractalConfigGallery::new(configs);
+        }
+    }
+
     /// Check if thumbnail generation is in progress
     pub fn is_generating(&self) -> bool {
         self.gallery.is_generating()
