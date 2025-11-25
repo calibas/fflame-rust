@@ -261,6 +261,120 @@ pub const VERSION_HISTORY: &[&str] = &[
 3. **Debugging**: Know exactly which format a file uses
 4. **Confidence**: Can make breaking changes without fear
 5. **User Experience**: Seamless upgrades, no manual migration
+6. **Smaller Files**: Omit default values during serialization (see below)
+
+## Compact Serialization (Omitting Defaults)
+
+With versioning, defaults are implied by the version number. We can skip writing fields that match their defaults, significantly reducing file size.
+
+### Implementation
+
+```rust
+impl FractalConfig {
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        // Serialize to Value first
+        let mut value = serde_json::to_value(self)?;
+
+        // Remove fields that match defaults
+        if let Some(obj) = value.as_object_mut() {
+            let defaults = Self::default();
+
+            // Only keep non-default values
+            if self.zoom == defaults.zoom { obj.remove("zoom"); }
+            if self.pan_x == defaults.pan_x { obj.remove("pan_x"); }
+            if self.pan_y == defaults.pan_y { obj.remove("pan_y"); }
+            if self.exposure == defaults.exposure { obj.remove("exposure"); }
+            if self.gamma == defaults.gamma { obj.remove("gamma"); }
+            // ... etc for all defaultable fields
+
+            // Always keep: version, flame (required)
+        }
+
+        serde_json::to_string_pretty(&value)
+    }
+}
+```
+
+### Alternative: serde `skip_serializing_if`
+
+```rust
+#[derive(Serialize, Deserialize)]
+pub struct FractalConfig {
+    pub version: u32,
+    pub flame: Flame,  // Always required
+
+    #[serde(default = "default_zoom", skip_serializing_if = "is_default_zoom")]
+    pub zoom: f32,
+
+    #[serde(default = "default_exposure", skip_serializing_if = "is_default_exposure")]
+    pub exposure: f32,
+
+    // ...
+}
+
+fn is_default_zoom(v: &f32) -> bool { *v == 1.0 }
+fn is_default_exposure(v: &f32) -> bool { *v == 1.0 }
+```
+
+### Size Comparison
+
+Typical FractalConfig with all fields:
+```json
+{
+  "version": 1,
+  "flame": { ... },
+  "zoom": 1.0,
+  "pan_x": 0.0,
+  "pan_y": 0.0,
+  "rotation": 0.0,
+  "camera_rotation_x": 0.0,
+  "camera_rotation_y": 0.0,
+  "density_scale": 1.0,
+  "exposure": 1.0,
+  "gamma": 2.2,
+  ...
+}
+// ~2-3 KB
+```
+
+With defaults omitted:
+```json
+{
+  "version": 1,
+  "flame": { ... }
+}
+// ~500 bytes (for simple flames)
+```
+
+### Benefits
+- **Smaller files**: 50-80% reduction for configs using mostly defaults
+- **Cleaner diffs**: Only changed values show up in version control
+- **Faster parsing**: Less JSON to parse
+- **Clearer intent**: Non-default values stand out as intentional customizations
+
+### ⚠️ Caution: Changing Default Values
+
+If a default value changes in a future version, migration must explicitly set the old default for existing configs. Otherwise, omitted fields will silently get the new default.
+
+**Example:** If `gamma` default changes from `2.2` to `2.4`:
+```rust
+fn migrate_v5_to_v6(mut config: Self) -> Result<Self, String> {
+    // v6 changed gamma default from 2.2 to 2.4
+    // Configs that omitted gamma were using 2.2, so preserve that
+    if config.gamma == 2.4 {  // New default was applied during deserialize
+        config.gamma = 2.2;    // Restore old default
+    }
+    config.version = 6;
+    Ok(config)
+}
+```
+
+**Best practice:** Avoid changing defaults when possible. If unavoidable:
+1. Bump version
+2. Add migration that preserves old default for existing configs
+3. Document the change in VERSION_HISTORY
+
+**Default values are defined in:** `src/config/defaults.rs`
 
 ## When to Bump Version
 
