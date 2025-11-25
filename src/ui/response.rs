@@ -39,6 +39,9 @@ pub struct UiResponse {
 
     // UI interaction state (for frame rate optimization)
     pub needs_repaint: bool,
+
+    // Preset selection from library
+    pub selected_preset_config: Option<crate::config::FractalConfig>,
 }
 
 impl Default for UiResponse {
@@ -65,6 +68,7 @@ impl Default for UiResponse {
             open_config_dialog: false,
             fractal_viewport_size: None,
             needs_repaint: false,
+            selected_preset_config: None,
         }
     }
 }

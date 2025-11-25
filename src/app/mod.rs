@@ -867,6 +867,15 @@ impl App {
             }
         }
 
+        // Handle preset selection from Preset Library panel
+        if let Some(config) = ui_response.selected_preset_config {
+            if let Err(e) = self.load_config_with_undo(config, "Load Preset".to_string()) {
+                log::error!("Failed to load preset: {}", e);
+            } else {
+                log::info!("Preset loaded successfully");
+            }
+        }
+
         // Handle PNG export
         if ui_response.png_export_with_background || ui_response.png_export_transparent {
             let transparent = ui_response.png_export_transparent;
@@ -1225,6 +1234,18 @@ impl App {
 
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
+
+        // Generate one thumbnail for preset library if needed (one per frame)
+        // This is blocking but only ~1-2 seconds per thumbnail
+        if self.egui_layer.preset_library_needs_thumbnails() {
+            self.egui_layer.generate_preset_thumbnail(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &self.palette_library,
+            );
+            // Request immediate repaint to continue generation next frame
+            window.request_redraw();
+        }
 
         let t5 = Instant::now();
 

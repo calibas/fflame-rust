@@ -1,6 +1,7 @@
 mod config_dialog;
 mod font_loader;
 mod formatting;
+pub mod fractal_gallery;
 mod help;
 mod menu_bar;
 mod menu_context;
@@ -8,6 +9,7 @@ mod palette_editor;
 mod palette_library;
 mod panel_viewer;
 mod performance;
+pub mod preset_library;
 mod response;
 mod settings;
 mod tone_mapping;
@@ -42,6 +44,10 @@ pub struct EguiLayer {
     // Track registered texture dimensions to detect resize
     fractal_texture_width: u32,
     fractal_texture_height: u32,
+
+    // Preset library panel state
+    preset_library_panel: Option<preset_library::PresetLibraryPanel>,
+    selected_preset_config: Option<crate::config::FractalConfig>,
 }
 
 impl EguiLayer {
@@ -75,6 +81,8 @@ impl EguiLayer {
             fractal_texture_id: None,
             fractal_texture_width: 0,
             fractal_texture_height: 0,
+            preset_library_panel: None,
+            selected_preset_config: None,
         }
     }
 
@@ -301,6 +309,10 @@ impl EguiLayer {
                         config_load_file: &mut config_load_file,
                         apophysis_import_file: &mut apophysis_import_file,
                         open_config_dialog: &mut open_config_dialog,
+
+                        // Preset library panel state
+                        preset_library_panel: &mut self.preset_library_panel,
+                        selected_preset_config: &mut self.selected_preset_config,
                     },
                 });
 
@@ -436,6 +448,9 @@ impl EguiLayer {
             );
         }
 
+        // Take selected preset config (reset to None after returning)
+        let selected_preset_config = self.selected_preset_config.take();
+
         UiResponse {
             config_export_requested: config_export_json,
             config_import_requested: config_import_json,
@@ -457,6 +472,33 @@ impl EguiLayer {
             open_config_dialog,
             fractal_viewport_size,
             needs_repaint,
+            selected_preset_config,
+        }
+    }
+
+    /// Check if preset library panel needs thumbnail generation
+    pub fn preset_library_needs_thumbnails(&self) -> bool {
+        if let Some(ref panel) = self.preset_library_panel {
+            panel.is_generating()
+        } else {
+            false
+        }
+    }
+
+    /// Generate one thumbnail for the preset library (call once per frame)
+    /// Returns true if generation is complete
+    pub fn generate_preset_thumbnail(
+        &mut self,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+        palette_library: &crate::scene::palette::PaletteLibrary,
+    ) -> bool {
+        if let Some(ref mut panel) = self.preset_library_panel {
+            panel.generate_one_thumbnail(&self.ctx, |config| {
+                crate::renderer::render_thumbnail(device, queue, config, palette_library)
+            })
+        } else {
+            true // No panel, nothing to generate
         }
     }
 }
