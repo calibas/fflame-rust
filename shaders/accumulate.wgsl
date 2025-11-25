@@ -50,10 +50,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let is_converged = params.target_iterations_per_pixel > 0u && has_some_density && pixel_iterations >= params.target_iterations_per_pixel;
     let convergence_gate = select(1.0, 0.0, is_converged);
 
-    // If no new samples this frame, just keep previous values unchanged
-    // Background compositing happens in tonemap shader, not here
+    // Detect overwrite mode (blend_factor ~= 1.0)
+    let is_overwrite_mode = params.blend_factor >= 0.99;
+
+    // If no new samples this frame:
+    // - Normal mode: keep previous values (progressive accumulation)
+    // - Overwrite mode: clear to zero (prevents smearing during preview)
     if (density == 0.0) {
-        textureStore(output_texture, pixel, prev);
+        let output = select(prev, vec4<f32>(0.0, 0.0, 0.0, 0.0), is_overwrite_mode);
+        textureStore(output_texture, pixel, output);
         return;
     }
 
