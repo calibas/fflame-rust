@@ -283,10 +283,10 @@ impl FlameRenderer {
             density_compression_strength: self.density_compression_strength,
             target_iterations_per_pixel: self.target_iterations_per_pixel,
             _pad0: 0.0,
+            background_r: self.background_color[0],
+            background_g: self.background_color[1],
+            background_b: self.background_color[2],
             _pad1: 0.0,
-            _pad2: 0.0,
-            _pad3: 0.0,
-            _pad4: 0.0,
         };
 
         self.buffers.update_accumulate_params(queue, &params);
