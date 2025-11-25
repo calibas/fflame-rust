@@ -6,6 +6,7 @@
 //! - Custom palette library
 //! - Custom workspace layouts
 //! - Auto-backup system
+//! - Thumbnail cache for gallery previews
 //!
 //! Storage backends:
 //! - Desktop (Windows/macOS): Filesystem (via `directories` crate)
@@ -13,6 +14,8 @@
 
 pub mod backend;
 pub mod settings;
+pub mod thumbnail_cache;
 
 pub use backend::{StorageError, StorageResult};
 pub use settings::SystemSettings;
+pub use thumbnail_cache::{ThumbnailCache, GalleryItem, TextureCache};

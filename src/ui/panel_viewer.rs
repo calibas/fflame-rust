@@ -58,6 +58,10 @@ pub struct PanelContext<'a> {
     pub config_load_file: &'a mut bool,
     pub apophysis_import_file: &'a mut bool,
     pub open_config_dialog: &'a mut bool,
+
+    // Preset library panel state
+    pub preset_library_panel: &'a mut Option<super::preset_library::PresetLibraryPanel>,
+    pub selected_preset_config: &'a mut Option<crate::config::FractalConfig>,
 }
 
 /// Viewer for rendering each panel type
@@ -109,6 +113,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::ConfigDialog => {
                 self.render_config_dialog_panel(ui);
+            }
+            PanelType::PresetLibrary => {
+                self.render_preset_library_panel(ui);
             }
         }
     }
@@ -397,6 +404,25 @@ impl<'a> PanelViewer<'a> {
                     crate::config::ConfigPath::Zoom,
                     new_zoom.into()
                 );
+            }
+        }
+    }
+
+    /// Render Preset Library panel (browse and select presets with thumbnails)
+    fn render_preset_library_panel(&mut self, ui: &mut egui::Ui) {
+        // Initialize panel if not already created
+        if self.context.preset_library_panel.is_none() {
+            *self.context.preset_library_panel = Some(
+                super::preset_library::PresetLibraryPanel::new(self.context.preset_library)
+            );
+        }
+
+        if let Some(panel) = self.context.preset_library_panel.as_mut() {
+            let response = panel.render(ui);
+
+            // Handle selection
+            if let Some(config) = response.selected {
+                *self.context.selected_preset_config = Some(config);
             }
         }
     }

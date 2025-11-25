@@ -14,12 +14,17 @@ pub fn render_menu_bar(
             ui.menu_button(t!("menu.file"), |ui| {
                 if ui.button("📂 Open...").clicked() {
                     menu_actions.file.load_config = true;
-
                 }
 
                 if ui.button("💾 Save As...").clicked() {
                     menu_actions.file.save_config = true;
+                }
 
+                ui.separator();
+
+                // Preset Library
+                if ui.button("📚 From Preset Library...").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::PresetLibrary);
                 }
 
                 ui.separator();
@@ -227,7 +232,11 @@ pub fn render_menu_bar(
                 let palette_library_open = workspace.panel_exists(super::workspace::PanelType::PaletteLibrary);
                 if ui.selectable_label(palette_library_open, "📚 Palette Library").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::PaletteLibrary);
+                }
 
+                let preset_library_open = workspace.panel_exists(super::workspace::PanelType::PresetLibrary);
+                if ui.selectable_label(preset_library_open, "📚 Preset Library").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::PresetLibrary);
                 }
 
                 // Config Import/Export opens as floating window in docking system
