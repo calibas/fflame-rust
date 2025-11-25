@@ -1,8 +1,26 @@
 # Preset Browser & Fractal Config Gallery System
 
-**Status:** Design Phase
+**Status:** Implemented (Phase 1)
 **Created:** 2025-11-24
 **Updated:** 2025-11-24
+
+## Implementation Status
+
+✅ **Completed:**
+- `ThumbnailCache` with hash-based disk storage and LRU eviction (max 200 items)
+- `FractalConfigGallery` reusable widget with Grid view
+- `PresetLibraryPanel` integrated with workspace
+- `render_thumbnail()` helper (512×512 @ 50M iterations)
+- One-per-frame thumbnail generation with progress UI
+- FNV-1a hashing (stable across program runs)
+- BTreeMap serialization for deterministic config hashing
+- WASM support (memory-only cache)
+
+⏳ **Future Work:**
+- List view mode
+- User Library panel
+- Backup Library panel
+- Search/filter functionality
 
 ## Overview
 
@@ -233,18 +251,15 @@ impl ThumbnailCache {
     }
 
     /// Generate hash from FractalConfig
+    /// Uses FNV-1a (not DefaultHasher which is randomly seeded per-run)
     pub fn config_hash(config: &FractalConfig) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         // Serialize to JSON for consistent hashing
+        // Note: Transform.variations uses BTreeMap serialization for deterministic key order
         let json = serde_json::to_string(config).unwrap_or_default();
 
-        // Use DefaultHasher (SipHash) - fast, no external dependency
-        // Not cryptographically secure, but fine for local cache keys
-        let mut hasher = DefaultHasher::new();
-        json.hash(&mut hasher);
-        format!("{:016x}", hasher.finish())  // 16-char hex string
+        // FNV-1a 64-bit hash - fast, simple, and stable across program runs
+        let hash = fnv1a_hash(json.as_bytes());
+        format!("{:016x}", hash)  // 16-char hex string
     }
 }
 
@@ -819,6 +834,7 @@ assets/presets/
 - Subsequent opens (all cache hit): Instant (<100ms)
 - Adding new preset: ~50-100ms for single thumbnail
 - Cache invalidation: Automatic via hash (config change = new hash = new thumbnail)
+- LRU eviction: Oldest thumbnails deleted when cache exceeds 200 items
 
 Note: At ~1 billion iterations/second, 50M iterations renders in ~50ms.
 
@@ -926,7 +942,7 @@ impl ThumbnailCache {
 - **Progressive quality:** Quick low-res preview, then high-res upgrade
 
 ### Cache Management
-- **Size limit:** Cap total cache size, evict old thumbnails
+- ✅ **Size limit:** LRU eviction when cache exceeds 200 items (oldest by mtime deleted)
 - **Manual clear:** Button to clear thumbnail cache
 - **Integrity check:** Verify cached thumbnails match config hashes
 
