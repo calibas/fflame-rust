@@ -1,13 +1,16 @@
 //! Thumbnail cache for FractalConfig gallery previews
 //!
 //! Uses hash-based filenames for content-addressable storage:
-//! - Desktop: Persistent disk cache in user data directory
+//! - Desktop: Persistent disk cache in user data directory (LRU, max 200 items)
 //! - WASM: Memory-only cache (regenerate each session)
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::config::FractalConfig;
+
+/// Maximum number of thumbnails to keep in disk cache
+const MAX_CACHE_SIZE: usize = 200;
 
 /// FNV-1a 64-bit hash - fast, simple, and stable across program runs
 /// Unlike DefaultHasher (SipHash), this produces deterministic output
@@ -89,6 +92,7 @@ impl ThumbnailCache {
 
     /// Load thumbnail from disk cache
     /// Returns None on WASM or if file doesn't exist
+    /// Updates file mtime on access for LRU tracking
     pub fn load(&self, hash: &str) -> Option<image::RgbaImage> {
         if !self.disk_enabled {
             return None;
@@ -97,7 +101,13 @@ impl ThumbnailCache {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let path = self.cache_dir.join(format!("{}.png", hash));
-            image::open(&path).ok().map(|img| img.into_rgba8())
+            if let Ok(img) = image::open(&path) {
+                // Touch file to update mtime for LRU tracking
+                Self::touch_file(&path);
+                Some(img.into_rgba8())
+            } else {
+                None
+            }
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -107,7 +117,18 @@ impl ThumbnailCache {
         }
     }
 
+    /// Update file modification time (for LRU tracking)
+    #[cfg(not(target_arch = "wasm32"))]
+    fn touch_file(path: &PathBuf) {
+        use std::fs::OpenOptions;
+        // Opening with write access updates mtime
+        if let Ok(file) = OpenOptions::new().write(true).open(path) {
+            drop(file);
+        }
+    }
+
     /// Save thumbnail to disk cache
+    /// Enforces MAX_CACHE_SIZE limit by removing oldest files (LRU)
     /// No-op on WASM
     pub fn save(&mut self, hash: &str, image: &image::RgbaImage) -> anyhow::Result<()> {
         // Always add to memory index
@@ -119,11 +140,49 @@ impl ThumbnailCache {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // Enforce cache size limit before adding new file
+            self.enforce_cache_limit();
+
             let path = self.cache_dir.join(format!("{}.png", hash));
             image.save(&path)?;
         }
 
         Ok(())
+    }
+
+    /// Remove oldest files if cache exceeds MAX_CACHE_SIZE
+    #[cfg(not(target_arch = "wasm32"))]
+    fn enforce_cache_limit(&mut self) {
+        if self.cached_hashes.len() < MAX_CACHE_SIZE {
+            return;
+        }
+
+        // Get all files with their modification times
+        let mut files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&self.cache_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |e| e == "png") {
+                    if let Ok(metadata) = path.metadata() {
+                        if let Ok(mtime) = metadata.modified() {
+                            files.push((path, mtime));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by mtime (oldest first)
+        files.sort_by_key(|(_, mtime)| *mtime);
+
+        // Remove oldest files until we're under the limit
+        let to_remove = files.len().saturating_sub(MAX_CACHE_SIZE - 1);
+        for (path, _) in files.into_iter().take(to_remove) {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                self.cached_hashes.remove(stem);
+            }
+            std::fs::remove_file(&path).ok();
+        }
     }
 
     /// Mark a hash as cached (for memory-only tracking after GPU texture upload)
