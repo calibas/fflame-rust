@@ -54,9 +54,11 @@
   - `src/storage/` - **Local storage system** (Added 2025-11-23, PR #27)
     - `settings.rs` - SystemSettings struct (device-specific settings)
     - `backend.rs` - Cross-platform storage (filesystem + localStorage)
+    - `thumbnail_cache.rs` - **Thumbnail cache for preset gallery** (Added 2025-11-24)
     - Persists VSync, target FPS, iterations per thread, export defaults
     - Desktop: User data directory, WASM: browser localStorage
   - `src/renderer/compute_kernel.rs` - GPU rendering orchestration
+  - `src/renderer/thumbnail.rs` - **Thumbnail rendering** (Added 2025-11-24)
   - `src/scene/transforms.rs` - Flame algorithm (CPU + GPU)
   - `src/ui/` - **Dockable panel UI system** (Migrated to egui_dock 2025-11-13)
     - `mod.rs` - Main UI coordinator, docking integration
@@ -68,6 +70,8 @@
     - `tone_mapping.rs` - Color and tone mapping panel
     - `palette_editor.rs` - Palette editing panel
     - `palette_library.rs` - **Palette Library panel** (Added 2025-11-18)
+    - `preset_library.rs` - **Preset Library panel** (Added 2025-11-24)
+    - `fractal_gallery.rs` - **Reusable gallery widget** (Added 2025-11-24)
     - `undo_history.rs` - Visual undo history browser panel
     - `menu_bar.rs` - Top menu bar (File, Edit, View, etc.)
   - `src/i18n.rs` - **Internationalization support** (Added 2025-11-13)
@@ -894,7 +898,7 @@ Features that could be added in future development (see [docs/STATUS.md](docs/ST
 - **Denoising** - AI or traditional denoising for faster convergence
 
 ### Nice to Have
-- **Preset browser UI** - Visual grid of preset thumbnails instead of dropdown
+- ~~**Preset browser UI**~~ ✅ Implemented 2025-11-24 - See [PRESET-BROWSER.md](docs/main/PRESET-BROWSER.md)
 - **Palette library management** - Save/organize custom palettes permanently
 - **Transform presets** - Save/load individual transform configurations
 - **Batch export** - Render multiple configurations automatically
