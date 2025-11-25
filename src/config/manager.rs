@@ -693,6 +693,8 @@ impl ConfigManager {
             ConfigPath::Saturation => Ok(config.saturation.into()),
             ConfigPath::HueShift => Ok(config.hue_shift.into()),
             ConfigPath::ValueScale => Ok(config.value_scale.into()),
+            ConfigPath::AlphaBlendLow => Ok(config.alpha_blend_low.into()),
+            ConfigPath::AlphaBlendHigh => Ok(config.alpha_blend_high.into()),
             ConfigPath::DensityScale => Ok(config.density_scale.into()),
             ConfigPath::TonemapMode => Ok(config.tonemap_mode.into()),
             ConfigPath::TonemapCurve => Ok(config.tonemap_curve.clone().into()),
@@ -942,6 +944,12 @@ impl ConfigManager {
             }
             ConfigPath::ValueScale => {
                 self.current.value_scale = value.try_into()?;
+            }
+            ConfigPath::AlphaBlendLow => {
+                self.current.alpha_blend_low = value.try_into()?;
+            }
+            ConfigPath::AlphaBlendHigh => {
+                self.current.alpha_blend_high = value.try_into()?;
             }
             ConfigPath::DensityScale => {
                 self.current.density_scale = value.try_into()?;

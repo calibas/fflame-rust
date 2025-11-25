@@ -27,6 +27,11 @@ pub const PREFILTER_WHITE: f32 = 67108864.0; // (1 shl 26)
 pub const DEFAULT_WHITE_LEVEL: f32 = 200.0;
 pub const DEFAULT_GAMMA_THRESHOLD: f32 = 0.0025; // Smooths gamma curve at low densities
 
+// Alpha blending curve (background compositing)
+// Controls transition from gamma-corrected alpha (edges) to linear alpha (detail)
+pub const DEFAULT_ALPHA_BLEND_LOW: f32 = 0.3; // Start blending toward linear at this alpha
+pub const DEFAULT_ALPHA_BLEND_HIGH: f32 = 0.8; // Full linear alpha above this value
+
 // Accumulation
 pub const DEFAULT_LOW_DENSITY_SMOOTHING: f32 = 0.5; // Moderate smoothing
 pub const DEFAULT_DENSITY_COMPRESSION: f32 = 0.0; // No compression
