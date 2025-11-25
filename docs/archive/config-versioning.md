@@ -394,22 +394,18 @@ fn migrate_v5_to_v6(mut config: Self) -> Result<Self, String> {
 1. ✅ **Phase 1**: Add version to FractalConfig (this PR)
    - Add `version` field with default
    - Implement migration framework
+   - Compact serialization (omit default values)
    - Test with current version (no migrations yet)
 
-2. **Phase 2**: Add versioning to local storage structures
-   - SystemSettings version
-   - WorkspaceEntry version
-   - Custom fractal/palette metadata versions
+2. ✅ **Phase 2**: Add versioning to local storage structures
+   - ✅ SystemSettings version (compact serialization, migration chain)
+   - WorkspaceEntry version (when workspace persistence is added)
+   - Custom fractal/palette metadata versions (when needed)
 
-3. **Phase 3**: Build migration infrastructure
-   - Migration trait/interface
-   - Automated testing for migrations
-   - Version compatibility matrix
-
-4. **Phase 4**: Apply retroactively to existing changes
-   - Identify past breaking changes
-   - Create migrations for them
-   - Test migration chains
+**Phases 3 & 4 (Deferred):** Originally planned for migration traits and retroactive fixes, but not needed:
+- Migration methods work fine inline on each struct
+- No past breaking changes exist (new project)
+- Tests already cover version handling
 
 ## Testing Strategy
 

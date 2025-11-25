@@ -222,7 +222,14 @@ All JSON structures include version at the top:
 - Bug fixes
 - Internal logic changes
 
-See [config-versioning.md](config-versioning.md) for complete migration framework.
+### Compact Serialization
+
+Both FractalConfig and SystemSettings use compact serialization:
+- Fields matching default values are omitted from JSON output
+- Results in 50-80% smaller files for configs using mostly defaults
+- Version field is always included (enables migration)
+
+See [../archive/config-versioning.md](../archive/config-versioning.md) for complete migration framework design.
 
 ## Storage Architecture
 
