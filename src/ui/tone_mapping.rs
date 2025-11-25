@@ -238,6 +238,17 @@ pub fn render_colors_content(
             if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::DensityScale, 0.01..=10.0, "Density Scale") {
                 max_update = max_update.max(result.update_type);
             }
+
+            ui.separator();
+            ui.label("Alpha Blending (Background)").on_hover_text("Controls how fractal edges blend with background.\nLow values use gamma-corrected alpha (fast rise, no halos).\nHigh values use linear alpha (preserves density detail).");
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::AlphaBlendLow, 0.0..=1.0, "Alpha Blend Low") {
+                max_update = max_update.max(result.update_type);
+            }
+
+            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::AlphaBlendHigh, 0.0..=1.0, "Alpha Blend High") {
+                max_update = max_update.max(result.update_type);
+            }
         });
 
     // Section 2: Tone Curve

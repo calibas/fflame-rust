@@ -19,12 +19,15 @@ struct TonemapParams {
     white_level: f32,  // Apophysis white_level constant (default 200.0)
     prefilter_white: f32,  // Apophysis PREFILTER_WHITE constant (67108864.0)
     bright_adjust: f32,  // Apophysis BRIGHT_ADJUST constant (2.3)
-    area: f32,  // Render area (width * height) 
+    area: f32,  // Render area (width * height)
     sample_density: f32,  // Iterations per pixel
     saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
     hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
     value_scale: f32,  // Value (brightness) multiplier (1.0 = no change)
     gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
+    alpha_blend_low: f32,  // Start blending toward linear alpha at this value
+    alpha_blend_high: f32,  // Full linear alpha above this value
+    _pad_alpha: vec2<f32>,  // Padding to align to 16 bytes
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -275,12 +278,24 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let should_apply_curve = tonemap_params.use_curve != 0u && bucket_count > 0.001;
     var fractal_color = select(color, vec3<f32>(curve_r, curve_g, curve_b), should_apply_curve);
 
-    // Map density to alpha for compositing with background
-    // density_scale controls how quickly fractal becomes opaque
-    let fractal_alpha = clamp(bucket_count * 0.01 * tonemap_params.density_scale, 0.0, 1.0);
+    // ===== STAGE 3F: Background Blending =====
+    // We need an alpha curve that:
+    // 1. Rises quickly at low densities (avoids dark halos at edges)
+    // 2. Preserves variation in mid-range (maintains detail)
+    //
+    // Strategy: Blend between gamma-corrected alpha (good edges) and linear (good detail)
+    // At low density: use mostly gamma alpha (fast rise, no halos)
+    // At high density: use mostly linear alpha (preserves detail)
+    // Adjustable via alpha_blend_low and alpha_blend_high sliders
+    let linear_alpha = clamp(bucket_count * 0.01 * tonemap_params.density_scale, 0.0, 1.0);
+    let gamma_alpha = clamp(alpha, 0.0, 1.0);
 
-    // Alpha composite: background * (1 - alpha) + fractal * alpha
-    // This properly blends fractal over background based on accumulated density
+    // Blend factor controlled by sliders: transition from gamma to linear alpha
+    let blend_t = smoothstep(tonemap_params.alpha_blend_low, tonemap_params.alpha_blend_high, gamma_alpha);
+    let fractal_alpha = mix(gamma_alpha, linear_alpha, blend_t);
+
+    // Alpha composite using gamma-corrected density (Apophysis method)
+    // This ensures the tonemapping and background blend use the same density curve
     let final_color = tonemap_params.background_color * (1.0 - fractal_alpha) + fractal_color * fractal_alpha;
     let final_alpha = 1.0;
 

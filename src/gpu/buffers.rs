@@ -164,6 +164,9 @@ pub struct TonemapParams {
     pub hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
     pub value_scale: f32,  // Value (brightness) multiplier (1.0 = no change)
     pub gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
+    pub alpha_blend_low: f32,  // Start blending toward linear alpha at this gamma-corrected value
+    pub alpha_blend_high: f32,  // Full linear alpha above this value
+    pub _pad_alpha: [f32; 2],  // Padding to align to 16 bytes
 }
 
 impl Default for TonemapParams {
@@ -188,6 +191,9 @@ impl Default for TonemapParams {
             hue_shift: DEFAULT_HUE_SHIFT,
             value_scale: DEFAULT_VALUE_SCALE,
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
+            alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
+            alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
+            _pad_alpha: [0.0, 0.0],
         }
     }
 }
