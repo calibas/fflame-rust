@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use serde::{Deserialize, Serialize, Deserializer, Serializer};
 use serde::de::{self, Visitor, MapAccess};
 use crate::variations::VariationRegistry;
@@ -274,13 +274,18 @@ impl Transform {
     }
 }
 
-/// Custom serialization - saves as HashMap
+/// Custom serialization - saves as sorted map for deterministic output
 impl Serialize for Transform {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         use serde::ser::SerializeStruct;
+
+        // Convert HashMaps to BTreeMaps for deterministic key ordering
+        // (HashMap iteration order is random, breaking content-addressable caching)
+        let variations_sorted: BTreeMap<_, _> = self.variations.iter().collect();
+        let params_sorted: BTreeMap<_, _> = self.variation_params.iter().collect();
 
         let mut state = serializer.serialize_struct("Transform", 14)?;
         state.serialize_field("a", &self.a)?;
@@ -291,8 +296,8 @@ impl Serialize for Transform {
         state.serialize_field("f", &self.f)?;
         state.serialize_field("g", &self.g)?;
         state.serialize_field("weight", &self.weight)?;
-        state.serialize_field("variations", &self.variations)?;
-        state.serialize_field("variation_params", &self.variation_params)?;
+        state.serialize_field("variations", &variations_sorted)?;
+        state.serialize_field("variation_params", &params_sorted)?;
         state.serialize_field("color", &self.color)?;
         state.serialize_field("color_speed", &self.color_speed)?;
         state.serialize_field("opacity", &self.opacity)?;

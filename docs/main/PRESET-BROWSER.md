@@ -1,8 +1,26 @@
 # Preset Browser & Fractal Config Gallery System
 
-**Status:** Design Phase
+**Status:** Implemented (Phase 1)
 **Created:** 2025-11-24
 **Updated:** 2025-11-24
+
+## Implementation Status
+
+✅ **Completed:**
+- `ThumbnailCache` with hash-based disk storage and LRU eviction (max 200 items)
+- `FractalConfigGallery` reusable widget with Grid view
+- `PresetLibraryPanel` integrated with workspace
+- `render_thumbnail()` helper (512×512 @ 50M iterations)
+- One-per-frame thumbnail generation with progress UI
+- FNV-1a hashing (stable across program runs)
+- BTreeMap serialization for deterministic config hashing
+- WASM support (memory-only cache)
+
+⏳ **Future Work:**
+- List view mode
+- User Library panel
+- Backup Library panel
+- Search/filter functionality
 
 ## Overview
 
@@ -16,8 +34,8 @@ A reusable gallery/browser system for viewing and selecting FractalConfigs in di
 
 1. **Reusable Component:** Single `FractalConfigGallery` widget works for all use cases
 2. **Multiple View Modes:** Grid (thumbnails) and List (details) views
-3. **Visual Previews:** High-quality 512×512 thumbnails scaled in UI
-4. **Performance:** Lazy loading, texture caching, smooth scrolling
+3. **Visual Previews:** High-quality 512x512 thumbnails scaled in UI
+4. **Performance:** Hash-based disk cache, lazy generation, smooth scrolling
 5. **Responsive:** Adapts to window size, mobile-friendly layout
 6. **Professional:** Modern asset browser UX (Unity/Blender style)
 
@@ -27,62 +45,73 @@ A reusable gallery/browser system for viewing and selecting FractalConfigs in di
 
 #### **Grid View** (Default)
 ```
-┌─────────────────────────────────────────────────┐
-│  Preset Browser                    [≡] [Grid] [X]│
-├─────────────────────────────────────────────────┤
-│  Search: [_______________] 🔍                   │
-├─────────────────────────────────────────────────┤
-│  ┌──────────────────────────────────────────┐  │
-│  │                                           │  │
-│  │   ┌────┐  ┌────┐  ┌────┐  ┌────┐        │  │
-│  │   │    │  │    │  │    │  │    │        │  │  128×128 thumbnails
-│  │   │ P1 │  │ P2 │  │ P3 │  │ P4 │        │  │  (scaled from 512×512)
-│  │   │    │  │    │  │    │  │    │        │  │
-│  │   └────┘  └────┘  └────┘  └────┘        │  │
-│  │   Simple  Sphere  Spiral  Julia         │  │
-│  │                                           │  │
-│  │   ┌────┐  ┌────┐  ┌────┐  ┌────┐        │  │
-│  │   │    │  │    │  │    │  │    │        │  │
-│  │   │ P5 │  │ P6 │  │ P7 │  │ P8 │        │  │
-│  │   │    │  │    │  │    │  │    │        │  │
-│  │   └────┘  └────┘  └────┘  └────┘        │  │
-│  │   Complex Flower  3D      JDisc          │  │
-│  │                                           │  │
-│  └──────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────┘
++---------------------------------------------------+
+|  Preset Library                    [=] [Grid] [X] |
++---------------------------------------------------+
+|  Search: [_______________]                        |
++---------------------------------------------------+
+|  +----------------------------------------------+ |
+|  |                                              | |
+|  |   +----+  +----+  +----+  +----+             | |
+|  |   |    |  |    |  |    |  |    |             | |  128x128 thumbnails
+|  |   | P1 |  | P2 |  | P3 |  | P4 |             | |  (scaled from 512x512)
+|  |   |    |  |    |  |    |  |    |             | |
+|  |   +----+  +----+  +----+  +----+             | |
+|  |   Simple  Sphere  Spiral  Julia              | |
+|  |                                              | |
+|  |   +----+  +----+  +----+  +----+             | |
+|  |   |    |  |    |  |    |  |    |             | |
+|  |   | P5 |  | P6 |  | P7 |  | P8 |             | |
+|  |   |    |  |    |  |    |  |    |             | |
+|  |   +----+  +----+  +----+  +----+             | |
+|  |   Complex Flower  3D      JDisc              | |
+|  |                                              | |
+|  +----------------------------------------------+ |
++---------------------------------------------------+
 ```
 
 #### **List View** (Details)
 ```
-┌─────────────────────────────────────────────────┐
-│  Preset Browser                    [≡] [List] [X]│
-├─────────────────────────────────────────────────┤
-│  Search: [_______________] 🔍                   │
-├─────────────────────────────────────────────────┤
-│  ┌──────────────────────────────────────────┐  │
-│  │ [▶] Simple                               │  │
-│  │     2 transforms, 2D, Linear+Sinusoidal  │  │
-│  │                                           │  │
-│  │ [▶] Spherical                            │  │
-│  │     2 transforms, 2D, Spherical          │  │
-│  │                                           │  │
-│  │ [▶] Spiral                               │  │
-│  │     2 transforms, 2D, Spiral+Linear      │  │
-│  │                                           │  │
-│  │ [▶] Julia                                │  │
-│  │     1 transform, 2D, Julia               │  │
-│  │                                           │  │
-│  │ [▶] Complex                              │  │
-│  │     4 transforms, 2D, Multi-variation    │  │
-│  │                                           │  │
-│  └──────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────┘
++---------------------------------------------------+
+|  Preset Library                    [=] [List] [X] |
++---------------------------------------------------+
+|  Search: [_______________]                        |
++---------------------------------------------------+
+|  +----------------------------------------------+ |
+|  | [>] Simple                                   | |
+|  |     2 transforms, 2D, Linear+Sinusoidal     | |
+|  |                                              | |
+|  | [>] Spherical                               | |
+|  |     2 transforms, 2D, Spherical             | |
+|  |                                              | |
+|  | [>] Spiral                                  | |
+|  |     2 transforms, 2D, Spiral+Linear         | |
+|  |                                              | |
+|  | [>] Julia                                   | |
+|  |     1 transform, 2D, Julia                  | |
+|  |                                              | |
+|  | [>] Complex                                 | |
+|  |     4 transforms, 2D, Multi-variation       | |
+|  |                                              | |
+|  +----------------------------------------------+ |
++---------------------------------------------------+
+```
+
+### Progress UI During Thumbnail Generation
+```
++---------------------------------------+
+|  Generating Thumbnails...             |
+|                                       |
+|  ############............  5/12      |
+|                                       |
+|  Rendering "Spiral"...                |
++---------------------------------------+
 ```
 
 ### Controls
 
 **Toolbar:**
-- **View Mode Toggle:** Grid ⬄ List (button or icon)
+- **View Mode Toggle:** Grid <-> List (button or icon)
 - **Sort:** By Name / Date / Transform Count (dropdown)
 - **Search:** Text filter for names (future: filter by variations, mode, etc.)
 
@@ -104,8 +133,8 @@ A reusable gallery/browser system for viewing and selecting FractalConfigs in di
 **API:**
 ```rust
 pub struct FractalConfigGallery {
-    /// Configs to display
-    configs: Vec<FractalConfig>,
+    /// Configs to display (with unique IDs for cache lookup)
+    configs: Vec<GalleryItem>,
 
     /// Current view mode
     view_mode: GalleryViewMode,
@@ -116,11 +145,25 @@ pub struct FractalConfigGallery {
     /// Thumbnail size (grid view)
     thumbnail_size: f32,
 
-    /// Texture cache (egui TextureHandles)
-    texture_cache: HashMap<usize, egui::TextureHandle>,
+    /// Texture cache (hash -> TextureHandle)
+    texture_cache: HashMap<String, egui::TextureHandle>,
+
+    /// Thumbnail disk cache
+    disk_cache: ThumbnailCache,
+
+    /// Pending thumbnail generation queue
+    pending_thumbnails: VecDeque<usize>,
+
+    /// Currently generating (for progress UI)
+    generating_index: Option<usize>,
 
     /// Selected config index
     selected_index: Option<usize>,
+}
+
+pub struct GalleryItem {
+    pub config: FractalConfig,
+    pub hash: String,  // SHA256 of config JSON for cache lookup
 }
 
 pub enum GalleryViewMode {
@@ -129,171 +172,199 @@ pub enum GalleryViewMode {
 }
 
 impl FractalConfigGallery {
-    pub fn new(configs: Vec<FractalConfig>) -> Self;
+    pub fn new(configs: Vec<FractalConfig>, cache: ThumbnailCache) -> Self;
 
-    /// Render gallery UI, returns selected config index
-    pub fn render(&mut self, ui: &mut egui::Ui) -> Option<usize>;
+    /// Add configs (e.g., when loading a new library file)
+    pub fn add_configs(&mut self, configs: Vec<FractalConfig>);
 
-    /// Set view mode
-    pub fn set_view_mode(&mut self, mode: GalleryViewMode);
+    /// Render gallery UI, returns selected config if clicked
+    /// Also handles one-per-frame thumbnail generation
+    pub fn render(
+        &mut self,
+        ui: &mut egui::Ui,
+        renderer: &mut FlameRenderer,
+    ) -> GalleryResponse;
 
-    /// Update search filter
-    pub fn set_search(&mut self, query: String);
+    /// Check if thumbnail generation is in progress
+    pub fn is_generating(&self) -> bool;
 
-    /// Get filtered configs
-    fn filtered_configs(&self) -> Vec<(usize, &FractalConfig)>;
+    /// Get generation progress (current, total)
+    pub fn generation_progress(&self) -> Option<(usize, usize)>;
+}
 
-    /// Render grid view
-    fn render_grid(&mut self, ui: &mut egui::Ui) -> Option<usize>;
+pub struct GalleryResponse {
+    /// Config was selected (clicked)
+    pub selected: Option<FractalConfig>,
 
-    /// Render list view
-    fn render_list(&mut self, ui: &mut egui::Ui) -> Option<usize>;
-
-    /// Get or generate thumbnail texture
-    fn get_thumbnail(&mut self, ctx: &egui::Context, index: usize, config: &FractalConfig) -> egui::TextureHandle;
+    /// Request to close the panel (e.g., after selection)
+    pub close_requested: bool,
 }
 ```
 
-### Thumbnail System
+### Thumbnail Disk Cache
 
-**Approach:** Runtime headless rendering (on-demand generation)
+**Purpose:** Persist thumbnails across sessions using hash-based filenames
+
+**Storage Location:**
+- Desktop: `{user_data_dir}/FractalFlame/cache/thumbnails/{hash}.png`
+- WASM: Memory cache only (regenerate each session)
 
 **Architecture:**
 ```rust
-pub struct ThumbnailRenderer {
-    /// Shared GPU device/queue from main app
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
+pub struct ThumbnailCache {
+    /// Cache directory path
+    cache_dir: PathBuf,
 
-    /// Thumbnail render size
-    width: u32,
-    height: u32,
-
-    /// Target iterations per thumbnail
-    iterations: u64,
+    /// In-memory index of known cached hashes
+    cached_hashes: HashSet<String>,
 }
 
-impl ThumbnailRenderer {
-    /// Create renderer using existing GPU resources
-    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>) -> Self {
-        Self {
-            device,
-            queue,
-            width: 512,
-            height: 512,
-            iterations: 200_000_000,
-        }
+impl ThumbnailCache {
+    /// Create cache, scan existing thumbnails
+    pub fn new() -> Self {
+        let cache_dir = get_cache_dir().join("thumbnails");
+        std::fs::create_dir_all(&cache_dir).ok();
+
+        // Scan existing files to build index
+        let cached_hashes = Self::scan_cache_dir(&cache_dir);
+
+        Self { cache_dir, cached_hashes }
     }
 
-    /// Render config to RGBA image (blocking)
-    pub fn render_thumbnail(&self, config: &FractalConfig) -> image::RgbaImage {
-        // Reuse headless export code
-        let renderer = FlameRenderer::new_headless(
-            &self.device,
-            &self.queue,
-            self.width,
-            self.height,
-        );
-
-        renderer.load_config(config);
-
-        // Render to target iterations
-        let dispatches = (self.iterations / ITERATIONS_PER_DISPATCH as u64) as u32;
-        for _ in 0..dispatches {
-            renderer.render_dispatch();
-        }
-
-        // Read pixels from GPU
-        renderer.read_accumulation_buffer()
+    /// Check if thumbnail exists in cache
+    pub fn exists(&self, hash: &str) -> bool {
+        self.cached_hashes.contains(hash)
     }
 
-    /// Async version (non-blocking)
-    pub async fn render_thumbnail_async(&self, config: &FractalConfig) -> image::RgbaImage {
-        // Same as above but with async GPU operations
-        // Allows UI to remain responsive during generation
+    /// Load thumbnail from disk
+    pub fn load(&self, hash: &str) -> Option<image::RgbaImage> {
+        let path = self.cache_dir.join(format!("{}.png", hash));
+        image::open(&path).ok()?.into_rgba8().into()
     }
+
+    /// Save thumbnail to disk
+    pub fn save(&mut self, hash: &str, image: &image::RgbaImage) -> anyhow::Result<()> {
+        let path = self.cache_dir.join(format!("{}.png", hash));
+        image.save(&path)?;
+        self.cached_hashes.insert(hash.to_string());
+        Ok(())
+    }
+
+    /// Generate hash from FractalConfig
+    /// Uses FNV-1a (not DefaultHasher which is randomly seeded per-run)
+    pub fn config_hash(config: &FractalConfig) -> String {
+        // Serialize to JSON for consistent hashing
+        // Note: Transform.variations uses BTreeMap serialization for deterministic key order
+        let json = serde_json::to_string(config).unwrap_or_default();
+
+        // FNV-1a 64-bit hash - fast, simple, and stable across program runs
+        let hash = fnv1a_hash(json.as_bytes());
+        format!("{:016x}", hash)  // 16-char hex string
+    }
+}
+
+fn get_cache_dir() -> PathBuf {
+    // Same as SystemSettings storage location
+    directories::ProjectDirs::from("", "", "FractalFlame")
+        .map(|dirs| dirs.cache_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".cache"))
 }
 ```
 
-**Integration with Gallery:**
+### One-Per-Frame Thumbnail Generation
+
+**Approach:** Render one thumbnail per frame to allow UI progress updates
+
+**Flow:**
 ```rust
 impl FractalConfigGallery {
-    /// Get or generate thumbnail texture
-    fn get_thumbnail(
+    pub fn render(
         &mut self,
-        ctx: &egui::Context,
-        index: usize,
-        config: &FractalConfig,
-        renderer: &ThumbnailRenderer,
-    ) -> Option<egui::TextureHandle> {
-        let texture_id = egui::Id::new(("preset_thumbnail", index));
+        ui: &mut egui::Ui,
+        renderer: &mut FlameRenderer,
+    ) -> GalleryResponse {
+        // Step 1: Check for missing thumbnails and queue them
+        self.queue_missing_thumbnails();
 
-        // Check cache first
-        if let Some(cached) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(texture_id)) {
-            return Some(cached);
+        // Step 2: If generating, show progress modal and render one thumbnail
+        if let Some(index) = self.pending_thumbnails.front().copied() {
+            self.show_generation_progress(ui, index);
+            self.generate_one_thumbnail(renderer, index);
+            return GalleryResponse::default(); // Block interaction during generation
         }
 
-        // Check if generation is in progress
-        if self.rendering_thumbnails.contains(&index) {
-            return None; // Show placeholder
+        // Step 3: Normal gallery rendering
+        match self.view_mode {
+            GalleryViewMode::Grid => self.render_grid(ui),
+            GalleryViewMode::List => self.render_list(ui),
+        }
+    }
+
+    fn queue_missing_thumbnails(&mut self) {
+        for (index, item) in self.configs.iter().enumerate() {
+            if !self.texture_cache.contains_key(&item.hash)
+               && !self.disk_cache.exists(&item.hash)
+               && !self.pending_thumbnails.contains(&index)
+            {
+                self.pending_thumbnails.push_back(index);
+            }
+        }
+    }
+
+    fn generate_one_thumbnail(&mut self, renderer: &mut FlameRenderer, index: usize) {
+        let item = &self.configs[index];
+
+        // Check disk cache first (might have been generated in previous session)
+        if let Some(image) = self.disk_cache.load(&item.hash) {
+            self.upload_texture(ui.ctx(), &item.hash, image);
+            self.pending_thumbnails.pop_front();
+            return;
         }
 
-        // Start async generation
-        self.rendering_thumbnails.insert(index);
+        // Render thumbnail using existing headless export code
+        let image = render_thumbnail(&item.config, renderer);
 
-        // TODO: Spawn async task to render thumbnail
-        // For now, render synchronously (blocks UI briefly)
-        let image = renderer.render_thumbnail(config);
+        // Save to disk cache
+        self.disk_cache.save(&item.hash, &image).ok();
 
-        // Convert to egui ColorImage
-        let size = [image.width() as usize, image.height() as usize];
-        let pixels = image.into_flat_samples();
-        let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels.samples);
+        // Upload to GPU texture
+        self.upload_texture(ui.ctx(), &item.hash, image);
 
-        // Upload to GPU
-        let tex = ctx.load_texture(
-            format!("preset_{}", index),
-            color_image,
-            egui::TextureOptions::LINEAR, // Smooth scaling
-        );
+        // Remove from queue
+        self.pending_thumbnails.pop_front();
+    }
 
-        // Cache in egui memory
-        ctx.data_mut(|data| {
-            data.insert_temp(texture_id, tex.clone());
-        });
+    fn show_generation_progress(&self, ui: &mut egui::Ui, current_index: usize) {
+        let total = self.pending_thumbnails.len() +
+                    self.configs.len() - self.pending_thumbnails.len();
+        let completed = self.configs.len() - self.pending_thumbnails.len();
+        let config_name = &self.configs[current_index].config.flame.name;
 
-        self.rendering_thumbnails.remove(&index);
-        Some(tex)
+        egui::Window::new("Generating Thumbnails...")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ui.ctx(), |ui| {
+                ui.add(egui::ProgressBar::new(completed as f32 / total as f32)
+                    .text(format!("{}/{}", completed, total)));
+                ui.label(format!("Rendering \"{}\"...", config_name));
+            });
     }
 }
-```
 
-**Loading States:**
-```rust
-// While rendering, show placeholder
-if let Some(texture) = self.get_thumbnail(ctx, index, config, renderer) {
-    ui.image(&texture).fit_to_exact_size(egui::vec2(128.0, 128.0));
-} else {
-    // Show loading spinner
-    ui.add_sized(
-        egui::vec2(128.0, 128.0),
-        egui::Spinner::new().size(32.0),
-    );
+/// Render a single thumbnail (blocking, ~1-2 seconds)
+fn render_thumbnail(config: &FractalConfig, renderer: &mut FlameRenderer) -> image::RgbaImage {
+    const THUMBNAIL_SIZE: u32 = 512;
+    const THUMBNAIL_ITERATIONS: u64 = 50_000_000;  // 50M for fast generation
+
+    // Use headless export with modified settings
+    let mut export_config = config.clone();
+    export_config.max_iterations = THUMBNAIL_ITERATIONS;
+
+    // Render using existing headless export infrastructure
+    renderer.export_headless(&export_config, THUMBNAIL_SIZE, THUMBNAIL_SIZE)
 }
 ```
-
-**Performance Characteristics:**
-- Rendering time: ~0.5-2 seconds per thumbnail @ 512×512, 200M iterations
-- Total for 10 presets: ~5-20 seconds (one-time cost on first open)
-- Subsequent opens: Instant (textures cached in egui memory)
-- Memory usage: ~1 MB per thumbnail (10 MB for 10 presets)
-
-**Optimization Strategies:**
-1. **Lazy generation:** Only render visible thumbnails (virtual scrolling)
-2. **Background generation:** Spawn async tasks to avoid blocking UI
-3. **Lower quality preview:** Initial pass at 64×64, 10M iterations, then upgrade
-4. **Disk cache:** Save rendered thumbnails to temp directory for future sessions
-5. **Progressive rendering:** Show partial results during generation
 
 ### Grid Layout
 
@@ -309,8 +380,8 @@ fn calculate_columns(panel_width: f32, thumbnail_size: f32) -> usize {
 
 **egui Grid Implementation:**
 ```rust
-fn render_grid(&mut self, ui: &mut egui::Ui) -> Option<usize> {
-    let mut selected = None;
+fn render_grid(&mut self, ui: &mut egui::Ui) -> GalleryResponse {
+    let mut response = GalleryResponse::default();
     let panel_width = ui.available_width();
     let columns = self.calculate_columns(panel_width);
 
@@ -322,16 +393,16 @@ fn render_grid(&mut self, ui: &mut egui::Ui) -> Option<usize> {
             .show(ui, |ui| {
                 let filtered = self.filtered_configs();
 
-                for (col, (index, config)) in filtered.iter().enumerate() {
+                for (item_index, (original_index, item)) in filtered.iter().enumerate() {
                     // Get thumbnail texture
-                    let texture = self.get_thumbnail(ui.ctx(), *index, config);
+                    let texture = self.texture_cache.get(&item.hash);
 
                     // Allocate space for card
                     let card_size = egui::vec2(self.thumbnail_size, self.thumbnail_size + 24.0);
-                    let (rect, response) = ui.allocate_exact_size(card_size, egui::Sense::click());
+                    let (rect, click_response) = ui.allocate_exact_size(card_size, egui::Sense::click());
 
                     // Hover highlight
-                    if response.hovered() {
+                    if click_response.hovered() {
                         ui.painter().rect_filled(
                             rect.expand(4.0),
                             4.0,
@@ -340,13 +411,19 @@ fn render_grid(&mut self, ui: &mut egui::Ui) -> Option<usize> {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
 
-                    // Render thumbnail
+                    // Render thumbnail or placeholder
                     let img_rect = egui::Rect::from_min_size(
                         rect.min,
                         egui::vec2(self.thumbnail_size, self.thumbnail_size),
                     );
-                    ui.put(img_rect, egui::Image::new(&texture)
-                        .fit_to_exact_size(egui::vec2(self.thumbnail_size, self.thumbnail_size)));
+
+                    if let Some(texture) = texture {
+                        ui.put(img_rect, egui::Image::new(texture)
+                            .fit_to_exact_size(egui::vec2(self.thumbnail_size, self.thumbnail_size)));
+                    } else {
+                        // Placeholder (should rarely happen with disk cache)
+                        ui.painter().rect_filled(img_rect, 4.0, egui::Color32::DARK_GRAY);
+                    }
 
                     // Render name below
                     let name_rect = egui::Rect::from_min_size(
@@ -356,25 +433,25 @@ fn render_grid(&mut self, ui: &mut egui::Ui) -> Option<usize> {
                     ui.painter().text(
                         name_rect.center_top() + egui::vec2(0.0, 2.0),
                         egui::Align2::CENTER_TOP,
-                        &config.flame.name,
+                        &item.config.flame.name,
                         egui::FontId::default(),
                         ui.visuals().text_color(),
                     );
 
                     // Handle click
-                    if response.clicked() {
-                        selected = Some(*index);
+                    if click_response.clicked() {
+                        response.selected = Some(item.config.clone());
                     }
 
-                    // Move to next column
-                    if (col + 1) % columns == 0 {
+                    // Move to next row after filling columns
+                    if (item_index + 1) % columns == 0 {
                         ui.end_row();
                     }
                 }
             });
     });
 
-    selected
+    response
 }
 ```
 
@@ -382,15 +459,15 @@ fn render_grid(&mut self, ui: &mut egui::Ui) -> Option<usize> {
 
 **egui Implementation:**
 ```rust
-fn render_list(&mut self, ui: &mut egui::Ui) -> Option<usize> {
-    let mut selected = None;
+fn render_list(&mut self, ui: &mut egui::Ui) -> GalleryResponse {
+    let mut response = GalleryResponse::default();
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         let filtered = self.filtered_configs();
 
-        for (index, config) in filtered {
+        for (original_index, item) in filtered {
             // Collapsing header for each item
-            let header_id = ui.make_persistent_id(format!("config_list_{}", index));
+            let header_id = ui.make_persistent_id(format!("config_list_{}", original_index));
 
             egui::collapsing_header::CollapsingState::load_with_default_open(
                 ui.ctx(),
@@ -401,32 +478,32 @@ fn render_list(&mut self, ui: &mut egui::Ui) -> Option<usize> {
                 // Row with name and summary
                 ui.horizontal(|ui| {
                     // Play icon (clickable)
-                    if ui.button("▶").clicked() {
-                        selected = Some(index);
+                    if ui.button(">").clicked() {
+                        response.selected = Some(item.config.clone());
                     }
 
-                    ui.strong(&config.flame.name);
+                    ui.strong(&item.config.flame.name);
                 });
 
                 // Summary line
                 ui.label(format!(
                     "{} transforms, {}, {}",
-                    config.flame.transforms.len(),
-                    match config.flame.render_mode {
+                    item.config.flame.transforms.len(),
+                    match item.config.flame.render_mode {
                         RenderMode::TwoD => "2D",
                         RenderMode::ThreeD => "3D",
                     },
-                    self.format_variations(config),
+                    self.format_variations(&item.config),
                 ));
             })
             .body(|ui| {
                 // Expanded details
-                ui.label(format!("Zoom: {:.2}", config.zoom));
-                ui.label(format!("Max Iterations: {}", config.max_iterations));
-                ui.label(format!("Color Mode: {:?}", config.color_mode));
+                ui.label(format!("Zoom: {:.2}", item.config.zoom));
+                ui.label(format!("Max Iterations: {}", item.config.max_iterations));
+                ui.label(format!("Color Mode: {:?}", item.config.color_mode));
 
-                // Optional: Show small thumbnail in expanded view
-                if let Some(texture) = self.texture_cache.get(&index) {
+                // Show small thumbnail in expanded view
+                if let Some(texture) = self.texture_cache.get(&item.hash) {
                     ui.image(texture).fit_to_exact_size(egui::vec2(64.0, 64.0));
                 }
             });
@@ -435,7 +512,7 @@ fn render_list(&mut self, ui: &mut egui::Ui) -> Option<usize> {
         }
     });
 
-    selected
+    response
 }
 
 fn format_variations(&self, config: &FractalConfig) -> String {
@@ -455,30 +532,79 @@ fn format_variations(&self, config: &FractalConfig) -> String {
 }
 ```
 
+## Multi-Config .fflame Files
+
+**Extended Format:** `.fflame` files can now hold single configs or arrays
+
+```json
+// Single config (current format - still supported)
+{ "flame": {...}, "zoom": 1.0, ... }
+
+// Multi-config (new library format)
+[
+  { "flame": {...}, "zoom": 1.0, ... },
+  { "flame": {...}, "zoom": 2.0, ... }
+]
+```
+
+**Loading Logic:**
+```rust
+pub fn load_fflame_file(path: &Path) -> anyhow::Result<Vec<FractalConfig>> {
+    let contents = std::fs::read_to_string(path)?;
+    let value: serde_json::Value = serde_json::from_str(&contents)?;
+
+    match value {
+        // Array of configs
+        serde_json::Value::Array(arr) => {
+            arr.into_iter()
+                .map(|v| serde_json::from_value(v))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(Into::into)
+        }
+        // Single config (wrap in vec)
+        _ => {
+            let config: FractalConfig = serde_json::from_value(value)?;
+            Ok(vec![config])
+        }
+    }
+}
+```
+
 ## Panel Integration
 
-### 1. Preset Browser Panel
+### 1. Preset Library Panel
 
-**Location:** `src/ui/preset_browser.rs` (new file)
+**Location:** `src/ui/preset_library.rs` (new file)
 
 ```rust
-use super::fractal_gallery::{FractalConfigGallery, GalleryViewMode};
+use super::fractal_gallery::{FractalConfigGallery, GalleryViewMode, GalleryResponse};
 use crate::scene::presets::PresetLibrary;
 
-pub struct PresetBrowserPanel {
+pub struct PresetLibraryPanel {
     gallery: FractalConfigGallery,
 }
 
-impl PresetBrowserPanel {
-    pub fn new(library: &PresetLibrary) -> Self {
+impl PresetLibraryPanel {
+    pub fn new(library: &PresetLibrary, cache: ThumbnailCache) -> Self {
         Self {
-            gallery: FractalConfigGallery::new(library.presets().to_vec()),
+            gallery: FractalConfigGallery::new(library.presets().to_vec(), cache),
         }
     }
 
-    /// Render panel, returns selected preset index
-    pub fn render(&mut self, ui: &mut egui::Ui) -> Option<usize> {
-        self.gallery.render(ui)
+    /// Load additional presets from file (e.g., user-provided .fflame)
+    pub fn load_library_file(&mut self, path: &Path) -> anyhow::Result<()> {
+        let configs = load_fflame_file(path)?;
+        self.gallery.add_configs(configs);
+        Ok(())
+    }
+
+    /// Render panel, returns selected preset
+    pub fn render(
+        &mut self,
+        ui: &mut egui::Ui,
+        renderer: &mut FlameRenderer,
+    ) -> GalleryResponse {
+        self.gallery.render(ui, renderer)
     }
 }
 ```
@@ -488,61 +614,98 @@ impl PresetBrowserPanel {
 **Location:** `src/ui/user_library.rs` (new file)
 
 ```rust
-use super::fractal_gallery::{FractalConfigGallery, GalleryViewMode};
+use super::fractal_gallery::{FractalConfigGallery, GalleryResponse};
 use crate::config::FractalConfig;
 
 pub struct UserLibraryPanel {
     gallery: FractalConfigGallery,
+    library_path: PathBuf,
 }
 
 impl UserLibraryPanel {
-    pub fn new(user_configs: Vec<FractalConfig>) -> Self {
+    pub fn new(cache: ThumbnailCache) -> Self {
+        let library_path = get_user_library_path();
+        let configs = Self::load_user_library(&library_path);
+
         Self {
-            gallery: FractalConfigGallery::new(user_configs),
+            gallery: FractalConfigGallery::new(configs, cache),
+            library_path,
         }
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui) -> Option<usize> {
+    fn load_user_library(path: &Path) -> Vec<FractalConfig> {
+        if path.exists() {
+            load_fflame_file(path).unwrap_or_default()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn add_current(&mut self, config: FractalConfig) {
+        self.gallery.add_configs(vec![config]);
+        self.save_library();
+    }
+
+    fn save_library(&self) {
+        // Save all configs as JSON array
+        let json = serde_json::to_string_pretty(&self.gallery.configs()).unwrap();
+        std::fs::write(&self.library_path, json).ok();
+    }
+
+    pub fn render(
+        &mut self,
+        ui: &mut egui::Ui,
+        renderer: &mut FlameRenderer,
+        current_config: &FractalConfig,
+    ) -> GalleryResponse {
         ui.horizontal(|ui| {
-            if ui.button("➕ Add Current").clicked() {
-                // TODO: Add current config to library
+            if ui.button("+ Add Current").clicked() {
+                self.add_current(current_config.clone());
             }
-            if ui.button("🗑 Delete Selected").clicked() {
-                // TODO: Delete selected config
-            }
+            // Future: Delete selected, export, etc.
         });
 
         ui.separator();
 
-        self.gallery.render(ui)
+        self.gallery.render(ui, renderer)
     }
+}
+
+fn get_user_library_path() -> PathBuf {
+    directories::ProjectDirs::from("", "", "FractalFlame")
+        .map(|dirs| dirs.data_dir().join("user_library.fflame"))
+        .unwrap_or_else(|| PathBuf::from("user_library.fflame"))
 }
 ```
 
-### 3. Backup Browser Panel
+### 3. Backup Library Panel
 
-**Location:** `src/ui/backup_browser.rs` (new file)
+**Location:** `src/ui/backup_library.rs` (new file)
 
 ```rust
-use super::fractal_gallery::{FractalConfigGallery, GalleryViewMode};
+use super::fractal_gallery::{FractalConfigGallery, GalleryResponse};
 use crate::config::FractalConfig;
 
-pub struct BackupBrowserPanel {
+pub struct BackupLibraryPanel {
     gallery: FractalConfigGallery,
 }
 
-impl BackupBrowserPanel {
-    pub fn new(backups: Vec<FractalConfig>) -> Self {
+impl BackupLibraryPanel {
+    pub fn new(backups: Vec<FractalConfig>, cache: ThumbnailCache) -> Self {
         Self {
-            gallery: FractalConfigGallery::new(backups),
+            gallery: FractalConfigGallery::new(backups, cache),
         }
     }
 
-    pub fn render(&mut self, ui: &mut egui::Ui) -> Option<usize> {
+    pub fn render(
+        &mut self,
+        ui: &mut egui::Ui,
+        renderer: &mut FlameRenderer,
+    ) -> GalleryResponse {
         ui.label("Auto-saved backups from this session");
         ui.separator();
 
-        self.gallery.render(ui)
+        self.gallery.render(ui, renderer)
     }
 }
 ```
@@ -554,24 +717,24 @@ impl BackupBrowserPanel {
 ```rust
 // src/ui/menu_bar.rs
 ui.menu_button(t!("menu.file"), |ui| {
-    if ui.button("📂 Open...").clicked() {
+    if ui.button("Open...").clicked() {
         menu_actions.file.load_config = true;
     }
 
-    if ui.button("💾 Save As...").clicked() {
+    if ui.button("Save As...").clicked() {
         menu_actions.file.save_config = true;
     }
 
     ui.separator();
 
-    // NEW: Preset browser
-    if ui.button("🎨 From Preset...").clicked() {
-        workspace.open_floating_panel(PanelType::PresetBrowser);
+    // NEW: Preset library
+    if ui.button("From Preset...").clicked() {
+        workspace.open_panel(PanelType::PresetLibrary);
     }
 
     // NEW: User library
-    if ui.button("📚 My Fractals...").clicked() {
-        workspace.open_floating_panel(PanelType::UserLibrary);
+    if ui.button("My Fractals...").clicked() {
+        workspace.open_panel(PanelType::UserLibrary);
     }
 
     ui.separator();
@@ -584,14 +747,14 @@ ui.menu_button(t!("menu.file"), |ui| {
 
 ```rust
 // Add to Window menu for panel visibility
-let preset_browser_open = workspace.panel_exists(PanelType::PresetBrowser);
-if ui.selectable_label(preset_browser_open, "🎨 Preset Browser").clicked() {
-    workspace.open_floating_panel(PanelType::PresetBrowser);
+let preset_library_open = workspace.panel_exists(PanelType::PresetLibrary);
+if ui.selectable_label(preset_library_open, "Preset Library").clicked() {
+    workspace.toggle_panel(PanelType::PresetLibrary);
 }
 
 let user_library_open = workspace.panel_exists(PanelType::UserLibrary);
-if ui.selectable_label(user_library_open, "📚 User Library").clicked() {
-    workspace.open_floating_panel(PanelType::UserLibrary);
+if ui.selectable_label(user_library_open, "User Library").clicked() {
+    workspace.toggle_panel(PanelType::UserLibrary);
 }
 ```
 
@@ -601,18 +764,18 @@ if ui.selectable_label(user_library_open, "📚 User Library").clicked() {
 // src/ui/workspace.rs
 pub enum PanelType {
     // ... existing variants ...
-    PresetBrowser,   // Browse built-in presets
+    PresetLibrary,   // Browse built-in presets
     UserLibrary,     // User-saved fractals
-    BackupBrowser,   // Auto-saved backups
+    BackupLibrary,   // Auto-saved backups
 }
 
 impl std::fmt::Display for PanelType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             // ... existing cases ...
-            PanelType::PresetBrowser => write!(f, "Preset Browser"),
+            PanelType::PresetLibrary => write!(f, "Preset Library"),
             PanelType::UserLibrary => write!(f, "My Fractals"),
-            PanelType::BackupBrowser => write!(f, "Backups"),
+            PanelType::BackupLibrary => write!(f, "Backups"),
         }
     }
 }
@@ -622,212 +785,183 @@ impl std::fmt::Display for PanelType {
 
 ```
 src/
-├── renderer/
-│   ├── compute_kernel.rs     # Main FlameRenderer
-│   └── thumbnail.rs          # NEW: ThumbnailRenderer (runtime generation)
-├── ui/
-│   ├── mod.rs                # Module declarations
-│   ├── workspace.rs          # Panel types, layouts
-│   ├── menu_bar.rs           # Menu integration
-│   ├── fractal_gallery.rs    # NEW: Reusable gallery widget
-│   ├── preset_browser.rs     # NEW: Preset browser panel
-│   ├── user_library.rs       # NEW: User fractal library
-│   ├── backup_browser.rs     # NEW: Backup browser
-│   └── ... (existing panels)
++-- renderer/
+|   +-- compute_kernel.rs     # Main FlameRenderer
+|   +-- thumbnail.rs          # NEW: render_thumbnail() helper
++-- storage/
+|   +-- thumbnail_cache.rs    # NEW: Hash-based disk cache
++-- ui/
+|   +-- mod.rs                # Module declarations
+|   +-- workspace.rs          # Panel types, layouts
+|   +-- menu_bar.rs           # Menu integration
+|   +-- fractal_gallery.rs    # NEW: Reusable gallery widget
+|   +-- preset_library.rs     # NEW: Preset library panel
+|   +-- user_library.rs       # NEW: User fractal library
+|   +-- backup_library.rs     # NEW: Backup library
+|   +-- ... (existing panels)
+
+{user_data_dir}/FractalFlame/
++-- cache/
+|   +-- thumbnails/           # Hash-based PNG cache
+|       +-- a1b2c3d4...png
+|       +-- e5f6g7h8...png
++-- user_library.fflame       # User's saved fractals (JSON array)
 
 assets/presets/
-├── simple.fflame
-├── spherical.fflame
-├── spiral.fflame
-└── ...
-# Note: No thumbnails/ directory - generated at runtime
++-- simple.fflame
++-- spherical.fflame
++-- spiral.fflame
++-- ...
 ```
 
-## Runtime Thumbnail Generation
+## Thumbnail Generation Flow
 
-**How it works:**
-1. User opens Preset Browser panel for first time
-2. Panel requests thumbnails for visible presets
-3. `ThumbnailRenderer` creates headless GPU renderer
-4. Each preset rendered to 512×512 @ 200M iterations
-5. Texture uploaded to GPU and cached in egui memory
-6. Subsequent opens use cached textures (instant)
+**Complete Flow:**
+1. User opens Preset Library panel
+2. Gallery checks each config against disk cache (by hash)
+3. **Cache hit:** Load PNG from disk -> upload to GPU texture -> display
+4. **Cache miss:** Add to pending queue
+5. If pending queue non-empty:
+   - Show "Generating Thumbnails..." modal with progress bar
+   - Render ONE thumbnail per frame (blocking, ~50-100ms each)
+   - Save to disk cache
+   - Upload to GPU texture
+   - Update progress, continue next frame
+6. When queue empty, show normal gallery UI
 
 **Performance:**
-- First open: 5-20 seconds for 10 presets (one-time cost)
-- Loading indicator: Spinner shown during generation
-- Lazy loading: Only render visible thumbnails
-- Session cache: Textures persist until app closes
-- Future: Optional disk cache for persistence
+- First open with 12 presets (all cache miss): ~1-2 seconds total
+- Subsequent opens (all cache hit): Instant (<100ms)
+- Adding new preset: ~50-100ms for single thumbnail
+- Cache invalidation: Automatic via hash (config change = new hash = new thumbnail)
+- LRU eviction: Oldest thumbnails deleted when cache exceeds 200 items
+
+Note: At ~1 billion iterations/second, 50M iterations renders in ~50ms.
 
 **When adding new presets:**
-1. Add `.fflame` file to `assets/presets/`
-2. Restart app to load new preset
-3. Thumbnail generated automatically on first view
-4. No manual scripts or PNG files needed
+1. Add `.fflame` file to `assets/presets/` or load via UI
+2. Open Preset Library panel
+3. New preset detected (hash not in cache)
+4. Thumbnail generated automatically
+5. Cached for future sessions
+
+## WASM Considerations
+
+**Memory Cache Only:**
+- WASM cannot use filesystem directly
+- Thumbnails regenerated each session (~1-2s on first open)
+- Same generation flow as desktop, just no disk persistence
+- Future enhancement: IndexedDB for cross-session persistence
+
+**Platform Abstraction:**
+```rust
+impl ThumbnailCache {
+    pub fn new() -> Self {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // WASM: Memory-only cache
+            Self {
+                cache_dir: PathBuf::new(),  // Unused
+                cached_hashes: HashSet::new(),
+                disk_enabled: false,
+            }
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Desktop: Full disk cache
+            let cache_dir = get_cache_dir().join("thumbnails");
+            std::fs::create_dir_all(&cache_dir).ok();
+            let cached_hashes = Self::scan_cache_dir(&cache_dir);
+            Self {
+                cache_dir,
+                cached_hashes,
+                disk_enabled: true,
+            }
+        }
+    }
+
+    pub fn load(&self, hash: &str) -> Option<image::RgbaImage> {
+        if !self.disk_enabled {
+            return None;  // WASM: Always cache miss on disk
+        }
+        // Desktop: Load from disk...
+    }
+
+    pub fn save(&mut self, hash: &str, image: &image::RgbaImage) -> anyhow::Result<()> {
+        if !self.disk_enabled {
+            return Ok(());  // WASM: No-op
+        }
+        // Desktop: Save to disk...
+    }
+}
+```
 
 ## Migration Path
 
-### Phase 1: Parallel Systems
-- Keep existing dropdown in Rendering panel (lines 30-56 of `settings.rs`)
-- Add new Preset Browser panel
-- Both work simultaneously
-- Users can choose preferred method
+### Phase 1: Core Implementation
+- Implement `ThumbnailCache` with hash-based storage
+- Implement `FractalConfigGallery` with one-per-frame generation
+- Add `PanelType::PresetLibrary` to workspace
+- Keep existing dropdown (parallel systems)
 
-### Phase 2: User Testing
-- Gather feedback on gallery UX
-- Measure performance (texture loading, scrolling)
-- Refine thumbnail quality/size trade-offs
+### Phase 2: Polish & Testing
+- Test generation performance (target <2s per thumbnail)
+- Test cache hit/miss behavior
+- Refine progress UI
+- Add search/filter functionality
 
-### Phase 3: Deprecation
-- Remove dropdown from Rendering panel
-- Only use Preset Browser
-- Cleaner UI, less code duplication
+### Phase 3: Additional Panels
+- User Library panel with save/load
+- Backup Library panel
+- Multi-config .fflame loading
 
-### Phase 4: Expansion
-- Add User Library panel for saved fractals
-- Add Backup Browser for auto-saves
-- Add fractal pack import/export
+### Phase 4: Deprecation
+- Remove dropdown from Settings panel
+- Preset Library becomes primary preset selection method
 
 ## Future Enhancements
 
 ### Search & Filter
 - **Text search:** Filter by name (case-insensitive)
 - **Tag system:** Filter by variation types, render mode, complexity
-- **Sort options:** Name, Date, Transform count, Popularity
+- **Sort options:** Name, Date, Transform count
 
 ### Thumbnail Features
-- **Hover preview:** Show full-size (512×512) image on hover
-- **Animation:** Show brief animation (3-5 frames) on hover
+- **Hover preview:** Show full-size (512x512) image on hover
 - **Metadata overlay:** Show transform count, variation types as badge
 
 ### User Library Features
-- **Save current:** Add button to save current config to library
-- **Organize:** Folders, tags, favorites, collections
-- **Export/Import:** Share fractal libraries with others
-- **Cloud sync:** Optional sync across devices (future)
+- **Organize:** Folders, tags, favorites
+- **Export/Import:** Share libraries with others
+- **Delete/rename:** Manage saved fractals
 
-### Fractal Packs
-- **Pack format:** JSON array of FractalConfigs + metadata
-- **Pack management:** Enable/disable packs like palettes
-- **Community packs:** Download and install curated collections
-- **Pack metadata:** Author, description, version, thumbnail
+### Performance Optimizations
+- **Virtual scrolling:** Only render visible thumbnails (for large libraries)
+- **Parallel generation:** Multiple thumbnails simultaneously (future)
+- **Progressive quality:** Quick low-res preview, then high-res upgrade
 
-### Advanced Gallery Features
-- **Multi-select:** Select multiple configs for batch operations
-- **Comparison mode:** Side-by-side view of 2-4 fractals
-- **Drag & drop:** Reorder, organize, drop into panels
-- **Keyboard navigation:** Arrow keys, Enter to load, Delete to remove
+### Cache Management
+- ✅ **Size limit:** LRU eviction when cache exceeds 200 items (oldest by mtime deleted)
+- **Manual clear:** Button to clear thumbnail cache
+- **Integrity check:** Verify cached thumbnails match config hashes
 
-## Performance Considerations
+## Dependencies
 
-### Texture Memory
-- **512×512 RGBA:** ~1 MB per texture
-- **10 presets:** ~10 MB total (acceptable)
-- **100 presets:** ~100 MB (may need virtual scrolling)
-- **Mitigation:** Lazy load textures on-demand, unload off-screen textures
+**No new dependencies required.**
 
-### Scrolling Performance
-- **egui optimization:** Built-in scroll area is efficient
-- **Texture caching:** Reuse uploaded GPU textures
-- **Virtual scrolling:** Only render visible items (future enhancement)
-
-### Thumbnail Generation
-- **Runtime rendering:** Generated on-demand, one-time cost per session
-- **Quality vs size:** 512×512 @ 200M iterations is good balance
-- **Caching:** Textures persist in egui memory for session lifetime
-- **Future:** Optional disk cache to persist between sessions
-
-## egui View Mode Support
-
-**Built-in support:**
-- egui has `Grid` for grid layouts ✅
-- egui has `CollapsingHeader` for list details ✅
-- No built-in "view mode switcher" widget, but easy to implement:
-
-```rust
-ui.horizontal(|ui| {
-    if ui.selectable_label(view_mode == GalleryViewMode::Grid, "🔲 Grid").clicked() {
-        view_mode = GalleryViewMode::Grid;
-    }
-    if ui.selectable_label(view_mode == GalleryViewMode::List, "≡ List").clicked() {
-        view_mode = GalleryViewMode::List;
-    }
-});
-```
-
-## Open Questions
-
-1. **Should gallery state persist across sessions?**
-   - View mode, thumbnail size, sort order
-   - Store in egui memory or config file?
-
-2. **Should we support drag & drop between galleries?**
-   - E.g., drag preset to user library to save
-   - Requires egui drag-and-drop system
-
-3. **Thumbnail quality vs performance trade-off?**
-   - Start with 512×512 @ 200M
-   - Monitor generation time and file sizes
-   - Reduce if needed (256×256 or 100M iterations)
-
-4. **Should List view show thumbnails?**
-   - Small thumbnail (64×64) in collapsed row?
-   - Or only in expanded details?
-
-5. **How to handle user library persistence?**
-   - Save as individual `.fflame` files in user directory?
-   - Single JSON array file with all saved fractals?
-   - SQLite database for advanced queries?
-
-## Implementation Priority
-
-### Phase 1: Core Gallery Widget (Week 1)
-1. Create `fractal_gallery.rs` with basic grid view
-2. Implement texture loading and caching
-3. Add responsive column calculation
-4. Handle click selection
-
-### Phase 2: Thumbnail Renderer (Week 1)
-1. Create `ThumbnailRenderer` struct in `src/renderer/thumbnail.rs`
-2. Implement `render_thumbnail()` using headless export code
-3. Add GPU resource sharing (Arc<Device>, Arc<Queue>)
-4. Test rendering speed and quality
-5. Integrate with `FractalConfigGallery`
-
-### Phase 3: Preset Browser Integration (Week 1)
-1. Add `PanelType::PresetBrowser` to workspace
-2. Create `preset_browser.rs` wrapper
-3. Add "From Preset..." menu item
-4. Implement loading states and spinners
-5. Test with existing presets
-
-### Phase 4: List View & Polish (Week 2)
-1. Implement list view in gallery
-2. Add view mode switcher
-3. Add search/filter functionality
-4. Polish hover effects and animations
-
-### Phase 5: Additional Panels (Week 2-3)
-1. User Library panel
-2. Backup Browser panel
-3. Fractal pack system
-4. Import/export functionality
-
-### Phase 6: Advanced Features (Future)
-1. Async thumbnail generation (non-blocking)
-2. Disk cache for thumbnails (persist between sessions)
-3. Advanced search and filtering
-4. Hover previews and animations
-5. Multi-select and batch operations
-6. Cloud sync and sharing
+**Existing dependencies used:**
+- `image` - PNG encoding/decoding
+- `directories` - User data directory paths
+- `serde_json` - Config serialization for hashing
+- `std::collections::hash_map::DefaultHasher` - Fast hashing (built-in)
 
 ---
 
 **Next Steps:**
-1. Review and approve design
-2. Implement `ThumbnailRenderer` for runtime generation
-3. Create `FractalConfigGallery` widget
-4. Integrate Preset Browser panel
-5. Test rendering performance and quality
-6. Iterate on UX and optimization
+1. Implement `ThumbnailCache` in `src/storage/thumbnail_cache.rs`
+2. Implement `FractalConfigGallery` in `src/ui/fractal_gallery.rs`
+3. Implement `render_thumbnail()` helper
+4. Add `PresetLibraryPanel` and workspace integration
+5. Test thumbnail generation and caching
+6. Iterate on UX
