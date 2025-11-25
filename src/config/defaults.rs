@@ -2,6 +2,14 @@
 //!
 //! Single source of truth for all default values used throughout the codebase.
 //! Changing a value here updates all usages.
+//!
+//! ⚠️ WARNING: Changing defaults affects config serialization!
+//! With compact serialization (omitting defaults), old configs rely on these values.
+//! If you change a default:
+//!   1. Bump CURRENT_CONFIG_VERSION in fractal_config.rs
+//!   2. Add migration to preserve old default for existing configs
+//!   3. Document the change in VERSION_HISTORY
+//! See docs/projects/config-versioning.md for details.
 
 // Histogram & Color
 pub const DEFAULT_HISTOGRAM_COLOR_SCALE: f32 = 100.0; // Max precision: 100 color levels

@@ -7,15 +7,20 @@ use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 pub const CURRENT_CONFIG_VERSION: u32 = 1;
 
 /// Complete fractal configuration (excludes runtime-only settings)
+/// All fields except `flame` have defaults for compact serialization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FractalConfig {
-    /// The flame (transforms)
+    /// The flame (transforms) - always required
     pub flame: Flame,
 
     /// View settings
+    #[serde(default = "default_zoom")]
     pub zoom: f32,
+    #[serde(default)]
     pub pan_x: f32,
+    #[serde(default)]
     pub pan_y: f32,
+    #[serde(default)]
     pub rotation: f32,  // 2D rotation (around Z axis)
 
     /// 3D Camera rotation (for 3D mode)
@@ -27,7 +32,9 @@ pub struct FractalConfig {
     pub camera_z: f32,  // Camera Z position (height)
 
     /// Rendering settings
+    #[serde(default = "default_density_scale")]
     pub density_scale: f32,
+    #[serde(default = "default_speed_factor")]
     pub speed_factor: f32,
     /// Maximum total iterations to render (default: 1 billion = ~infinite for interactive use)
     #[serde(default = "default_max_iterations")]
@@ -52,7 +59,9 @@ pub struct FractalConfig {
     pub target_iterations_per_pixel: u32,
 
     /// Color settings
+    #[serde(default)]
     pub color_mode: ColorMode,
+    #[serde(default)]
     pub palette_index: usize,
     /// The actual palette data (for complete reproducibility)
     /// If None, will use palette_index from library
@@ -61,6 +70,7 @@ pub struct FractalConfig {
     /// Palette rotation: -1.0 to 1.0, shifts palette indices (Apophysis: -128 to 128)
     #[serde(default = "default_palette_rotation")]
     pub palette_rotation: f32,
+    #[serde(default)]
     pub background_color: [f32; 3],
 
     /// Tone mapping settings
@@ -104,8 +114,20 @@ pub struct FractalConfig {
     pub deterministic_rng: bool,
 }
 
-fn default_exposure() -> f32 {
+fn default_zoom() -> f32 {
     1.0
+}
+
+fn default_density_scale() -> f32 {
+    super::defaults::DEFAULT_DENSITY_SCALE
+}
+
+fn default_speed_factor() -> f32 {
+    super::defaults::DEFAULT_SPEED_FACTOR
+}
+
+fn default_exposure() -> f32 {
+    super::defaults::DEFAULT_EXPOSURE
 }
 
 fn default_gamma() -> f32 {
@@ -210,17 +232,24 @@ impl Default for FractalConfig {
 
 impl FractalConfig {
     /// Export configuration to JSON string with version header
+    /// Omits fields that match defaults for compact output
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         // Serialize to JSON value
         let mut value = serde_json::to_value(self)?;
 
-        // Inject version at the top
         if let Some(obj) = value.as_object_mut() {
-            obj.insert("version".to_string(), serde_json::json!(CURRENT_CONFIG_VERSION));
+            // Remove fields that match defaults (compact serialization)
+            let defaults = Self::default();
+            Self::remove_default_fields(obj, self, &defaults);
 
-            // Re-serialize with version first (serde_json preserves insertion order)
+            // Build ordered object with version first
             let mut ordered_obj = serde_json::Map::new();
             ordered_obj.insert("version".to_string(), serde_json::json!(CURRENT_CONFIG_VERSION));
+
+            // Add flame first (always required), then other non-default fields
+            if let Some(flame) = obj.remove("flame") {
+                ordered_obj.insert("flame".to_string(), flame);
+            }
             for (k, v) in obj.iter() {
                 if k != "version" {
                     ordered_obj.insert(k.clone(), v.clone());
@@ -232,34 +261,118 @@ impl FractalConfig {
         }
     }
 
-    /// Import configuration from JSON string with version checking
+    /// Remove fields from JSON object that match default values
+    fn remove_default_fields(obj: &mut serde_json::Map<String, serde_json::Value>, config: &Self, defaults: &Self) {
+        // View settings
+        if config.zoom == defaults.zoom { obj.remove("zoom"); }
+        if config.pan_x == defaults.pan_x { obj.remove("pan_x"); }
+        if config.pan_y == defaults.pan_y { obj.remove("pan_y"); }
+        if config.rotation == defaults.rotation { obj.remove("rotation"); }
+        if config.camera_rotation_x == defaults.camera_rotation_x { obj.remove("camera_rotation_x"); }
+        if config.camera_rotation_y == defaults.camera_rotation_y { obj.remove("camera_rotation_y"); }
+        if config.camera_z == defaults.camera_z { obj.remove("camera_z"); }
+
+        // Rendering settings
+        if config.density_scale == defaults.density_scale { obj.remove("density_scale"); }
+        if config.speed_factor == defaults.speed_factor { obj.remove("speed_factor"); }
+        if config.max_iterations == defaults.max_iterations { obj.remove("max_iterations"); }
+        if config.histogram_color_scale == defaults.histogram_color_scale { obj.remove("histogram_color_scale"); }
+        if config.low_density_smoothing == defaults.low_density_smoothing { obj.remove("low_density_smoothing"); }
+        if config.density_compression_strength == defaults.density_compression_strength { obj.remove("density_compression_strength"); }
+        if config.blend_factor == defaults.blend_factor { obj.remove("blend_factor"); }
+        if config.use_dynamic_blend == defaults.use_dynamic_blend { obj.remove("use_dynamic_blend"); }
+        if config.target_iterations_per_pixel == defaults.target_iterations_per_pixel { obj.remove("target_iterations_per_pixel"); }
+
+        // Color settings
+        if config.color_mode == defaults.color_mode { obj.remove("color_mode"); }
+        if config.palette_index == defaults.palette_index { obj.remove("palette_index"); }
+        if config.palette.is_none() { obj.remove("palette"); }
+        if config.palette_rotation == defaults.palette_rotation { obj.remove("palette_rotation"); }
+        if config.background_color == defaults.background_color { obj.remove("background_color"); }
+
+        // Tone mapping settings
+        if config.tonemap_mode == defaults.tonemap_mode { obj.remove("tonemap_mode"); }
+        if config.tonemap_curve == defaults.tonemap_curve { obj.remove("tonemap_curve"); }
+        if config.use_curve == defaults.use_curve { obj.remove("use_curve"); }
+        if config.exposure == defaults.exposure { obj.remove("exposure"); }
+        if config.gamma == defaults.gamma { obj.remove("gamma"); }
+        if config.gamma_threshold == defaults.gamma_threshold { obj.remove("gamma_threshold"); }
+        if config.brightness == defaults.brightness { obj.remove("brightness"); }
+        if config.vibrancy == defaults.vibrancy { obj.remove("vibrancy"); }
+        if config.saturation == defaults.saturation { obj.remove("saturation"); }
+        if config.hue_shift == defaults.hue_shift { obj.remove("hue_shift"); }
+        if config.value_scale == defaults.value_scale { obj.remove("value_scale"); }
+
+        // Other
+        if config.deterministic_rng == defaults.deterministic_rng { obj.remove("deterministic_rng"); }
+    }
+
+    /// Import configuration from JSON string with version checking and migration
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         // Parse to check version first
         let value: serde_json::Value = serde_json::from_str(json)?;
 
         // Check version if present
-        if let Some(version) = value.get("version").and_then(|v| v.as_u64()) {
-            let version = version as u32;
+        let version = value.get("version")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(0); // Pre-versioning configs are version 0
 
-            if version > CURRENT_CONFIG_VERSION {
-                let msg = format!(
-                    "Config version {} is newer than supported version {}. Please update the application.",
-                    version, CURRENT_CONFIG_VERSION
-                );
-                return Err(serde_json::Error::io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    msg
-                )));
-            }
-
-            // TODO: Add migration logic here when needed
-            // if version < CURRENT_CONFIG_VERSION {
-            //     value = migrate(value, version)?;
-            // }
+        if version > CURRENT_CONFIG_VERSION {
+            let msg = format!(
+                "Config version {} is newer than supported version {}. Please update the application.",
+                version, CURRENT_CONFIG_VERSION
+            );
+            return Err(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                msg
+            )));
         }
 
-        // Deserialize (version field is ignored by struct)
-        serde_json::from_value(value)
+        // Deserialize first (serde defaults will apply)
+        let mut config: Self = serde_json::from_value(value)?;
+
+        // Apply migrations if needed
+        if version < CURRENT_CONFIG_VERSION {
+            config = Self::migrate(config, version)?;
+        }
+
+        Ok(config)
+    }
+
+    /// Migrate config from old version to current version
+    /// Returns error as serde_json::Error for API consistency
+    fn migrate(mut config: Self, from_version: u32) -> Result<Self, serde_json::Error> {
+        let mut current_version = from_version;
+
+        // Migration chain: apply each migration in sequence
+        while current_version < CURRENT_CONFIG_VERSION {
+            config = match current_version {
+                0 => Self::migrate_v0_to_v1(config),
+                // Future migrations:
+                // 1 => Self::migrate_v1_to_v2(config),
+                // 2 => Self::migrate_v2_to_v3(config),
+                _ => {
+                    let msg = format!("Unknown config version {} during migration", current_version);
+                    return Err(serde_json::Error::io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        msg
+                    )));
+                }
+            };
+            current_version += 1;
+        }
+
+        log::info!("Migrated config from version {} to {}", from_version, CURRENT_CONFIG_VERSION);
+        Ok(config)
+    }
+
+    /// Migrate pre-versioning configs (version 0) to version 1
+    /// These are configs saved before versioning was implemented
+    fn migrate_v0_to_v1(config: Self) -> Self {
+        // No structural changes needed - serde defaults handle missing fields
+        // This migration exists to document that v0 -> v1 is a no-op
+        config
     }
 
     /// Export to JSON file
@@ -273,5 +386,101 @@ impl FractalConfig {
     pub fn load_from_file(path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
         let json = std::fs::read_to_string(path)?;
         Ok(Self::from_json(&json)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_version_included_in_json() {
+        let config = FractalConfig::default();
+        let json = config.to_json().unwrap();
+        assert!(json.contains("\"version\": 1"));
+    }
+
+    #[test]
+    fn test_compact_serialization_omits_defaults() {
+        let config = FractalConfig::default();
+        let json = config.to_json().unwrap();
+
+        // Default values should NOT be in the output
+        assert!(!json.contains("\"zoom\""));
+        assert!(!json.contains("\"pan_x\""));
+        assert!(!json.contains("\"exposure\""));
+        assert!(!json.contains("\"gamma\""));
+
+        // Required fields should still be present
+        assert!(json.contains("\"version\""));
+        assert!(json.contains("\"flame\""));
+    }
+
+    #[test]
+    fn test_non_default_values_included() {
+        let mut config = FractalConfig::default();
+        config.zoom = 2.5;
+        config.exposure = 1.5;
+
+        let json = config.to_json().unwrap();
+
+        // Non-default values should be included
+        assert!(json.contains("\"zoom\": 2.5"));
+        assert!(json.contains("\"exposure\": 1.5"));
+    }
+
+    #[test]
+    fn test_roundtrip_with_defaults() {
+        let original = FractalConfig::default();
+        let json = original.to_json().unwrap();
+        let loaded = FractalConfig::from_json(&json).unwrap();
+
+        // All values should match after roundtrip
+        assert_eq!(original.zoom, loaded.zoom);
+        assert_eq!(original.pan_x, loaded.pan_x);
+        assert_eq!(original.exposure, loaded.exposure);
+        assert_eq!(original.gamma, loaded.gamma);
+    }
+
+    #[test]
+    fn test_roundtrip_with_non_defaults() {
+        let mut original = FractalConfig::default();
+        original.zoom = 3.0;
+        original.pan_x = 1.5;
+        original.exposure = 2.0;
+        original.gamma = 1.8;
+
+        let json = original.to_json().unwrap();
+        let loaded = FractalConfig::from_json(&json).unwrap();
+
+        assert_eq!(original.zoom, loaded.zoom);
+        assert_eq!(original.pan_x, loaded.pan_x);
+        assert_eq!(original.exposure, loaded.exposure);
+        assert_eq!(original.gamma, loaded.gamma);
+    }
+
+    #[test]
+    fn test_future_version_rejected() {
+        let json = r#"{"version": 999, "flame": {"name": "test", "transforms": []}}"#;
+        let result = FractalConfig::from_json(json);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("newer than supported"));
+    }
+
+    #[test]
+    fn test_missing_version_treated_as_v0() {
+        // Pre-versioning config (no version field)
+        let json = r#"{"flame": {"name": "test", "transforms": []}}"#;
+        let result = FractalConfig::from_json(json);
+        // Should succeed - v0 migrates to v1
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_version_1_loads_without_migration() {
+        let json = r#"{"version": 1, "flame": {"name": "test", "transforms": []}}"#;
+        let result = FractalConfig::from_json(json);
+        assert!(result.is_ok());
     }
 }
