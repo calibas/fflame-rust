@@ -233,12 +233,15 @@ impl App {
                         max_iterations.map_or(true, |max| r.total_iterations() < max)
                     });
 
+                    // Check if animation is playing (needs continuous redraws)
+                    let animation_playing = app.animation_controller.is_playing();
+
                     // Update present mode based on system settings
                     app.gpu.set_present_mode(app.config_manager.system_settings().vsync_enabled);
 
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
-                    if is_rendering || app.pending_redraws > 0 {
+                    if is_rendering || animation_playing || app.pending_redraws > 0 {
                         // Actively rendering fractals OR UI animations pending
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
