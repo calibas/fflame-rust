@@ -12,9 +12,11 @@ pub use export::export_headless_wasm;
 
 use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, window::Window};
 use egui_wgpu::wgpu::SurfaceError;
+use std::sync::{Arc, Mutex};
 
 use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
+use crate::ui::animation_panel::ExportProgress;
 use crate::renderer::FlameRenderer;
 use crate::scene::transforms::Flame;
 use crate::scene::palette::PaletteLibrary;
@@ -68,6 +70,9 @@ pub struct App {
     pub(super) export_width: u32,
     pub(super) export_height: u32,
     pub(super) use_custom_export_size: bool,
+
+    // Animation export progress (shared with background export thread)
+    pub(super) animation_export_progress: Arc<Mutex<ExportProgress>>,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -135,6 +140,7 @@ impl App {
             export_width,
             export_height,
             use_custom_export_size: false,  // Default to viewport size
+            animation_export_progress: Arc::new(Mutex::new(ExportProgress::default())),
         };
 
         #[allow(deprecated)]
@@ -342,6 +348,9 @@ impl App {
             );
         }
 
+        // Get a snapshot of export progress for UI display
+        let export_progress = self.animation_export_progress.lock().unwrap().clone();
+
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -365,6 +374,7 @@ impl App {
             &mut self.export_width,
             &mut self.export_height,
             &mut self.use_custom_export_size,
+            &export_progress,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
@@ -1309,8 +1319,12 @@ impl App {
         // Handle animation export request
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(export_settings) = ui_response.animation_export_requested {
-            if let Some(ref animation) = self.animation_controller.animation {
-                use crate::animation::export::{AnimationExportConfig, CliProgressCallback, export_animation, VideoEncodingSettings, encode_video, is_ffmpeg_available};
+            // Check if already exporting
+            let already_exporting = self.animation_export_progress.lock().unwrap().is_exporting;
+            if already_exporting {
+                log::warn!("Animation export already in progress");
+            } else if let Some(ref animation) = self.animation_controller.animation {
+                use crate::animation::export::{AnimationExportConfig, UiProgressCallback, export_animation, VideoEncodingSettings, encode_video, is_ffmpeg_available};
 
                 // Build video settings if encoding requested
                 let video_settings = if export_settings.encode_video {
@@ -1327,7 +1341,7 @@ impl App {
                 let export_config = AnimationExportConfig {
                     config: self.config_manager.active_config().clone(),
                     animation: animation.clone(),
-                    output_dir: export_settings.output_dir,
+                    output_dir: export_settings.output_dir.clone(),
                     width: export_settings.width,
                     height: export_settings.height,
                     fps: export_settings.fps,
@@ -1336,7 +1350,7 @@ impl App {
                     video_settings: video_settings.clone(),
                 };
 
-                println!("Starting animation export...");
+                println!("Starting animation export (background thread)...");
                 println!("  Output: {}", export_config.output_dir.display());
                 println!("  Resolution: {}x{} @ {} FPS", export_config.width, export_config.height, export_config.fps);
                 println!("  Total frames: {}", export_config.total_frames());
@@ -1344,40 +1358,72 @@ impl App {
                     println!("  Video: {} (CRF {})", vs.codec.display_name(), vs.quality);
                 }
 
-                // Run export synchronously (blocking UI - TODO: make async with progress dialog)
-                let mut progress = CliProgressCallback::new();
-                match pollster::block_on(export_animation(export_config, &mut progress)) {
-                    Ok(result) => {
-                        println!("\nAnimation export complete!");
-                        println!("  {} frames in {:.1}s", result.total_frames, result.total_time_ms / 1000.0);
-                        println!("  Output: {}", result.output_dir.display());
+                // Set initial export progress
+                {
+                    let mut p = self.animation_export_progress.lock().unwrap();
+                    p.is_exporting = true;
+                    p.current_frame = 0;
+                    p.total_frames = export_config.total_frames();
+                    p.seconds_per_frame = 0.0;
+                    p.status = "Starting export...".to_string();
+                }
 
-                        // Video encoding
-                        if let Some(ref vs) = video_settings {
-                            if is_ffmpeg_available() {
-                                println!("\nEncoding video...");
-                                match encode_video(&result.output_dir, export_settings.fps, vs) {
-                                    Ok(video_result) => {
-                                        println!("Video encoding complete!");
-                                        println!("  Output: {}", video_result.video_path.display());
-                                        println!("  Encoding time: {:.1}s", video_result.encode_time_ms / 1000.0);
-                                        if video_result.frames_cleaned > 0 {
-                                            println!("  Cleaned up {} PNG frames", video_result.frames_cleaned);
+                // Clone progress Arc for the background thread
+                let progress_arc = Arc::clone(&self.animation_export_progress);
+                let fps = export_settings.fps;
+
+                // Spawn background thread for export
+                std::thread::spawn(move || {
+                    let mut progress = UiProgressCallback::new(Arc::clone(&progress_arc));
+
+                    match pollster::block_on(export_animation(export_config, &mut progress)) {
+                        Ok(result) => {
+                            println!("\nAnimation export complete!");
+                            println!("  {} frames in {:.1}s", result.total_frames, result.total_time_ms / 1000.0);
+                            println!("  Output: {}", result.output_dir.display());
+
+                            // Video encoding (still in background thread)
+                            if let Some(ref vs) = video_settings {
+                                if is_ffmpeg_available() {
+                                    // Update progress for video encoding
+                                    if let Ok(mut p) = progress_arc.lock() {
+                                        p.status = "Encoding video...".to_string();
+                                    }
+
+                                    println!("\nEncoding video...");
+                                    match encode_video(&result.output_dir, fps, vs) {
+                                        Ok(video_result) => {
+                                            println!("Video encoding complete!");
+                                            println!("  Output: {}", video_result.video_path.display());
+                                            println!("  Encoding time: {:.1}s", video_result.encode_time_ms / 1000.0);
+                                            if video_result.frames_cleaned > 0 {
+                                                println!("  Cleaned up {} PNG frames", video_result.frames_cleaned);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Video encoding failed: {}", e);
                                         }
                                     }
-                                    Err(e) => {
-                                        eprintln!("Video encoding failed: {}", e);
-                                    }
+                                } else {
+                                    eprintln!("Warning: ffmpeg not found. Video encoding skipped.");
                                 }
-                            } else {
-                                eprintln!("Warning: ffmpeg not found. Video encoding skipped.");
+                            }
+
+                            // Mark export complete
+                            if let Ok(mut p) = progress_arc.lock() {
+                                p.is_exporting = false;
+                                p.status = format!("Complete: {} frames", result.total_frames);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Animation export failed: {}", e);
+                            if let Ok(mut p) = progress_arc.lock() {
+                                p.is_exporting = false;
+                                p.status = format!("Failed: {}", e);
                             }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("Animation export failed: {}", e);
-                    }
-                }
+                });
             } else {
                 eprintln!("No animation loaded for export");
             }
