@@ -283,10 +283,10 @@ impl FlameRenderer {
             density_compression_strength: self.density_compression_strength,
             target_iterations_per_pixel: self.target_iterations_per_pixel,
             _pad0: 0.0,
+            background_r: self.background_color[0],
+            background_g: self.background_color[1],
+            background_b: self.background_color[2],
             _pad1: 0.0,
-            _pad2: 0.0,
-            _pad3: 0.0,
-            _pad4: 0.0,
         };
 
         self.buffers.update_accumulate_params(queue, &params);
@@ -416,7 +416,7 @@ impl FlameRenderer {
 
         // 8. Update tone mapping settings from config
         // Not in live preview mode (loading config)
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, config.alpha_blend_low, config.alpha_blend_high, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -505,6 +505,10 @@ impl FlameRenderer {
             hue_shift: DEFAULT_HUE_SHIFT,
             value_scale: DEFAULT_VALUE_SCALE,
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
+            alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
+            alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
+            transparent_mode: 0,
+            _pad_alpha: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -520,6 +524,50 @@ impl FlameRenderer {
     /// Get fractal output texture view for display
     pub fn get_fractal_texture_view(&self) -> &TextureView {
         &self.fractal_texture_view
+    }
+
+    /// Create a staging buffer for reading fractal pixels
+    /// Returns (buffer, padded_bytes_per_row)
+    pub fn create_pixel_staging_buffer(&self, device: &Device) -> (Buffer, u32) {
+        let bytes_per_pixel = 4u32; // RGBA8
+        let unpadded_bytes_per_row = self.width * bytes_per_pixel;
+        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * self.height) as u64;
+
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Fractal Staging Buffer"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        (buffer, padded_bytes_per_row)
+    }
+
+    /// Copy fractal texture to a staging buffer
+    pub fn copy_fractal_to_buffer(&self, encoder: &mut CommandEncoder, buffer: &Buffer, padded_bytes_per_row: u32) {
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: &self.fractal_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Get RNG seed based on deterministic mode
@@ -641,6 +689,10 @@ impl FlameRenderer {
             hue_shift: DEFAULT_HUE_SHIFT,
             value_scale: DEFAULT_VALUE_SCALE,
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
+            alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
+            alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
+            transparent_mode: 0,
+            _pad_alpha: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -657,8 +709,53 @@ impl FlameRenderer {
         self.update_tonemap_state(queue);
     }
 
-    /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, and value scale
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, _batch_size: u32, is_live_preview: bool) {
+    /// Set transparent mode for PNG export
+    /// When enabled, tonemap shader outputs fractal alpha instead of blending with background
+    pub fn set_transparent_mode(&self, queue: &Queue, transparent: bool, config: &FractalConfig, iterations_per_thread: u32) {
+        use crate::config::defaults::*;
+
+        let tonemap_mode_u32 = match config.tonemap_mode {
+            crate::scene::tonemap::ToneMapMode::Linear => 0u32,
+            crate::scene::tonemap::ToneMapMode::Logarithmic => 1u32,
+            crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
+        };
+
+        // Calculate area and sample_density (simplified for export)
+        let apophysis_zoom = config.zoom.log2();
+        let base_pixels_per_unit = (self.width.min(self.height) as f32) * 0.25;
+        let pixels_per_unit_zoomed = base_pixels_per_unit * (2.0_f32).powf(apophysis_zoom);
+        let area = (self.width * self.height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
+        let sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0);
+
+        let params = TonemapParams {
+            exposure: config.exposure,
+            gamma: config.gamma,
+            density_scale: self.density_scale,
+            tonemap_mode: tonemap_mode_u32,
+            background_color: self.background_color,
+            _pad_bg: 0.0,
+            use_curve: if config.use_curve { 1u32 } else { 0u32 },
+            vibrancy: config.vibrancy,
+            brightness: config.brightness,
+            white_level: DEFAULT_WHITE_LEVEL,
+            prefilter_white: PREFILTER_WHITE,
+            bright_adjust: BRIGHT_ADJUST,
+            area,
+            sample_density,
+            saturation: config.saturation,
+            hue_shift: config.hue_shift,
+            value_scale: config.value_scale,
+            gamma_threshold: config.gamma_threshold,
+            alpha_blend_low: config.alpha_blend_low,
+            alpha_blend_high: config.alpha_blend_high,
+            transparent_mode: if transparent { 1 } else { 0 },
+            _pad_alpha: 0.0,
+        };
+        self.buffers.update_tonemap_params(queue, &params);
+    }
+
+    /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, value scale, and alpha blend
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, alpha_blend_low: f32, alpha_blend_high: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, _batch_size: u32, is_live_preview: bool) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match tonemap_mode {
@@ -738,6 +835,10 @@ impl FlameRenderer {
             hue_shift,
             value_scale,
             gamma_threshold,
+            alpha_blend_low,
+            alpha_blend_high,
+            transparent_mode: 0,
+            _pad_alpha: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }

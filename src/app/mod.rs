@@ -397,6 +397,7 @@ impl App {
                     // Restore tonemap parameters after buffer recreation (not in live preview mode)
                     renderer.update_tonemap(&self.gpu.queue, resize_config.tonemap_mode, resize_config.use_curve, resize_config.exposure, resize_config.gamma,
                         resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.saturation, resize_config.hue_shift, resize_config.value_scale,
+                        resize_config.alpha_blend_low, resize_config.alpha_blend_high,
                         viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, self.config_manager.system_settings().iterations_per_thread, 1, false);
                     renderer.update_curve_lut(&self.gpu.queue, &resize_config.tonemap_curve);
 
@@ -968,9 +969,23 @@ impl App {
                 if self.use_custom_export_size {
                     // Custom-size export: create temporary renderer at export dimensions
                     self.export_custom_size(transparent, export_config, render_time_ms);
-                } else if let Some(ref renderer) = self.flame_renderer {
+                } else if let Some(ref mut renderer) = self.flame_renderer {
                     // Viewport-size export: use current renderer
                     let total_iterations = renderer.total_iterations();
+
+                    // For transparent export, we need to re-run tonemap with transparent_mode=1
+                    if transparent {
+                        let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
+                        renderer.set_transparent_mode(&self.gpu.queue, true, &export_config, iterations_per_thread);
+
+                        // Run tonemap pass with transparent mode
+                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                            label: Some("Transparent Export Tonemap"),
+                        });
+                        renderer.tonemap_pass(&mut encoder);
+                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+                    }
+
                     let pixels_future = renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, export_config.background_color);
 
                     match pollster::block_on(pixels_future) {
@@ -1007,39 +1022,248 @@ impl App {
                         }
                         Err(e) => eprintln!("Failed to capture pixels: {}", e),
                     }
+
+                    // Reset transparent mode back to normal for display
+                    if transparent {
+                        let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
+                        renderer.set_transparent_mode(&self.gpu.queue, false, &export_config, iterations_per_thread);
+
+                        // Run tonemap pass to restore normal display
+                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                            label: Some("Restore Normal Tonemap"),
+                        });
+                        renderer.tonemap_pass(&mut encoder);
+                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+                    }
                 }
             }
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: Use unsafe lifetime extension
-                // SAFETY: The Device, Queue, and FlameRenderer live in App which persists
-                // for the entire program lifetime. The GPU resources won't be dropped
-                // until the app exits, so extending their lifetime to 'static is safe.
-                // read_fractal_pixels only needs immutable access since it reads from
-                // the renderer's internal fractal_texture without modification.
+                // WASM: Use async task for pixel reading and file save
                 use wasm_bindgen_futures::spawn_local;
+                use crate::renderer::compute_kernel::FlameRenderer;
 
-                // Build metadata before borrowing renderer
                 let export_config = self.export_config();
+                let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
+                let background_color = export_config.background_color;
 
-                if let Some(ref renderer) = self.flame_renderer {
-                    let total_iterations = renderer.total_iterations();
-                    let render_time_ms = self.metrics.render_time_ms;
-                    let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
+                if self.use_custom_export_size {
+                    // Custom size export: create temporary renderer and render
+                    let export_width = self.export_width;
+                    let export_height = self.export_height;
+                    let max_iterations = export_config.max_iterations;
+
+                    log::info!("WASM: Exporting at custom size {}×{}", export_width, export_height);
+
+                    // Create temporary renderer at export dimensions
+                    let surface_format = egui_wgpu::wgpu::TextureFormat::Rgba8Unorm;
+                    let mut temp_renderer = FlameRenderer::new(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        surface_format,
+                        export_width,
+                        export_height,
+                        &export_config.flame,
+                    );
+
+                    // Load config into temp renderer
+                    let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                        label: Some("WASM Custom Export Encoder"),
+                    });
+
+                    let palette = export_config.palette.as_ref()
+                        .or_else(|| self.palette_library.get(export_config.palette_index))
+                        .cloned()
+                        .unwrap_or_default();
+
+                    temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &export_config, &palette, iterations_per_thread);
+                    self.gpu.queue.submit(std::iter::once(encoder.finish()));
+
+                    // Render frames until we reach max_iterations
+                    let render_start = web_time::Instant::now();
+                    let mut total_rendered = 0u64;
+
+                    const NUM_WORKGROUPS: u32 = 128;
+                    const THREADS_PER_WORKGROUP: u64 = 64;
+                    const BATCH_SIZE: u32 = 4;
+
+                    let mut batch_frame_count = 0;
+
+                    while total_rendered < max_iterations {
+                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                            label: Some("WASM Export Render Frame"),
+                        });
+
+                        let clear_histogram = batch_frame_count == 0;
+
+                        temp_renderer.compute_pass(
+                            &mut encoder,
+                            &self.gpu.queue,
+                            NUM_WORKGROUPS,
+                            iterations_per_thread,
+                            export_config.zoom,
+                            export_config.pan_x,
+                            export_config.pan_y,
+                            export_config.rotation,
+                            export_config.camera_rotation_x,
+                            export_config.camera_rotation_y,
+                            export_config.camera_z,
+                            export_config.speed_factor,
+                            clear_histogram,
+                        );
+
+                        let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
+                        total_rendered += samples_this_frame;
+                        batch_frame_count += 1;
+
+                        if batch_frame_count >= BATCH_SIZE {
+                            let total_samples_in_batch = samples_this_frame * BATCH_SIZE as u64;
+                            temp_renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                            batch_frame_count = 0;
+                        }
+
+                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+
+                        if total_rendered >= max_iterations {
+                            if batch_frame_count > 0 {
+                                let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                                    label: Some("WASM Export Final Accumulation"),
+                                });
+                                let total_samples_in_batch = samples_this_frame * batch_frame_count as u64;
+                                temp_renderer.accumulate_pass(&mut final_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
+                                self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
+                            }
+                            break;
+                        }
+                    }
+
+                    let render_time_ms = render_start.elapsed().as_secs_f64() * 1000.0;
+
+                    // Set transparent mode if requested
+                    if transparent {
+                        temp_renderer.set_transparent_mode(&self.gpu.queue, true, &export_config, iterations_per_thread);
+                    }
+
+                    // Final tonemap pass
+                    let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                        label: Some("WASM Export Final Tonemap"),
+                    });
+                    temp_renderer.tonemap_pass(&mut final_encoder);
+                    self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
+
+                    // Move renderer to heap for async task
+                    let temp_renderer = Box::new(temp_renderer);
                     let speed_factor = export_config.speed_factor;
-                    let background_color = export_config.background_color;
 
+                    // SAFETY: Device and Queue live for program lifetime.
+                    // temp_renderer is moved into the async task and will be dropped there.
                     let device: &'static egui_wgpu::wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
                     let queue: &'static egui_wgpu::wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
-                    let renderer: &'static crate::renderer::compute_kernel::FlameRenderer =
-                        unsafe { std::mem::transmute(renderer) };
 
                     spawn_local(async move {
-                        // Await pixel capture
-                        match renderer.read_fractal_pixels(device, queue, transparent, background_color).await {
+                        match temp_renderer.read_fractal_pixels(device, queue, transparent, background_color).await {
                             Ok((width, height, rgba_data)) => {
-                                // Build metadata with captured dimensions
+                                let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                                    width,
+                                    height,
+                                    total_rendered,
+                                    render_time_ms,
+                                    iterations_per_thread,
+                                    speed_factor,
+                                    &export_config,
+                                );
+
+                                match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
+                                    Ok(png_data) => {
+                                        if let Some(file_handle) = rfd::AsyncFileDialog::new()
+                                            .add_filter("PNG Image", &["png"])
+                                            .set_file_name("fractal.png")
+                                            .save_file()
+                                            .await
+                                        {
+                                            if let Err(e) = file_handle.write(&png_data).await {
+                                                log::error!("Failed to save PNG: {:?}", e);
+                                            } else {
+                                                log::info!("PNG saved: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => log::error!("Failed to encode PNG: {}", e),
+                                }
+                            }
+                            Err(e) => log::error!("Failed to capture pixels: {}", e),
+                        }
+                        // temp_renderer is dropped here
+                    });
+                } else if let Some(ref mut renderer) = self.flame_renderer {
+                    // Viewport size export: use current renderer
+                    //
+                    // IMPORTANT: We must read pixels BEFORE spawning the async task, because
+                    // the next frame will overwrite fractal_texture with a new render.
+                    // The async task is only used for the file dialog and write.
+
+                    let total_iterations = renderer.total_iterations();
+                    let render_time_ms = self.metrics.render_time_ms;
+                    let speed_factor = export_config.speed_factor;
+
+                    // For transparent export, set transparent mode and run tonemap before reading
+                    if transparent {
+                        renderer.set_transparent_mode(&self.gpu.queue, true, &export_config, iterations_per_thread);
+
+                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                            label: Some("Transparent Export Tonemap"),
+                        });
+                        renderer.tonemap_pass(&mut encoder);
+                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+                    }
+
+                    // Read pixels NOW, before the next frame overwrites the texture
+                    // We create a staging buffer and initiate the copy immediately
+                    let width = renderer.width;
+                    let height = renderer.height;
+                    let (staging_buffer, padded_bytes_per_row) = renderer.create_pixel_staging_buffer(&self.gpu.device);
+
+                    // Copy texture to staging buffer
+                    let mut copy_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                        label: Some("Viewport Export Copy"),
+                    });
+                    renderer.copy_fractal_to_buffer(&mut copy_encoder, &staging_buffer, padded_bytes_per_row);
+                    self.gpu.queue.submit(std::iter::once(copy_encoder.finish()));
+
+                    // Now spawn async task to wait for buffer map and save file
+                    let device: &'static egui_wgpu::wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
+
+                    spawn_local(async move {
+                        // Map the staging buffer (this is the async part)
+                        let buffer_slice = staging_buffer.slice(..);
+                        let (tx, rx) = futures::channel::oneshot::channel();
+                        buffer_slice.map_async(egui_wgpu::wgpu::MapMode::Read, move |result| {
+                            let _ = tx.send(result);
+                        });
+                        let _ = device.poll(egui_wgpu::wgpu::PollType::Wait { submission_index: None, timeout: None });
+
+                        match rx.await {
+                            Ok(Ok(())) => {
+                                let data = buffer_slice.get_mapped_range();
+
+                                // Extract RGBA data from staging buffer (handle row padding)
+                                let bytes_per_pixel = 4u32;
+                                let unpadded_bytes_per_row = (width * bytes_per_pixel) as usize;
+                                let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
+
+                                for y in 0..height {
+                                    let row_start = (y * padded_bytes_per_row) as usize;
+                                    // Only copy the actual pixel data, not the padding
+                                    let row_data = &data[row_start..row_start + unpadded_bytes_per_row];
+                                    // For opaque export, the shader already blended with background (transparent_mode=0)
+                                    // For transparent export, we ran tonemap with transparent_mode=1
+                                    rgba_data.extend_from_slice(row_data);
+                                }
+                                drop(data);
+                                staging_buffer.unmap();
+
+                                // Build metadata and encode PNG
                                 let metadata = crate::png_metadata::PngMetadata::from_app_state(
                                     width,
                                     height,
@@ -1050,10 +1274,8 @@ impl App {
                                     &export_config,
                                 );
 
-                                // Encode PNG with metadata (owned data, no borrowing)
                                 match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
                                     Ok(png_data) => {
-                                        // Open file dialog and save
                                         if let Some(file_handle) = rfd::AsyncFileDialog::new()
                                             .add_filter("PNG Image", &["png"])
                                             .set_file_name("fractal.png")
@@ -1070,7 +1292,8 @@ impl App {
                                     Err(e) => log::error!("Failed to encode PNG: {}", e),
                                 }
                             }
-                            Err(e) => log::error!("Failed to capture pixels: {}", e),
+                            Ok(Err(e)) => log::error!("Buffer map error: {:?}", e),
+                            Err(_) => log::error!("Failed to receive buffer map result"),
                         }
                     });
                 }
@@ -1297,6 +1520,7 @@ impl App {
             renderer.update_tonemap(&self.gpu.queue, final_config.tonemap_mode, final_config.use_curve,
                 final_config.exposure, final_config.gamma, final_config.gamma_threshold, final_config.brightness,
                 final_config.vibrancy, final_config.saturation, final_config.hue_shift, final_config.value_scale,
+                final_config.alpha_blend_low, final_config.alpha_blend_high,
                 renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations, final_config.zoom,
                 self.config_manager.system_settings().iterations_per_thread, batch_size_for_tonemap, is_live_preview);
 
@@ -1314,6 +1538,8 @@ impl App {
 
         // Generate one thumbnail for preset library if needed (one per frame)
         // This is blocking but only ~1-2 seconds per thumbnail
+        // Note: Thumbnail generation uses pollster which isn't available on WASM
+        #[cfg(not(target_arch = "wasm32"))]
         if self.egui_layer.preset_library_needs_thumbnails() {
             self.egui_layer.generate_preset_thumbnail(
                 &self.gpu.device,
@@ -1325,6 +1551,7 @@ impl App {
         }
 
         // Generate one thumbnail for file browser if needed (one per frame)
+        #[cfg(not(target_arch = "wasm32"))]
         if self.egui_layer.file_browser_needs_thumbnails() {
             self.egui_layer.generate_file_browser_thumbnail(
                 &self.gpu.device,

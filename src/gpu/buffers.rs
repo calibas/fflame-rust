@@ -164,6 +164,10 @@ pub struct TonemapParams {
     pub hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
     pub value_scale: f32,  // Value (brightness) multiplier (1.0 = no change)
     pub gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
+    pub alpha_blend_low: f32,  // Start blending toward linear alpha at this gamma-corrected value
+    pub alpha_blend_high: f32,  // Full linear alpha above this value
+    pub transparent_mode: u32,  // 0 = normal (blend with background), 1 = transparent export
+    pub _pad_alpha: f32,  // Padding to align to 16 bytes
 }
 
 impl Default for TonemapParams {
@@ -188,6 +192,10 @@ impl Default for TonemapParams {
             hue_shift: DEFAULT_HUE_SHIFT,
             value_scale: DEFAULT_VALUE_SCALE,
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
+            alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
+            alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
+            transparent_mode: 0,  // Normal display mode
+            _pad_alpha: 0.0,
         }
     }
 }
@@ -203,11 +211,11 @@ pub struct AccumulateParams {
     pub low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing
     pub density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression
     pub target_iterations_per_pixel: u32, // Per-pixel convergence threshold (0 = disabled)
-    pub _pad0: f32,  // Padding
-    pub _pad1: f32,  // Align vec3 to 16-byte boundary (offset 32)
-    pub _pad2: f32,
-    pub _pad3: f32,  // vec3<f32> in WGSL std140 layout
-    pub _pad4: f32,  // Total 12 fields = 48 bytes
+    pub _pad0: f32,  // Padding for alignment
+    pub background_r: f32,  // Background color RGB (for blending when no samples)
+    pub background_g: f32,
+    pub background_b: f32,
+    pub _pad1: f32,  // Total 12 fields = 48 bytes
 }
 
 /// Manages GPU buffers and textures for fractal flame rendering
@@ -344,10 +352,10 @@ impl FlameBuffers {
             density_compression_strength: 0.0, // Default: linear accumulation (no compression)
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
             _pad0: 0.0,
+            background_r: 0.0,  // Default black background
+            background_g: 0.0,
+            background_b: 0.0,
             _pad1: 0.0,
-            _pad2: 0.0,
-            _pad3: 0.0,
-            _pad4: 0.0,
         };
         let accumulate_params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Accumulate Params Buffer"),
