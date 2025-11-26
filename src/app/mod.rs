@@ -21,6 +21,7 @@ use crate::scene::palette::PaletteLibrary;
 use crate::scene::presets::PresetLibrary;
 use crate::util::PerformanceMetrics;
 use crate::config::{FractalConfig, ConfigManager};
+use crate::animation::{AnimationController, PlaybackState};
 
 pub struct App {
     // Core state management
@@ -43,6 +44,9 @@ pub struct App {
     pub(super) palette_library: PaletteLibrary,
     pub(super) preset_library: PresetLibrary,
     pub(super) current_preset_index: usize,  // UI state, not config
+
+    // Animation system
+    pub(super) animation_controller: AnimationController,
 
     // Performance tracking
     pub(super) metrics: PerformanceMetrics,
@@ -117,6 +121,7 @@ impl App {
             palette_library,
             preset_library,
             current_preset_index: 0,
+            animation_controller: AnimationController::new(),
             metrics: PerformanceMetrics::new(),
             last_frame_time: None,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
@@ -1430,6 +1435,43 @@ impl App {
         self.view_changed_by_keyboard = false;
 
         // ============================================================================
+        // ANIMATION UPDATE (between UI processing and rendering)
+        // ============================================================================
+        // If animation is playing, update time and apply values to config
+        let animation_playing = self.animation_controller.state == PlaybackState::Playing;
+
+        if animation_playing {
+            // Calculate delta time from last frame
+            let delta_time = self.last_frame_time
+                .map(|last| render_start.duration_since(last).as_secs_f64())
+                .unwrap_or(1.0 / 60.0); // Default to ~16ms if no previous frame
+
+            // Update animation time
+            self.animation_controller.update(delta_time);
+
+            // Evaluate all tracks and apply values to ConfigManager (silently, no undo)
+            let frame_values = self.animation_controller.evaluate_frame();
+
+            for (path_str, json_value) in frame_values {
+                // Parse the string key back to ConfigPath
+                if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
+                    // Convert JSON value to ConfigValue
+                    if let Some(config_value) = crate::config::json_to_config_value(&json_value, &path) {
+                        // Apply silently (no undo point)
+                        if let Err(e) = self.config_manager.update_param_silent(path, config_value) {
+                            log::warn!("Animation: failed to update {}: {}", path_str, e);
+                        }
+                    }
+                } else {
+                    log::warn!("Animation: unknown path key: {}", path_str);
+                }
+            }
+
+            // Sync flame from config (animation may have changed transform parameters)
+            self.flame = self.config_manager.active_config().flame.clone();
+        }
+
+        // ============================================================================
         // PHASE 3: Get FINAL Config and Render Fractal
         // ============================================================================
         // Single config read after all updates are complete
@@ -1445,14 +1487,18 @@ impl App {
             // Overwrite mode logic:
             // - Use flag set in previous frame (changes were detected then, applied now)
             // - When fractal stopped: Always allow overwrite to enable live parameter updates
+            // - During animation playback: Always use overwrite for smooth real-time updates
             let has_stopped = renderer.total_iterations() >= final_config.max_iterations;
-            let use_overwrite = self.use_overwrite_next_frame || has_stopped;
+            let use_overwrite = self.use_overwrite_next_frame || has_stopped || animation_playing;
             renderer.set_overwrite_mode(use_overwrite);
 
             // Check if we should continue iterating
+            // During animation playback, always iterate (ignore max_iterations limit)
             let max_iterations = Some(final_config.max_iterations);
-            let should_iterate = !self.paused &&
-                max_iterations.map_or(true, |max| renderer.total_iterations() < max);
+            let should_iterate = !self.paused && (
+                animation_playing ||
+                max_iterations.map_or(true, |max| renderer.total_iterations() < max)
+            );
 
             // Mark rendering as complete the frame after max_iterations is reached
             if !should_iterate && !self.rendering_complete {
