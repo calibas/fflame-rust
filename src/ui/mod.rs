@@ -431,6 +431,9 @@ impl EguiLayer {
         config_save_file |= menu_actions.file.save_config;
         apophysis_import_file |= menu_actions.file.import_apophysis;
         if menu_actions.file.export_png {
+            png_export_with_background = true;
+        }
+        if menu_actions.file.export_png_transparent {
             png_export_transparent = true;
         }
         *quit_requested |= menu_actions.file.quit;

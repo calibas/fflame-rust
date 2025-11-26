@@ -27,7 +27,8 @@ struct TonemapParams {
     gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
     alpha_blend_low: f32,  // Start blending toward linear alpha at this value
     alpha_blend_high: f32,  // Full linear alpha above this value
-    _pad_alpha: vec2<f32>,  // Padding to align to 16 bytes
+    transparent_mode: u32,  // 0 = normal (blend with background), 1 = transparent export
+    _pad_alpha: f32,  // Padding to align to 16 bytes
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -294,10 +295,21 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let blend_t = smoothstep(tonemap_params.alpha_blend_low, tonemap_params.alpha_blend_high, gamma_alpha);
     let fractal_alpha = mix(gamma_alpha, linear_alpha, blend_t);
 
-    // Alpha composite using gamma-corrected density (Apophysis method)
-    // This ensures the tonemapping and background blend use the same density curve
-    let final_color = tonemap_params.background_color * (1.0 - fractal_alpha) + fractal_color * fractal_alpha;
-    let final_alpha = 1.0;
+    // Transparent mode: output fractal color with alpha for PNG export
+    // Normal mode: composite with background color for display
+    var final_color: vec3<f32>;
+    var final_alpha: f32;
+
+    if (tonemap_params.transparent_mode != 0u) {
+        // Transparent export: output fractal color and alpha directly
+        // No background blending - the alpha channel represents transparency
+        final_color = fractal_color;
+        final_alpha = fractal_alpha;
+    } else {
+        // Normal display: composite with background, opaque output
+        final_color = tonemap_params.background_color * (1.0 - fractal_alpha) + fractal_color * fractal_alpha;
+        final_alpha = 1.0;
+    }
 
     // Convert from linear to sRGB for display
     // (Rgba8Unorm is linear, but monitors expect sRGB)
