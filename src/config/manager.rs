@@ -403,6 +403,46 @@ impl ConfigManager {
         Ok(update_type)
     }
 
+    /// Update a parameter silently (no undo point created)
+    ///
+    /// Used by the animation system during playback to update parameters
+    /// without creating undo history entries. This allows animations to
+    /// run smoothly without polluting the undo stack.
+    ///
+    /// # Arguments
+    /// * `path` - The ConfigPath identifying which parameter to update
+    /// * `new_value` - The new value to set
+    ///
+    /// # Returns
+    /// * `Ok(UpdateType)` - The type of GPU update needed
+    /// * `Err(ConfigError)` - If the path is invalid or value type doesn't match
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Animation controller updates zoom during playback
+    /// config_manager.update_param_silent(ConfigPath::Zoom, 2.5.into())?;
+    /// ```
+    pub fn update_param_silent(
+        &mut self,
+        path: ConfigPath,
+        new_value: ConfigValue,
+    ) -> Result<UpdateType, ConfigError> {
+        // Skip if value hasn't changed
+        let old_value = self.get_value(&path)?;
+        if old_value.approx_eq(&new_value) {
+            return Ok(UpdateType::None);
+        }
+
+        // Apply value directly (no history, no preview)
+        self.set_value(&path, new_value)?;
+
+        // Determine update type and record action
+        let update_type = path.update_type();
+        self.record_action(update_type);
+
+        Ok(update_type)
+    }
+
     /// Undo last change
     pub fn undo(&mut self) -> Result<UpdateType, ConfigError> {
         // Clear preview mode before undo (if active)
