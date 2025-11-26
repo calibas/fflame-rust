@@ -1483,9 +1483,12 @@ impl App {
             // Overwrite mode logic:
             // - Use flag set in previous frame (changes were detected then, applied now)
             // - When fractal stopped: Always allow overwrite to enable live parameter updates
-            // - During animation playback: Always use overwrite for smooth real-time updates
+            // - During animation playback: Depends on quality mode setting
+            //   - Responsive mode: Use overwrite for smooth real-time preview
+            //   - HighQuality mode: Use batched accumulation for better quality
             let has_stopped = renderer.total_iterations() >= final_config.max_iterations;
-            let use_overwrite = self.use_overwrite_next_frame || has_stopped || animation_playing;
+            let animation_uses_overwrite = animation_playing && self.animation_controller.use_overwrite_mode();
+            let use_overwrite = self.use_overwrite_next_frame || has_stopped || animation_uses_overwrite;
             renderer.set_overwrite_mode(use_overwrite);
 
             // Check if we should continue iterating
