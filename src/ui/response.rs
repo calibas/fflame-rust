@@ -45,6 +45,9 @@ pub struct UiResponse {
 
     // File browser requests
     pub file_browser_open_requested: bool,
+
+    // Animation export request
+    pub animation_export_requested: Option<super::animation_panel::AnimationExportSettings>,
 }
 
 impl Default for UiResponse {
@@ -73,6 +76,7 @@ impl Default for UiResponse {
             needs_repaint: false,
             selected_preset_config: None,
             file_browser_open_requested: false,
+            animation_export_requested: None,
         }
     }
 }

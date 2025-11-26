@@ -69,6 +69,10 @@ pub struct PanelContext<'a> {
     // File browser panel state
     pub file_browser_panel: &'a mut Option<super::file_browser::FileBrowserPanel>,
     pub file_browser_open_requested: &'a mut bool,
+
+    // Animation export settings
+    pub animation_export_settings: &'a mut super::animation_panel::AnimationExportSettings,
+    pub animation_export_requested: &'a mut Option<super::animation_panel::AnimationExportSettings>,
 }
 
 /// Viewer for rendering each panel type
@@ -236,6 +240,7 @@ impl<'a> PanelViewer<'a> {
         let response = super::animation_panel::render_animation_content(
             ui,
             self.context.animation_controller,
+            self.context.animation_export_settings,
         );
 
         // Handle animation load response
@@ -264,6 +269,11 @@ impl<'a> PanelViewer<'a> {
                     }
                 }
             }
+        }
+
+        // Handle animation export request
+        if let Some(settings) = response.export_animation {
+            *self.context.animation_export_requested = Some(settings);
         }
 
         // Show track summary below main controls
