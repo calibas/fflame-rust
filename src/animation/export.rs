@@ -200,7 +200,7 @@ impl Default for CliProgressCallback {
 
 impl ExportProgressCallback for CliProgressCallback {
     fn on_frame_start(&mut self, frame: u32, total: u32, time: f64) {
-        print!("\r  Frame {}/{} (time: {:.2}s)...", frame + 1, total, time);
+        print!("\r  Frame {}/{} (anim: {:.2}s)...", frame + 1, total, time);
         use std::io::Write;
         std::io::stdout().flush().ok();
     }
@@ -216,6 +216,59 @@ impl ExportProgressCallback for CliProgressCallback {
 
     fn on_export_complete(&mut self, total_frames: u32, total_time_ms: f64) {
         println!("\n  Export complete: {} frames in {:.1}s", total_frames, total_time_ms / 1000.0);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled
+    }
+}
+
+/// UI progress callback that updates shared state for display
+///
+/// Used by the GUI to show progress bar during export.
+pub struct UiProgressCallback {
+    progress: std::sync::Arc<std::sync::Mutex<crate::ui::animation_panel::ExportProgress>>,
+    cancelled: bool,
+    last_frame_time_ms: f64,
+}
+
+impl UiProgressCallback {
+    pub fn new(progress: std::sync::Arc<std::sync::Mutex<crate::ui::animation_panel::ExportProgress>>) -> Self {
+        Self {
+            progress,
+            cancelled: false,
+            last_frame_time_ms: 0.0,
+        }
+    }
+}
+
+impl ExportProgressCallback for UiProgressCallback {
+    fn on_frame_start(&mut self, frame: u32, total: u32, time: f64) {
+        if let Ok(mut p) = self.progress.lock() {
+            p.is_exporting = true;
+            p.current_frame = frame;
+            p.total_frames = total;
+            p.status = format!("Rendering frame {} (anim: {:.2}s)", frame + 1, time);
+        }
+    }
+
+    fn on_frame_complete(&mut self, frame: u32, total: u32, elapsed_ms: f64) {
+        self.last_frame_time_ms = elapsed_ms;
+        if let Ok(mut p) = self.progress.lock() {
+            p.current_frame = frame + 1; // Frame is complete, so increment
+            p.total_frames = total;
+            p.seconds_per_frame = elapsed_ms / 1000.0;
+            p.status = format!("Frame {}/{} complete ({:.1}s)", frame + 1, total, elapsed_ms / 1000.0);
+        }
+    }
+
+    fn on_export_complete(&mut self, total_frames: u32, total_time_ms: f64) {
+        if let Ok(mut p) = self.progress.lock() {
+            p.is_exporting = false;
+            p.current_frame = total_frames;
+            p.total_frames = total_frames;
+            p.status = format!("Export complete: {} frames in {:.1}s", total_frames, total_time_ms / 1000.0);
+        }
     }
 
     fn is_cancelled(&self) -> bool {

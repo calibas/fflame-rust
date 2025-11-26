@@ -7,6 +7,38 @@ use egui::Ui;
 use crate::animation::{Animation, AnimationController, AnimationQualityMode, LoopMode, PlaybackState};
 use crate::animation::export::VideoCodec;
 
+/// Export progress state for UI display
+#[derive(Clone, Default)]
+pub struct ExportProgress {
+    /// Whether export is currently in progress
+    pub is_exporting: bool,
+    /// Current frame being rendered (0-indexed)
+    pub current_frame: u32,
+    /// Total frames to render
+    pub total_frames: u32,
+    /// Time per frame in seconds (for ETA calculation)
+    pub seconds_per_frame: f64,
+    /// Status message
+    pub status: String,
+}
+
+impl ExportProgress {
+    /// Get progress as a fraction (0.0 to 1.0)
+    pub fn progress(&self) -> f32 {
+        if self.total_frames == 0 {
+            0.0
+        } else {
+            self.current_frame as f32 / self.total_frames as f32
+        }
+    }
+
+    /// Get estimated time remaining in seconds
+    pub fn eta_seconds(&self) -> f64 {
+        let remaining_frames = self.total_frames.saturating_sub(self.current_frame);
+        remaining_frames as f64 * self.seconds_per_frame
+    }
+}
+
 /// Export settings for animation rendering
 #[derive(Clone)]
 pub struct AnimationExportSettings {
@@ -68,6 +100,7 @@ pub fn render_animation_content(
     ui: &mut Ui,
     controller: &mut AnimationController,
     export_settings: &mut AnimationExportSettings,
+    export_progress: &ExportProgress,
 ) -> AnimationPanelResponse {
     let mut response = AnimationPanelResponse::default();
 
@@ -114,7 +147,7 @@ pub fn render_animation_content(
     ui.separator();
 
     // Export animation section
-    render_export_controls(ui, controller, export_settings, &mut response);
+    render_export_controls(ui, controller, export_settings, export_progress, &mut response);
 
     response
 }
@@ -346,14 +379,36 @@ fn render_export_controls(
     ui: &mut Ui,
     controller: &AnimationController,
     settings: &mut AnimationExportSettings,
+    progress: &ExportProgress,
     response: &mut AnimationPanelResponse,
 ) {
     let has_animation = controller.animation.is_some();
 
     egui::CollapsingHeader::new("🎬 Export Animation")
-        .default_open(false)
+        .default_open(progress.is_exporting) // Auto-expand when exporting
         .show(ui, |ui| {
-            ui.add_enabled_ui(has_animation, |ui| {
+            // Show progress bar when exporting
+            if progress.is_exporting {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(&progress.status);
+                });
+
+                ui.add(egui::ProgressBar::new(progress.progress())
+                    .text(format!("Frame {}/{}", progress.current_frame + 1, progress.total_frames))
+                    .animate(true));
+
+                let eta = progress.eta_seconds();
+                if eta > 0.0 {
+                    let eta_min = (eta / 60.0).floor() as u32;
+                    let eta_sec = (eta % 60.0).floor() as u32;
+                    ui.label(format!("ETA: {}:{:02}", eta_min, eta_sec));
+                }
+
+                ui.separator();
+            }
+
+            ui.add_enabled_ui(has_animation && !progress.is_exporting, |ui| {
                 // Output directory
                 ui.horizontal(|ui| {
                     ui.label("Output:");

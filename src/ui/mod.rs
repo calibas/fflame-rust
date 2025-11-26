@@ -1,4 +1,4 @@
-mod animation_panel;
+pub mod animation_panel;
 mod config_dialog;
 pub mod file_browser;
 mod font_loader;
@@ -23,6 +23,7 @@ mod variation_params;
 mod view;
 pub mod workspace;
 
+pub use animation_panel::ExportProgress;
 pub use font_loader::ensure_font_for_locale;
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
@@ -195,6 +196,7 @@ impl EguiLayer {
         export_width: &mut u32,
         export_height: &mut u32,
         use_custom_export_size: &mut bool,
+        animation_export_progress: &animation_panel::ExportProgress,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -341,6 +343,7 @@ impl EguiLayer {
                         // Animation export settings
                         animation_export_settings: &mut self.animation_export_settings,
                         animation_export_requested: &mut animation_export_requested,
+                        animation_export_progress,
                     },
                 });
 

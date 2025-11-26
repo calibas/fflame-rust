@@ -73,6 +73,7 @@ pub struct PanelContext<'a> {
     // Animation export settings
     pub animation_export_settings: &'a mut super::animation_panel::AnimationExportSettings,
     pub animation_export_requested: &'a mut Option<super::animation_panel::AnimationExportSettings>,
+    pub animation_export_progress: &'a super::animation_panel::ExportProgress,
 }
 
 /// Viewer for rendering each panel type
@@ -241,6 +242,7 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.animation_controller,
             self.context.animation_export_settings,
+            self.context.animation_export_progress,
         );
 
         // Handle animation load response
