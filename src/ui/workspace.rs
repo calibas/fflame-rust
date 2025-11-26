@@ -31,6 +31,8 @@ pub enum PanelType {
     Rendering,
     /// Undo/redo history browser
     History,
+    /// Animation playback controls
+    Animation,
     /// Performance stats and version info
     Performance,
     /// Help and keyboard shortcuts
@@ -53,6 +55,7 @@ impl std::fmt::Display for PanelType {
             PanelType::View => write!(f, "View"),
             PanelType::Rendering => write!(f, "Rendering"),
             PanelType::History => write!(f, "History"),
+            PanelType::Animation => write!(f, "Animation"),
             PanelType::Performance => write!(f, "Performance"),
             PanelType::Help => write!(f, "Help"),
             PanelType::ConfigDialog => write!(f, "Config Import/Export"),

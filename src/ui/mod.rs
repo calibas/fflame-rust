@@ -1,3 +1,4 @@
+mod animation_panel;
 mod config_dialog;
 pub mod file_browser;
 mod font_loader;
@@ -180,6 +181,7 @@ impl EguiLayer {
         flame: &mut crate::scene::transforms::Flame,
         palette_library: &mut crate::scene::palette::PaletteLibrary,
         preset_library: &crate::scene::presets::PresetLibrary,
+        animation_controller: &mut crate::animation::AnimationController,
         current_preset_index: &mut usize,
         paused: &mut bool,
         quit_requested: &mut bool,
@@ -277,6 +279,9 @@ impl EguiLayer {
 
                         // Renderer
                         flame_renderer: flame_renderer.as_ref().map(|v| &**v),
+
+                        // Animation controller
+                        animation_controller,
 
                         // Action flags
                         add_transform: &mut add_transform,

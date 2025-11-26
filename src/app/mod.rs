@@ -355,6 +355,7 @@ impl App {
             &mut self.flame,
             &mut self.palette_library,
             &self.preset_library,
+            &mut self.animation_controller,
             &mut self.current_preset_index,
             &mut self.paused,
             &mut self.quit_requested,
