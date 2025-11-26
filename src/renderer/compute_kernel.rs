@@ -526,6 +526,50 @@ impl FlameRenderer {
         &self.fractal_texture_view
     }
 
+    /// Create a staging buffer for reading fractal pixels
+    /// Returns (buffer, padded_bytes_per_row)
+    pub fn create_pixel_staging_buffer(&self, device: &Device) -> (Buffer, u32) {
+        let bytes_per_pixel = 4u32; // RGBA8
+        let unpadded_bytes_per_row = self.width * bytes_per_pixel;
+        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * self.height) as u64;
+
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Fractal Staging Buffer"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        (buffer, padded_bytes_per_row)
+    }
+
+    /// Copy fractal texture to a staging buffer
+    pub fn copy_fractal_to_buffer(&self, encoder: &mut CommandEncoder, buffer: &Buffer, padded_bytes_per_row: u32) {
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: &self.fractal_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
     /// Get RNG seed based on deterministic mode
     fn get_rng_seed(&mut self) -> u32 {
         if self.deterministic_rng {
