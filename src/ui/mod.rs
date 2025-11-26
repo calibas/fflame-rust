@@ -493,6 +493,7 @@ impl EguiLayer {
     }
 
     /// Check if preset library panel needs thumbnail generation
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn preset_library_needs_thumbnails(&self) -> bool {
         if let Some(ref panel) = self.preset_library_panel {
             panel.is_generating()
@@ -503,6 +504,7 @@ impl EguiLayer {
 
     /// Generate one thumbnail for the preset library (call once per frame)
     /// Returns true if generation is complete
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn generate_preset_thumbnail(
         &mut self,
         device: &egui_wgpu::wgpu::Device,
@@ -519,6 +521,7 @@ impl EguiLayer {
     }
 
     /// Check if file browser panel needs thumbnail generation
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn file_browser_needs_thumbnails(&self) -> bool {
         if let Some(ref panel) = self.file_browser_panel {
             panel.is_generating()
@@ -529,6 +532,7 @@ impl EguiLayer {
 
     /// Generate one thumbnail for the file browser (call once per frame)
     /// Returns true if generation is complete
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn generate_file_browser_thumbnail(
         &mut self,
         device: &egui_wgpu::wgpu::Device,

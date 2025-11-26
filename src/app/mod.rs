@@ -1359,6 +1359,8 @@ impl App {
 
         // Generate one thumbnail for preset library if needed (one per frame)
         // This is blocking but only ~1-2 seconds per thumbnail
+        // Note: Thumbnail generation uses pollster which isn't available on WASM
+        #[cfg(not(target_arch = "wasm32"))]
         if self.egui_layer.preset_library_needs_thumbnails() {
             self.egui_layer.generate_preset_thumbnail(
                 &self.gpu.device,
@@ -1370,6 +1372,7 @@ impl App {
         }
 
         // Generate one thumbnail for file browser if needed (one per frame)
+        #[cfg(not(target_arch = "wasm32"))]
         if self.egui_layer.file_browser_needs_thumbnails() {
             self.egui_layer.generate_file_browser_thumbnail(
                 &self.gpu.device,
