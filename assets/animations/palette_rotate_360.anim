@@ -1,0 +1,18 @@
+{
+  "name": "Palette Rotate 360",
+  "duration": 10.0,
+  "tracks": {
+    "PaletteRotation": {
+      "source": {
+        "type": "Keyframes",
+        "keyframes": [
+          { "time": 0.0, "value": 0.0, "easing": "Linear" },
+          { "time": 10.0, "value": 1.0, "easing": "Linear" }
+        ]
+      },
+      "interpolation": "Linear"
+    }
+  },
+  "circular_tracks": [],
+  "loop_mode": "Loop"
+}
