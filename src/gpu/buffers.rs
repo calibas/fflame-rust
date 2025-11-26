@@ -166,7 +166,8 @@ pub struct TonemapParams {
     pub gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
     pub alpha_blend_low: f32,  // Start blending toward linear alpha at this gamma-corrected value
     pub alpha_blend_high: f32,  // Full linear alpha above this value
-    pub _pad_alpha: [f32; 2],  // Padding to align to 16 bytes
+    pub transparent_mode: u32,  // 0 = normal (blend with background), 1 = transparent export
+    pub _pad_alpha: f32,  // Padding to align to 16 bytes
 }
 
 impl Default for TonemapParams {
@@ -193,7 +194,8 @@ impl Default for TonemapParams {
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
-            _pad_alpha: [0.0, 0.0],
+            transparent_mode: 0,  // Normal display mode
+            _pad_alpha: 0.0,
         }
     }
 }

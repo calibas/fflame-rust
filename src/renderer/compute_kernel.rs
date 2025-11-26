@@ -507,7 +507,8 @@ impl FlameRenderer {
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
-            _pad_alpha: [0.0, 0.0],
+            transparent_mode: 0,
+            _pad_alpha: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -646,7 +647,8 @@ impl FlameRenderer {
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
-            _pad_alpha: [0.0, 0.0],
+            transparent_mode: 0,
+            _pad_alpha: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -661,6 +663,51 @@ impl FlameRenderer {
     pub fn update_background_color(&mut self, queue: &Queue, background_color: [f32; 3]) {
         self.background_color = background_color;
         self.update_tonemap_state(queue);
+    }
+
+    /// Set transparent mode for PNG export
+    /// When enabled, tonemap shader outputs fractal alpha instead of blending with background
+    pub fn set_transparent_mode(&self, queue: &Queue, transparent: bool, config: &FractalConfig, iterations_per_thread: u32) {
+        use crate::config::defaults::*;
+
+        let tonemap_mode_u32 = match config.tonemap_mode {
+            crate::scene::tonemap::ToneMapMode::Linear => 0u32,
+            crate::scene::tonemap::ToneMapMode::Logarithmic => 1u32,
+            crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
+        };
+
+        // Calculate area and sample_density (simplified for export)
+        let apophysis_zoom = config.zoom.log2();
+        let base_pixels_per_unit = (self.width.min(self.height) as f32) * 0.25;
+        let pixels_per_unit_zoomed = base_pixels_per_unit * (2.0_f32).powf(apophysis_zoom);
+        let area = (self.width * self.height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
+        let sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0);
+
+        let params = TonemapParams {
+            exposure: config.exposure,
+            gamma: config.gamma,
+            density_scale: self.density_scale,
+            tonemap_mode: tonemap_mode_u32,
+            background_color: self.background_color,
+            _pad_bg: 0.0,
+            use_curve: if config.use_curve { 1u32 } else { 0u32 },
+            vibrancy: config.vibrancy,
+            brightness: config.brightness,
+            white_level: DEFAULT_WHITE_LEVEL,
+            prefilter_white: PREFILTER_WHITE,
+            bright_adjust: BRIGHT_ADJUST,
+            area,
+            sample_density,
+            saturation: config.saturation,
+            hue_shift: config.hue_shift,
+            value_scale: config.value_scale,
+            gamma_threshold: config.gamma_threshold,
+            alpha_blend_low: config.alpha_blend_low,
+            alpha_blend_high: config.alpha_blend_high,
+            transparent_mode: if transparent { 1 } else { 0 },
+            _pad_alpha: 0.0,
+        };
+        self.buffers.update_tonemap_params(queue, &params);
     }
 
     /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, value scale, and alpha blend
@@ -746,7 +793,8 @@ impl FlameRenderer {
             gamma_threshold,
             alpha_blend_low,
             alpha_blend_high,
-            _pad_alpha: [0.0, 0.0],
+            transparent_mode: 0,
+            _pad_alpha: 0.0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }

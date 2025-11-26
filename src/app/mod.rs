@@ -969,9 +969,23 @@ impl App {
                 if self.use_custom_export_size {
                     // Custom-size export: create temporary renderer at export dimensions
                     self.export_custom_size(transparent, export_config, render_time_ms);
-                } else if let Some(ref renderer) = self.flame_renderer {
+                } else if let Some(ref mut renderer) = self.flame_renderer {
                     // Viewport-size export: use current renderer
                     let total_iterations = renderer.total_iterations();
+
+                    // For transparent export, we need to re-run tonemap with transparent_mode=1
+                    if transparent {
+                        let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
+                        renderer.set_transparent_mode(&self.gpu.queue, true, &export_config, iterations_per_thread);
+
+                        // Run tonemap pass with transparent mode
+                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                            label: Some("Transparent Export Tonemap"),
+                        });
+                        renderer.tonemap_pass(&mut encoder);
+                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+                    }
+
                     let pixels_future = renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, export_config.background_color);
 
                     match pollster::block_on(pixels_future) {
@@ -1008,6 +1022,19 @@ impl App {
                         }
                         Err(e) => eprintln!("Failed to capture pixels: {}", e),
                     }
+
+                    // Reset transparent mode back to normal for display
+                    if transparent {
+                        let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
+                        renderer.set_transparent_mode(&self.gpu.queue, false, &export_config, iterations_per_thread);
+
+                        // Run tonemap pass to restore normal display
+                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                            label: Some("Restore Normal Tonemap"),
+                        });
+                        renderer.tonemap_pass(&mut encoder);
+                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+                    }
                 }
             }
 
@@ -1024,12 +1051,28 @@ impl App {
                 // Build metadata before borrowing renderer
                 let export_config = self.export_config();
 
-                if let Some(ref renderer) = self.flame_renderer {
+                if let Some(ref mut renderer) = self.flame_renderer {
                     let total_iterations = renderer.total_iterations();
                     let render_time_ms = self.metrics.render_time_ms;
                     let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
                     let speed_factor = export_config.speed_factor;
                     let background_color = export_config.background_color;
+
+                    // For transparent export, set transparent mode and run tonemap before reading
+                    if transparent {
+                        renderer.set_transparent_mode(&self.gpu.queue, true, &export_config, iterations_per_thread);
+
+                        // Run tonemap pass with transparent mode
+                        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                            label: Some("Transparent Export Tonemap"),
+                        });
+                        renderer.tonemap_pass(&mut encoder);
+                        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+
+                        // Reset transparent mode immediately - the texture is already rendered
+                        // and will be read by the async task. Next frame will re-run normal tonemap.
+                        renderer.set_transparent_mode(&self.gpu.queue, false, &export_config, iterations_per_thread);
+                    }
 
                     let device: &'static egui_wgpu::wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
                     let queue: &'static egui_wgpu::wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };

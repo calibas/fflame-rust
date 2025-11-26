@@ -8,6 +8,7 @@ pub struct FileMenuActions {
     pub save_config: bool,
     pub import_apophysis: bool,
     pub export_png: bool,
+    pub export_png_transparent: bool,
     pub quit: bool,
 }
 

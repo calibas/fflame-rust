@@ -7,7 +7,7 @@ use super::formatting::format_iterations;
 pub fn render_settings_content(
     ui: &mut egui::Ui,
     png_export_with_background: &mut bool,
-    _png_export_transparent: &mut bool,
+    png_export_transparent: &mut bool,
     export_width: &mut u32,
     export_height: &mut u32,
     use_custom_export_size: &mut bool,
@@ -317,8 +317,10 @@ pub fn render_settings_content(
             if ui.button("Export with Background").clicked() {
                 *png_export_with_background = true;
             }
-            // TODO: Transparent export currently broken, hiding for now
-            // ui.checkbox(png_export_transparent, "Export Transparent");
+
+            if ui.button("Export Transparent").clicked() {
+                *png_export_transparent = true;
+            }
 
             ui.separator();
             ui.checkbox(use_custom_export_size, "Use Custom Export Size");

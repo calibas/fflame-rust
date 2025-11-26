@@ -49,6 +49,11 @@ pub fn render_menu_bar(
 
                 }
 
+                if ui.button("🖼 Export Transparent PNG...").clicked() {
+                    menu_actions.file.export_png_transparent = true;
+
+                }
+
                 ui.separator();
 
                 if ui.button("❌ Quit").clicked() {
