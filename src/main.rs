@@ -41,6 +41,41 @@ enum Commands {
         #[arg(long)]
         iterations_per_thread: Option<u32>,
     },
+
+    /// Export animation as PNG sequence (high-quality frame-by-frame rendering)
+    ExportAnimation {
+        /// Input .fflame config file (base flame state)
+        #[arg(short, long)]
+        config: String,
+
+        /// Input .anim animation file
+        #[arg(short, long)]
+        animation: String,
+
+        /// Output directory for frames
+        #[arg(short, long)]
+        output: String,
+
+        /// Frame width (default: 1920)
+        #[arg(short, long, default_value = "1920")]
+        width: u32,
+
+        /// Frame height (default: 1080)
+        #[arg(short = 'H', long, default_value = "1080")]
+        height: u32,
+
+        /// Frames per second (default: 30)
+        #[arg(long, default_value = "30")]
+        fps: u32,
+
+        /// Export transparent PNGs
+        #[arg(long)]
+        transparent: bool,
+
+        /// Iterations per thread (default: 256)
+        #[arg(long, default_value = "256")]
+        iterations_per_thread: u32,
+    },
 }
 
 fn main() {
@@ -52,6 +87,10 @@ fn main() {
             Some(Commands::Export { input, output, width, height, category, iterations_per_thread }) => {
                 // Run in headless export mode
                 fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread);
+            }
+            Some(Commands::ExportAnimation { config, animation, output, width, height, fps, transparent, iterations_per_thread }) => {
+                // Run animation export mode
+                fractal_flame_wgpu::export_animation_mode(&config, &animation, &output, width, height, fps, transparent, iterations_per_thread);
             }
             None => {
                 // Run normal GUI mode

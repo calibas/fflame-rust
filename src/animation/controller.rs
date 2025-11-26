@@ -138,6 +138,14 @@ impl AnimationController {
     ///
     /// Returns vec of (path_string, value) pairs for parameters that should be updated
     pub fn evaluate_frame(&self) -> Vec<(String, serde_json::Value)> {
+        self.evaluate_at_time(self.current_time)
+    }
+
+    /// Evaluate all tracks at a specific time (for export)
+    ///
+    /// This is the core evaluation function used by both real-time playback
+    /// and animation export. Returns vec of (path_string, value) pairs.
+    pub fn evaluate_at_time(&self, time: f64) -> Vec<(String, serde_json::Value)> {
         let Some(ref animation) = self.animation else {
             return Vec::new();
         };
@@ -146,14 +154,14 @@ impl AnimationController {
 
         // Evaluate regular tracks
         for (path_str, track) in &animation.tracks {
-            if let Some(value) = self.evaluate_track(track, self.current_time) {
+            if let Some(value) = self.evaluate_track(track, time) {
                 values.push((path_str.clone(), value));
             }
         }
 
         // Evaluate circular tracks (output X and Y)
         for circular in &animation.circular_tracks {
-            let (x, y) = circular.evaluate(self.current_time);
+            let (x, y) = circular.evaluate(time);
             values.push((circular.target_x.clone(), serde_json::json!(x)));
             values.push((circular.target_y.clone(), serde_json::json!(y)));
         }

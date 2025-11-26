@@ -67,6 +67,12 @@ pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub fn export_animation_mode(config_path: &str, animation_path: &str, output_dir: &str, width: u32, height: u32, fps: u32, transparent: bool, iterations_per_thread: u32) {
+    env_logger::init();
+    pollster::block_on(export_animation_async(config_path, animation_path, output_dir, width, height, fps, transparent, iterations_per_thread)).expect("Animation export failed");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 async fn export_async(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>) -> Result<(), Box<dyn std::error::Error>> {
     use std::path::Path;
 
@@ -129,6 +135,72 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
     }
 
     println!("\nExport complete!");
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn export_animation_async(
+    config_path: &str,
+    animation_path: &str,
+    output_dir: &str,
+    width: u32,
+    height: u32,
+    fps: u32,
+    transparent: bool,
+    iterations_per_thread: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::path::Path;
+    use animation::export::{AnimationExportConfig, CliProgressCallback, export_animation};
+    use animation::Animation;
+
+    println!("Fractal Flame Animation Export");
+    println!("===============================");
+    println!("Config: {}", config_path);
+    println!("Animation: {}", animation_path);
+    println!("Output: {}", output_dir);
+    println!("Resolution: {}x{} @ {} FPS", width, height, fps);
+    println!("Iterations per thread: {}", iterations_per_thread);
+    if transparent {
+        println!("Mode: Transparent PNG");
+    }
+    println!();
+
+    // Load config file
+    let config = config::FractalConfig::load_from_file(Path::new(config_path))?;
+    println!("Loaded config: {}", config.flame.name);
+
+    // Load animation file
+    let animation_contents = std::fs::read_to_string(animation_path)?;
+    let anim = Animation::from_json(&animation_contents)?;
+    println!("Loaded animation: {} ({:.1}s duration)", anim.name, anim.duration);
+
+    let total_frames = (anim.duration * fps as f64).ceil() as u32;
+    println!("Total frames: {}", total_frames);
+    println!();
+
+    // Create export config
+    let export_config = AnimationExportConfig {
+        config,
+        animation: anim,
+        output_dir: Path::new(output_dir).to_path_buf(),
+        width,
+        height,
+        fps,
+        iterations_per_thread,
+        transparent,
+    };
+
+    // Run export
+    let mut progress = CliProgressCallback::new();
+    let result = export_animation(export_config, &mut progress).await?;
+
+    println!();
+    println!("Animation export complete!");
+    println!("  Total frames: {}", result.total_frames);
+    println!("  Total time: {:.1}s", result.total_time_ms / 1000.0);
+    println!("  Average per frame: {:.1}s", result.avg_frame_time_ms / 1000.0);
+    println!("  Output: {}", result.output_dir.display());
+
     Ok(())
 }
 

@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 mod controller;
 mod interpolation;
+pub mod export;
 
 pub use controller::AnimationController;
 pub use interpolation::{EasingFunction, Interpolation};

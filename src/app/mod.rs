@@ -1306,6 +1306,45 @@ impl App {
             }
         }
 
+        // Handle animation export request
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(export_settings) = ui_response.animation_export_requested {
+            if let Some(ref animation) = self.animation_controller.animation {
+                use crate::animation::export::{AnimationExportConfig, CliProgressCallback, export_animation};
+
+                let export_config = AnimationExportConfig {
+                    config: self.config_manager.active_config().clone(),
+                    animation: animation.clone(),
+                    output_dir: export_settings.output_dir,
+                    width: export_settings.width,
+                    height: export_settings.height,
+                    fps: export_settings.fps,
+                    iterations_per_thread: export_settings.iterations_per_thread,
+                    transparent: export_settings.transparent,
+                };
+
+                println!("Starting animation export...");
+                println!("  Output: {}", export_config.output_dir.display());
+                println!("  Resolution: {}x{} @ {} FPS", export_config.width, export_config.height, export_config.fps);
+                println!("  Total frames: {}", export_config.total_frames());
+
+                // Run export synchronously (blocking UI - TODO: make async with progress dialog)
+                let mut progress = CliProgressCallback::new();
+                match pollster::block_on(export_animation(export_config, &mut progress)) {
+                    Ok(result) => {
+                        println!("\nAnimation export complete!");
+                        println!("  {} frames in {:.1}s", result.total_frames, result.total_time_ms / 1000.0);
+                        println!("  Output: {}", result.output_dir.display());
+                    }
+                    Err(e) => {
+                        eprintln!("Animation export failed: {}", e);
+                    }
+                }
+            } else {
+                eprintln!("No animation loaded for export");
+            }
+        }
+
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         // Get pending actions from ConfigManager (replaces individual boolean flags)
         let actions = self.config_manager.get_pending_actions();

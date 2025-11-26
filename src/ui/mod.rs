@@ -53,6 +53,9 @@ pub struct EguiLayer {
 
     // File browser panel state
     file_browser_panel: Option<file_browser::FileBrowserPanel>,
+
+    // Animation export settings
+    animation_export_settings: animation_panel::AnimationExportSettings,
 }
 
 impl EguiLayer {
@@ -89,6 +92,7 @@ impl EguiLayer {
             preset_library_panel: None,
             selected_preset_config: None,
             file_browser_panel: None,
+            animation_export_settings: animation_panel::AnimationExportSettings::default(),
         }
     }
 
@@ -234,6 +238,9 @@ impl EguiLayer {
         // File browser
         let mut file_browser_open_requested = false;
 
+        // Animation export
+        let mut animation_export_requested: Option<animation_panel::AnimationExportSettings> = None;
+
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
         let menu_state = MenuState {
@@ -330,6 +337,10 @@ impl EguiLayer {
                         // File browser panel state
                         file_browser_panel: &mut self.file_browser_panel,
                         file_browser_open_requested: &mut file_browser_open_requested,
+
+                        // Animation export settings
+                        animation_export_settings: &mut self.animation_export_settings,
+                        animation_export_requested: &mut animation_export_requested,
                     },
                 });
 
@@ -494,6 +505,7 @@ impl EguiLayer {
             needs_repaint,
             selected_preset_config,
             file_browser_open_requested,
+            animation_export_requested,
         }
     }
 
