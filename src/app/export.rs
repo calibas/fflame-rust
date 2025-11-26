@@ -7,6 +7,7 @@ pub async fn export_headless_wasm(
     width: u32,
     height: u32,
     iterations_per_thread: u32,
+    transparent: bool,
 ) -> Result<Vec<u8>, String> {
     use crate::renderer::compute_kernel::FlameRenderer;
     use crate::scene::palette::PaletteLibrary;
@@ -138,6 +139,11 @@ pub async fn export_headless_wasm(
         }
     }
 
+    // Set transparent mode if requested
+    if transparent {
+        renderer.set_transparent_mode(&queue, true, config, iterations_per_thread);
+    }
+
     // Render tonemap pass
     let mut final_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
         label: Some("Final Tonemap"),
@@ -145,8 +151,8 @@ pub async fn export_headless_wasm(
     renderer.tonemap_pass(&mut final_encoder);
     queue.submit(std::iter::once(final_encoder.finish()));
 
-    // Capture pixels
-    let (width, height, rgba_data) = renderer.read_fractal_pixels(&device, &queue, false, config.background_color)
+    // Capture pixels (transparent mode already handled by shader)
+    let (width, height, rgba_data) = renderer.read_fractal_pixels(&device, &queue, transparent, config.background_color)
         .await
         .map_err(|e| format!("Failed to read pixels: {}", e))?;
 
@@ -180,6 +186,7 @@ pub async fn export_headless(
     height: u32,
     test_category: Option<String>,
     iterations_per_thread: u32,
+    transparent: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     use crate::renderer::compute_kernel::FlameRenderer;
     use crate::scene::palette::PaletteLibrary;
@@ -309,6 +316,11 @@ pub async fn export_headless(
 
     println!("\r  Progress: {}/{} (100.0%)", total_rendered, target);
 
+    // Set transparent mode if requested
+    if transparent {
+        renderer.set_transparent_mode(&queue, true, config, iterations_per_thread);
+    }
+
     // Render tonemap pass to fractal_texture before reading pixels
     let mut final_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
         label: Some("Final Tonemap"),
@@ -316,8 +328,8 @@ pub async fn export_headless(
     renderer.tonemap_pass(&mut final_encoder);
     queue.submit(std::iter::once(final_encoder.finish()));
 
-    // Capture pixels from fractal_texture (what was actually rendered and displayed)
-    let (width, height, rgba_data) = renderer.read_fractal_pixels(&device, &queue, false, config.background_color).await?;
+    // Capture pixels from fractal_texture (transparent mode already handled by shader)
+    let (width, height, rgba_data) = renderer.read_fractal_pixels(&device, &queue, transparent, config.background_color).await?;
 
     // Encode PNG
     let png_data = crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data.clone(), None)?;

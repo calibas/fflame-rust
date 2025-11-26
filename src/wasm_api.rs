@@ -227,13 +227,14 @@ impl WasmApi {
         width: u32,
         height: u32,
         iterations_per_thread: u32,
+        transparent: bool,
     ) -> Result<Vec<u8>, JsValue> {
         use crate::app::export::export_headless_wasm;
 
         let config = self.config.as_ref()
             .ok_or_else(|| JsValue::from_str("No config loaded"))?;
 
-        let png_data = export_headless_wasm(config, width, height, iterations_per_thread)
+        let png_data = export_headless_wasm(config, width, height, iterations_per_thread, transparent)
             .await
             .map_err(|e| JsValue::from_str(&e))?;
 

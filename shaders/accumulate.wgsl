@@ -10,10 +10,10 @@ struct AccumulateParams {
     density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression
     target_iterations_per_pixel: u32, // Per-pixel convergence threshold (0 = disabled)
     _pad0: f32,
-    _pad1: f32, // Padding for alignment
-    _pad2: f32,
-    _pad3: f32,
-    _pad4: f32,
+    background_r: f32, // Unused - kept for struct layout compatibility
+    background_g: f32,
+    background_b: f32,
+    _pad1: f32,
 }
 
 @group(0) @binding(0) var previous_accumulation: texture_2d<f32>;
@@ -44,58 +44,55 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let b_sum = f32(histogram[base_idx + 2u]);
     let density = f32(histogram[base_idx + 3u]);
 
-    // Convert back to float color (average)
-    // Density includes scale (density = sum of pixel_scale per hit)
-    // So we divide by density only, not (density × pixel_scale)
-    var new_color = vec3<f32>(0.0);
-    if (density > 0.0) {
-        new_color = vec3<f32>(
-            r_sum / density,
-            g_sum / density,
-            b_sum / density
-        );
-
-        // Clamp to valid range
-        new_color = clamp(new_color, vec3<f32>(0.0), vec3<f32>(1.0));
-    }
-
-    // Blend new samples with previous accumulation
     // Check per-pixel convergence: has this pixel received enough iterations?
     let pixel_iterations = iteration_counts[pixel_idx];
-
-    // Only apply convergence check if pixel has some accumulated density
-    // This prevents empty spots on first frame when dense pixels immediately hit the limit
     let has_some_density = prev.a > 0.01;
     let is_converged = params.target_iterations_per_pixel > 0u && has_some_density && pixel_iterations >= params.target_iterations_per_pixel;
-
-    // Gate blend_factor based on convergence (hard cutoff)
-    // If converged, stop all accumulation (convergence_gate = 0.0)
     let convergence_gate = select(1.0, 0.0, is_converged);
+
+    // Detect overwrite mode (blend_factor ~= 1.0)
+    let is_overwrite_mode = params.blend_factor >= 0.99;
+
+    // If no new samples this frame:
+    // - Normal mode: keep previous values (progressive accumulation)
+    // - Overwrite mode: clear to zero (prevents smearing during preview)
+    if (density == 0.0) {
+        let output = select(prev, vec4<f32>(0.0, 0.0, 0.0, 0.0), is_overwrite_mode);
+        textureStore(output_texture, pixel, output);
+        return;
+    }
+
+    // Convert histogram to averaged color
+    let new_color = clamp(vec3<f32>(
+        r_sum / density,
+        g_sum / density,
+        b_sum / density
+    ), vec3<f32>(0.0), vec3<f32>(1.0));
 
     // Adaptive blending based on accumulated density to reduce low-density noise
     let density_threshold = 0.1;
     let density_factor = mix(1.0, min(prev.a / density_threshold, 1.0), params.low_density_smoothing);
 
     // Apply density compression to slow accumulation in bright areas
-    // Formula adjusted for actual density scale (0-100+)
-    // Use linear term instead of squared to avoid saturation
     let compression_factor = 1.0 / (1.0 + prev.a * params.density_compression_strength * 0.01);
 
     // Multiply all factors together: global blend × density × compression × convergence
-    let adjusted_blend = params.blend_factor * density_factor * compression_factor * convergence_gate;
+    let final_blend = params.blend_factor * density_factor * compression_factor * convergence_gate;
 
-    // ALWAYS blend (like ce58657), even when density==0, to prevent smearing during interactive editing
-    let rgb_accumulated = prev.rgb * (1.0 - adjusted_blend) + new_color * adjusted_blend;
+    // Blend RGB: when prev.a is near zero, use new_color directly to avoid black contamination
+    // As density builds, gradually trust the blended result more
+    let blend_trust = clamp(prev.a / 0.05, 0.0, 1.0);
+    let blended_rgb = prev.rgb * (1.0 - final_blend) + new_color * final_blend;
+    let rgb_accumulated = mix(new_color, blended_rgb, blend_trust);
 
     // Alpha (density) handling:
     // - Normal mode (blend_factor < 1.0): Additive accumulation
     // - Overwrite mode (blend_factor == 1.0): Replace previous alpha
-    // This prevents progressive brightness during live preview drag
     let new_alpha = density * 0.01 * params.blend_factor * convergence_gate;
     let alpha_accumulated = select(
         prev.a + new_alpha,        // Normal: accumulate
         new_alpha,                 // Overwrite: replace
-        params.blend_factor >= 0.99  // Check for overwrite mode (float comparison tolerance)
+        params.blend_factor >= 0.99
     );
 
     // Write to output

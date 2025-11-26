@@ -109,6 +109,16 @@ pub struct FractalConfig {
     #[serde(default = "default_value_scale")]
     pub value_scale: f32,
 
+    /// Alpha blend low threshold: start blending toward linear alpha at this gamma-corrected value
+    /// Lower = more gamma-corrected (no halos), Higher = more linear (more detail at edges)
+    #[serde(default = "default_alpha_blend_low")]
+    pub alpha_blend_low: f32,
+
+    /// Alpha blend high threshold: fully linear alpha above this gamma-corrected value
+    /// Controls when mid-range density areas get full linear alpha (preserves detail)
+    #[serde(default = "default_alpha_blend_high")]
+    pub alpha_blend_high: f32,
+
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default)]
     pub deterministic_rng: bool,
@@ -156,6 +166,14 @@ fn default_hue_shift() -> f32 {
 
 fn default_value_scale() -> f32 {
     super::defaults::DEFAULT_VALUE_SCALE
+}
+
+fn default_alpha_blend_low() -> f32 {
+    super::defaults::DEFAULT_ALPHA_BLEND_LOW
+}
+
+fn default_alpha_blend_high() -> f32 {
+    super::defaults::DEFAULT_ALPHA_BLEND_HIGH
 }
 
 fn default_palette_rotation() -> f32 {
@@ -225,6 +243,8 @@ impl Default for FractalConfig {
             saturation: default_saturation(),
             hue_shift: default_hue_shift(),
             value_scale: default_value_scale(),
+            alpha_blend_low: default_alpha_blend_low(),
+            alpha_blend_high: default_alpha_blend_high(),
             deterministic_rng: false,
         }
     }

@@ -403,6 +403,8 @@ impl PresetLibrary {
                     blend_factor: 0.1,
                     use_dynamic_blend: true,
                     target_iterations_per_pixel: 0,
+                    alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,
+                    alpha_blend_high: crate::config::defaults::DEFAULT_ALPHA_BLEND_HIGH,
                 }
             },
             Self::flame_to_config(create_simple_flame()),
@@ -451,6 +453,8 @@ impl PresetLibrary {
                     blend_factor: 0.1,
                     use_dynamic_blend: true,
                     target_iterations_per_pixel: 0,
+                    alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,
+                    alpha_blend_high: crate::config::defaults::DEFAULT_ALPHA_BLEND_HIGH,
                 }
             },
         ];
@@ -515,6 +519,8 @@ impl PresetLibrary {
             blend_factor: 0.1,
             use_dynamic_blend: true,
             target_iterations_per_pixel: 0,
+            alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,
+            alpha_blend_high: crate::config::defaults::DEFAULT_ALPHA_BLEND_HIGH,
         }
     }
 

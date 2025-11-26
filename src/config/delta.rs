@@ -34,6 +34,8 @@ pub enum ConfigPath {
     Saturation,
     HueShift,
     ValueScale,
+    AlphaBlendLow,
+    AlphaBlendHigh,
     DensityScale,
     TonemapMode,
     TonemapCurve,
@@ -127,6 +129,8 @@ impl Display for ConfigPath {
             ConfigPath::Saturation => write!(f, "Saturation"),
             ConfigPath::HueShift => write!(f, "Hue Shift"),
             ConfigPath::ValueScale => write!(f, "Value Scale"),
+            ConfigPath::AlphaBlendLow => write!(f, "Alpha Blend Low"),
+            ConfigPath::AlphaBlendHigh => write!(f, "Alpha Blend High"),
             ConfigPath::DensityScale => write!(f, "Density Scale"),
             ConfigPath::TonemapMode => write!(f, "Tonemap Mode"),
             ConfigPath::TonemapCurve => write!(f, "Tone Curve"),
@@ -618,6 +622,8 @@ impl ConfigPath {
             | ConfigPath::Saturation
             | ConfigPath::HueShift
             | ConfigPath::ValueScale
+            | ConfigPath::AlphaBlendLow
+            | ConfigPath::AlphaBlendHigh
             | ConfigPath::DensityScale
             | ConfigPath::TonemapMode
             | ConfigPath::TonemapCurve

@@ -1,3 +1,4 @@
+# pylint: skip-file
 #!/usr/bin/env python3
 """
 Benchmark script for comparing performance across commits.

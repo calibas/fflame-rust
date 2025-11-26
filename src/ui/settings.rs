@@ -7,7 +7,7 @@ use super::formatting::format_iterations;
 pub fn render_settings_content(
     ui: &mut egui::Ui,
     png_export_with_background: &mut bool,
-    _png_export_transparent: &mut bool,
+    png_export_transparent: &mut bool,
     export_width: &mut u32,
     export_height: &mut u32,
     use_custom_export_size: &mut bool,
@@ -247,11 +247,13 @@ pub fn render_settings_content(
             let mut temp_blend = config.blend_factor;
             let response = ui.add_enabled(
                 !config.use_dynamic_blend,
-                egui::Slider::new(&mut temp_blend, 0.01..=1.0)
+                egui::Slider::new(&mut temp_blend, 0.001..=1.0)
+                    .logarithmic(true)
                     .text("Fixed Blend Rate")
             ).on_hover_text(
                 "Controls how quickly new samples blend with history.\n\
                 Only active when Dynamic Blend is disabled.\n\n\
+                0.001 = Nearly permanent (very slow fade)\n\
                 0.01 = Very slow/smooth\n\
                 0.1 = Balanced (default)\n\
                 1.0 = Fast/flickery"
@@ -315,8 +317,10 @@ pub fn render_settings_content(
             if ui.button("Export with Background").clicked() {
                 *png_export_with_background = true;
             }
-            // TODO: Transparent export currently broken, hiding for now
-            // ui.checkbox(png_export_transparent, "Export Transparent");
+
+            if ui.button("Export Transparent").clicked() {
+                *png_export_transparent = true;
+            }
 
             ui.separator();
             ui.checkbox(use_custom_export_size, "Use Custom Export Size");

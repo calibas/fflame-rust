@@ -120,7 +120,8 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
 
         // Call the existing PNG export logic from app
         // We'll need to add a headless export helper
-        let success = app::export_headless(config, &output_file, w, h, category.clone(), ipt).await?;
+        // CLI export uses opaque (non-transparent) mode by default
+        let success = app::export_headless(config, &output_file, w, h, category.clone(), ipt, false).await?;
 
         if success {
             println!("  ✓ Saved to {}", output_file.display());
