@@ -19,6 +19,9 @@ pub struct PanelContext<'a> {
     // Renderer (optional, might not exist during init)
     pub flame_renderer: Option<&'a crate::renderer::compute_kernel::FlameRenderer>,
 
+    // Animation controller
+    pub animation_controller: &'a mut crate::animation::AnimationController,
+
     // Action flags
     pub add_transform: &'a mut bool,
     pub delete_transform: &'a mut Option<usize>,
@@ -108,6 +111,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::History => {
                 self.render_history_panel(ui);
+            }
+            PanelType::Animation => {
+                self.render_animation_panel(ui);
             }
             PanelType::Performance => {
                 self.render_performance_panel(ui);
@@ -223,6 +229,46 @@ impl<'a> PanelViewer<'a> {
             self.context.undo_requested,
             self.context.redo_requested,
         );
+    }
+
+    /// Render Animation panel (playback controls, timeline)
+    fn render_animation_panel(&mut self, ui: &mut egui::Ui) {
+        let response = super::animation_panel::render_animation_content(
+            ui,
+            self.context.animation_controller,
+        );
+
+        // Handle animation load response
+        if let Some(animation) = response.load_animation {
+            self.context.animation_controller.load(animation);
+        }
+
+        // Handle animation save response
+        if response.save_animation {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(ref animation) = self.context.animation_controller.animation {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Animation", &["anim", "json"])
+                    .set_file_name(&format!("{}.anim", animation.name))
+                    .save_file()
+                {
+                    match animation.to_json() {
+                        Ok(json) => {
+                            if let Err(e) = std::fs::write(&path, json) {
+                                log::error!("Failed to save animation: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to serialize animation: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Show track summary below main controls
+        ui.separator();
+        super::animation_panel::render_track_summary(ui, self.context.animation_controller);
     }
 
     /// Render the Performance panel (stats and version info)

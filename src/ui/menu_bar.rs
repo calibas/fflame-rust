@@ -263,6 +263,12 @@ pub fn render_menu_bar(
 
                 }
 
+                // Animation panel
+                let animation_open = workspace.panel_exists(super::workspace::PanelType::Animation);
+                if ui.selectable_label(animation_open, "🎬 Animation").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Animation);
+                }
+
                 ui.separator();
                 ui.menu_button("📐 Workspace Layout", |ui| {
                     let current = workspace.current_layout;
