@@ -1247,36 +1247,18 @@ impl App {
                             Ok(Ok(())) => {
                                 let data = buffer_slice.get_mapped_range();
 
-                                // Extract RGBA data from staging buffer
+                                // Extract RGBA data from staging buffer (handle row padding)
                                 let bytes_per_pixel = 4u32;
-                                let unpadded_bytes_per_row = width * bytes_per_pixel;
+                                let unpadded_bytes_per_row = (width * bytes_per_pixel) as usize;
                                 let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
 
                                 for y in 0..height {
                                     let row_start = (y * padded_bytes_per_row) as usize;
-                                    let row_end = row_start + (width * bytes_per_pixel) as usize;
-                                    let row_data = &data[row_start..row_end];
-
-                                    for x in 0..width {
-                                        let pixel_start = (x * bytes_per_pixel) as usize;
-                                        let r = row_data[pixel_start];
-                                        let g = row_data[pixel_start + 1];
-                                        let b = row_data[pixel_start + 2];
-                                        let a = row_data[pixel_start + 3];
-
-                                        if transparent {
-                                            rgba_data.extend_from_slice(&[r, g, b, a]);
-                                        } else {
-                                            let alpha = a as f32 / 255.0;
-                                            let bg_r = (background_color[0] * 255.0) as u8;
-                                            let bg_g = (background_color[1] * 255.0) as u8;
-                                            let bg_b = (background_color[2] * 255.0) as u8;
-                                            let out_r = ((r as f32 * alpha) + (bg_r as f32 * (1.0 - alpha))) as u8;
-                                            let out_g = ((g as f32 * alpha) + (bg_g as f32 * (1.0 - alpha))) as u8;
-                                            let out_b = ((b as f32 * alpha) + (bg_b as f32 * (1.0 - alpha))) as u8;
-                                            rgba_data.extend_from_slice(&[out_r, out_g, out_b, 255]);
-                                        }
-                                    }
+                                    // Only copy the actual pixel data, not the padding
+                                    let row_data = &data[row_start..row_start + unpadded_bytes_per_row];
+                                    // For opaque export, the shader already blended with background (transparent_mode=0)
+                                    // For transparent export, we ran tonemap with transparent_mode=1
+                                    rgba_data.extend_from_slice(row_data);
                                 }
                                 drop(data);
                                 staging_buffer.unmap();
