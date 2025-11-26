@@ -197,6 +197,11 @@ impl App {
         println!("Export stats: {} accumulation passes, {} total iterations",
             accumulation_count, total_rendered);
 
+        // Set transparent mode if requested (before tonemap pass)
+        if transparent {
+            temp_renderer.set_transparent_mode(&self.gpu.queue, true, &config, self.config_manager.system_settings().iterations_per_thread);
+        }
+
         // Final tonemap pass
         let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Export Final Tonemap"),
