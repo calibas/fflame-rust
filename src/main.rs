@@ -75,6 +75,26 @@ enum Commands {
         /// Iterations per thread (default: 256)
         #[arg(long, default_value = "256")]
         iterations_per_thread: u32,
+
+        /// Encode to video after rendering frames (requires ffmpeg)
+        #[arg(long)]
+        video: bool,
+
+        /// Video codec: h264, h265, or vp9 (default: h265)
+        #[arg(long, default_value = "h265")]
+        video_codec: String,
+
+        /// Video quality (CRF): 0-51, lower = better (default: 18)
+        #[arg(long, default_value = "18")]
+        video_quality: u8,
+
+        /// Output video filename without extension (default: animation)
+        #[arg(long, default_value = "animation")]
+        video_name: String,
+
+        /// Delete PNG frames after successful video encoding
+        #[arg(long)]
+        cleanup: bool,
     },
 }
 
@@ -88,9 +108,32 @@ fn main() {
                 // Run in headless export mode
                 fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread);
             }
-            Some(Commands::ExportAnimation { config, animation, output, width, height, fps, transparent, iterations_per_thread }) => {
+            Some(Commands::ExportAnimation { config, animation, output, width, height, fps, transparent, iterations_per_thread, video, video_codec, video_quality, video_name, cleanup }) => {
+                // Parse video codec
+                let codec = match video_codec.to_lowercase().as_str() {
+                    "h264" => fractal_flame_wgpu::animation::export::VideoCodec::H264,
+                    "h265" | "hevc" => fractal_flame_wgpu::animation::export::VideoCodec::H265,
+                    "vp9" => fractal_flame_wgpu::animation::export::VideoCodec::VP9,
+                    _ => {
+                        eprintln!("Unknown video codec '{}'. Using h264.", video_codec);
+                        fractal_flame_wgpu::animation::export::VideoCodec::H264
+                    }
+                };
+
+                // Build video settings if video encoding requested
+                let video_settings = if video {
+                    Some(fractal_flame_wgpu::animation::export::VideoEncodingSettings {
+                        codec,
+                        quality: video_quality,
+                        output_name: video_name,
+                        cleanup_frames: cleanup,
+                    })
+                } else {
+                    None
+                };
+
                 // Run animation export mode
-                fractal_flame_wgpu::export_animation_mode(&config, &animation, &output, width, height, fps, transparent, iterations_per_thread);
+                fractal_flame_wgpu::export_animation_mode(&config, &animation, &output, width, height, fps, transparent, iterations_per_thread, video_settings);
             }
             None => {
                 // Run normal GUI mode

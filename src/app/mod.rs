@@ -1310,7 +1310,19 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(export_settings) = ui_response.animation_export_requested {
             if let Some(ref animation) = self.animation_controller.animation {
-                use crate::animation::export::{AnimationExportConfig, CliProgressCallback, export_animation};
+                use crate::animation::export::{AnimationExportConfig, CliProgressCallback, export_animation, VideoEncodingSettings, encode_video, is_ffmpeg_available};
+
+                // Build video settings if encoding requested
+                let video_settings = if export_settings.encode_video {
+                    Some(VideoEncodingSettings {
+                        codec: export_settings.video_codec,
+                        quality: export_settings.video_quality,
+                        output_name: export_settings.video_name.clone(),
+                        cleanup_frames: export_settings.cleanup_frames,
+                    })
+                } else {
+                    None
+                };
 
                 let export_config = AnimationExportConfig {
                     config: self.config_manager.active_config().clone(),
@@ -1321,12 +1333,16 @@ impl App {
                     fps: export_settings.fps,
                     iterations_per_thread: export_settings.iterations_per_thread,
                     transparent: export_settings.transparent,
+                    video_settings: video_settings.clone(),
                 };
 
                 println!("Starting animation export...");
                 println!("  Output: {}", export_config.output_dir.display());
                 println!("  Resolution: {}x{} @ {} FPS", export_config.width, export_config.height, export_config.fps);
                 println!("  Total frames: {}", export_config.total_frames());
+                if let Some(ref vs) = video_settings {
+                    println!("  Video: {} (CRF {})", vs.codec.display_name(), vs.quality);
+                }
 
                 // Run export synchronously (blocking UI - TODO: make async with progress dialog)
                 let mut progress = CliProgressCallback::new();
@@ -1335,6 +1351,28 @@ impl App {
                         println!("\nAnimation export complete!");
                         println!("  {} frames in {:.1}s", result.total_frames, result.total_time_ms / 1000.0);
                         println!("  Output: {}", result.output_dir.display());
+
+                        // Video encoding
+                        if let Some(ref vs) = video_settings {
+                            if is_ffmpeg_available() {
+                                println!("\nEncoding video...");
+                                match encode_video(&result.output_dir, export_settings.fps, vs) {
+                                    Ok(video_result) => {
+                                        println!("Video encoding complete!");
+                                        println!("  Output: {}", video_result.video_path.display());
+                                        println!("  Encoding time: {:.1}s", video_result.encode_time_ms / 1000.0);
+                                        if video_result.frames_cleaned > 0 {
+                                            println!("  Cleaned up {} PNG frames", video_result.frames_cleaned);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Video encoding failed: {}", e);
+                                    }
+                                }
+                            } else {
+                                eprintln!("Warning: ffmpeg not found. Video encoding skipped.");
+                            }
+                        }
                     }
                     Err(e) => {
                         eprintln!("Animation export failed: {}", e);

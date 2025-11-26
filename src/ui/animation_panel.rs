@@ -5,6 +5,7 @@
 
 use egui::Ui;
 use crate::animation::{Animation, AnimationController, AnimationQualityMode, LoopMode, PlaybackState};
+use crate::animation::export::VideoCodec;
 
 /// Export settings for animation rendering
 #[derive(Clone)]
@@ -21,6 +22,16 @@ pub struct AnimationExportSettings {
     pub transparent: bool,
     /// Iterations per thread
     pub iterations_per_thread: u32,
+    /// Encode to video after rendering
+    pub encode_video: bool,
+    /// Video codec
+    pub video_codec: VideoCodec,
+    /// Video quality (CRF)
+    pub video_quality: u8,
+    /// Output video filename (without extension)
+    pub video_name: String,
+    /// Delete PNG frames after video encoding
+    pub cleanup_frames: bool,
 }
 
 impl Default for AnimationExportSettings {
@@ -32,6 +43,11 @@ impl Default for AnimationExportSettings {
             fps: 30,
             transparent: false,
             iterations_per_thread: 256,
+            encode_video: false,
+            video_codec: VideoCodec::H264,
+            video_quality: 18,
+            video_name: "animation".to_string(),
+            cleanup_frames: false,
         }
     }
 }
@@ -411,10 +427,66 @@ fn render_export_controls(
 
                 ui.separator();
 
+                // Video encoding section
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let ffmpeg_available = crate::animation::export::is_ffmpeg_available();
+
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut settings.encode_video, "Encode to video");
+                        if !ffmpeg_available {
+                            ui.label("⚠").on_hover_text("ffmpeg not found. Install ffmpeg to enable video encoding.");
+                        }
+                    });
+
+                    if settings.encode_video {
+                        ui.add_enabled_ui(ffmpeg_available, |ui| {
+                            // Codec selection
+                            ui.horizontal(|ui| {
+                                ui.label("Codec:");
+                                egui::ComboBox::from_id_salt("video_codec")
+                                    .selected_text(settings.video_codec.display_name())
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut settings.video_codec, VideoCodec::H264, VideoCodec::H264.display_name());
+                                        ui.selectable_value(&mut settings.video_codec, VideoCodec::H265, VideoCodec::H265.display_name());
+                                        ui.selectable_value(&mut settings.video_codec, VideoCodec::VP9, VideoCodec::VP9.display_name());
+                                    });
+                            });
+
+                            // Quality slider
+                            ui.horizontal(|ui| {
+                                ui.label("Quality:");
+                                ui.add(egui::Slider::new(&mut settings.video_quality, 0..=51).text("CRF"));
+                            });
+                            ui.small("Lower = better quality, larger file. 18 = visually lossless");
+
+                            // Output name
+                            ui.horizontal(|ui| {
+                                ui.label("Video name:");
+                                ui.text_edit_singleline(&mut settings.video_name);
+                                ui.label(format!(".{}", settings.video_codec.extension()));
+                            });
+
+                            // Cleanup option
+                            ui.checkbox(&mut settings.cleanup_frames, "Delete PNGs after encoding");
+                        });
+                    }
+
+                    ui.separator();
+                }
+
                 // Export button
                 #[cfg(not(target_arch = "wasm32"))]
-                if ui.button("🎬 Export Animation to PNG Sequence").clicked() {
-                    response.export_animation = Some(settings.clone());
+                {
+                    let button_text = if settings.encode_video {
+                        "🎬 Export Animation + Video"
+                    } else {
+                        "🎬 Export Animation to PNG Sequence"
+                    };
+
+                    if ui.button(button_text).clicked() {
+                        response.export_animation = Some(settings.clone());
+                    }
                 }
 
                 #[cfg(target_arch = "wasm32")]

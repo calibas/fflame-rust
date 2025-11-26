@@ -4,11 +4,81 @@
 //! Each frame is rendered to completion (max_iterations) for production quality.
 //!
 //! This module provides a reusable export engine used by both CLI and UI.
+//!
+//! ## Video Encoding
+//!
+//! Optionally encodes PNG sequence to video using ffmpeg (must be installed separately).
+//! Supports H.264 (best compatibility), H.265 (better compression), and VP9 (royalty-free).
 
 use std::path::PathBuf;
 
 use crate::animation::{Animation, AnimationController};
 use crate::config::{ConfigPath, FractalConfig, json_to_config_value};
+
+/// Video codec options for ffmpeg encoding
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VideoCodec {
+    /// H.264 (libx264) - Best compatibility, good compression
+    H264,
+    /// H.265/HEVC (libx265) - Better compression, less compatible
+    #[default]
+    H265,
+    /// VP9 (libvpx-vp9) - Royalty-free, good for web
+    VP9,
+}
+
+impl VideoCodec {
+    /// Get ffmpeg codec argument
+    pub fn ffmpeg_codec(&self) -> &'static str {
+        match self {
+            VideoCodec::H264 => "libx264",
+            VideoCodec::H265 => "libx265",
+            VideoCodec::VP9 => "libvpx-vp9",
+        }
+    }
+
+    /// Get output file extension
+    pub fn extension(&self) -> &'static str {
+        match self {
+            VideoCodec::H264 | VideoCodec::H265 => "mp4",
+            VideoCodec::VP9 => "webm",
+        }
+    }
+
+    /// Get display name
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            VideoCodec::H264 => "H.264 (MP4)",
+            VideoCodec::H265 => "H.265/HEVC (MP4)",
+            VideoCodec::VP9 => "VP9 (WebM)",
+        }
+    }
+}
+
+/// Video encoding settings
+#[derive(Debug, Clone)]
+pub struct VideoEncodingSettings {
+    /// Video codec to use
+    pub codec: VideoCodec,
+    /// Quality (CRF value: 0-51 for H.264/H.265, 0-63 for VP9; lower = better)
+    /// Default: 18 (visually lossless for H.264)
+    pub quality: u8,
+    /// Output video filename (without extension, will be added based on codec)
+    pub output_name: String,
+    /// Delete PNG frames after successful video encoding
+    pub cleanup_frames: bool,
+}
+
+impl Default for VideoEncodingSettings {
+    fn default() -> Self {
+        Self {
+            codec: VideoCodec::default(),
+            quality: 18,
+            output_name: "animation".to_string(),
+            cleanup_frames: false,
+        }
+    }
+}
 
 /// Animation export configuration
 #[derive(Clone)]
@@ -29,6 +99,8 @@ pub struct AnimationExportConfig {
     pub iterations_per_thread: u32,
     /// Export transparent PNGs
     pub transparent: bool,
+    /// Optional video encoding settings
+    pub video_settings: Option<VideoEncodingSettings>,
 }
 
 impl AnimationExportConfig {
@@ -467,4 +539,197 @@ async fn render_frame_to_completion(
             break;
         }
     }
+}
+
+// ============================================================================
+// Video Encoding (ffmpeg)
+// ============================================================================
+
+/// Check if ffmpeg is available on the system
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_ffmpeg_available() -> bool {
+    std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Get ffmpeg version string (if available)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn get_ffmpeg_version() -> Option<String> {
+    let output = std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // First line typically: "ffmpeg version X.Y.Z ..."
+    stdout.lines().next().map(|s| s.to_string())
+}
+
+/// Result of video encoding
+#[derive(Debug)]
+pub struct VideoEncodeResult {
+    /// Path to the output video file
+    pub video_path: PathBuf,
+    /// Number of PNG frames that were cleaned up (0 if cleanup disabled)
+    pub frames_cleaned: u32,
+    /// Encoding time in milliseconds
+    pub encode_time_ms: f64,
+}
+
+/// Errors that can occur during video encoding
+#[derive(Debug)]
+pub enum VideoEncodeError {
+    /// ffmpeg not found on system
+    FfmpegNotFound,
+    /// ffmpeg command failed
+    FfmpegFailed(String),
+    /// IO error
+    IoError(std::io::Error),
+    /// No frames found in output directory
+    NoFramesFound,
+}
+
+impl std::fmt::Display for VideoEncodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VideoEncodeError::FfmpegNotFound => write!(f, "ffmpeg not found. Please install ffmpeg and ensure it's in your PATH."),
+            VideoEncodeError::FfmpegFailed(msg) => write!(f, "ffmpeg encoding failed: {}", msg),
+            VideoEncodeError::IoError(e) => write!(f, "IO error: {}", e),
+            VideoEncodeError::NoFramesFound => write!(f, "No PNG frames found in output directory"),
+        }
+    }
+}
+
+impl std::error::Error for VideoEncodeError {}
+
+impl From<std::io::Error> for VideoEncodeError {
+    fn from(e: std::io::Error) -> Self {
+        VideoEncodeError::IoError(e)
+    }
+}
+
+/// Encode PNG sequence to video using ffmpeg
+///
+/// # Arguments
+/// * `frames_dir` - Directory containing frame_NNNN.png files
+/// * `fps` - Frames per second
+/// * `settings` - Video encoding settings
+///
+/// # Returns
+/// * `Ok(VideoEncodeResult)` - Encoding succeeded
+/// * `Err(VideoEncodeError)` - Encoding failed
+#[cfg(not(target_arch = "wasm32"))]
+pub fn encode_video(
+    frames_dir: &std::path::Path,
+    fps: u32,
+    settings: &VideoEncodingSettings,
+) -> Result<VideoEncodeResult, VideoEncodeError> {
+    use std::time::Instant;
+
+    let start = Instant::now();
+
+    // Check ffmpeg availability
+    if !is_ffmpeg_available() {
+        return Err(VideoEncodeError::FfmpegNotFound);
+    }
+
+    // Verify frames exist
+    let frame_pattern = frames_dir.join("frame_%04d.png");
+    let first_frame = frames_dir.join("frame_0001.png");
+    if !first_frame.exists() {
+        return Err(VideoEncodeError::NoFramesFound);
+    }
+
+    // Build output path
+    let video_path = frames_dir.join(format!("{}.{}", settings.output_name, settings.codec.extension()));
+
+    // Build ffmpeg command
+    let mut cmd = std::process::Command::new("ffmpeg");
+
+    // Overwrite output without asking
+    cmd.arg("-y");
+
+    // Input settings
+    cmd.arg("-framerate").arg(fps.to_string());
+    cmd.arg("-i").arg(&frame_pattern);
+
+    // Codec-specific settings
+    match settings.codec {
+        VideoCodec::H264 => {
+            cmd.arg("-c:v").arg("libx264");
+            cmd.arg("-crf").arg(settings.quality.to_string());
+            cmd.arg("-preset").arg("medium");
+            cmd.arg("-pix_fmt").arg("yuv420p"); // Maximum compatibility
+        }
+        VideoCodec::H265 => {
+            cmd.arg("-c:v").arg("libx265");
+            cmd.arg("-crf").arg(settings.quality.to_string());
+            cmd.arg("-preset").arg("medium");
+            cmd.arg("-pix_fmt").arg("yuv420p");
+            // Suppress x265 logging
+            cmd.arg("-x265-params").arg("log-level=error");
+        }
+        VideoCodec::VP9 => {
+            cmd.arg("-c:v").arg("libvpx-vp9");
+            cmd.arg("-crf").arg(settings.quality.to_string());
+            cmd.arg("-b:v").arg("0"); // Use CRF mode
+            cmd.arg("-pix_fmt").arg("yuv420p");
+        }
+    }
+
+    // Output file
+    cmd.arg(&video_path);
+
+    // Run ffmpeg
+    let output = cmd.output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(VideoEncodeError::FfmpegFailed(stderr.to_string()));
+    }
+
+    // Clean up frames if requested
+    let frames_cleaned = if settings.cleanup_frames {
+        cleanup_frames(frames_dir)?
+    } else {
+        0
+    };
+
+    let encode_time_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+    Ok(VideoEncodeResult {
+        video_path,
+        frames_cleaned,
+        encode_time_ms,
+    })
+}
+
+/// Delete all frame_NNNN.png files in a directory
+#[cfg(not(target_arch = "wasm32"))]
+fn cleanup_frames(frames_dir: &std::path::Path) -> Result<u32, std::io::Error> {
+    let mut count = 0;
+
+    for entry in std::fs::read_dir(frames_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            // Match frame_NNNN.png pattern
+            if name.starts_with("frame_") && name.ends_with(".png") {
+                std::fs::remove_file(&path)?;
+                count += 1;
+            }
+        }
+    }
+
+    Ok(count)
 }

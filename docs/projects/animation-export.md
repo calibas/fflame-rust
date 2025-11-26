@@ -63,7 +63,7 @@ For each frame:
 
 ```bash
 # Export animation to PNG sequence
-fractal_flame export-animation \
+fractal_flame_wgpu export-animation \
   --config flame.fflame \
   --animation zoom.anim \
   --output ./frames/ \
@@ -71,14 +71,42 @@ fractal_flame export-animation \
   --fps 30
 
 # Export with video encoding (requires ffmpeg)
-fractal_flame export-animation \
+fractal_flame_wgpu export-animation \
   --config flame.fflame \
   --animation zoom.anim \
-  --output animation.mp4 \
+  --output ./frames/ \
   --width 1920 --height 1080 \
   --fps 30 \
   --video
+
+# Export with custom video settings
+fractal_flame_wgpu export-animation \
+  --config flame.fflame \
+  --animation zoom.anim \
+  --output ./frames/ \
+  --fps 30 \
+  --video \
+  --video-codec h265 \
+  --video-quality 18 \
+  --video-name my_animation \
+  --cleanup
 ```
+
+### Video Codec Options
+
+| Codec | Extension | Notes |
+|-------|-----------|-------|
+| `h264` | `.mp4` | Best compatibility, default |
+| `h265` | `.mp4` | Better compression, less compatible |
+| `vp9` | `.webm` | Royalty-free, good for web |
+
+### Quality (CRF) Guide
+
+- **0**: Lossless (huge files)
+- **18**: Visually lossless (default, recommended)
+- **23**: Good quality, smaller files
+- **28**: Acceptable quality, much smaller files
+- **51**: Worst quality
 
 ### UI Integration
 
@@ -108,10 +136,14 @@ Add "Export Animation" button to Animation panel:
 - [ ] Implement background export with progress UI (currently blocks UI)
 - [ ] Add cancel support
 
-### Phase 4: Video Encoding (Optional)
-- [ ] Detect ffmpeg availability
-- [ ] Shell out to ffmpeg for video encoding
-- [ ] Support common codecs (H.264, H.265, VP9)
+### Phase 4: Video Encoding ✅
+- [x] Detect ffmpeg availability (`is_ffmpeg_available()`, `get_ffmpeg_version()`)
+- [x] Shell out to ffmpeg for video encoding (`encode_video()`)
+- [x] Support common codecs (H.264, H.265, VP9)
+- [x] Quality control via CRF (Constant Rate Factor)
+- [x] Optional cleanup of PNG frames after encoding
+- [x] CLI flags: `--video`, `--video-codec`, `--video-quality`, `--video-name`, `--cleanup`
+- [x] UI controls: Codec dropdown, quality slider, video name, cleanup checkbox
 
 ## File Format
 
@@ -129,11 +161,26 @@ Each PNG includes metadata:
 - Animation time
 - All standard PNG metadata from single-frame export
 
-### Video Output (Phase 4)
-Uses ffmpeg command:
+### Video Output
+
+Uses ffmpeg for encoding (must be installed separately). The application automatically generates appropriate ffmpeg commands based on codec selection:
+
+**H.264 (default):**
 ```bash
-ffmpeg -framerate 30 -i frame_%04d.png -c:v libx264 -pix_fmt yuv420p output.mp4
+ffmpeg -y -framerate 30 -i frame_%04d.png -c:v libx264 -crf 18 -preset medium -pix_fmt yuv420p output.mp4
 ```
+
+**H.265/HEVC:**
+```bash
+ffmpeg -y -framerate 30 -i frame_%04d.png -c:v libx265 -crf 18 -preset medium -pix_fmt yuv420p -x265-params log-level=error output.mp4
+```
+
+**VP9:**
+```bash
+ffmpeg -y -framerate 30 -i frame_%04d.png -c:v libvpx-vp9 -crf 18 -b:v 0 -pix_fmt yuv420p output.webm
+```
+
+**Note:** The `-y` flag automatically overwrites existing files. The `-pix_fmt yuv420p` ensures maximum player compatibility.
 
 ## Performance Estimates
 
