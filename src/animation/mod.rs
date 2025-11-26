@@ -139,6 +139,24 @@ pub enum PlaybackState {
     Paused,
 }
 
+/// Animation quality mode - controls rendering behavior during playback
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnimationQualityMode {
+    /// Responsive mode: uses overwrite blending for smooth real-time preview
+    /// - Each frame immediately updates the display
+    /// - Lower quality but no latency
+    /// - Good for previewing animations
+    #[default]
+    Responsive,
+
+    /// High quality mode: uses batched accumulation (4 frames) like normal rendering
+    /// - Accumulates samples across 4 frames before blending
+    /// - Higher quality with smoother density transitions
+    /// - Has ~4 frame latency (parameter changes visible 4 frames later)
+    /// - Good for final renders or slow animations
+    HighQuality,
+}
+
 impl Animation {
     /// Create empty animation
     pub fn new(name: String, duration: f64) -> Self {

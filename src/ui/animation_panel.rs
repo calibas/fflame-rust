@@ -4,7 +4,7 @@
 //! as well as loading and saving animation files.
 
 use egui::Ui;
-use crate::animation::{Animation, AnimationController, LoopMode, PlaybackState};
+use crate::animation::{Animation, AnimationController, AnimationQualityMode, LoopMode, PlaybackState};
 
 /// Response from animation panel rendering
 #[derive(Default)]
@@ -51,6 +51,11 @@ pub fn render_animation_content(
 
     // Loop mode selector
     render_loop_mode(ui, controller);
+
+    ui.separator();
+
+    // Quality mode selector
+    render_quality_mode(ui, controller);
 
     ui.separator();
 
@@ -208,6 +213,43 @@ fn loop_mode_label(mode: LoopMode) -> &'static str {
         LoopMode::Once => "Once (Stop at end)",
         LoopMode::Loop => "Loop (Repeat)",
         LoopMode::PingPong => "Ping-Pong (Bounce)",
+    }
+}
+
+/// Render quality mode selector
+fn render_quality_mode(ui: &mut Ui, controller: &mut AnimationController) {
+    ui.horizontal(|ui| {
+        ui.label("Quality:");
+
+        egui::ComboBox::from_id_salt("quality_mode")
+            .selected_text(quality_mode_label(controller.quality_mode))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(
+                    &mut controller.quality_mode,
+                    AnimationQualityMode::Responsive,
+                    quality_mode_label(AnimationQualityMode::Responsive),
+                );
+                ui.selectable_value(
+                    &mut controller.quality_mode,
+                    AnimationQualityMode::HighQuality,
+                    quality_mode_label(AnimationQualityMode::HighQuality),
+                );
+            });
+    });
+
+    // Show tooltip explaining the mode
+    let tooltip = match controller.quality_mode {
+        AnimationQualityMode::Responsive => "Fast preview - each frame updates immediately",
+        AnimationQualityMode::HighQuality => "Better quality - batches 4 frames for smoother results (slight latency)",
+    };
+    ui.small(tooltip);
+}
+
+/// Get display label for quality mode
+fn quality_mode_label(mode: AnimationQualityMode) -> &'static str {
+    match mode {
+        AnimationQualityMode::Responsive => "Responsive (Fast)",
+        AnimationQualityMode::HighQuality => "High Quality (Batched)",
     }
 }
 

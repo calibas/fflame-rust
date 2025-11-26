@@ -6,19 +6,19 @@
       "source": {
         "type": "Keyframes",
         "keyframes": [
-          { "time": 0.0, "value": 1.0, "easing": "EaseInOutCubic" },
-          { "time": 5.0, "value": 3.0, "easing": "EaseInOutCubic" },
-          { "time": 10.0, "value": 1.0, "easing": "Linear" }
+          { "time": 0.0, "value": 11.0, "easing": "EaseInOutCubic" },
+          { "time": 5.0, "value": 13.0, "easing": "EaseInOutCubic" },
+          { "time": 10.0, "value": 11.0, "easing": "Linear" }
         ]
       },
       "interpolation": "Linear"
     },
-    "Exposure": {
+    "HueShift": {
       "source": {
         "type": "Oscillator",
         "oscillator_type": "Sine",
-        "center": 1.0,
-        "amplitude": 0.3,
+        "center": 0.0,
+        "amplitude": 30.0,
         "frequency": 0.5,
         "phase": 0.0
       },
