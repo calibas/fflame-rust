@@ -299,13 +299,10 @@ impl App {
 
         let render_start = Instant::now();
 
-        // Log frame timing for GPU usage investigation
-        // if let Some(last_frame) = self.last_frame_time {
-        //     let frame_time = render_start.duration_since(last_frame);
-        //     log::info!("Frame interval: {:.3}ms (rendering_complete={})",
-        //         frame_time.as_secs_f64() * 1000.0,
-        //         self.rendering_complete);
-        // }
+        // Calculate delta time BEFORE updating last_frame_time (for animation)
+        let delta_time = self.last_frame_time
+            .map(|last| render_start.duration_since(last).as_secs_f64())
+            .unwrap_or(1.0 / 60.0);
 
         self.last_frame_time = Some(render_start);
 
@@ -1442,12 +1439,7 @@ impl App {
         let animation_playing = self.animation_controller.state == PlaybackState::Playing;
 
         if animation_playing {
-            // Calculate delta time from last frame
-            let delta_time = self.last_frame_time
-                .map(|last| render_start.duration_since(last).as_secs_f64())
-                .unwrap_or(1.0 / 60.0); // Default to ~16ms if no previous frame
-
-            // Update animation time
+            // Update animation time (delta_time calculated at frame start, before last_frame_time update)
             self.animation_controller.update(delta_time);
 
             // Evaluate all tracks and apply values to ConfigManager (silently, no undo)
