@@ -67,9 +67,19 @@ pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn export_animation_mode(config_path: &str, animation_path: &str, output_dir: &str, width: u32, height: u32, fps: u32, transparent: bool, iterations_per_thread: u32) {
+pub fn export_animation_mode(
+    config_path: &str,
+    animation_path: &str,
+    output_dir: &str,
+    width: u32,
+    height: u32,
+    fps: u32,
+    transparent: bool,
+    iterations_per_thread: u32,
+    video_settings: Option<animation::export::VideoEncodingSettings>,
+) {
     env_logger::init();
-    pollster::block_on(export_animation_async(config_path, animation_path, output_dir, width, height, fps, transparent, iterations_per_thread)).expect("Animation export failed");
+    pollster::block_on(export_animation_async(config_path, animation_path, output_dir, width, height, fps, transparent, iterations_per_thread, video_settings)).expect("Animation export failed");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -148,9 +158,10 @@ async fn export_animation_async(
     fps: u32,
     transparent: bool,
     iterations_per_thread: u32,
+    video_settings: Option<animation::export::VideoEncodingSettings>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::path::Path;
-    use animation::export::{AnimationExportConfig, CliProgressCallback, export_animation};
+    use animation::export::{AnimationExportConfig, CliProgressCallback, export_animation, encode_video, is_ffmpeg_available};
     use animation::Animation;
 
     println!("Fractal Flame Animation Export");
@@ -163,7 +174,20 @@ async fn export_animation_async(
     if transparent {
         println!("Mode: Transparent PNG");
     }
+    if let Some(ref vs) = video_settings {
+        println!("Video: {} (CRF {})", vs.codec.display_name(), vs.quality);
+        if vs.cleanup_frames {
+            println!("Cleanup: Will delete PNGs after encoding");
+        }
+    }
     println!();
+
+    // Check ffmpeg availability if video encoding requested
+    if video_settings.is_some() && !is_ffmpeg_available() {
+        eprintln!("Warning: ffmpeg not found. Video encoding will be skipped.");
+        eprintln!("Install ffmpeg and ensure it's in your PATH to enable video encoding.");
+        println!();
+    }
 
     // Load config file
     let config = config::FractalConfig::load_from_file(Path::new(config_path))?;
@@ -188,6 +212,7 @@ async fn export_animation_async(
         fps,
         iterations_per_thread,
         transparent,
+        video_settings: video_settings.clone(),
     };
 
     // Run export
@@ -200,6 +225,28 @@ async fn export_animation_async(
     println!("  Total time: {:.1}s", result.total_time_ms / 1000.0);
     println!("  Average per frame: {:.1}s", result.avg_frame_time_ms / 1000.0);
     println!("  Output: {}", result.output_dir.display());
+
+    // Video encoding
+    if let Some(ref vs) = video_settings {
+        if is_ffmpeg_available() {
+            println!();
+            println!("Encoding video...");
+
+            match encode_video(&result.output_dir, fps, vs) {
+                Ok(video_result) => {
+                    println!("Video encoding complete!");
+                    println!("  Output: {}", video_result.video_path.display());
+                    println!("  Encoding time: {:.1}s", video_result.encode_time_ms / 1000.0);
+                    if video_result.frames_cleaned > 0 {
+                        println!("  Cleaned up {} PNG frames", video_result.frames_cleaned);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Video encoding failed: {}", e);
+                }
+            }
+        }
+    }
 
     Ok(())
 }
