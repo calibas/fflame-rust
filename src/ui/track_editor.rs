@@ -7,6 +7,8 @@ use crate::animation::{
     Animation, AnimationController, CircularTrack, EasingFunction, Interpolation,
     Keyframe, OscillatorType, Track, TrackSource,
 };
+use crate::scene::transforms::Flame;
+use crate::variations::global_registry;
 
 /// UI state for track editor
 #[derive(Default)]
@@ -34,83 +36,114 @@ pub enum NewTrackType {
 
 /// Category of animatable parameters
 struct ParameterCategory {
-    name: &'static str,
-    params: Vec<(&'static str, &'static str)>, // (display_name, path_string)
+    name: String,
+    params: Vec<(String, String)>, // (display_name, path_string)
 }
 
 /// Get list of animatable parameters organized by category
-fn animatable_parameters(transform_count: usize) -> Vec<ParameterCategory> {
+fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
+    let registry = global_registry();
+    let transform_count = flame.transforms.len();
+
     let mut categories = vec![
         ParameterCategory {
-            name: "View",
+            name: "View".to_string(),
             params: vec![
-                ("Zoom", "Zoom"),
-                ("Rotation", "Rotation"),
-                ("Camera Rotation X", "CameraRotationX"),
-                ("Camera Rotation Y", "CameraRotationY"),
-                ("Camera Z", "CameraZ"),
+                ("Zoom".to_string(), "Zoom".to_string()),
+                ("Rotation".to_string(), "Rotation".to_string()),
+                ("Camera Rotation X".to_string(), "CameraRotationX".to_string()),
+                ("Camera Rotation Y".to_string(), "CameraRotationY".to_string()),
+                ("Camera Z".to_string(), "CameraZ".to_string()),
             ],
         },
         ParameterCategory {
-            name: "Tone Mapping",
+            name: "Tone Mapping".to_string(),
             params: vec![
-                ("Exposure", "Exposure"),
-                ("Gamma", "Gamma"),
-                ("Gamma Threshold", "GammaThreshold"),
-                ("Brightness", "Brightness"),
-                ("Vibrancy", "Vibrancy"),
-                ("Saturation", "Saturation"),
-                ("Hue Shift", "HueShift"),
-                ("Value Scale", "ValueScale"),
-                ("Alpha Blend Low", "AlphaBlendLow"),
-                ("Alpha Blend High", "AlphaBlendHigh"),
-                ("Density Scale", "DensityScale"),
+                ("Exposure".to_string(), "Exposure".to_string()),
+                ("Gamma".to_string(), "Gamma".to_string()),
+                ("Gamma Threshold".to_string(), "GammaThreshold".to_string()),
+                ("Brightness".to_string(), "Brightness".to_string()),
+                ("Vibrancy".to_string(), "Vibrancy".to_string()),
+                ("Saturation".to_string(), "Saturation".to_string()),
+                ("Hue Shift".to_string(), "HueShift".to_string()),
+                ("Value Scale".to_string(), "ValueScale".to_string()),
+                ("Alpha Blend Low".to_string(), "AlphaBlendLow".to_string()),
+                ("Alpha Blend High".to_string(), "AlphaBlendHigh".to_string()),
+                ("Density Scale".to_string(), "DensityScale".to_string()),
             ],
         },
         ParameterCategory {
-            name: "Color",
+            name: "Color".to_string(),
             params: vec![
-                ("Palette Rotation", "PaletteRotation"),
-                ("Speed Factor", "SpeedFactor"),
-                ("Histogram Color Scale", "HistogramColorScale"),
+                ("Palette Rotation".to_string(), "PaletteRotation".to_string()),
+                ("Speed Factor".to_string(), "SpeedFactor".to_string()),
+                ("Histogram Color Scale".to_string(), "HistogramColorScale".to_string()),
             ],
         },
         ParameterCategory {
-            name: "Rendering",
+            name: "Rendering".to_string(),
             params: vec![
-                ("Blend Factor", "BlendFactor"),
-                ("Perspective Strength", "PerspectiveStrength"),
-                ("Low Density Smoothing", "LowDensitySmoothing"),
+                ("Blend Factor".to_string(), "BlendFactor".to_string()),
+                ("Perspective Strength".to_string(), "PerspectiveStrength".to_string()),
+                ("Low Density Smoothing".to_string(), "LowDensitySmoothing".to_string()),
             ],
         },
     ];
 
     // Add transform-specific parameters
     for i in 0..transform_count {
+        let transform = &flame.transforms[i];
+
         let mut params = vec![
-            (format!("Weight"), format!("Transform.{}.Weight", i)),
-            (format!("Color"), format!("Transform.{}.Color", i)),
-            (format!("Color Speed"), format!("Transform.{}.ColorSpeed", i)),
-            (format!("Opacity"), format!("Transform.{}.Opacity", i)),
+            ("Weight".to_string(), format!("Transform.{}.Weight", i)),
+            ("Color".to_string(), format!("Transform.{}.Color", i)),
+            ("Color Speed".to_string(), format!("Transform.{}.ColorSpeed", i)),
+            ("Opacity".to_string(), format!("Transform.{}.Opacity", i)),
         ];
 
         // High-level transform operations (translate, rotate, scale)
-        params.push((format!("Origin X (Translate)"), format!("Transform.{}.OriginX", i)));
-        params.push((format!("Origin Y (Translate)"), format!("Transform.{}.OriginY", i)));
-        params.push((format!("Rotation"), format!("Transform.{}.Rotation", i)));
-        params.push((format!("Scale"), format!("Transform.{}.Scale", i)));
+        params.push(("Origin X (Translate)".to_string(), format!("Transform.{}.OriginX", i)));
+        params.push(("Origin Y (Translate)".to_string(), format!("Transform.{}.OriginY", i)));
+        params.push(("Rotation".to_string(), format!("Transform.{}.Rotation", i)));
+        params.push(("Scale".to_string(), format!("Transform.{}.Scale", i)));
 
         // Raw affine parameters (for advanced users)
         for param in ['A', 'B', 'C', 'D', 'E', 'F', 'G'] {
             params.push((format!("Affine {}", param), format!("Transform.{}.Affine.{}", i, param)));
         }
 
+        // Active variations for this transform
+        let mut active_variations: Vec<(&String, &f32)> = transform.variations
+            .iter()
+            .filter(|(_, weight)| **weight != 0.0)
+            .collect();
+        // Sort by name for consistent ordering
+        active_variations.sort_by_key(|(name, _)| *name);
+
+        for (var_name, _weight) in &active_variations {
+            // Add variation weight
+            let display_name = registry.get(var_name)
+                .map(|v| v.display_name.clone())
+                .unwrap_or_else(|| var_name.to_string());
+            params.push((
+                format!("{} (Weight)", display_name),
+                format!("Transform.{}.Variation.{}", i, var_name),
+            ));
+
+            // Add variation parameters if any
+            if let Some(var_info) = registry.get(var_name) {
+                for param_def in &var_info.parameters {
+                    params.push((
+                        format!("{} - {}", display_name, param_def.display_name),
+                        format!("Transform.{}.VariationParam.{}.{}", i, var_name, param_def.name),
+                    ));
+                }
+            }
+        }
+
         categories.push(ParameterCategory {
-            name: Box::leak(format!("Transform {}", i).into_boxed_str()),
-            params: params.into_iter().map(|(d, p)| {
-                (Box::leak(d.into_boxed_str()) as &'static str,
-                 Box::leak(p.into_boxed_str()) as &'static str)
-            }).collect(),
+            name: format!("Transform {}", i),
+            params,
         });
     }
 
@@ -122,7 +155,7 @@ pub fn render_track_editor(
     ui: &mut Ui,
     controller: &mut AnimationController,
     state: &mut TrackEditorState,
-    transform_count: usize,
+    flame: &Flame,
 ) {
     let has_animation = controller.animation.is_some();
 
@@ -159,7 +192,7 @@ pub fn render_track_editor(
 
             // Add track dialog
             if state.add_track_dialog_open && has_animation {
-                render_add_track_dialog(ui, controller, state, transform_count);
+                render_add_track_dialog(ui, controller, state, flame);
             }
 
             ui.separator();
@@ -183,7 +216,7 @@ fn render_add_track_dialog(
     ui: &mut Ui,
     controller: &mut AnimationController,
     state: &mut TrackEditorState,
-    transform_count: usize,
+    flame: &Flame,
 ) {
     egui::Frame::new()
         .fill(ui.visuals().extreme_bg_color)
@@ -209,7 +242,7 @@ fn render_add_track_dialog(
             });
 
             // Target parameter selection
-            let categories = animatable_parameters(transform_count);
+            let categories = animatable_parameters(flame);
 
             ui.horizontal(|ui| {
                 ui.label("Target:");
@@ -222,11 +255,11 @@ fn render_add_track_dialog(
                     .show_ui(ui, |ui| {
                         for category in &categories {
                             ui.separator();
-                            ui.label(category.name);
+                            ui.label(&category.name);
                             for (display_name, path) in &category.params {
                                 if ui.selectable_label(
                                     state.new_track_target == *path,
-                                    *display_name
+                                    display_name
                                 ).clicked() {
                                     state.new_track_target = path.to_string();
                                 }
@@ -248,11 +281,11 @@ fn render_add_track_dialog(
                         .show_ui(ui, |ui| {
                             for category in &categories {
                                 ui.separator();
-                                ui.label(category.name);
+                                ui.label(&category.name);
                                 for (display_name, path) in &category.params {
                                     if ui.selectable_label(
                                         state.new_track_target_y == *path,
-                                        *display_name
+                                        display_name
                                     ).clicked() {
                                         state.new_track_target_y = path.to_string();
                                     }

@@ -305,12 +305,11 @@ impl<'a> PanelViewer<'a> {
 
         // Track editor section
         ui.separator();
-        let transform_count = self.context.flame.transforms.len();
         super::track_editor::render_track_editor(
             ui,
             self.context.animation_controller,
             self.context.track_editor_state,
-            transform_count,
+            self.context.flame,
         );
     }
 
