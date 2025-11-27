@@ -5,7 +5,7 @@
 //! During playback, the animation controller updates ConfigManager silently
 //! (without creating undo points).
 
-use crate::config::ConfigPath;
+use crate::config::{ConfigPath, FractalConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -21,6 +21,12 @@ pub use interpolation::{EasingFunction, Interpolation};
 pub struct Animation {
     /// User-facing animation name
     pub name: String,
+
+    /// Embedded fractal configuration (makes animation self-contained and reproducible)
+    /// When present, loading this animation also loads the base config.
+    /// When absent, animation applies to whatever fractal is currently loaded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_config: Option<FractalConfig>,
 
     /// Total duration in seconds
     pub duration: f64,
@@ -159,15 +165,38 @@ pub enum AnimationQualityMode {
 }
 
 impl Animation {
-    /// Create empty animation
+    /// Create empty animation (without embedded config)
     pub fn new(name: String, duration: f64) -> Self {
         Self {
             name,
+            base_config: None,
             duration,
             tracks: HashMap::new(),
             circular_tracks: Vec::new(),
             loop_mode: LoopMode::Once,
         }
+    }
+
+    /// Create animation with embedded fractal config (for reproducibility)
+    pub fn with_config(name: String, duration: f64, config: FractalConfig) -> Self {
+        Self {
+            name,
+            base_config: Some(config),
+            duration,
+            tracks: HashMap::new(),
+            circular_tracks: Vec::new(),
+            loop_mode: LoopMode::Once,
+        }
+    }
+
+    /// Set the base config (captures current fractal state)
+    pub fn set_base_config(&mut self, config: FractalConfig) {
+        self.base_config = Some(config);
+    }
+
+    /// Check if this animation has an embedded config
+    pub fn has_base_config(&self) -> bool {
+        self.base_config.is_some()
     }
 
     /// Add track for parameter using ConfigPath
