@@ -1575,11 +1575,15 @@ impl App {
         // Detect play start: controller started playing but FSM not yet in animation mode
         if is_controller_playing && !was_fsm_animating {
             self.render_mode.enter_animation(self.config_manager.active_config());
+            // Enable animation mode in ConfigManager - UI changes become silent (no undo)
+            self.config_manager.set_animation_mode(true);
         }
 
         // Detect user stop/pause: FSM was animating but controller is no longer playing
         // (This catches manual stop/pause clicks from UI - auto-stop is handled below after update())
         if was_fsm_animating && !is_controller_playing {
+            // Disable animation mode before exit so undo entry creation works
+            self.config_manager.set_animation_mode(false);
             self.handle_animation_exit();
         }
 
@@ -1590,6 +1594,8 @@ impl App {
             // Check if animation auto-stopped (LoopMode::Once reached end)
             let auto_stopped = self.animation_controller.state != PlaybackState::Playing;
             if auto_stopped {
+                // Disable animation mode before exit so undo entry creation works
+                self.config_manager.set_animation_mode(false);
                 // Animation finished naturally - exit animation mode and create undo snapshot
                 self.handle_animation_exit();
             }
