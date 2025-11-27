@@ -1331,39 +1331,27 @@ impl App {
             if already_exporting {
                 log::warn!("Animation export already in progress");
             } else if let Some(ref animation) = self.animation_controller.animation {
-                use crate::animation::export::{AnimationExportConfig, UiProgressCallback, export_animation, VideoEncodingSettings, encode_video, is_ffmpeg_available};
-
-                // Build video settings if encoding requested
-                let video_settings = if export_settings.encode_video {
-                    Some(VideoEncodingSettings {
-                        codec: export_settings.video_codec,
-                        quality: export_settings.video_quality,
-                        output_name: export_settings.video_name.clone(),
-                        cleanup_frames: export_settings.cleanup_frames,
-                    })
-                } else {
-                    None
-                };
+                use crate::animation::export::{AnimationExportConfig, UiProgressCallback, export_animation, VideoEncodingSettings};
 
                 let export_config = AnimationExportConfig {
                     config: self.config_manager.active_config().clone(),
                     animation: animation.clone(),
-                    output_dir: export_settings.output_dir.clone(),
+                    output_path: export_settings.output_path.clone(),
                     width: export_settings.width,
                     height: export_settings.height,
                     fps: export_settings.fps,
                     iterations_per_thread: export_settings.iterations_per_thread,
-                    transparent: export_settings.transparent,
-                    video_settings: video_settings.clone(),
+                    video_settings: VideoEncodingSettings {
+                        codec: export_settings.video_codec,
+                        quality: export_settings.video_quality,
+                    },
                 };
 
                 println!("Starting animation export (background thread)...");
-                println!("  Output: {}", export_config.output_dir.display());
+                println!("  Output: {}", export_config.output_path.display());
                 println!("  Resolution: {}x{} @ {} FPS", export_config.width, export_config.height, export_config.fps);
                 println!("  Total frames: {}", export_config.total_frames());
-                if let Some(ref vs) = video_settings {
-                    println!("  Video: {} (CRF {})", vs.codec.display_name(), vs.quality);
-                }
+                println!("  Codec: {} (CRF {})", export_config.video_settings.codec.display_name(), export_config.video_settings.quality);
 
                 // Set initial export progress
                 {
@@ -1377,7 +1365,6 @@ impl App {
 
                 // Clone progress Arc for the background thread
                 let progress_arc = Arc::clone(&self.animation_export_progress);
-                let fps = export_settings.fps;
 
                 // Spawn background thread for export
                 std::thread::spawn(move || {
@@ -1387,39 +1374,12 @@ impl App {
                         Ok(result) => {
                             println!("\nAnimation export complete!");
                             println!("  {} frames in {:.1}s", result.total_frames, result.total_time_ms / 1000.0);
-                            println!("  Output: {}", result.output_dir.display());
-
-                            // Video encoding (still in background thread)
-                            if let Some(ref vs) = video_settings {
-                                if is_ffmpeg_available() {
-                                    // Update progress for video encoding
-                                    if let Ok(mut p) = progress_arc.lock() {
-                                        p.status = "Encoding video...".to_string();
-                                    }
-
-                                    println!("\nEncoding video...");
-                                    match encode_video(&result.output_dir, fps, vs) {
-                                        Ok(video_result) => {
-                                            println!("Video encoding complete!");
-                                            println!("  Output: {}", video_result.video_path.display());
-                                            println!("  Encoding time: {:.1}s", video_result.encode_time_ms / 1000.0);
-                                            if video_result.frames_cleaned > 0 {
-                                                println!("  Cleaned up {} PNG frames", video_result.frames_cleaned);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            eprintln!("Video encoding failed: {}", e);
-                                        }
-                                    }
-                                } else {
-                                    eprintln!("Warning: ffmpeg not found. Video encoding skipped.");
-                                }
-                            }
+                            println!("  Output: {}", result.output_path.display());
 
                             // Mark export complete
                             if let Ok(mut p) = progress_arc.lock() {
                                 p.is_exporting = false;
-                                p.status = format!("Complete: {} frames", result.total_frames);
+                                p.status = format!("Complete: {}", result.output_path.display());
                             }
                         }
                         Err(e) => {

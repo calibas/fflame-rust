@@ -70,16 +70,15 @@ pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option
 pub fn export_animation_mode(
     config_path: &str,
     animation_path: &str,
-    output_dir: &str,
+    output_path: &str,
     width: u32,
     height: u32,
     fps: u32,
-    transparent: bool,
     iterations_per_thread: u32,
-    video_settings: Option<animation::export::VideoEncodingSettings>,
+    video_settings: animation::export::VideoEncodingSettings,
 ) {
     env_logger::init();
-    pollster::block_on(export_animation_async(config_path, animation_path, output_dir, width, height, fps, transparent, iterations_per_thread, video_settings)).expect("Animation export failed");
+    pollster::block_on(export_animation_async(config_path, animation_path, output_path, width, height, fps, iterations_per_thread, video_settings)).expect("Animation export failed");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -152,41 +151,32 @@ async fn export_async(input: &str, output: &str, width: Option<u32>, height: Opt
 async fn export_animation_async(
     config_path: &str,
     animation_path: &str,
-    output_dir: &str,
+    output_path: &str,
     width: u32,
     height: u32,
     fps: u32,
-    transparent: bool,
     iterations_per_thread: u32,
-    video_settings: Option<animation::export::VideoEncodingSettings>,
+    video_settings: animation::export::VideoEncodingSettings,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::path::Path;
-    use animation::export::{AnimationExportConfig, CliProgressCallback, export_animation, encode_video, is_ffmpeg_available};
+    use animation::export::{AnimationExportConfig, CliProgressCallback, export_animation, is_ffmpeg_available};
     use animation::Animation;
 
     println!("Fractal Flame Animation Export");
     println!("===============================");
     println!("Config: {}", config_path);
     println!("Animation: {}", animation_path);
-    println!("Output: {}", output_dir);
+    println!("Output: {}", output_path);
     println!("Resolution: {}x{} @ {} FPS", width, height, fps);
     println!("Iterations per thread: {}", iterations_per_thread);
-    if transparent {
-        println!("Mode: Transparent PNG");
-    }
-    if let Some(ref vs) = video_settings {
-        println!("Video: {} (CRF {})", vs.codec.display_name(), vs.quality);
-        if vs.cleanup_frames {
-            println!("Cleanup: Will delete PNGs after encoding");
-        }
-    }
+    println!("Codec: {} (CRF {})", video_settings.codec.display_name(), video_settings.quality);
     println!();
 
-    // Check ffmpeg availability if video encoding requested
-    if video_settings.is_some() && !is_ffmpeg_available() {
-        eprintln!("Warning: ffmpeg not found. Video encoding will be skipped.");
-        eprintln!("Install ffmpeg and ensure it's in your PATH to enable video encoding.");
-        println!();
+    // Check ffmpeg availability
+    if !is_ffmpeg_available() {
+        eprintln!("Error: FFmpeg not found.");
+        eprintln!("Install FFmpeg and ensure it's in your PATH to export animations.");
+        return Err("FFmpeg not found".into());
     }
 
     // Load config file
@@ -206,16 +196,15 @@ async fn export_animation_async(
     let export_config = AnimationExportConfig {
         config,
         animation: anim,
-        output_dir: Path::new(output_dir).to_path_buf(),
+        output_path: Path::new(output_path).to_path_buf(),
         width,
         height,
         fps,
         iterations_per_thread,
-        transparent,
-        video_settings: video_settings.clone(),
+        video_settings,
     };
 
-    // Run export
+    // Run export (pipes directly to FFmpeg)
     let mut progress = CliProgressCallback::new();
     let result = export_animation(export_config, &mut progress).await?;
 
@@ -224,29 +213,7 @@ async fn export_animation_async(
     println!("  Total frames: {}", result.total_frames);
     println!("  Total time: {:.1}s", result.total_time_ms / 1000.0);
     println!("  Average per frame: {:.1}s", result.avg_frame_time_ms / 1000.0);
-    println!("  Output: {}", result.output_dir.display());
-
-    // Video encoding
-    if let Some(ref vs) = video_settings {
-        if is_ffmpeg_available() {
-            println!();
-            println!("Encoding video...");
-
-            match encode_video(&result.output_dir, fps, vs) {
-                Ok(video_result) => {
-                    println!("Video encoding complete!");
-                    println!("  Output: {}", video_result.video_path.display());
-                    println!("  Encoding time: {:.1}s", video_result.encode_time_ms / 1000.0);
-                    if video_result.frames_cleaned > 0 {
-                        println!("  Cleaned up {} PNG frames", video_result.frames_cleaned);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Video encoding failed: {}", e);
-                }
-            }
-        }
-    }
+    println!("  Output: {}", result.output_path.display());
 
     Ok(())
 }
