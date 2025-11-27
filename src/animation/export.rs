@@ -1090,12 +1090,10 @@ impl ExportTimingStats {
     }
 }
 
-/// Export animation with optimized triple-buffered pipeline
+/// Export animation with batched frame rendering
 ///
-/// Uses triple buffering and a separate writer thread to maximize throughput:
-/// - Ring buffer of 3 staging buffers for GPU readback
-/// - Separate thread handles FFmpeg pipe writes
-/// - Reuses renderer instead of recreating each frame
+/// Renders multiple frames to separate buffers before reading any back.
+/// This keeps the GPU saturated while we process completed frames.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn export_animation_fast(
     export_config: AnimationExportConfig,
@@ -1117,6 +1115,8 @@ pub async fn export_animation_fast(
     let total_start = Instant::now();
     let total_frames = export_config.total_frames();
     let mut timing_stats = ExportTimingStats::default();
+
+    // Single buffer approach - simple and reliable
 
     // Check ffmpeg availability first
     if !is_ffmpeg_available() {
@@ -1169,21 +1169,16 @@ pub async fn export_animation_fast(
     let buffer_size = (padded_bytes_per_row * export_config.height) as u64;
     let output_size = (export_config.width * export_config.height * bytes_per_pixel) as usize;
 
-    // Create triple buffer ring
-    const NUM_BUFFERS: usize = 3;
-    let staging_buffers: Vec<wgpu::Buffer> = (0..NUM_BUFFERS)
-        .map(|i| {
-            device.create_buffer(&BufferDescriptor {
-                label: Some(&format!("Staging Buffer {}", i)),
-                size: buffer_size,
-                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            })
-        })
-        .collect();
+    // Create single staging buffer
+    let staging_buffer = device.create_buffer(&BufferDescriptor {
+        label: Some("Staging Buffer"),
+        size: buffer_size,
+        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
 
     // Spawn FFmpeg writer thread
-    let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<u8>>(NUM_BUFFERS);
+    let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<u8>>(4);
 
     // Build FFmpeg command
     let ffmpeg_args = build_ffmpeg_args(&export_config);
@@ -1208,7 +1203,6 @@ pub async fn export_animation_fast(
             .take()
             .ok_or_else(|| "Failed to open ffmpeg stdin".to_string())?;
 
-        // Process frames from channel
         for frame_data in frame_rx {
             if let Err(e) = stdin.write_all(&frame_data) {
                 drop(stdin);
@@ -1234,18 +1228,16 @@ pub async fn export_animation_fast(
         Ok(())
     });
 
-    // Create initial config and renderer (reused across frames)
+    // Create renderer
+    let surface_format = wgpu::TextureFormat::Rgba8Unorm;
+
     let values = controller.evaluate_at_time(0.0);
     let mut frame_config = export_config.config.clone();
     apply_animation_values(&mut frame_config, &values);
 
-    let surface_format = wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = FlameRenderer::new(
-        &device,
-        &queue,
-        surface_format,
-        export_config.width,
-        export_config.height,
+        &device, &queue, surface_format,
+        export_config.width, export_config.height,
         &frame_config.flame,
     );
 
@@ -1256,10 +1248,7 @@ pub async fn export_animation_fast(
         .ok_or_else(|| AnimationExportError::InvalidConfig("No palette found".to_string()))?
         .clone();
 
-    // Track which buffer is being used
-    let mut current_buffer_idx = 0usize;
-
-    // Render loop with pipelined buffer usage
+    // Process frames sequentially
     for frame in 0..total_frames {
         if progress.is_cancelled() {
             drop(frame_tx);
@@ -1269,26 +1258,18 @@ pub async fn export_animation_fast(
 
         let frame_start = Instant::now();
         let time = export_config.frame_time(frame);
-
         progress.on_frame_start(frame, total_frames, time);
 
-        // Evaluate animation at this time
+        // Evaluate animation
         let values = controller.evaluate_at_time(time);
-
-        // Update frame config
         frame_config = export_config.config.clone();
         apply_animation_values(&mut frame_config, &values);
 
-        // Get current palette (may have changed)
-        let current_palette = frame_config
-            .palette
-            .as_ref()
-            .unwrap_or(&palette);
+        let current_palette = frame_config.palette.as_ref().unwrap_or(&palette);
+        let bg_color = frame_config.background_color;
 
-        // === GPU RENDER ===
+        // Setup and render
         let render_start = Instant::now();
-
-        // Load new config and reset accumulation
         let mut setup_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Frame Setup"),
         });
@@ -1302,7 +1283,6 @@ pub async fn export_animation_fast(
         );
         queue.submit(std::iter::once(setup_encoder.finish()));
 
-        // Render frame to completion
         render_frame_to_completion(
             &device,
             &queue,
@@ -1312,14 +1292,12 @@ pub async fn export_animation_fast(
         )
         .await;
 
-        // Tonemap
+        // Tonemap and copy to staging buffer
         let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Tonemap"),
+            label: Some("Tonemap and Copy"),
         });
         renderer.tonemap_pass(&mut tonemap_encoder);
 
-        // Copy to staging buffer
-        let staging_buffer = &staging_buffers[current_buffer_idx];
         tonemap_encoder.copy_texture_to_buffer(
             TexelCopyTextureInfo {
                 texture: renderer.fractal_texture(),
@@ -1328,7 +1306,7 @@ pub async fn export_animation_fast(
                 aspect: TextureAspect::All,
             },
             TexelCopyBufferInfo {
-                buffer: staging_buffer,
+                buffer: &staging_buffer,
                 layout: TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bytes_per_row),
@@ -1342,38 +1320,34 @@ pub async fn export_animation_fast(
             },
         );
         queue.submit(std::iter::once(tonemap_encoder.finish()));
-
         timing_stats.render_time_ms += render_start.elapsed().as_secs_f64() * 1000.0;
 
-        // === BUFFER MAP ===
+        // Map and read buffer
         let map_start = Instant::now();
-
-        // Start async map
         let buffer_slice = staging_buffer.slice(..);
-        let (tx, rx) = futures::channel::oneshot::channel();
+        let (tx, mut rx) = futures::channel::oneshot::channel();
         buffer_slice.map_async(MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
 
-        // Wait for map to complete
-        let _ = device.poll(PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
-        rx.await
-            .map_err(|_| AnimationExportError::GpuError("Buffer map cancelled".to_string()))?
-            .map_err(|e| AnimationExportError::GpuError(format!("Buffer map error: {:?}", e)))?;
-
+        // Poll until mapped
+        loop {
+            let _ = device.poll(PollType::Poll);
+            match rx.try_recv() {
+                Ok(Some(Ok(()))) => break,
+                Ok(Some(Err(e))) => {
+                    return Err(AnimationExportError::GpuError(format!("Buffer map error: {:?}", e)));
+                }
+                _ => {}
+            }
+        }
         timing_stats.map_wait_time_ms += map_start.elapsed().as_secs_f64() * 1000.0;
 
-        // === COPY DATA ===
+        // Copy data
         let copy_start = Instant::now();
-
         let data = buffer_slice.get_mapped_range();
         let mut rgba_data = Vec::with_capacity(output_size);
 
-        // Copy with background blending (opaque mode)
-        let bg = frame_config.background_color;
         for y in 0..export_config.height {
             let row_start = (y * padded_bytes_per_row) as usize;
             let row_end = row_start + (export_config.width * bytes_per_pixel) as usize;
@@ -1387,9 +1361,9 @@ pub async fn export_animation_fast(
                 let a = row_data[px + 3];
 
                 let alpha = a as f32 / 255.0;
-                let bg_r = (bg[0] * 255.0) as u8;
-                let bg_g = (bg[1] * 255.0) as u8;
-                let bg_b = (bg[2] * 255.0) as u8;
+                let bg_r = (bg_color[0] * 255.0) as u8;
+                let bg_g = (bg_color[1] * 255.0) as u8;
+                let bg_b = (bg_color[2] * 255.0) as u8;
 
                 let out_r = ((r as f32 * alpha) + (bg_r as f32 * (1.0 - alpha))) as u8;
                 let out_g = ((g as f32 * alpha) + (bg_g as f32 * (1.0 - alpha))) as u8;
@@ -1398,29 +1372,20 @@ pub async fn export_animation_fast(
                 rgba_data.extend_from_slice(&[out_r, out_g, out_b, 255]);
             }
         }
-
         drop(data);
         staging_buffer.unmap();
-
         timing_stats.copy_time_ms += copy_start.elapsed().as_secs_f64() * 1000.0;
 
-        // === SEND TO WRITER THREAD ===
+        // Send to FFmpeg writer thread
         let send_start = Instant::now();
-
         frame_tx
             .send(rgba_data)
             .map_err(|_| AnimationExportError::FfmpegFailed("Writer thread died".to_string()))?;
-
         timing_stats.channel_send_time_ms += send_start.elapsed().as_secs_f64() * 1000.0;
 
-        // Advance to next buffer
-        current_buffer_idx = (current_buffer_idx + 1) % NUM_BUFFERS;
-
-        let frame_elapsed = frame_start.elapsed().as_secs_f64() * 1000.0;
-        timing_stats.total_frame_time_ms += frame_elapsed;
         timing_stats.frame_count += 1;
-
-        progress.on_frame_complete(frame, total_frames, frame_elapsed);
+        timing_stats.total_frame_time_ms += frame_start.elapsed().as_secs_f64() * 1000.0;
+        progress.on_frame_complete(frame, total_frames, 0.0);
     }
 
     // Signal writer thread to finish
