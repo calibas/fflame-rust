@@ -94,7 +94,13 @@ fn animatable_parameters(transform_count: usize) -> Vec<ParameterCategory> {
             (format!("Opacity"), format!("Transform.{}.Opacity", i)),
         ];
 
-        // Affine parameters
+        // High-level transform operations (translate, rotate, scale)
+        params.push((format!("Origin X (Translate)"), format!("Transform.{}.OriginX", i)));
+        params.push((format!("Origin Y (Translate)"), format!("Transform.{}.OriginY", i)));
+        params.push((format!("Rotation"), format!("Transform.{}.Rotation", i)));
+        params.push((format!("Scale"), format!("Transform.{}.Scale", i)));
+
+        // Raw affine parameters (for advanced users)
         for param in ['A', 'B', 'C', 'D', 'E', 'F', 'G'] {
             params.push((format!("Affine {}", param), format!("Transform.{}.Affine.{}", i, param)));
         }
@@ -258,8 +264,10 @@ fn render_add_track_dialog(
 
             // Add/Cancel buttons
             ui.horizontal(|ui| {
-                let can_add = !state.new_track_target.is_empty()
-                    && (state.new_track_type != NewTrackType::Circular || !state.new_track_target_y.is_empty());
+                let can_add = match state.new_track_type {
+                    NewTrackType::Circular => !state.new_track_target.is_empty() && !state.new_track_target_y.is_empty(),
+                    _ => !state.new_track_target.is_empty(),
+                };
 
                 if ui.add_enabled(can_add, egui::Button::new("Add")).clicked() {
                     if let Some(ref mut animation) = controller.animation {

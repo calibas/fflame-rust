@@ -11,6 +11,7 @@ Users can:
 - Edit existing track properties
 - Delete tracks
 - Select target parameters from a categorized dropdown list
+- Animate transform Origin X/Y (translate), Rotation, and Scale directly
 
 ## Track Types
 
@@ -36,38 +37,69 @@ Users can:
 - AlphaBlendLow, AlphaBlendHigh, DensityScale
 
 **Color:**
-- PaletteRotation, SpeedFactor
-
-**Transform-level (per transform index):**
-- TransformWeight, TransformColor, TransformColorSpeed, TransformOpacity
-- TransformAffine (with param: A/B/C/D/E/F/G)
-- TransformVariation (with variation name)
+- PaletteRotation, SpeedFactor, HistogramColorScale
 
 **Rendering:**
-- HistogramColorScale, BlendFactor, PerspectiveStrength
+- BlendFactor, PerspectiveStrength, LowDensitySmoothing
+
+**Transform-level (per transform index):**
+- Weight, Color, ColorSpeed, Opacity
+- **Origin X (Translate)** - High-level translate X operation
+- **Origin Y (Translate)** - High-level translate Y operation
+- **Rotation** - High-level rotation operation (radians)
+- **Scale** - High-level uniform scale operation
+- Affine A, B, C, D, E, F, G - Raw affine coefficients (advanced)
+- Variations (by name)
+
+## High-Level Transform Operations
+
+The track editor supports animating transforms using intuitive high-level operations rather than raw affine coefficients:
+
+- **Origin X / Origin Y**: Translate the transform's origin point. Uses Apophysis conventions where origin_x = e and origin_y = -f.
+- **Rotation**: Rotate the transform about its origin. Value in radians, computed from atan2(b, a).
+- **Scale**: Uniformly scale the transform. Computed from sqrt(a² + b²).
+
+These high-level operations automatically update the underlying affine coefficients (a, b, c, d, e, f) when animated.
+
+For advanced users who need full control, the raw affine parameters (A-G) are also available as animation targets.
 
 ## Implementation
 
 ### Files Changed
 
-1. **`src/ui/track_editor.rs`** (NEW) - Main track editor module:
+1. **`src/ui/track_editor.rs`** - Main track editor module:
    - `TrackEditorState` struct for UI state
    - `render_track_editor()` function
    - `render_keyframe_editor()` function
    - `render_add_track_dialog()` function
-   - `animatable_parameters()` helper function
+   - `animatable_parameters()` helper function (includes Origin/Rotation/Scale targets)
 
-2. **`src/animation/mod.rs`** - Added methods:
-   - `remove_track()` method to Animation
-   - `remove_circular_track()` method
+2. **`src/config/delta.rs`** - Added ConfigPath variants:
+   - `TransformOriginX { index }` - High-level origin X (translate X)
+   - `TransformOriginY { index }` - High-level origin Y (translate Y)
+   - `TransformRotation { index }` - High-level rotation
+   - `TransformScale { index }` - High-level uniform scale
 
-3. **`src/ui/mod.rs`** - Module export
+3. **`src/config/manager.rs`** - Added get/apply handlers:
+   - `get_value()` support for new transform operation paths
+   - `apply_value()` support using Transform's set_* methods
 
-4. **`src/ui/panel_viewer.rs`** - Integration:
+4. **`src/scene/transforms.rs`** - Transform operation methods:
+   - `origin_x()` / `set_origin_x()` - Translate X operations
+   - `origin_y()` / `set_origin_y()` - Translate Y operations
+   - `rotation()` / `set_rotation()` - Rotation operations
+   - `scale()` / `set_scale()` - Scale operations
+
+5. **`src/animation/mod.rs`** - Track management:
+   - `remove_track()` / `remove_circular_track()` methods
+
+6. **`src/ui/mod.rs`** - Module export
+
+7. **`src/ui/panel_viewer.rs`** - Integration:
    - Added `track_editor_state` to PanelContext
    - Replaced `render_track_summary` with `render_track_editor`
 
-5. **`src/ui/animation_panel.rs`** - Added:
+8. **`src/ui/animation_panel.rs`** - Added:
    - `new_animation` field to AnimationPanelResponse
    - "+ New" button to file controls
 
