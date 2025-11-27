@@ -5,7 +5,7 @@
 
 use egui::Ui;
 use crate::animation::{Animation, AnimationController, AnimationQualityMode, LoopMode, PlaybackState};
-use crate::animation::export::VideoCodec;
+use crate::animation::export::{VideoCodec, HardwareAccel};
 
 /// Export progress state for UI display
 #[derive(Clone, Default)]
@@ -54,6 +54,8 @@ pub struct AnimationExportSettings {
     pub iterations_per_thread: u32,
     /// Video codec
     pub video_codec: VideoCodec,
+    /// Hardware acceleration
+    pub hardware_accel: HardwareAccel,
     /// Video quality (CRF)
     pub video_quality: u8,
 }
@@ -67,6 +69,7 @@ impl Default for AnimationExportSettings {
             fps: 30,
             iterations_per_thread: 256,
             video_codec: VideoCodec::H265,
+            hardware_accel: HardwareAccel::None,
             video_quality: 18,
         }
     }
@@ -464,6 +467,34 @@ fn render_export_controls(
                                 } else {
                                     settings.output_path = std::path::PathBuf::from(new_name);
                                 }
+                            }
+                        }
+                    });
+
+                    // Hardware acceleration
+                    ui.horizontal(|ui| {
+                        ui.label("Encoder:");
+                        let old_accel = settings.hardware_accel;
+                        egui::ComboBox::from_id_salt("hardware_accel")
+                            .selected_text(settings.hardware_accel.display_name())
+                            .show_ui(ui, |ui| {
+                                for &accel in HardwareAccel::all() {
+                                    // Only show options that support the current codec
+                                    let supported = accel.supports_codec(settings.video_codec);
+                                    ui.add_enabled_ui(supported, |ui| {
+                                        let label = if supported {
+                                            accel.display_name().to_string()
+                                        } else {
+                                            format!("{} (not available for {})", accel.display_name(), settings.video_codec.display_name())
+                                        };
+                                        ui.selectable_value(&mut settings.hardware_accel, accel, label);
+                                    });
+                                }
+                            });
+                        // Reset to software if current accel doesn't support new codec
+                        if old_accel != settings.hardware_accel || !settings.hardware_accel.supports_codec(settings.video_codec) {
+                            if !settings.hardware_accel.supports_codec(settings.video_codec) {
+                                settings.hardware_accel = HardwareAccel::None;
                             }
                         }
                     });

@@ -28,15 +28,6 @@ pub enum VideoCodec {
 }
 
 impl VideoCodec {
-    /// Get ffmpeg codec argument
-    pub fn ffmpeg_codec(&self) -> &'static str {
-        match self {
-            VideoCodec::H264 => "libx264",
-            VideoCodec::H265 => "libx265",
-            VideoCodec::VP9 => "libvpx-vp9",
-        }
-    }
-
     /// Get output file extension
     pub fn extension(&self) -> &'static str {
         match self {
@@ -55,11 +46,89 @@ impl VideoCodec {
     }
 }
 
+/// Hardware acceleration options for video encoding
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HardwareAccel {
+    /// Software encoding (CPU) - always available, slower but compatible
+    #[default]
+    None,
+    /// NVIDIA NVENC - fast hardware encoding on NVIDIA GPUs
+    Nvenc,
+    /// Intel Quick Sync Video - hardware encoding on Intel CPUs with integrated graphics
+    Qsv,
+    /// AMD AMF - hardware encoding on AMD GPUs
+    Amf,
+    /// Apple VideoToolbox - hardware encoding on macOS
+    VideoToolbox,
+}
+
+impl HardwareAccel {
+    /// Get the ffmpeg encoder name for this hardware acceleration + codec combination
+    /// Returns None if the combination is not supported
+    pub fn encoder_for_codec(&self, codec: VideoCodec) -> Option<&'static str> {
+        match (self, codec) {
+            // Software encoders
+            (HardwareAccel::None, VideoCodec::H264) => Some("libx264"),
+            (HardwareAccel::None, VideoCodec::H265) => Some("libx265"),
+            (HardwareAccel::None, VideoCodec::VP9) => Some("libvpx-vp9"),
+
+            // NVIDIA NVENC
+            (HardwareAccel::Nvenc, VideoCodec::H264) => Some("h264_nvenc"),
+            (HardwareAccel::Nvenc, VideoCodec::H265) => Some("hevc_nvenc"),
+            (HardwareAccel::Nvenc, VideoCodec::VP9) => None, // NVENC doesn't support VP9
+
+            // Intel Quick Sync
+            (HardwareAccel::Qsv, VideoCodec::H264) => Some("h264_qsv"),
+            (HardwareAccel::Qsv, VideoCodec::H265) => Some("hevc_qsv"),
+            (HardwareAccel::Qsv, VideoCodec::VP9) => Some("vp9_qsv"),
+
+            // AMD AMF
+            (HardwareAccel::Amf, VideoCodec::H264) => Some("h264_amf"),
+            (HardwareAccel::Amf, VideoCodec::H265) => Some("hevc_amf"),
+            (HardwareAccel::Amf, VideoCodec::VP9) => None, // AMF doesn't support VP9
+
+            // Apple VideoToolbox
+            (HardwareAccel::VideoToolbox, VideoCodec::H264) => Some("h264_videotoolbox"),
+            (HardwareAccel::VideoToolbox, VideoCodec::H265) => Some("hevc_videotoolbox"),
+            (HardwareAccel::VideoToolbox, VideoCodec::VP9) => None, // VideoToolbox doesn't support VP9
+        }
+    }
+
+    /// Check if this hardware acceleration supports the given codec
+    pub fn supports_codec(&self, codec: VideoCodec) -> bool {
+        self.encoder_for_codec(codec).is_some()
+    }
+
+    /// Get display name
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            HardwareAccel::None => "Software (CPU)",
+            HardwareAccel::Nvenc => "NVIDIA NVENC",
+            HardwareAccel::Qsv => "Intel Quick Sync",
+            HardwareAccel::Amf => "AMD AMF",
+            HardwareAccel::VideoToolbox => "Apple VideoToolbox",
+        }
+    }
+
+    /// Get all available hardware acceleration options
+    pub fn all() -> &'static [HardwareAccel] {
+        &[
+            HardwareAccel::None,
+            HardwareAccel::Nvenc,
+            HardwareAccel::Qsv,
+            HardwareAccel::Amf,
+            HardwareAccel::VideoToolbox,
+        ]
+    }
+}
+
 /// Video encoding settings
 #[derive(Debug, Clone)]
 pub struct VideoEncodingSettings {
     /// Video codec to use
     pub codec: VideoCodec,
+    /// Hardware acceleration option
+    pub hardware_accel: HardwareAccel,
     /// Quality (CRF value: 0-51 for H.264/H.265, 0-63 for VP9; lower = better)
     /// Default: 18 (visually lossless for H.264)
     pub quality: u8,
@@ -69,6 +138,7 @@ impl Default for VideoEncodingSettings {
     fn default() -> Self {
         Self {
             codec: VideoCodec::default(),
+            hardware_accel: HardwareAccel::default(),
             quality: 18,
         }
     }
@@ -440,6 +510,131 @@ pub fn get_ffmpeg_version() -> Option<String> {
     stdout.lines().next().map(|s| s.to_string())
 }
 
+/// Check if a specific encoder is available in FFmpeg
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_encoder_available(encoder: &str) -> bool {
+    let output = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .ok();
+
+    if let Some(output) = output {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // Encoder list format: " V..... encoder_name   Description"
+        // Look for the encoder name as a word
+        stdout.lines().any(|line| {
+            line.split_whitespace()
+                .nth(1) // Second column is encoder name
+                .map(|name| name == encoder)
+                .unwrap_or(false)
+        })
+    } else {
+        false
+    }
+}
+
+/// Check which hardware acceleration options are available on this system
+#[cfg(not(target_arch = "wasm32"))]
+pub fn get_available_hardware_accels() -> Vec<(HardwareAccel, Vec<VideoCodec>)> {
+    let mut available = Vec::new();
+
+    // Software is always available
+    available.push((HardwareAccel::None, vec![VideoCodec::H264, VideoCodec::H265, VideoCodec::VP9]));
+
+    // Check NVENC (NVIDIA)
+    let nvenc_codecs: Vec<VideoCodec> = [
+        ("h264_nvenc", VideoCodec::H264),
+        ("hevc_nvenc", VideoCodec::H265),
+    ]
+    .iter()
+    .filter(|(enc, _)| is_encoder_available(enc))
+    .map(|(_, codec)| *codec)
+    .collect();
+
+    if !nvenc_codecs.is_empty() {
+        available.push((HardwareAccel::Nvenc, nvenc_codecs));
+    }
+
+    // Check QSV (Intel)
+    let qsv_codecs: Vec<VideoCodec> = [
+        ("h264_qsv", VideoCodec::H264),
+        ("hevc_qsv", VideoCodec::H265),
+        ("vp9_qsv", VideoCodec::VP9),
+    ]
+    .iter()
+    .filter(|(enc, _)| is_encoder_available(enc))
+    .map(|(_, codec)| *codec)
+    .collect();
+
+    if !qsv_codecs.is_empty() {
+        available.push((HardwareAccel::Qsv, qsv_codecs));
+    }
+
+    // Check AMF (AMD)
+    let amf_codecs: Vec<VideoCodec> = [
+        ("h264_amf", VideoCodec::H264),
+        ("hevc_amf", VideoCodec::H265),
+    ]
+    .iter()
+    .filter(|(enc, _)| is_encoder_available(enc))
+    .map(|(_, codec)| *codec)
+    .collect();
+
+    if !amf_codecs.is_empty() {
+        available.push((HardwareAccel::Amf, amf_codecs));
+    }
+
+    // Check VideoToolbox (macOS)
+    let vt_codecs: Vec<VideoCodec> = [
+        ("h264_videotoolbox", VideoCodec::H264),
+        ("hevc_videotoolbox", VideoCodec::H265),
+    ]
+    .iter()
+    .filter(|(enc, _)| is_encoder_available(enc))
+    .map(|(_, codec)| *codec)
+    .collect();
+
+    if !vt_codecs.is_empty() {
+        available.push((HardwareAccel::VideoToolbox, vt_codecs));
+    }
+
+    available
+}
+
+/// Print available hardware acceleration options to stdout
+#[cfg(not(target_arch = "wasm32"))]
+pub fn print_available_encoders() {
+    println!("Checking available FFmpeg encoders...\n");
+
+    if let Some(version) = get_ffmpeg_version() {
+        println!("{}\n", version);
+    }
+
+    let available = get_available_hardware_accels();
+
+    for (accel, codecs) in &available {
+        let codec_names: Vec<&str> = codecs.iter().map(|c| c.display_name()).collect();
+        println!("  {} - {}", accel.display_name(), codec_names.join(", "));
+    }
+
+    println!();
+
+    // Also check specific encoders for debugging
+    let encoders_to_check = [
+        "libx264", "libx265", "libvpx-vp9",
+        "h264_nvenc", "hevc_nvenc",
+        "h264_qsv", "hevc_qsv", "vp9_qsv",
+        "h264_amf", "hevc_amf",
+        "h264_videotoolbox", "hevc_videotoolbox",
+    ];
+
+    println!("Encoder availability:");
+    for encoder in encoders_to_check {
+        let status = if is_encoder_available(encoder) { "✓" } else { "✗" };
+        println!("  {} {}", status, encoder);
+    }
+}
+
 /// Export animation directly to video via FFmpeg pipe (desktop only)
 ///
 /// This pipes raw RGBA pixel data directly to FFmpeg's stdin, avoiding:
@@ -519,26 +714,89 @@ pub async fn export_animation(
     ffmpeg.arg("-r").arg(export_config.fps.to_string());
     ffmpeg.arg("-i").arg("-"); // Read from stdin
 
-    // Codec-specific settings
+    // Codec and hardware acceleration settings
     let settings = &export_config.video_settings;
+    let encoder = settings.hardware_accel.encoder_for_codec(settings.codec)
+        .expect("Invalid hardware accel + codec combination");
+
+    ffmpeg.arg("-c:v").arg(encoder);
+
+    // Quality and codec-specific settings
+    let is_hardware = settings.hardware_accel != HardwareAccel::None;
+
     match settings.codec {
         VideoCodec::H264 => {
-            ffmpeg.arg("-c:v").arg("libx264");
-            ffmpeg.arg("-crf").arg(settings.quality.to_string());
-            ffmpeg.arg("-preset").arg("medium");
+            if is_hardware {
+                // Hardware encoders use different quality parameters
+                match settings.hardware_accel {
+                    HardwareAccel::Nvenc => {
+                        // NVENC uses -rc vbr -cq for constant quality (0-51)
+                        ffmpeg.arg("-rc").arg("vbr");
+                        ffmpeg.arg("-cq").arg(settings.quality.to_string());
+                        ffmpeg.arg("-preset").arg("p4"); // Balanced preset
+                    }
+                    HardwareAccel::Qsv => {
+                        // QSV uses -global_quality for CQP mode
+                        ffmpeg.arg("-global_quality").arg(settings.quality.to_string());
+                        ffmpeg.arg("-preset").arg("medium");
+                    }
+                    HardwareAccel::Amf => {
+                        // AMF uses -qp for constant QP mode
+                        ffmpeg.arg("-rc").arg("cqp");
+                        ffmpeg.arg("-qp").arg(settings.quality.to_string());
+                    }
+                    HardwareAccel::VideoToolbox => {
+                        // VideoToolbox uses -q:v for quality (1-100, higher = better)
+                        // Convert CRF-style (lower=better) to VT-style (higher=better)
+                        let vt_quality = 100 - (settings.quality as i32 * 2).min(100).max(0);
+                        ffmpeg.arg("-q:v").arg(vt_quality.to_string());
+                    }
+                    HardwareAccel::None => unreachable!(),
+                }
+            } else {
+                ffmpeg.arg("-crf").arg(settings.quality.to_string());
+                ffmpeg.arg("-preset").arg("medium");
+            }
             ffmpeg.arg("-pix_fmt").arg("yuv420p"); // Maximum compatibility
         }
         VideoCodec::H265 => {
-            ffmpeg.arg("-c:v").arg("libx265");
-            ffmpeg.arg("-crf").arg(settings.quality.to_string());
-            ffmpeg.arg("-preset").arg("medium");
+            if is_hardware {
+                match settings.hardware_accel {
+                    HardwareAccel::Nvenc => {
+                        // NVENC uses -rc vbr -cq for constant quality (0-51)
+                        ffmpeg.arg("-rc").arg("vbr");
+                        ffmpeg.arg("-cq").arg(settings.quality.to_string());
+                        ffmpeg.arg("-preset").arg("p4");
+                    }
+                    HardwareAccel::Qsv => {
+                        ffmpeg.arg("-global_quality").arg(settings.quality.to_string());
+                        ffmpeg.arg("-preset").arg("medium");
+                    }
+                    HardwareAccel::Amf => {
+                        ffmpeg.arg("-rc").arg("cqp");
+                        ffmpeg.arg("-qp").arg(settings.quality.to_string());
+                    }
+                    HardwareAccel::VideoToolbox => {
+                        let vt_quality = 100 - (settings.quality as i32 * 2).min(100).max(0);
+                        ffmpeg.arg("-q:v").arg(vt_quality.to_string());
+                    }
+                    HardwareAccel::None => unreachable!(),
+                }
+            } else {
+                ffmpeg.arg("-crf").arg(settings.quality.to_string());
+                ffmpeg.arg("-preset").arg("medium");
+                ffmpeg.arg("-x265-params").arg("log-level=error");
+            }
             ffmpeg.arg("-pix_fmt").arg("yuv420p");
-            ffmpeg.arg("-x265-params").arg("log-level=error");
         }
         VideoCodec::VP9 => {
-            ffmpeg.arg("-c:v").arg("libvpx-vp9");
-            ffmpeg.arg("-crf").arg(settings.quality.to_string());
-            ffmpeg.arg("-b:v").arg("0"); // Use CRF mode
+            // VP9 only supports software or QSV
+            if settings.hardware_accel == HardwareAccel::Qsv {
+                ffmpeg.arg("-global_quality").arg(settings.quality.to_string());
+            } else {
+                ffmpeg.arg("-crf").arg(settings.quality.to_string());
+                ffmpeg.arg("-b:v").arg("0"); // Use CRF mode
+            }
             ffmpeg.arg("-pix_fmt").arg("yuv420p");
         }
     }
@@ -559,8 +817,6 @@ pub async fn export_animation(
         .ok_or_else(|| AnimationExportError::FfmpegFailed("Failed to open ffmpeg stdin".to_string()))?;
 
     // Render each frame and pipe to FFmpeg
-    let mut ffmpeg_error: Option<AnimationExportError> = None;
-
     for frame in 0..total_frames {
         if progress.is_cancelled() {
             // Kill FFmpeg process on cancel
@@ -622,8 +878,21 @@ pub async fn export_animation(
 
         // Write raw RGBA data directly to FFmpeg stdin
         if let Err(e) = stdin.write_all(&rgba_data) {
-            ffmpeg_error = Some(AnimationExportError::FfmpegFailed(format!("Failed to write frame to ffmpeg: {}", e)));
-            break;
+            // Try to get FFmpeg's stderr to understand why it failed
+            drop(stdin); // Close stdin so FFmpeg terminates
+            let output = child.wait_with_output().ok();
+            let stderr = output
+                .as_ref()
+                .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+                .unwrap_or_default();
+
+            let error_msg = if stderr.is_empty() {
+                format!("Failed to write frame to ffmpeg: {}", e)
+            } else {
+                format!("FFmpeg error: {}", stderr.trim())
+            };
+
+            return Err(AnimationExportError::FfmpegFailed(error_msg));
         }
 
         let frame_elapsed = frame_start.elapsed().as_secs_f64() * 1000.0;
@@ -637,14 +906,9 @@ pub async fn export_animation(
     let output = child.wait_with_output()
         .map_err(|e| AnimationExportError::FfmpegFailed(format!("Failed to wait for ffmpeg: {}", e)))?;
 
-    // Check for errors
-    if let Some(err) = ffmpeg_error {
-        return Err(err);
-    }
-
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AnimationExportError::FfmpegFailed(stderr.to_string()));
+        return Err(AnimationExportError::FfmpegFailed(format!("FFmpeg error: {}", stderr.trim())));
     }
 
     let total_time_ms = total_start.elapsed().as_secs_f64() * 1000.0;
