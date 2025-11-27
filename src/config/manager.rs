@@ -1349,6 +1349,33 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// Load a complete config with explicit before/after states
+    /// Used for animation undo where we track the pre-animation state separately
+    /// The current config is NOT modified (we're just recording the transition)
+    pub fn load_config_with_explicit_before(
+        &mut self,
+        before_config: FractalConfig,
+        after_config: FractalConfig,
+        description: String,
+    ) -> Result<(), ConfigError> {
+        // Clear any preview state
+        self.preview = None;
+
+        // Create bidirectional snapshot with explicit before/after
+        let change = ConfigChange::full_config_snapshot(
+            before_config,   // before (pre-animation state)
+            after_config,    // after (post-animation state, should match current)
+            description,
+        );
+
+        self.push_undo(change);
+
+        // Note: We don't modify self.current because it already matches after_config
+        // (the animation has been applying changes continuously)
+
+        Ok(())
+    }
+
     /// Apply a structural change (transform add/delete)
     /// Creates specialized snapshot and updates config atomically
     pub fn apply_structural_change(&mut self, change: ConfigChange) -> Result<(), ConfigError> {

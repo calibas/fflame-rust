@@ -117,7 +117,7 @@ pub fn render_animation_content(
     ui.separator();
 
     // Playback controls
-    render_playback_controls(ui, controller);
+    render_playback_controls(ui, controller, &mut response);
 
     ui.separator();
 
@@ -153,7 +153,7 @@ pub fn render_animation_content(
 }
 
 /// Render play/pause/stop buttons
-fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController) {
+fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, _response: &mut AnimationPanelResponse) {
     let has_animation = controller.animation.is_some();
 
     ui.horizontal(|ui| {
@@ -166,8 +166,12 @@ fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController) {
 
         if ui.add_enabled(has_animation, egui::Button::new(play_pause_text)).clicked() {
             match controller.state {
-                PlaybackState::Playing => controller.pause(),
-                PlaybackState::Paused | PlaybackState::Stopped => controller.play(),
+                PlaybackState::Playing => {
+                    controller.pause();
+                }
+                PlaybackState::Paused | PlaybackState::Stopped => {
+                    controller.play();
+                }
             }
         }
 

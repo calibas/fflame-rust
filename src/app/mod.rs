@@ -3,6 +3,9 @@
 mod input;
 mod config;
 pub mod export;
+pub mod render_mode;
+
+pub use render_mode::{RenderModeFSM, RenderModeState, TransitionResult};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use export::export_headless;
@@ -73,6 +76,9 @@ pub struct App {
 
     // Animation export progress (shared with background export thread)
     pub(super) animation_export_progress: Arc<Mutex<ExportProgress>>,
+
+    // Rendering mode state machine (Normal, Animating, Overwrite)
+    pub(super) render_mode: RenderModeFSM,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -141,6 +147,7 @@ impl App {
             export_height,
             use_custom_export_size: false,  // Default to viewport size
             animation_export_progress: Arc::new(Mutex::new(ExportProgress::default())),
+            render_mode: RenderModeFSM::new(),
         };
 
         #[allow(deprecated)]
@@ -1561,12 +1568,31 @@ impl App {
         // ============================================================================
         // ANIMATION UPDATE (between UI processing and rendering)
         // ============================================================================
-        // If animation is playing, update time and apply values to config
-        let animation_playing = self.animation_controller.state == PlaybackState::Playing;
+        // Detect animation state transitions and update FSM accordingly
+        let was_fsm_animating = self.render_mode.is_animating();
+        let is_controller_playing = self.animation_controller.state == PlaybackState::Playing;
 
-        if animation_playing {
+        // Detect play start: controller started playing but FSM not yet in animation mode
+        if is_controller_playing && !was_fsm_animating {
+            self.render_mode.enter_animation(self.config_manager.active_config());
+        }
+
+        // Detect user stop/pause: FSM was animating but controller is no longer playing
+        // (This catches manual stop/pause clicks from UI - auto-stop is handled below after update())
+        if was_fsm_animating && !is_controller_playing {
+            self.handle_animation_exit();
+        }
+
+        if is_controller_playing {
             // Update animation time (delta_time calculated at frame start, before last_frame_time update)
             self.animation_controller.update(delta_time);
+
+            // Check if animation auto-stopped (LoopMode::Once reached end)
+            let auto_stopped = self.animation_controller.state != PlaybackState::Playing;
+            if auto_stopped {
+                // Animation finished naturally - exit animation mode and create undo snapshot
+                self.handle_animation_exit();
+            }
 
             // Evaluate all tracks and apply values to ConfigManager (silently, no undo)
             let frame_values = self.animation_controller.evaluate_frame();
@@ -1610,7 +1636,7 @@ impl App {
             //   - Responsive mode: Use overwrite for smooth real-time preview
             //   - HighQuality mode: Use batched accumulation for better quality
             let has_stopped = renderer.total_iterations() >= final_config.max_iterations;
-            let animation_uses_overwrite = animation_playing && self.animation_controller.use_overwrite_mode();
+            let animation_uses_overwrite = is_controller_playing && self.animation_controller.use_overwrite_mode();
             let use_overwrite = self.use_overwrite_next_frame || has_stopped || animation_uses_overwrite;
             renderer.set_overwrite_mode(use_overwrite);
 
@@ -1618,7 +1644,7 @@ impl App {
             // During animation playback, always iterate (ignore max_iterations limit)
             let max_iterations = Some(final_config.max_iterations);
             let should_iterate = !self.paused && (
-                animation_playing ||
+                is_controller_playing ||
                 max_iterations.map_or(true, |max| renderer.total_iterations() < max)
             );
 
