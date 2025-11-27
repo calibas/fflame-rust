@@ -311,3 +311,6 @@ Keep the current CPU bencmarks, but only run them with the --full flag. The defa
 
 
 register_native_texture shouldn't run every frame.
+
+
+min/max iteration depths for transforms

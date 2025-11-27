@@ -747,6 +747,8 @@ impl ConfigManager {
             // View
             ConfigPath::Zoom => Ok(config.zoom.into()),
             ConfigPath::Pan => Ok((config.pan_x, config.pan_y).into()),
+            ConfigPath::PanX => Ok(config.pan_x.into()),
+            ConfigPath::PanY => Ok(config.pan_y.into()),
             ConfigPath::Rotation => Ok(config.rotation.into()),
             ConfigPath::CameraRotationX => Ok(config.camera_rotation_x.into()),
             ConfigPath::CameraRotationY => Ok(config.camera_rotation_y.into()),
@@ -781,6 +783,9 @@ impl ConfigManager {
             ConfigPath::PaletteRotation => Ok(config.palette_rotation.into()),
             ConfigPath::SpeedFactor => Ok(config.speed_factor.into()),
             ConfigPath::BackgroundColor => Ok(config.background_color.into()),
+            ConfigPath::BackgroundColorR => Ok(config.background_color[0].into()),
+            ConfigPath::BackgroundColorG => Ok(config.background_color[1].into()),
+            ConfigPath::BackgroundColorB => Ok(config.background_color[2].into()),
 
             // Rendering settings
             ConfigPath::HistogramColorScale => Ok(config.histogram_color_scale.into()),
@@ -970,6 +975,38 @@ impl ConfigManager {
                 );
                 Ok(value.into())
             }
+            ConfigPath::FinalTransformOriginX => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(final_xform.origin_x().into())
+            }
+            ConfigPath::FinalTransformOriginY => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(final_xform.origin_y().into())
+            }
+            ConfigPath::FinalTransformRotation => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(final_xform.rotation().into())
+            }
+            ConfigPath::FinalTransformScale => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(final_xform.scale().into())
+            }
 
             // Flame
             ConfigPath::RenderMode => Ok(config.flame.render_mode.into()),
@@ -1007,6 +1044,12 @@ impl ConfigManager {
                 let (x, y): (f32, f32) = value.try_into()?;
                 self.current.pan_x = x;
                 self.current.pan_y = y;
+            }
+            ConfigPath::PanX => {
+                self.current.pan_x = value.try_into()?;
+            }
+            ConfigPath::PanY => {
+                self.current.pan_y = value.try_into()?;
             }
             ConfigPath::Rotation => {
                 self.current.rotation = value.try_into()?;
@@ -1096,6 +1139,15 @@ impl ConfigManager {
             }
             ConfigPath::BackgroundColor => {
                 self.current.background_color = value.try_into()?;
+            }
+            ConfigPath::BackgroundColorR => {
+                self.current.background_color[0] = value.try_into()?;
+            }
+            ConfigPath::BackgroundColorG => {
+                self.current.background_color[1] = value.try_into()?;
+            }
+            ConfigPath::BackgroundColorB => {
+                self.current.background_color[2] = value.try_into()?;
             }
 
             // Rendering settings
@@ -1327,6 +1379,46 @@ impl ConfigManager {
                 let new_value: f32 = value.try_into()?;
                 let key = format!("{}.{}", variation, param);
                 final_xform.variation_params.insert(key, new_value);
+            }
+            ConfigPath::FinalTransformOriginX => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                final_xform.set_origin_x(new_value);
+            }
+            ConfigPath::FinalTransformOriginY => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                final_xform.set_origin_y(new_value);
+            }
+            ConfigPath::FinalTransformRotation => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                final_xform.set_rotation(new_value);
+            }
+            ConfigPath::FinalTransformScale => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                final_xform.set_scale(new_value);
             }
 
             // Flame

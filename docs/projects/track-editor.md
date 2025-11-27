@@ -30,7 +30,7 @@ Users can:
 ## Animatable Parameters
 
 **View (smooth, no reset):**
-- Zoom, Rotation, CameraRotationX, CameraRotationY, CameraZ
+- Zoom, **Pan X**, **Pan Y**, Rotation, CameraRotationX, CameraRotationY, CameraZ
 
 **Tone Mapping:**
 - Exposure, Gamma, GammaThreshold, Brightness, Vibrancy, Saturation, HueShift, ValueScale
@@ -38,6 +38,7 @@ Users can:
 
 **Color:**
 - PaletteRotation, SpeedFactor, HistogramColorScale
+- **Background Red**, **Background Green**, **Background Blue** - Individual color components
 
 **Rendering:**
 - BlendFactor, PerspectiveStrength, LowDensitySmoothing
@@ -49,7 +50,18 @@ Users can:
 - **Rotation** - High-level rotation operation (radians)
 - **Scale** - High-level uniform scale operation
 - Affine A, B, C, D, E, F, G - Raw affine coefficients (advanced)
-- Variations (by name)
+- Variations (by name) - Active variation weights
+- Variation parameters (by name.param) - Parameters for parameterized variations
+
+**Final Transform (only when enabled):**
+- **Origin X (Translate)** - High-level translate X operation
+- **Origin Y (Translate)** - High-level translate Y operation
+- **Rotation** - High-level rotation operation (radians)
+- **Scale** - High-level uniform scale operation
+- Color, ColorSpeed
+- Affine A, B, C, D, E, F, G - Raw affine coefficients (advanced)
+- Variations (by name) - Active variation weights
+- Variation parameters (by name.param) - Parameters for parameterized variations
 
 ## High-Level Transform Operations
 
