@@ -247,6 +247,16 @@ impl<'a> PanelViewer<'a> {
 
         // Handle animation load response
         if let Some(animation) = response.load_animation {
+            // If animation has embedded config, load it first
+            if let Some(ref config) = animation.base_config {
+                log::info!("Animation '{}' has embedded config, loading it", animation.name);
+                let description = format!("Load Animation: {}", animation.name);
+                if let Err(e) = self.context.config_manager.load_config(config.clone(), description) {
+                    log::error!("Failed to load animation's embedded config: {}", e);
+                }
+                // Mark that preset changed (triggers GPU update)
+                *self.context.preset_changed = true;
+            }
             self.context.animation_controller.load(animation);
         }
 
@@ -254,15 +264,21 @@ impl<'a> PanelViewer<'a> {
         if response.save_animation {
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(ref animation) = self.context.animation_controller.animation {
+                // Clone animation and embed current config
+                let mut animation_with_config = animation.clone();
+                animation_with_config.set_base_config(self.context.config_manager.active_config().clone());
+
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Animation", &["anim", "json"])
-                    .set_file_name(&format!("{}.anim", animation.name))
+                    .set_file_name(&format!("{}.anim", animation_with_config.name))
                     .save_file()
                 {
-                    match animation.to_json() {
+                    match animation_with_config.to_json() {
                         Ok(json) => {
                             if let Err(e) = std::fs::write(&path, json) {
                                 log::error!("Failed to save animation: {}", e);
+                            } else {
+                                log::info!("Saved animation with embedded config to {:?}", path);
                             }
                         }
                         Err(e) => {
