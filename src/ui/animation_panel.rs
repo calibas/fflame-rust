@@ -86,6 +86,8 @@ pub struct AnimationPanelResponse {
     pub export_animation: Option<AnimationExportSettings>,
     /// Create a new empty animation
     pub new_animation: bool,
+    /// Timeline was scrubbed (slider dragged or frame stepped) - needs fractal update
+    pub seek_changed: bool,
 }
 
 /// Render animation panel content
@@ -115,7 +117,7 @@ pub fn render_animation_content(
     ui.separator();
 
     // Timeline scrubber
-    render_timeline(ui, controller);
+    response.seek_changed = render_timeline(ui, controller);
 
     ui.separator();
 
@@ -200,9 +202,11 @@ fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, _
 }
 
 /// Render timeline scrubber with time display
-fn render_timeline(ui: &mut Ui, controller: &mut AnimationController) {
+/// Returns true if the timeline was scrubbed (slider dragged or frame stepped)
+fn render_timeline(ui: &mut Ui, controller: &mut AnimationController) -> bool {
     let has_animation = controller.animation.is_some();
     let duration = controller.animation.as_ref().map(|a| a.duration).unwrap_or(1.0);
+    let mut seek_changed = false;
 
     // Time display
     ui.horizontal(|ui| {
@@ -227,22 +231,27 @@ fn render_timeline(ui: &mut Ui, controller: &mut AnimationController) {
 
     if response.changed() {
         controller.seek(time);
+        seek_changed = true;
     }
 
-    // Frame stepping (when paused)
+    // Frame stepping (when not playing)
     if controller.state != PlaybackState::Playing {
         ui.horizontal(|ui| {
             let step = 1.0 / 60.0; // ~16ms frame step
 
             if ui.add_enabled(has_animation, egui::Button::new("◀ Frame")).clicked() {
                 controller.seek((controller.current_time - step).max(0.0));
+                seek_changed = true;
             }
 
             if ui.add_enabled(has_animation, egui::Button::new("Frame ▶")).clicked() {
                 controller.seek((controller.current_time + step).min(duration));
+                seek_changed = true;
             }
         });
     }
+
+    seek_changed
 }
 
 /// Render playback speed control

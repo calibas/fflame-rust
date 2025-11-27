@@ -97,11 +97,14 @@ impl AnimationController {
         match animation.loop_mode {
             LoopMode::Once => {
                 if self.current_time >= animation.duration {
-                    self.current_time = animation.duration;
+                    // Animation finished - reset to start
+                    self.current_time = 0.0;
                     self.state = PlaybackState::Stopped;
+                    self.direction = 1.0;
                 } else if self.current_time < 0.0 {
                     self.current_time = 0.0;
                     self.state = PlaybackState::Stopped;
+                    self.direction = 1.0;
                 }
             }
             LoopMode::Loop => {
@@ -368,7 +371,8 @@ mod tests {
         controller.play();
 
         controller.update(6.0); // Exceed duration
-        assert_eq!(controller.current_time, 5.0);
+        // When LoopMode::Once finishes, time resets to 0.0 for consistent behavior
+        assert_eq!(controller.current_time, 0.0);
         assert_eq!(controller.state, PlaybackState::Stopped);
     }
 

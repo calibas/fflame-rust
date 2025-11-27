@@ -48,6 +48,9 @@ pub struct UiResponse {
 
     // Animation export request
     pub animation_export_requested: Option<super::animation_panel::AnimationExportSettings>,
+
+    // Animation timeline was scrubbed (slider dragged or frame stepped)
+    pub animation_seek_changed: bool,
 }
 
 impl Default for UiResponse {
@@ -77,6 +80,7 @@ impl Default for UiResponse {
             selected_preset_config: None,
             file_browser_open_requested: false,
             animation_export_requested: None,
+            animation_seek_changed: false,
         }
     }
 }

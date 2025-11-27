@@ -1397,6 +1397,29 @@ impl App {
             }
         }
 
+        // Handle animation timeline scrubbing (slider drag or frame step)
+        if ui_response.animation_seek_changed {
+            // Evaluate animation at current scrubbed time and apply to config
+            let frame_values = self.animation_controller.evaluate_frame();
+
+            for (path_str, json_value) in frame_values {
+                if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
+                    if let Some(config_value) = crate::config::json_to_config_value(&json_value, &path) {
+                        // Apply silently (no undo point) - just preview the position
+                        if let Err(e) = self.config_manager.update_param_silent(path, config_value) {
+                            log::warn!("Animation scrub: failed to update {}: {}", path_str, e);
+                        }
+                    }
+                }
+            }
+
+            // Sync flame from config
+            self.flame = self.config_manager.active_config().flame.clone();
+
+            // Force a GPU update to show the scrubbed frame
+            self.use_overwrite_next_frame = true;
+        }
+
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         // Get pending actions from ConfigManager (replaces individual boolean flags)
         let actions = self.config_manager.get_pending_actions();
@@ -1546,6 +1569,21 @@ impl App {
             // Disable animation mode before exit so undo entry creation works
             self.config_manager.set_animation_mode(false);
             self.handle_animation_exit();
+
+            // Only restore base config when animation is STOPPED (not paused)
+            // When paused, the fractal should stay at the current timeline position
+            if self.animation_controller.state == PlaybackState::Stopped {
+                if let Some(ref animation) = self.animation_controller.animation {
+                    if let Some(ref base_config) = animation.base_config {
+                        // Load the base config silently (the undo entry was already created by handle_animation_exit)
+                        if let Err(e) = self.config_manager.load_config_silent(base_config.clone()) {
+                            log::error!("Failed to restore base config: {}", e);
+                        }
+                        self.flame = base_config.flame.clone();
+                        self.use_overwrite_next_frame = true;
+                    }
+                }
+            }
         }
 
         if is_controller_playing {
@@ -1559,6 +1597,18 @@ impl App {
                 self.config_manager.set_animation_mode(false);
                 // Animation finished naturally - exit animation mode and create undo snapshot
                 self.handle_animation_exit();
+
+                // Restore base config when animation stops (returns to original state)
+                if let Some(ref animation) = self.animation_controller.animation {
+                    if let Some(ref base_config) = animation.base_config {
+                        // Load the base config silently (the undo entry was already created by handle_animation_exit)
+                        if let Err(e) = self.config_manager.load_config_silent(base_config.clone()) {
+                            log::error!("Failed to restore base config: {}", e);
+                        }
+                        self.flame = base_config.flame.clone();
+                        self.use_overwrite_next_frame = true;
+                    }
+                }
             }
 
             // Evaluate all tracks and apply values to ConfigManager (silently, no undo)
