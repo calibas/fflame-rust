@@ -42,44 +42,32 @@ impl ExportProgress {
 /// Export settings for animation rendering
 #[derive(Clone)]
 pub struct AnimationExportSettings {
-    /// Output directory
-    pub output_dir: std::path::PathBuf,
+    /// Output video file path
+    pub output_path: std::path::PathBuf,
     /// Frame width
     pub width: u32,
     /// Frame height
     pub height: u32,
     /// Frames per second
     pub fps: u32,
-    /// Export transparent PNGs
-    pub transparent: bool,
     /// Iterations per thread
     pub iterations_per_thread: u32,
-    /// Encode to video after rendering
-    pub encode_video: bool,
     /// Video codec
     pub video_codec: VideoCodec,
     /// Video quality (CRF)
     pub video_quality: u8,
-    /// Output video filename (without extension)
-    pub video_name: String,
-    /// Delete PNG frames after video encoding
-    pub cleanup_frames: bool,
 }
 
 impl Default for AnimationExportSettings {
     fn default() -> Self {
         Self {
-            output_dir: std::path::PathBuf::from("./animation_export"),
+            output_path: std::path::PathBuf::from("./animation.mp4"),
             width: 1920,
             height: 1080,
             fps: 30,
-            transparent: false,
             iterations_per_thread: 256,
-            encode_video: false,
-            video_codec: VideoCodec::H264,
+            video_codec: VideoCodec::H265,
             video_quality: 18,
-            video_name: "animation".to_string(),
-            cleanup_frames: false,
         }
     }
 }
@@ -421,146 +409,134 @@ fn render_export_controls(
                 ui.separator();
             }
 
-            ui.add_enabled_ui(has_animation && !progress.is_exporting, |ui| {
-                // Output directory
-                ui.horizontal(|ui| {
-                    ui.label("Output:");
-                    let dir_str = settings.output_dir.to_string_lossy().to_string();
-                    let mut dir_display = dir_str.clone();
-                    if ui.text_edit_singleline(&mut dir_display).changed() {
-                        settings.output_dir = std::path::PathBuf::from(&dir_display);
-                    }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let ffmpeg_available = crate::animation::export::is_ffmpeg_available();
 
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if ui.button("Browse...").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_title("Select Output Directory")
-                            .pick_folder()
-                        {
-                            settings.output_dir = path;
-                        }
-                    }
-                });
-
-                // Resolution
-                ui.horizontal(|ui| {
-                    ui.label("Resolution:");
-                    ui.add(egui::DragValue::new(&mut settings.width).range(100..=7680).suffix("w"));
-                    ui.label("×");
-                    ui.add(egui::DragValue::new(&mut settings.height).range(100..=4320).suffix("h"));
-                });
-
-                // Quick resolution presets
-                ui.horizontal(|ui| {
-                    if ui.small_button("720p").clicked() {
-                        settings.width = 1280;
-                        settings.height = 720;
-                    }
-                    if ui.small_button("1080p").clicked() {
-                        settings.width = 1920;
-                        settings.height = 1080;
-                    }
-                    if ui.small_button("4K").clicked() {
-                        settings.width = 3840;
-                        settings.height = 2160;
-                    }
-                });
-
-                // FPS
-                ui.horizontal(|ui| {
-                    ui.label("Frame Rate:");
-                    ui.add(egui::DragValue::new(&mut settings.fps).range(1..=120).suffix(" fps"));
-
-                    if ui.small_button("24").clicked() { settings.fps = 24; }
-                    if ui.small_button("30").clicked() { settings.fps = 30; }
-                    if ui.small_button("60").clicked() { settings.fps = 60; }
-                });
-
-                // Iterations
-                ui.horizontal(|ui| {
-                    ui.label("Iterations/thread:");
-                    ui.add(egui::DragValue::new(&mut settings.iterations_per_thread).range(64..=4096));
-                });
-
-                // Transparent
-                ui.checkbox(&mut settings.transparent, "Transparent background");
-
-                // Estimate
-                if let Some(ref animation) = controller.animation {
-                    let total_frames = (animation.duration * settings.fps as f64).ceil() as u32;
+                if !ffmpeg_available {
+                    ui.horizontal(|ui| {
+                        ui.label("⚠ FFmpeg not found");
+                    });
+                    ui.small("Install FFmpeg and ensure it's in your PATH to export animations.");
                     ui.separator();
-                    ui.label(format!("Total frames: {} ({:.1}s × {} fps)",
-                        total_frames, animation.duration, settings.fps));
                 }
 
-                ui.separator();
-
-                // Video encoding section
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let ffmpeg_available = crate::animation::export::is_ffmpeg_available();
-
+                ui.add_enabled_ui(has_animation && !progress.is_exporting && ffmpeg_available, |ui| {
+                    // Output file path
                     ui.horizontal(|ui| {
-                        ui.checkbox(&mut settings.encode_video, "Encode to video");
-                        if !ffmpeg_available {
-                            ui.label("⚠").on_hover_text("ffmpeg not found. Install ffmpeg to enable video encoding.");
+                        ui.label("Output:");
+                        let path_str = settings.output_path.to_string_lossy().to_string();
+                        let mut path_display = path_str.clone();
+                        if ui.text_edit_singleline(&mut path_display).changed() {
+                            settings.output_path = std::path::PathBuf::from(&path_display);
+                        }
+
+                        if ui.button("Browse...").clicked() {
+                            let extension = settings.video_codec.extension();
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_title("Save Video As")
+                                .add_filter("Video", &[extension])
+                                .set_file_name(&format!("animation.{}", extension))
+                                .save_file()
+                            {
+                                settings.output_path = path;
+                            }
                         }
                     });
 
-                    if settings.encode_video {
-                        ui.add_enabled_ui(ffmpeg_available, |ui| {
-                            // Codec selection
-                            ui.horizontal(|ui| {
-                                ui.label("Codec:");
-                                egui::ComboBox::from_id_salt("video_codec")
-                                    .selected_text(settings.video_codec.display_name())
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(&mut settings.video_codec, VideoCodec::H264, VideoCodec::H264.display_name());
-                                        ui.selectable_value(&mut settings.video_codec, VideoCodec::H265, VideoCodec::H265.display_name());
-                                        ui.selectable_value(&mut settings.video_codec, VideoCodec::VP9, VideoCodec::VP9.display_name());
-                                    });
+                    // Codec selection
+                    ui.horizontal(|ui| {
+                        ui.label("Codec:");
+                        let old_codec = settings.video_codec;
+                        egui::ComboBox::from_id_salt("video_codec")
+                            .selected_text(settings.video_codec.display_name())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut settings.video_codec, VideoCodec::H264, VideoCodec::H264.display_name());
+                                ui.selectable_value(&mut settings.video_codec, VideoCodec::H265, VideoCodec::H265.display_name());
+                                ui.selectable_value(&mut settings.video_codec, VideoCodec::VP9, VideoCodec::VP9.display_name());
                             });
+                        // Update extension when codec changes
+                        if old_codec != settings.video_codec {
+                            if let Some(stem) = settings.output_path.file_stem() {
+                                let new_name = format!("{}.{}", stem.to_string_lossy(), settings.video_codec.extension());
+                                if let Some(parent) = settings.output_path.parent() {
+                                    settings.output_path = parent.join(new_name);
+                                } else {
+                                    settings.output_path = std::path::PathBuf::from(new_name);
+                                }
+                            }
+                        }
+                    });
 
-                            // Quality slider
-                            ui.horizontal(|ui| {
-                                ui.label("Quality:");
-                                ui.add(egui::Slider::new(&mut settings.video_quality, 0..=51).text("CRF"));
-                            });
-                            ui.small("Lower = better quality, larger file. 18 = visually lossless");
+                    // Quality slider
+                    ui.horizontal(|ui| {
+                        ui.label("Quality:");
+                        ui.add(egui::Slider::new(&mut settings.video_quality, 0..=51).text("CRF"));
+                    });
+                    ui.small("Lower = better quality, larger file. 18 = visually lossless");
 
-                            // Output name
-                            ui.horizontal(|ui| {
-                                ui.label("Video name:");
-                                ui.text_edit_singleline(&mut settings.video_name);
-                                ui.label(format!(".{}", settings.video_codec.extension()));
-                            });
+                    ui.separator();
 
-                            // Cleanup option
-                            ui.checkbox(&mut settings.cleanup_frames, "Delete PNGs after encoding");
-                        });
+                    // Resolution
+                    ui.horizontal(|ui| {
+                        ui.label("Resolution:");
+                        ui.add(egui::DragValue::new(&mut settings.width).range(100..=7680).suffix("w"));
+                        ui.label("×");
+                        ui.add(egui::DragValue::new(&mut settings.height).range(100..=4320).suffix("h"));
+                    });
+
+                    // Quick resolution presets
+                    ui.horizontal(|ui| {
+                        if ui.small_button("720p").clicked() {
+                            settings.width = 1280;
+                            settings.height = 720;
+                        }
+                        if ui.small_button("1080p").clicked() {
+                            settings.width = 1920;
+                            settings.height = 1080;
+                        }
+                        if ui.small_button("4K").clicked() {
+                            settings.width = 3840;
+                            settings.height = 2160;
+                        }
+                    });
+
+                    // FPS
+                    ui.horizontal(|ui| {
+                        ui.label("Frame Rate:");
+                        ui.add(egui::DragValue::new(&mut settings.fps).range(1..=120).suffix(" fps"));
+
+                        if ui.small_button("24").clicked() { settings.fps = 24; }
+                        if ui.small_button("30").clicked() { settings.fps = 30; }
+                        if ui.small_button("60").clicked() { settings.fps = 60; }
+                    });
+
+                    // Iterations
+                    ui.horizontal(|ui| {
+                        ui.label("Iterations/thread:");
+                        ui.add(egui::DragValue::new(&mut settings.iterations_per_thread).range(64..=4096));
+                    });
+
+                    // Estimate
+                    if let Some(ref animation) = controller.animation {
+                        let total_frames = (animation.duration * settings.fps as f64).ceil() as u32;
+                        ui.separator();
+                        ui.label(format!("Total frames: {} ({:.1}s × {} fps)",
+                            total_frames, animation.duration, settings.fps));
                     }
 
                     ui.separator();
-                }
 
-                // Export button
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let button_text = if settings.encode_video {
-                        "🎬 Export Animation + Video"
-                    } else {
-                        "🎬 Export Animation to PNG Sequence"
-                    };
-
-                    if ui.button(button_text).clicked() {
+                    // Export button
+                    if ui.button("🎬 Export Video").clicked() {
                         response.export_animation = Some(settings.clone());
                     }
-                }
+                });
+            }
 
-                #[cfg(target_arch = "wasm32")]
-                {
-                    ui.label("Animation export not available in web version");
-                }
-            });
+            #[cfg(target_arch = "wasm32")]
+            {
+                ui.label("Animation export not available in web version");
+            }
         });
 }

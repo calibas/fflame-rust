@@ -42,7 +42,7 @@ enum Commands {
         iterations_per_thread: Option<u32>,
     },
 
-    /// Export animation as PNG sequence (high-quality frame-by-frame rendering)
+    /// Export animation to video (pipes directly to ffmpeg, requires ffmpeg in PATH)
     ExportAnimation {
         /// Input .fflame config file (base flame state)
         #[arg(short, long)]
@@ -52,7 +52,7 @@ enum Commands {
         #[arg(short, long)]
         animation: String,
 
-        /// Output directory for frames
+        /// Output video file path (e.g., output.mp4)
         #[arg(short, long)]
         output: String,
 
@@ -68,17 +68,9 @@ enum Commands {
         #[arg(long, default_value = "30")]
         fps: u32,
 
-        /// Export transparent PNGs
-        #[arg(long)]
-        transparent: bool,
-
         /// Iterations per thread (default: 256)
         #[arg(long, default_value = "256")]
         iterations_per_thread: u32,
-
-        /// Encode to video after rendering frames (requires ffmpeg)
-        #[arg(long)]
-        video: bool,
 
         /// Video codec: h264, h265, or vp9 (default: h265)
         #[arg(long, default_value = "h265")]
@@ -87,14 +79,6 @@ enum Commands {
         /// Video quality (CRF): 0-51, lower = better (default: 18)
         #[arg(long, default_value = "18")]
         video_quality: u8,
-
-        /// Output video filename without extension (default: animation)
-        #[arg(long, default_value = "animation")]
-        video_name: String,
-
-        /// Delete PNG frames after successful video encoding
-        #[arg(long)]
-        cleanup: bool,
     },
 }
 
@@ -108,7 +92,7 @@ fn main() {
                 // Run in headless export mode
                 fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread);
             }
-            Some(Commands::ExportAnimation { config, animation, output, width, height, fps, transparent, iterations_per_thread, video, video_codec, video_quality, video_name, cleanup }) => {
+            Some(Commands::ExportAnimation { config, animation, output, width, height, fps, iterations_per_thread, video_codec, video_quality }) => {
                 // Parse video codec
                 let codec = match video_codec.to_lowercase().as_str() {
                     "h264" => fractal_flame_wgpu::animation::export::VideoCodec::H264,
@@ -120,20 +104,14 @@ fn main() {
                     }
                 };
 
-                // Build video settings if video encoding requested
-                let video_settings = if video {
-                    Some(fractal_flame_wgpu::animation::export::VideoEncodingSettings {
-                        codec,
-                        quality: video_quality,
-                        output_name: video_name,
-                        cleanup_frames: cleanup,
-                    })
-                } else {
-                    None
+                // Build video settings (always required - pipes directly to ffmpeg)
+                let video_settings = fractal_flame_wgpu::animation::export::VideoEncodingSettings {
+                    codec,
+                    quality: video_quality,
                 };
 
                 // Run animation export mode
-                fractal_flame_wgpu::export_animation_mode(&config, &animation, &output, width, height, fps, transparent, iterations_per_thread, video_settings);
+                fractal_flame_wgpu::export_animation_mode(&config, &animation, &output, width, height, fps, iterations_per_thread, video_settings);
             }
             None => {
                 // Run normal GUI mode
