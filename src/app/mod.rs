@@ -1331,7 +1331,7 @@ impl App {
             if already_exporting {
                 log::warn!("Animation export already in progress");
             } else if let Some(ref animation) = self.animation_controller.animation {
-                use crate::animation::export::{AnimationExportConfig, UiProgressCallback, export_animation, VideoEncodingSettings};
+                use crate::animation::export::{AnimationExportConfig, UiProgressCallback, export_animation_fast, VideoEncodingSettings};
 
                 let export_config = AnimationExportConfig {
                     config: self.config_manager.active_config().clone(),
@@ -1371,7 +1371,7 @@ impl App {
                 std::thread::spawn(move || {
                     let mut progress = UiProgressCallback::new(Arc::clone(&progress_arc));
 
-                    match pollster::block_on(export_animation(export_config, &mut progress)) {
+                    match pollster::block_on(export_animation_fast(export_config, &mut progress)) {
                         Ok(result) => {
                             println!("\nAnimation export complete!");
                             println!("  {} frames in {:.1}s", result.total_frames, result.total_time_ms / 1000.0);

@@ -1053,3 +1053,492 @@ async fn render_frame_to_completion(
         }
     }
 }
+
+/// Timing statistics for export performance analysis
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Default)]
+pub struct ExportTimingStats {
+    /// Time spent in GPU render dispatch
+    pub render_time_ms: f64,
+    /// Time spent waiting for buffer map
+    pub map_wait_time_ms: f64,
+    /// Time spent copying from mapped buffer
+    pub copy_time_ms: f64,
+    /// Time spent in channel send (waiting for writer thread)
+    pub channel_send_time_ms: f64,
+    /// Total frame time
+    pub total_frame_time_ms: f64,
+    /// Number of frames processed
+    pub frame_count: u32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ExportTimingStats {
+    pub fn log_summary(&self) {
+        if self.frame_count == 0 {
+            return;
+        }
+        let n = self.frame_count as f64;
+        println!("\n=== Export Timing Summary ({} frames) ===", self.frame_count);
+        println!("  Render dispatch:  {:>8.2} ms avg", self.render_time_ms / n);
+        println!("  Buffer map wait:  {:>8.2} ms avg", self.map_wait_time_ms / n);
+        println!("  Buffer copy:      {:>8.2} ms avg", self.copy_time_ms / n);
+        println!("  Channel send:     {:>8.2} ms avg", self.channel_send_time_ms / n);
+        println!("  Total frame:      {:>8.2} ms avg", self.total_frame_time_ms / n);
+        println!("  Effective FPS:    {:>8.2}", 1000.0 / (self.total_frame_time_ms / n));
+        println!("==========================================");
+    }
+}
+
+/// Export animation with optimized triple-buffered pipeline
+///
+/// Uses triple buffering and a separate writer thread to maximize throughput:
+/// - Ring buffer of 3 staging buffers for GPU readback
+/// - Separate thread handles FFmpeg pipe writes
+/// - Reuses renderer instead of recreating each frame
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn export_animation_fast(
+    export_config: AnimationExportConfig,
+    progress: &mut dyn ExportProgressCallback,
+) -> Result<AnimationExportResult, AnimationExportError> {
+    use crate::renderer::compute_kernel::FlameRenderer;
+    use crate::scene::palette::PaletteLibrary;
+    use egui_wgpu::wgpu::{
+        self, BufferDescriptor, BufferUsages, CommandEncoderDescriptor,
+        Extent3d, MapMode, Origin3d, PollType, TextureAspect,
+        TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo,
+        COPY_BYTES_PER_ROW_ALIGNMENT,
+    };
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    let total_start = Instant::now();
+    let total_frames = export_config.total_frames();
+    let mut timing_stats = ExportTimingStats::default();
+
+    // Check ffmpeg availability first
+    if !is_ffmpeg_available() {
+        return Err(AnimationExportError::FfmpegNotFound);
+    }
+
+    // Ensure output directory exists
+    if let Some(parent) = export_config.output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Create GPU resources
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
+
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        })
+        .await
+        .map_err(|e| AnimationExportError::GpuError(format!("Failed to find adapter: {:?}", e)))?;
+
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("Animation Export Device"),
+            required_features: wgpu::Features::CLEAR_TEXTURE,
+            required_limits: wgpu::Limits::default(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| AnimationExportError::GpuError(format!("Failed to create device: {:?}", e)))?;
+
+    // Create animation controller
+    let mut controller = AnimationController::new();
+    controller.load(export_config.animation.clone());
+
+    // Get palette library
+    let palette_library = PaletteLibrary::new();
+
+    // Calculate buffer dimensions
+    let bytes_per_pixel = 4u32; // RGBA8
+    let unpadded_bytes_per_row = export_config.width * bytes_per_pixel;
+    let align = COPY_BYTES_PER_ROW_ALIGNMENT;
+    let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+    let buffer_size = (padded_bytes_per_row * export_config.height) as u64;
+    let output_size = (export_config.width * export_config.height * bytes_per_pixel) as usize;
+
+    // Create triple buffer ring
+    const NUM_BUFFERS: usize = 3;
+    let staging_buffers: Vec<wgpu::Buffer> = (0..NUM_BUFFERS)
+        .map(|i| {
+            device.create_buffer(&BufferDescriptor {
+                label: Some(&format!("Staging Buffer {}", i)),
+                size: buffer_size,
+                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            })
+        })
+        .collect();
+
+    // Spawn FFmpeg writer thread
+    let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<u8>>(NUM_BUFFERS);
+
+    // Build FFmpeg command
+    let ffmpeg_args = build_ffmpeg_args(&export_config);
+    let output_path = export_config.output_path.clone();
+
+    let writer_handle = std::thread::spawn(move || -> Result<(), String> {
+        let mut ffmpeg = Command::new("ffmpeg");
+        for arg in &ffmpeg_args {
+            ffmpeg.arg(arg);
+        }
+        ffmpeg.arg(&output_path);
+        ffmpeg.stdin(Stdio::piped());
+        ffmpeg.stdout(Stdio::null());
+        ffmpeg.stderr(Stdio::piped());
+
+        let mut child = ffmpeg
+            .spawn()
+            .map_err(|e| format!("Failed to spawn ffmpeg: {}", e))?;
+
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Failed to open ffmpeg stdin".to_string())?;
+
+        // Process frames from channel
+        for frame_data in frame_rx {
+            if let Err(e) = stdin.write_all(&frame_data) {
+                drop(stdin);
+                let output = child.wait_with_output().ok();
+                let stderr = output
+                    .as_ref()
+                    .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
+                    .unwrap_or_default();
+                return Err(format!("FFmpeg write error: {} (stderr: {})", e, stderr.trim()));
+            }
+        }
+
+        drop(stdin);
+        let output = child
+            .wait_with_output()
+            .map_err(|e| format!("Failed to wait for ffmpeg: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("FFmpeg error: {}", stderr.trim()));
+        }
+
+        Ok(())
+    });
+
+    // Create initial config and renderer (reused across frames)
+    let values = controller.evaluate_at_time(0.0);
+    let mut frame_config = export_config.config.clone();
+    apply_animation_values(&mut frame_config, &values);
+
+    let surface_format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut renderer = FlameRenderer::new(
+        &device,
+        &queue,
+        surface_format,
+        export_config.width,
+        export_config.height,
+        &frame_config.flame,
+    );
+
+    let palette = frame_config
+        .palette
+        .as_ref()
+        .or_else(|| palette_library.get(frame_config.palette_index))
+        .ok_or_else(|| AnimationExportError::InvalidConfig("No palette found".to_string()))?
+        .clone();
+
+    // Track which buffer is being used
+    let mut current_buffer_idx = 0usize;
+
+    // Render loop with pipelined buffer usage
+    for frame in 0..total_frames {
+        if progress.is_cancelled() {
+            drop(frame_tx);
+            let _ = writer_handle.join();
+            return Err(AnimationExportError::Cancelled);
+        }
+
+        let frame_start = Instant::now();
+        let time = export_config.frame_time(frame);
+
+        progress.on_frame_start(frame, total_frames, time);
+
+        // Evaluate animation at this time
+        let values = controller.evaluate_at_time(time);
+
+        // Update frame config
+        frame_config = export_config.config.clone();
+        apply_animation_values(&mut frame_config, &values);
+
+        // Get current palette (may have changed)
+        let current_palette = frame_config
+            .palette
+            .as_ref()
+            .unwrap_or(&palette);
+
+        // === GPU RENDER ===
+        let render_start = Instant::now();
+
+        // Load new config and reset accumulation
+        let mut setup_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Frame Setup"),
+        });
+        renderer.load_config(
+            &device,
+            &mut setup_encoder,
+            &queue,
+            &frame_config,
+            current_palette,
+            export_config.iterations_per_thread,
+        );
+        queue.submit(std::iter::once(setup_encoder.finish()));
+
+        // Render frame to completion
+        render_frame_to_completion(
+            &device,
+            &queue,
+            &mut renderer,
+            &frame_config,
+            export_config.iterations_per_thread,
+        )
+        .await;
+
+        // Tonemap
+        let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Tonemap"),
+        });
+        renderer.tonemap_pass(&mut tonemap_encoder);
+
+        // Copy to staging buffer
+        let staging_buffer = &staging_buffers[current_buffer_idx];
+        tonemap_encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: renderer.fractal_texture(),
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: staging_buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(export_config.height),
+                },
+            },
+            Extent3d {
+                width: export_config.width,
+                height: export_config.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(tonemap_encoder.finish()));
+
+        timing_stats.render_time_ms += render_start.elapsed().as_secs_f64() * 1000.0;
+
+        // === BUFFER MAP ===
+        let map_start = Instant::now();
+
+        // Start async map
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+
+        // Wait for map to complete
+        let _ = device.poll(PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        rx.await
+            .map_err(|_| AnimationExportError::GpuError("Buffer map cancelled".to_string()))?
+            .map_err(|e| AnimationExportError::GpuError(format!("Buffer map error: {:?}", e)))?;
+
+        timing_stats.map_wait_time_ms += map_start.elapsed().as_secs_f64() * 1000.0;
+
+        // === COPY DATA ===
+        let copy_start = Instant::now();
+
+        let data = buffer_slice.get_mapped_range();
+        let mut rgba_data = Vec::with_capacity(output_size);
+
+        // Copy with background blending (opaque mode)
+        let bg = frame_config.background_color;
+        for y in 0..export_config.height {
+            let row_start = (y * padded_bytes_per_row) as usize;
+            let row_end = row_start + (export_config.width * bytes_per_pixel) as usize;
+            let row_data = &data[row_start..row_end];
+
+            for x in 0..export_config.width {
+                let px = (x * bytes_per_pixel) as usize;
+                let r = row_data[px];
+                let g = row_data[px + 1];
+                let b = row_data[px + 2];
+                let a = row_data[px + 3];
+
+                let alpha = a as f32 / 255.0;
+                let bg_r = (bg[0] * 255.0) as u8;
+                let bg_g = (bg[1] * 255.0) as u8;
+                let bg_b = (bg[2] * 255.0) as u8;
+
+                let out_r = ((r as f32 * alpha) + (bg_r as f32 * (1.0 - alpha))) as u8;
+                let out_g = ((g as f32 * alpha) + (bg_g as f32 * (1.0 - alpha))) as u8;
+                let out_b = ((b as f32 * alpha) + (bg_b as f32 * (1.0 - alpha))) as u8;
+
+                rgba_data.extend_from_slice(&[out_r, out_g, out_b, 255]);
+            }
+        }
+
+        drop(data);
+        staging_buffer.unmap();
+
+        timing_stats.copy_time_ms += copy_start.elapsed().as_secs_f64() * 1000.0;
+
+        // === SEND TO WRITER THREAD ===
+        let send_start = Instant::now();
+
+        frame_tx
+            .send(rgba_data)
+            .map_err(|_| AnimationExportError::FfmpegFailed("Writer thread died".to_string()))?;
+
+        timing_stats.channel_send_time_ms += send_start.elapsed().as_secs_f64() * 1000.0;
+
+        // Advance to next buffer
+        current_buffer_idx = (current_buffer_idx + 1) % NUM_BUFFERS;
+
+        let frame_elapsed = frame_start.elapsed().as_secs_f64() * 1000.0;
+        timing_stats.total_frame_time_ms += frame_elapsed;
+        timing_stats.frame_count += 1;
+
+        progress.on_frame_complete(frame, total_frames, frame_elapsed);
+    }
+
+    // Signal writer thread to finish
+    drop(frame_tx);
+
+    // Wait for writer thread
+    writer_handle
+        .join()
+        .map_err(|_| AnimationExportError::FfmpegFailed("Writer thread panicked".to_string()))?
+        .map_err(AnimationExportError::FfmpegFailed)?;
+
+    let total_time_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+    let avg_frame_time_ms = total_time_ms / total_frames as f64;
+
+    // Log timing summary
+    timing_stats.log_summary();
+
+    progress.on_export_complete(total_frames, total_time_ms);
+
+    Ok(AnimationExportResult {
+        total_frames,
+        total_time_ms,
+        avg_frame_time_ms,
+        output_path: export_config.output_path,
+    })
+}
+
+/// Build FFmpeg command-line arguments from export config
+#[cfg(not(target_arch = "wasm32"))]
+fn build_ffmpeg_args(config: &AnimationExportConfig) -> Vec<String> {
+    let mut args = Vec::new();
+
+    // Overwrite output
+    args.push("-y".to_string());
+
+    // Input format
+    args.push("-f".to_string());
+    args.push("rawvideo".to_string());
+    args.push("-pix_fmt".to_string());
+    args.push("rgba".to_string());
+    args.push("-s".to_string());
+    args.push(format!("{}x{}", config.width, config.height));
+    args.push("-r".to_string());
+    args.push(config.fps.to_string());
+    args.push("-i".to_string());
+    args.push("-".to_string());
+
+    // Codec and hardware acceleration
+    let settings = &config.video_settings;
+    let encoder = settings
+        .hardware_accel
+        .encoder_for_codec(settings.codec)
+        .expect("Invalid hardware accel + codec combination");
+
+    args.push("-c:v".to_string());
+    args.push(encoder.to_string());
+
+    // Quality settings
+    let is_hardware = settings.hardware_accel != HardwareAccel::None;
+
+    match settings.codec {
+        VideoCodec::H264 | VideoCodec::H265 => {
+            if is_hardware {
+                match settings.hardware_accel {
+                    HardwareAccel::Nvenc => {
+                        args.push("-rc".to_string());
+                        args.push("vbr".to_string());
+                        args.push("-cq".to_string());
+                        args.push(settings.quality.to_string());
+                        args.push("-preset".to_string());
+                        args.push("p4".to_string());
+                    }
+                    HardwareAccel::Qsv => {
+                        args.push("-global_quality".to_string());
+                        args.push(settings.quality.to_string());
+                        args.push("-preset".to_string());
+                        args.push("medium".to_string());
+                    }
+                    HardwareAccel::Amf => {
+                        args.push("-rc".to_string());
+                        args.push("cqp".to_string());
+                        args.push("-qp".to_string());
+                        args.push(settings.quality.to_string());
+                    }
+                    HardwareAccel::VideoToolbox => {
+                        let vt_quality = 100 - (settings.quality as i32 * 2).min(100).max(0);
+                        args.push("-q:v".to_string());
+                        args.push(vt_quality.to_string());
+                    }
+                    HardwareAccel::None => {}
+                }
+            } else {
+                args.push("-crf".to_string());
+                args.push(settings.quality.to_string());
+                args.push("-preset".to_string());
+                args.push("medium".to_string());
+                if settings.codec == VideoCodec::H265 {
+                    args.push("-x265-params".to_string());
+                    args.push("log-level=error".to_string());
+                }
+            }
+            args.push("-pix_fmt".to_string());
+            args.push("yuv420p".to_string());
+        }
+        VideoCodec::VP9 => {
+            if settings.hardware_accel == HardwareAccel::Qsv {
+                args.push("-global_quality".to_string());
+                args.push(settings.quality.to_string());
+            } else {
+                args.push("-crf".to_string());
+                args.push(settings.quality.to_string());
+                args.push("-b:v".to_string());
+                args.push("0".to_string());
+            }
+            args.push("-pix_fmt".to_string());
+            args.push("yuv420p".to_string());
+        }
+    }
+
+    args
+}
