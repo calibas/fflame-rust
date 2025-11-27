@@ -15,6 +15,7 @@ pub mod preset_library;
 mod response;
 mod settings;
 mod tone_mapping;
+pub mod track_editor;
 mod transforms;
 mod triangle_editor;
 mod undo_history;
@@ -24,6 +25,7 @@ mod view;
 pub mod workspace;
 
 pub use animation_panel::ExportProgress;
+pub use track_editor::TrackEditorState;
 pub use font_loader::ensure_font_for_locale;
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
@@ -57,6 +59,9 @@ pub struct EguiLayer {
 
     // Animation export settings
     animation_export_settings: animation_panel::AnimationExportSettings,
+
+    // Track editor state
+    track_editor_state: track_editor::TrackEditorState,
 }
 
 impl EguiLayer {
@@ -94,6 +99,7 @@ impl EguiLayer {
             selected_preset_config: None,
             file_browser_panel: None,
             animation_export_settings: animation_panel::AnimationExportSettings::default(),
+            track_editor_state: track_editor::TrackEditorState::default(),
         }
     }
 
@@ -344,6 +350,9 @@ impl EguiLayer {
                         animation_export_settings: &mut self.animation_export_settings,
                         animation_export_requested: &mut animation_export_requested,
                         animation_export_progress,
+
+                        // Track editor state
+                        track_editor_state: &mut self.track_editor_state,
                     },
                 });
 
