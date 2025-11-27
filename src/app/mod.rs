@@ -1343,6 +1343,7 @@ impl App {
                     iterations_per_thread: export_settings.iterations_per_thread,
                     video_settings: VideoEncodingSettings {
                         codec: export_settings.video_codec,
+                        hardware_accel: export_settings.hardware_accel,
                         quality: export_settings.video_quality,
                     },
                 };

@@ -15,6 +15,9 @@ struct Cli {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Subcommand)]
 enum Commands {
+    /// List available FFmpeg encoders and hardware acceleration options
+    ListEncoders,
+
     /// Export flame configs to PNG (headless batch mode)
     Export {
         /// Input .fflame config file or directory
@@ -76,6 +79,10 @@ enum Commands {
         #[arg(long, default_value = "h265")]
         video_codec: String,
 
+        /// Hardware acceleration: none, nvenc, qsv, amf, videotoolbox (default: none)
+        #[arg(long, default_value = "none")]
+        hw_accel: String,
+
         /// Video quality (CRF): 0-51, lower = better (default: 18)
         #[arg(long, default_value = "18")]
         video_quality: u8,
@@ -88,11 +95,15 @@ fn main() {
         let cli = Cli::parse();
 
         match cli.command {
+            Some(Commands::ListEncoders) => {
+                // List available FFmpeg encoders
+                fractal_flame_wgpu::animation::export::print_available_encoders();
+            }
             Some(Commands::Export { input, output, width, height, category, iterations_per_thread }) => {
                 // Run in headless export mode
                 fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread);
             }
-            Some(Commands::ExportAnimation { config, animation, output, width, height, fps, iterations_per_thread, video_codec, video_quality }) => {
+            Some(Commands::ExportAnimation { config, animation, output, width, height, fps, iterations_per_thread, video_codec, hw_accel, video_quality }) => {
                 // Parse video codec
                 let codec = match video_codec.to_lowercase().as_str() {
                     "h264" => fractal_flame_wgpu::animation::export::VideoCodec::H264,
@@ -104,9 +115,33 @@ fn main() {
                     }
                 };
 
+                // Parse hardware acceleration
+                let hardware_accel = match hw_accel.to_lowercase().as_str() {
+                    "none" | "software" | "cpu" => fractal_flame_wgpu::animation::export::HardwareAccel::None,
+                    "nvenc" | "nvidia" => fractal_flame_wgpu::animation::export::HardwareAccel::Nvenc,
+                    "qsv" | "quicksync" | "intel" => fractal_flame_wgpu::animation::export::HardwareAccel::Qsv,
+                    "amf" | "amd" => fractal_flame_wgpu::animation::export::HardwareAccel::Amf,
+                    "videotoolbox" | "vt" | "apple" => fractal_flame_wgpu::animation::export::HardwareAccel::VideoToolbox,
+                    _ => {
+                        eprintln!("Unknown hardware acceleration '{}'. Using software encoding.", hw_accel);
+                        fractal_flame_wgpu::animation::export::HardwareAccel::None
+                    }
+                };
+
+                // Validate hardware accel supports codec
+                if !hardware_accel.supports_codec(codec) {
+                    eprintln!("Warning: {} does not support {}. Falling back to software encoding.",
+                        hardware_accel.display_name(), codec.display_name());
+                }
+
                 // Build video settings (always required - pipes directly to ffmpeg)
                 let video_settings = fractal_flame_wgpu::animation::export::VideoEncodingSettings {
                     codec,
+                    hardware_accel: if hardware_accel.supports_codec(codec) {
+                        hardware_accel
+                    } else {
+                        fractal_flame_wgpu::animation::export::HardwareAccel::None
+                    },
                     quality: video_quality,
                 };
 
