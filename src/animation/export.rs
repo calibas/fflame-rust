@@ -380,6 +380,8 @@ fn apply_config_value(
             config.pan_x = *x;
             config.pan_y = *y;
         }
+        (ConfigPath::PanX, ConfigValue::Float(v)) => config.pan_x = *v,
+        (ConfigPath::PanY, ConfigValue::Float(v)) => config.pan_y = *v,
         (ConfigPath::Rotation, ConfigValue::Float(v)) => config.rotation = *v,
         (ConfigPath::CameraRotationX, ConfigValue::Float(v)) => config.camera_rotation_x = *v,
         (ConfigPath::CameraRotationY, ConfigValue::Float(v)) => config.camera_rotation_y = *v,
@@ -400,6 +402,9 @@ fn apply_config_value(
         (ConfigPath::PaletteRotation, ConfigValue::Float(v)) => config.palette_rotation = *v,
         (ConfigPath::SpeedFactor, ConfigValue::Float(v)) => config.speed_factor = *v,
         (ConfigPath::BackgroundColor, ConfigValue::ColorRgb(rgb)) => config.background_color = *rgb,
+        (ConfigPath::BackgroundColorR, ConfigValue::Float(v)) => config.background_color[0] = *v,
+        (ConfigPath::BackgroundColorG, ConfigValue::Float(v)) => config.background_color[1] = *v,
+        (ConfigPath::BackgroundColorB, ConfigValue::Float(v)) => config.background_color[2] = *v,
 
         // Transform parameters
         (ConfigPath::TransformWeight { index }, ConfigValue::Float(v)) => {
@@ -467,6 +472,63 @@ fn apply_config_value(
         (ConfigPath::TransformScale { index }, ConfigValue::Float(v)) => {
             if let Some(xform) = config.flame.transforms.get_mut(*index) {
                 xform.set_scale(*v);
+            }
+        }
+
+        // Final Transform parameters
+        (ConfigPath::FinalTransformAffine { param }, ConfigValue::Float(v)) => {
+            if let Some(ref mut final_xform) = config.flame.final_transform {
+                use crate::config::AffineParam;
+                match param {
+                    AffineParam::A => final_xform.a = *v,
+                    AffineParam::B => final_xform.b = *v,
+                    AffineParam::C => final_xform.c = *v,
+                    AffineParam::D => final_xform.d = *v,
+                    AffineParam::E => final_xform.e = *v,
+                    AffineParam::F => final_xform.f = *v,
+                    AffineParam::G => final_xform.g = *v,
+                }
+            }
+        }
+        (ConfigPath::FinalTransformColor, ConfigValue::Float(v)) => {
+            if let Some(ref mut final_xform) = config.flame.final_transform {
+                final_xform.color = *v;
+            }
+        }
+        (ConfigPath::FinalTransformColorSpeed, ConfigValue::Float(v)) => {
+            if let Some(ref mut final_xform) = config.flame.final_transform {
+                final_xform.color_speed = *v;
+            }
+        }
+        (ConfigPath::FinalTransformVariation { variation }, ConfigValue::Float(v)) => {
+            if let Some(ref mut final_xform) = config.flame.final_transform {
+                final_xform.variations.insert(variation.clone(), *v);
+            }
+        }
+        (ConfigPath::FinalTransformVariationParam { variation, param }, ConfigValue::Float(v)) => {
+            if let Some(ref mut final_xform) = config.flame.final_transform {
+                let key = format!("{}:{}", variation, param);
+                final_xform.variation_params.insert(key, *v);
+            }
+        }
+        (ConfigPath::FinalTransformOriginX, ConfigValue::Float(v)) => {
+            if let Some(ref mut final_xform) = config.flame.final_transform {
+                final_xform.set_origin_x(*v);
+            }
+        }
+        (ConfigPath::FinalTransformOriginY, ConfigValue::Float(v)) => {
+            if let Some(ref mut final_xform) = config.flame.final_transform {
+                final_xform.set_origin_y(*v);
+            }
+        }
+        (ConfigPath::FinalTransformRotation, ConfigValue::Float(v)) => {
+            if let Some(ref mut final_xform) = config.flame.final_transform {
+                final_xform.set_rotation(*v);
+            }
+        }
+        (ConfigPath::FinalTransformScale, ConfigValue::Float(v)) => {
+            if let Some(ref mut final_xform) = config.flame.final_transform {
+                final_xform.set_scale(*v);
             }
         }
 

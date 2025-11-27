@@ -20,6 +20,8 @@ pub enum ConfigPath {
     // ===== View parameters (no fractal recalc needed) =====
     Zoom,
     Pan,  // Combined PanX and PanY into single Vec2 value
+    PanX, // Separate X component for animation
+    PanY, // Separate Y component for animation
     Rotation,
     CameraRotationX,
     CameraRotationY,
@@ -48,6 +50,9 @@ pub enum ConfigPath {
     PaletteRotation,
     SpeedFactor,
     BackgroundColor,
+    BackgroundColorR, // Separate R component for animation
+    BackgroundColorG, // Separate G component for animation
+    BackgroundColorB, // Separate B component for animation
 
     // ===== Rendering settings (affects iteration speed/quality) =====
     HistogramColorScale,
@@ -95,6 +100,14 @@ pub enum ConfigPath {
         variation: String,
         param: String,
     },
+    /// High-level final transform origin X (translate X)
+    FinalTransformOriginX,
+    /// High-level final transform origin Y (translate Y)
+    FinalTransformOriginY,
+    /// High-level final transform rotation (angle in radians)
+    FinalTransformRotation,
+    /// High-level final transform scale (uniform scaling)
+    FinalTransformScale,
 
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
@@ -127,6 +140,8 @@ impl Display for ConfigPath {
             // View
             ConfigPath::Zoom => write!(f, "Zoom"),
             ConfigPath::Pan => write!(f, "Pan"),
+            ConfigPath::PanX => write!(f, "Pan X"),
+            ConfigPath::PanY => write!(f, "Pan Y"),
             ConfigPath::Rotation => write!(f, "Rotation"),
             ConfigPath::CameraRotationX => write!(f, "Camera Pitch"),
             ConfigPath::CameraRotationY => write!(f, "Camera Yaw"),
@@ -155,6 +170,9 @@ impl Display for ConfigPath {
             ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
             ConfigPath::SpeedFactor => write!(f, "Speed Blend Factor"),
             ConfigPath::BackgroundColor => write!(f, "Background Color"),
+            ConfigPath::BackgroundColorR => write!(f, "Background Red"),
+            ConfigPath::BackgroundColorG => write!(f, "Background Green"),
+            ConfigPath::BackgroundColorB => write!(f, "Background Blue"),
 
             // Rendering
             ConfigPath::HistogramColorScale => write!(f, "Histogram Color Scale"),
@@ -225,6 +243,10 @@ impl Display for ConfigPath {
             ConfigPath::FinalTransformVariationParam { variation, param } => {
                 write!(f, "Final Transform → {} → {}", variation, param)
             }
+            ConfigPath::FinalTransformOriginX => write!(f, "Final Transform → Origin X"),
+            ConfigPath::FinalTransformOriginY => write!(f, "Final Transform → Origin Y"),
+            ConfigPath::FinalTransformRotation => write!(f, "Final Transform → Rotation"),
+            ConfigPath::FinalTransformScale => write!(f, "Final Transform → Scale"),
 
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
@@ -632,6 +654,8 @@ impl ConfigPath {
             // View parameters - just math, no GPU work
             ConfigPath::Zoom
             | ConfigPath::Pan
+            | ConfigPath::PanX
+            | ConfigPath::PanY
             | ConfigPath::Rotation
             | ConfigPath::CameraRotationX
             | ConfigPath::CameraRotationY
@@ -652,7 +676,10 @@ impl ConfigPath {
             | ConfigPath::TonemapMode
             | ConfigPath::TonemapCurve
             | ConfigPath::UseCurve
-            | ConfigPath::BackgroundColor => UpdateType::ToneMappingOnly,
+            | ConfigPath::BackgroundColor
+            | ConfigPath::BackgroundColorR
+            | ConfigPath::BackgroundColorG
+            | ConfigPath::BackgroundColorB => UpdateType::ToneMappingOnly,
 
             // Color parameters - re-run accumulation with new colors
             ConfigPath::ColorMode
@@ -688,6 +715,10 @@ impl ConfigPath {
             | ConfigPath::FinalTransformColorSpeed
             | ConfigPath::FinalTransformVariation { .. }
             | ConfigPath::FinalTransformVariationParam { .. }
+            | ConfigPath::FinalTransformOriginX
+            | ConfigPath::FinalTransformOriginY
+            | ConfigPath::FinalTransformRotation
+            | ConfigPath::FinalTransformScale
             | ConfigPath::RenderMode
             | ConfigPath::PerspectiveStrength
             | ConfigPath::MaxIterations
@@ -711,6 +742,8 @@ impl ConfigPath {
             // View
             ConfigPath::Zoom => "Zoom".to_string(),
             ConfigPath::Pan => "Pan".to_string(),
+            ConfigPath::PanX => "PanX".to_string(),
+            ConfigPath::PanY => "PanY".to_string(),
             ConfigPath::Rotation => "Rotation".to_string(),
             ConfigPath::CameraRotationX => "CameraRotationX".to_string(),
             ConfigPath::CameraRotationY => "CameraRotationY".to_string(),
@@ -739,6 +772,9 @@ impl ConfigPath {
             ConfigPath::PaletteRotation => "PaletteRotation".to_string(),
             ConfigPath::SpeedFactor => "SpeedFactor".to_string(),
             ConfigPath::BackgroundColor => "BackgroundColor".to_string(),
+            ConfigPath::BackgroundColorR => "BackgroundColorR".to_string(),
+            ConfigPath::BackgroundColorG => "BackgroundColorG".to_string(),
+            ConfigPath::BackgroundColorB => "BackgroundColorB".to_string(),
 
             // Rendering
             ConfigPath::HistogramColorScale => "HistogramColorScale".to_string(),
@@ -783,6 +819,10 @@ impl ConfigPath {
             ConfigPath::FinalTransformVariationParam { variation, param } => {
                 format!("FinalTransform.VariationParam.{}.{}", variation, param)
             }
+            ConfigPath::FinalTransformOriginX => "FinalTransform.OriginX".to_string(),
+            ConfigPath::FinalTransformOriginY => "FinalTransform.OriginY".to_string(),
+            ConfigPath::FinalTransformRotation => "FinalTransform.Rotation".to_string(),
+            ConfigPath::FinalTransformScale => "FinalTransform.Scale".to_string(),
 
             // Flame
             ConfigPath::RenderMode => "RenderMode".to_string(),
@@ -807,6 +847,8 @@ impl ConfigPath {
             // View
             "Zoom" => return Some(ConfigPath::Zoom),
             "Pan" => return Some(ConfigPath::Pan),
+            "PanX" => return Some(ConfigPath::PanX),
+            "PanY" => return Some(ConfigPath::PanY),
             "Rotation" => return Some(ConfigPath::Rotation),
             "CameraRotationX" => return Some(ConfigPath::CameraRotationX),
             "CameraRotationY" => return Some(ConfigPath::CameraRotationY),
@@ -835,6 +877,9 @@ impl ConfigPath {
             "PaletteRotation" => return Some(ConfigPath::PaletteRotation),
             "SpeedFactor" => return Some(ConfigPath::SpeedFactor),
             "BackgroundColor" => return Some(ConfigPath::BackgroundColor),
+            "BackgroundColorR" => return Some(ConfigPath::BackgroundColorR),
+            "BackgroundColorG" => return Some(ConfigPath::BackgroundColorG),
+            "BackgroundColorB" => return Some(ConfigPath::BackgroundColorB),
 
             // Rendering
             "HistogramColorScale" => return Some(ConfigPath::HistogramColorScale),
@@ -912,6 +957,10 @@ impl ConfigPath {
                         param: parts[3].to_string(),
                     });
                 }
+                "OriginX" => return Some(ConfigPath::FinalTransformOriginX),
+                "OriginY" => return Some(ConfigPath::FinalTransformOriginY),
+                "Rotation" => return Some(ConfigPath::FinalTransformRotation),
+                "Scale" => return Some(ConfigPath::FinalTransformScale),
                 _ => {}
             }
         }
@@ -980,6 +1029,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
     match path {
         // Float parameters
         ConfigPath::Zoom
+        | ConfigPath::PanX
+        | ConfigPath::PanY
         | ConfigPath::Rotation
         | ConfigPath::CameraRotationX
         | ConfigPath::CameraRotationY
@@ -997,6 +1048,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::DensityScale
         | ConfigPath::PaletteRotation
         | ConfigPath::SpeedFactor
+        | ConfigPath::BackgroundColorR
+        | ConfigPath::BackgroundColorG
+        | ConfigPath::BackgroundColorB
         | ConfigPath::HistogramColorScale
         | ConfigPath::LowDensitySmoothing
         | ConfigPath::DensityCompressionStrength
@@ -1018,6 +1072,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::FinalTransformColorSpeed
         | ConfigPath::FinalTransformVariation { .. }
         | ConfigPath::FinalTransformVariationParam { .. }
+        | ConfigPath::FinalTransformOriginX
+        | ConfigPath::FinalTransformOriginY
+        | ConfigPath::FinalTransformRotation
+        | ConfigPath::FinalTransformScale
         | ConfigPath::SystemTargetFps => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }

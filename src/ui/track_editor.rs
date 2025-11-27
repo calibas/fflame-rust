@@ -50,6 +50,8 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
             name: "View".to_string(),
             params: vec![
                 ("Zoom".to_string(), "Zoom".to_string()),
+                ("Pan X".to_string(), "PanX".to_string()),
+                ("Pan Y".to_string(), "PanY".to_string()),
                 ("Rotation".to_string(), "Rotation".to_string()),
                 ("Camera Rotation X".to_string(), "CameraRotationX".to_string()),
                 ("Camera Rotation Y".to_string(), "CameraRotationY".to_string()),
@@ -78,6 +80,9 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
                 ("Palette Rotation".to_string(), "PaletteRotation".to_string()),
                 ("Speed Factor".to_string(), "SpeedFactor".to_string()),
                 ("Histogram Color Scale".to_string(), "HistogramColorScale".to_string()),
+                ("Background Red".to_string(), "BackgroundColorR".to_string()),
+                ("Background Green".to_string(), "BackgroundColorG".to_string()),
+                ("Background Blue".to_string(), "BackgroundColorB".to_string()),
             ],
         },
         ParameterCategory {
@@ -143,6 +148,54 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
 
         categories.push(ParameterCategory {
             name: format!("Transform {}", i),
+            params,
+        });
+    }
+
+    // Add Final Transform category if final transform is enabled
+    if let Some(ref final_xform) = flame.final_transform {
+        let mut params = vec![
+            ("Origin X (Translate)".to_string(), "FinalTransform.OriginX".to_string()),
+            ("Origin Y (Translate)".to_string(), "FinalTransform.OriginY".to_string()),
+            ("Rotation".to_string(), "FinalTransform.Rotation".to_string()),
+            ("Scale".to_string(), "FinalTransform.Scale".to_string()),
+            ("Color".to_string(), "FinalTransform.Color".to_string()),
+            ("Color Speed".to_string(), "FinalTransform.ColorSpeed".to_string()),
+        ];
+
+        // Raw affine parameters (for advanced users)
+        for param in ['A', 'B', 'C', 'D', 'E', 'F', 'G'] {
+            params.push((format!("Affine {}", param), format!("FinalTransform.Affine.{}", param)));
+        }
+
+        // Active variations for final transform
+        let mut active_variations: Vec<(&String, &f32)> = final_xform.variations
+            .iter()
+            .filter(|(_, weight)| **weight != 0.0)
+            .collect();
+        active_variations.sort_by_key(|(name, _)| *name);
+
+        for (var_name, _weight) in &active_variations {
+            let display_name = registry.get(var_name)
+                .map(|v| v.display_name.clone())
+                .unwrap_or_else(|| var_name.to_string());
+            params.push((
+                format!("{} (Weight)", display_name),
+                format!("FinalTransform.Variation.{}", var_name),
+            ));
+
+            if let Some(var_info) = registry.get(var_name) {
+                for param_def in &var_info.parameters {
+                    params.push((
+                        format!("{} - {}", display_name, param_def.display_name),
+                        format!("FinalTransform.VariationParam.{}.{}", var_name, param_def.name),
+                    ));
+                }
+            }
+        }
+
+        categories.push(ParameterCategory {
+            name: "Final Transform".to_string(),
             params,
         });
     }
