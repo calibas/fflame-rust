@@ -229,6 +229,12 @@ pub struct ConfigManager {
     /// When Some: transform edits don't create history entries
     /// When None: normal operation
     modify_session: Option<ModifySession>,
+
+    /// Animation mode flag
+    /// When true: all update_param calls are silent (no undo entries)
+    /// This allows users to tweak settings during animation playback
+    /// without corrupting the undo history
+    animation_mode: bool,
 }
 
 /// Session state for transform modification (triangle editor, etc.)
@@ -253,18 +259,40 @@ impl ConfigManager {
             system_settings,
             pending_actions: UpdateAction::none(),
             modify_session: None,
+            animation_mode: false,
         }
+    }
+
+    /// Set animation mode
+    ///
+    /// When true, all update_param calls become silent (no undo entries).
+    /// This allows tweaking settings during animation without corrupting undo history.
+    pub fn set_animation_mode(&mut self, enabled: bool) {
+        self.animation_mode = enabled;
+    }
+
+    /// Check if animation mode is active
+    pub fn is_animation_mode(&self) -> bool {
+        self.animation_mode
     }
 
     /// Apply a single parameter change
     ///
     /// All changes apply immediately and create history entries.
     /// Coalescing (in push_undo) automatically merges rapid changes to same parameter.
+    ///
+    /// Note: When animation_mode is true, delegates to update_param_silent
+    /// to avoid creating undo entries during animation playback.
     pub fn update_param(
         &mut self,
         path: ConfigPath,
         new_value: ConfigValue,
     ) -> Result<UpdateType, ConfigError> {
+        // Animation mode: use silent updates (no undo entries)
+        if self.animation_mode {
+            return self.update_param_silent(path, new_value);
+        }
+
         // Special case: modify session (skip history, commit on session end)
         if self.modify_session.is_some() {
             self.set_value(&path, new_value)?;
