@@ -93,6 +93,8 @@ pub struct AnimationPanelResponse {
     pub save_animation: bool,
     /// Export animation request with settings
     pub export_animation: Option<AnimationExportSettings>,
+    /// Create a new empty animation
+    pub new_animation: bool,
 }
 
 /// Render animation panel content
@@ -142,7 +144,7 @@ pub fn render_animation_content(
     ui.separator();
 
     // Load/Save buttons
-    render_file_controls(ui, &mut response);
+    render_file_controls(ui, controller, &mut response);
 
     ui.separator();
 
@@ -345,9 +347,16 @@ fn quality_mode_label(mode: AnimationQualityMode) -> &'static str {
 }
 
 /// Render load/save file controls
-fn render_file_controls(ui: &mut Ui, response: &mut AnimationPanelResponse) {
+fn render_file_controls(ui: &mut Ui, controller: &AnimationController, response: &mut AnimationPanelResponse) {
+    let has_animation = controller.animation.is_some();
+
     ui.horizontal(|ui| {
-        if ui.button("📂 Load Animation").clicked() {
+        // New animation button
+        if ui.button("+ New").on_hover_text("Create a new empty animation").clicked() {
+            response.new_animation = true;
+        }
+
+        if ui.button("📂 Load").on_hover_text("Load animation from file").clicked() {
             // Trigger file load dialog
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -369,7 +378,7 @@ fn render_file_controls(ui: &mut Ui, response: &mut AnimationPanelResponse) {
             }
         }
 
-        if ui.button("💾 Save Animation").clicked() {
+        if ui.add_enabled(has_animation, egui::Button::new("💾 Save")).on_hover_text("Save animation to file").clicked() {
             response.save_animation = true;
         }
     });
@@ -554,31 +563,4 @@ fn render_export_controls(
                 }
             });
         });
-}
-
-/// Show animation track summary (collapsible)
-pub fn render_track_summary(ui: &mut Ui, controller: &AnimationController) {
-    if let Some(ref animation) = controller.animation {
-        egui::CollapsingHeader::new(format!("Tracks ({})", animation.tracks.len() + animation.circular_tracks.len()))
-            .default_open(false)
-            .show(ui, |ui| {
-                // Regular tracks
-                for (path, track) in &animation.tracks {
-                    let track_type = match &track.source {
-                        crate::animation::TrackSource::Keyframes { keyframes } => {
-                            format!("Keyframes ({})", keyframes.len())
-                        }
-                        crate::animation::TrackSource::Oscillator { oscillator_type, .. } => {
-                            format!("{:?}", oscillator_type)
-                        }
-                    };
-                    ui.label(format!("  {} → {}", path, track_type));
-                }
-
-                // Circular tracks
-                for circular in &animation.circular_tracks {
-                    ui.label(format!("  Circular → {}, {}", circular.target_x, circular.target_y));
-                }
-            });
-    }
 }

@@ -216,6 +216,20 @@ impl Animation {
         self.circular_tracks.push(track);
     }
 
+    /// Remove a track by its target path
+    pub fn remove_track(&mut self, path: &str) -> Option<Track> {
+        self.tracks.remove(path)
+    }
+
+    /// Remove a circular track by index
+    pub fn remove_circular_track(&mut self, index: usize) -> Option<CircularTrack> {
+        if index < self.circular_tracks.len() {
+            Some(self.circular_tracks.remove(index))
+        } else {
+            None
+        }
+    }
+
     /// Load from JSON file
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)

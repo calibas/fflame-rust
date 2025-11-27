@@ -74,6 +74,9 @@ pub struct PanelContext<'a> {
     pub animation_export_settings: &'a mut super::animation_panel::AnimationExportSettings,
     pub animation_export_requested: &'a mut Option<super::animation_panel::AnimationExportSettings>,
     pub animation_export_progress: &'a super::animation_panel::ExportProgress,
+
+    // Track editor state
+    pub track_editor_state: &'a mut super::track_editor::TrackEditorState,
 }
 
 /// Viewer for rendering each panel type
@@ -245,6 +248,12 @@ impl<'a> PanelViewer<'a> {
             self.context.animation_export_progress,
         );
 
+        // Handle new animation request
+        if response.new_animation {
+            let new_anim = crate::animation::Animation::new("New Animation".to_string(), 10.0);
+            self.context.animation_controller.load(new_anim);
+        }
+
         // Handle animation load response
         if let Some(animation) = response.load_animation {
             // If animation has embedded config, load it first
@@ -294,9 +303,15 @@ impl<'a> PanelViewer<'a> {
             *self.context.animation_export_requested = Some(settings);
         }
 
-        // Show track summary below main controls
+        // Track editor section
         ui.separator();
-        super::animation_panel::render_track_summary(ui, self.context.animation_controller);
+        let transform_count = self.context.flame.transforms.len();
+        super::track_editor::render_track_editor(
+            ui,
+            self.context.animation_controller,
+            self.context.track_editor_state,
+            transform_count,
+        );
     }
 
     /// Render the Performance panel (stats and version info)
