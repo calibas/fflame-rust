@@ -77,6 +77,9 @@ pub struct PanelContext<'a> {
 
     // Track editor state
     pub track_editor_state: &'a mut super::track_editor::TrackEditorState,
+
+    // Animation seek changed flag (timeline was scrubbed)
+    pub animation_seek_changed: &'a mut bool,
 }
 
 /// Viewer for rendering each panel type
@@ -301,6 +304,11 @@ impl<'a> PanelViewer<'a> {
         // Handle animation export request
         if let Some(settings) = response.export_animation {
             *self.context.animation_export_requested = Some(settings);
+        }
+
+        // Handle timeline scrubbing
+        if response.seek_changed {
+            *self.context.animation_seek_changed = true;
         }
 
         // Track editor section

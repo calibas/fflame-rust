@@ -248,6 +248,7 @@ impl EguiLayer {
 
         // Animation export
         let mut animation_export_requested: Option<animation_panel::AnimationExportSettings> = None;
+        let mut animation_seek_changed = false;
 
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
@@ -353,6 +354,9 @@ impl EguiLayer {
 
                         // Track editor state
                         track_editor_state: &mut self.track_editor_state,
+
+                        // Animation seek changed flag
+                        animation_seek_changed: &mut animation_seek_changed,
                     },
                 });
 
@@ -518,6 +522,7 @@ impl EguiLayer {
             selected_preset_config,
             file_browser_open_requested,
             animation_export_requested,
+            animation_seek_changed,
         }
     }
 

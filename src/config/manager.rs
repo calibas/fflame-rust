@@ -1543,6 +1543,28 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// Load a complete config silently (no undo entry)
+    /// Used when restoring base config after animation stops
+    /// The undo entry should have already been created by handle_animation_exit
+    pub fn load_config_silent(&mut self, new_config: FractalConfig) -> Result<(), ConfigError> {
+        // Clear any preview state
+        self.preview = None;
+
+        // Replace current config (no undo entry)
+        self.current = new_config;
+
+        // Record full config import action for GPU updates
+        let mut action = UpdateAction::none();
+        action.update_flame = true;
+        action.update_view = true;
+        action.update_palette = true;
+        action.update_tone_curve = true;
+        action.reset_accumulation = true;
+        self.pending_actions.merge(&action);
+
+        Ok(())
+    }
+
     /// Load a complete config with explicit before/after states
     /// Used for animation undo where we track the pre-animation state separately
     /// The current config is NOT modified (we're just recording the transition)
