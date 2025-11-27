@@ -72,6 +72,18 @@ pub enum ConfigPath {
         variation: String,
         param: String,
     },
+    /// High-level transform origin X (translate X)
+    /// Computed from affine: origin_x = e
+    TransformOriginX { index: usize },
+    /// High-level transform origin Y (translate Y)
+    /// Computed from affine: origin_y = -f (Apophysis convention)
+    TransformOriginY { index: usize },
+    /// High-level transform rotation (angle in radians)
+    /// Computed from: atan2(b, a)
+    TransformRotation { index: usize },
+    /// High-level transform scale (uniform scaling)
+    /// Computed from: sqrt(a² + b²)
+    TransformScale { index: usize },
 
     // ===== Final Transform (require iteration reset) =====
     FinalTransformEnabled,
@@ -186,6 +198,18 @@ impl Display for ConfigPath {
                     variation,
                     param
                 )
+            }
+            ConfigPath::TransformOriginX { index } => {
+                write!(f, "Transform {} → Origin X", index + 1)
+            }
+            ConfigPath::TransformOriginY { index } => {
+                write!(f, "Transform {} → Origin Y", index + 1)
+            }
+            ConfigPath::TransformRotation { index } => {
+                write!(f, "Transform {} → Rotation", index + 1)
+            }
+            ConfigPath::TransformScale { index } => {
+                write!(f, "Transform {} → Scale", index + 1)
             }
 
             // Final Transform
@@ -654,6 +678,10 @@ impl ConfigPath {
             | ConfigPath::TransformAffine { .. }
             | ConfigPath::TransformVariation { .. }
             | ConfigPath::TransformVariationParam { .. }
+            | ConfigPath::TransformOriginX { .. }
+            | ConfigPath::TransformOriginY { .. }
+            | ConfigPath::TransformRotation { .. }
+            | ConfigPath::TransformScale { .. }
             | ConfigPath::FinalTransformEnabled
             | ConfigPath::FinalTransformAffine { .. }
             | ConfigPath::FinalTransformColor
@@ -737,6 +765,10 @@ impl ConfigPath {
             ConfigPath::TransformVariationParam { index, variation, param } => {
                 format!("Transform.{}.VariationParam.{}.{}", index, variation, param)
             }
+            ConfigPath::TransformOriginX { index } => format!("Transform.{}.OriginX", index),
+            ConfigPath::TransformOriginY { index } => format!("Transform.{}.OriginY", index),
+            ConfigPath::TransformRotation { index } => format!("Transform.{}.Rotation", index),
+            ConfigPath::TransformScale { index } => format!("Transform.{}.Scale", index),
 
             // Final Transform
             ConfigPath::FinalTransformEnabled => "FinalTransform.Enabled".to_string(),
@@ -851,6 +883,10 @@ impl ConfigPath {
                         param: parts[4].to_string(),
                     });
                 }
+                "OriginX" => return Some(ConfigPath::TransformOriginX { index }),
+                "OriginY" => return Some(ConfigPath::TransformOriginY { index }),
+                "Rotation" => return Some(ConfigPath::TransformRotation { index }),
+                "Scale" => return Some(ConfigPath::TransformScale { index }),
                 _ => {}
             }
         }
@@ -973,6 +1009,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TransformAffine { .. }
         | ConfigPath::TransformVariation { .. }
         | ConfigPath::TransformVariationParam { .. }
+        | ConfigPath::TransformOriginX { .. }
+        | ConfigPath::TransformOriginY { .. }
+        | ConfigPath::TransformRotation { .. }
+        | ConfigPath::TransformScale { .. }
         | ConfigPath::FinalTransformAffine { .. }
         | ConfigPath::FinalTransformColor
         | ConfigPath::FinalTransformColorSpeed
@@ -1191,6 +1231,27 @@ mod tests {
                 variation: "julian".to_string(),
                 param: "power".to_string(),
             },
+        ];
+
+        for path in paths {
+            let key = path.to_string_key();
+            let parsed = ConfigPath::from_string_key(&key);
+            assert_eq!(parsed, Some(path.clone()), "Failed roundtrip for key: {}", key);
+        }
+    }
+
+    #[test]
+    fn test_config_path_string_roundtrip_transform_operations() {
+        // Test high-level transform operation paths (origin, rotation, scale)
+        let paths = vec![
+            ConfigPath::TransformOriginX { index: 0 },
+            ConfigPath::TransformOriginX { index: 3 },
+            ConfigPath::TransformOriginY { index: 0 },
+            ConfigPath::TransformOriginY { index: 5 },
+            ConfigPath::TransformRotation { index: 1 },
+            ConfigPath::TransformRotation { index: 2 },
+            ConfigPath::TransformScale { index: 0 },
+            ConfigPath::TransformScale { index: 4 },
         ];
 
         for path in paths {

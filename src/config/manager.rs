@@ -877,6 +877,39 @@ impl ConfigManager {
                 );
                 Ok(value.into())
             }
+            // High-level transform operations (translate, rotate, scale)
+            ConfigPath::TransformOriginX { index } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.origin_x().into())
+            }
+            ConfigPath::TransformOriginY { index } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.origin_y().into())
+            }
+            ConfigPath::TransformRotation { index } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.rotation().into())
+            }
+            ConfigPath::TransformScale { index } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.scale().into())
+            }
 
             // Final Transform
             ConfigPath::FinalTransformEnabled => {
@@ -1178,6 +1211,47 @@ impl ConfigManager {
                 let new_value: f32 = value.try_into()?;
                 let key = format!("{}.{}", variation, param);
                 xform.variation_params.insert(key, new_value);
+            }
+            // High-level transform operations (translate, rotate, scale)
+            ConfigPath::TransformOriginX { index } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                xform.set_origin_x(new_value);
+            }
+            ConfigPath::TransformOriginY { index } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                xform.set_origin_y(new_value);
+            }
+            ConfigPath::TransformRotation { index } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                xform.set_rotation(new_value);
+            }
+            ConfigPath::TransformScale { index } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                xform.set_scale(new_value);
             }
 
             // Final Transform

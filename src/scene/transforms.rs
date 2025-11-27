@@ -234,6 +234,116 @@ impl Transform {
         self.f = 0.0;
     }
 
+    // === TRANSFORM OPERATIONS (for animation) ===
+
+    /// Get the origin X position (translation component)
+    pub fn origin_x(&self) -> f32 {
+        self.e
+    }
+
+    /// Get the origin Y position (translation component, Apophysis convention)
+    pub fn origin_y(&self) -> f32 {
+        -self.f
+    }
+
+    /// Set the origin X position (translation component)
+    pub fn set_origin_x(&mut self, x: f32) {
+        // Get current triangle
+        let (mut o, mut x_pt, mut y_pt) = self.to_triangle_apophysis();
+        let dx = x - o[0];
+        // Translate all points
+        o[0] = x;
+        x_pt[0] += dx;
+        y_pt[0] += dx;
+        self.from_triangle_apophysis(o, x_pt, y_pt);
+    }
+
+    /// Set the origin Y position (translation component, Apophysis convention)
+    pub fn set_origin_y(&mut self, y: f32) {
+        // Get current triangle
+        let (mut o, mut x_pt, mut y_pt) = self.to_triangle_apophysis();
+        let dy = y - o[1];
+        // Translate all points
+        o[1] = y;
+        x_pt[1] += dy;
+        y_pt[1] += dy;
+        self.from_triangle_apophysis(o, x_pt, y_pt);
+    }
+
+    /// Get the rotation angle in radians (from the X-axis arm)
+    pub fn rotation(&self) -> f32 {
+        let (o, x_pt, _) = self.to_triangle_apophysis();
+        let dx = x_pt[0] - o[0];
+        let dy = x_pt[1] - o[1];
+        dy.atan2(dx)
+    }
+
+    /// Set the rotation angle in radians (rotates around origin, preserving scale)
+    pub fn set_rotation(&mut self, angle: f32) {
+        let (o, x_pt, y_pt) = self.to_triangle_apophysis();
+
+        // Get current vectors from origin
+        let x_vec = [x_pt[0] - o[0], x_pt[1] - o[1]];
+        let y_vec = [y_pt[0] - o[0], y_pt[1] - o[1]];
+
+        // Get current lengths (scales)
+        let x_len = (x_vec[0] * x_vec[0] + x_vec[1] * x_vec[1]).sqrt();
+        let y_len = (y_vec[0] * y_vec[0] + y_vec[1] * y_vec[1]).sqrt();
+
+        // Get current angle between X and Y arms (to preserve shear)
+        let current_x_angle = x_vec[1].atan2(x_vec[0]);
+        let current_y_angle = y_vec[1].atan2(y_vec[0]);
+        let angle_diff = current_y_angle - current_x_angle;
+
+        // New X arm at the target angle
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+        let new_x = [o[0] + x_len * cos_a, o[1] + x_len * sin_a];
+
+        // New Y arm at target angle + preserved angle difference
+        let y_angle = angle + angle_diff;
+        let new_y = [o[0] + y_len * y_angle.cos(), o[1] + y_len * y_angle.sin()];
+
+        self.from_triangle_apophysis(o, new_x, new_y);
+    }
+
+    /// Get the uniform scale factor (average of X and Y arm lengths)
+    pub fn scale(&self) -> f32 {
+        let (o, x_pt, y_pt) = self.to_triangle_apophysis();
+        let x_vec = [x_pt[0] - o[0], x_pt[1] - o[1]];
+        let y_vec = [y_pt[0] - o[0], y_pt[1] - o[1]];
+        let x_len = (x_vec[0] * x_vec[0] + x_vec[1] * x_vec[1]).sqrt();
+        let y_len = (y_vec[0] * y_vec[0] + y_vec[1] * y_vec[1]).sqrt();
+        (x_len + y_len) / 2.0
+    }
+
+    /// Set uniform scale (scales both arms equally, preserving rotation)
+    pub fn set_scale(&mut self, scale: f32) {
+        let (o, x_pt, y_pt) = self.to_triangle_apophysis();
+
+        // Get current vectors from origin
+        let x_vec = [x_pt[0] - o[0], x_pt[1] - o[1]];
+        let y_vec = [y_pt[0] - o[0], y_pt[1] - o[1]];
+
+        // Get current lengths
+        let x_len = (x_vec[0] * x_vec[0] + x_vec[1] * x_vec[1]).sqrt();
+        let y_len = (y_vec[0] * y_vec[0] + y_vec[1] * y_vec[1]).sqrt();
+
+        // Avoid division by zero
+        if x_len < 1e-6 || y_len < 1e-6 {
+            return;
+        }
+
+        // Scale both arms to the target scale
+        let x_scale = scale / x_len;
+        let y_scale = scale / y_len;
+
+        let new_x = [o[0] + x_vec[0] * x_scale, o[1] + x_vec[1] * x_scale];
+        let new_y = [o[0] + y_vec[0] * y_scale, o[1] + y_vec[1] * y_scale];
+
+        self.from_triangle_apophysis(o, new_x, new_y);
+    }
+
     // === COMPATIBILITY METHODS (for gradual migration) ===
 
     /// COMPATIBILITY: Set variation by index (for old code)
