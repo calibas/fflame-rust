@@ -1,0 +1,52 @@
+{
+  "name": "Transform Rotation",
+  "duration": 8.0,
+  "tracks": {
+    "Transform.0.Affine.A": {
+      "source": {
+        "type": "Oscillator",
+        "oscillator_type": "Sine",
+        "center": 0.5,
+        "amplitude": 0.3,
+        "frequency": 0.25,
+        "phase": 0.0
+      },
+      "interpolation": "Linear"
+    },
+    "Transform.0.Affine.D": {
+      "source": {
+        "type": "Oscillator",
+        "oscillator_type": "Sine",
+        "center": 0.5,
+        "amplitude": 0.3,
+        "frequency": 0.25,
+        "phase": 0.25
+      },
+      "interpolation": "Linear"
+    },
+    "Transform.0.Affine.B": {
+      "source": {
+        "type": "Oscillator",
+        "oscillator_type": "Sine",
+        "center": 0.0,
+        "amplitude": 0.3,
+        "frequency": 0.25,
+        "phase": 0.25
+      },
+      "interpolation": "Linear"
+    },
+    "Transform.0.Affine.C": {
+      "source": {
+        "type": "Oscillator",
+        "oscillator_type": "Sine",
+        "center": 0.0,
+        "amplitude": -0.3,
+        "frequency": 0.25,
+        "phase": 0.0
+      },
+      "interpolation": "Linear"
+    }
+  },
+  "circular_tracks": [],
+  "loop_mode": "Loop"
+}

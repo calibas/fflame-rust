@@ -1,0 +1,26 @@
+{
+  "name": "Transform 2 Rotate 360",
+  "duration": 10.0,
+  "tracks": {},
+  "circular_tracks": [
+    {
+      "target_x": "Transform.1.Affine.A",
+      "target_y": "Transform.1.Affine.C",
+      "center_x": 0.0,
+      "center_y": 0.0,
+      "radius": 1.0,
+      "speed": 0.1,
+      "phase": 0.0
+    },
+    {
+      "target_x": "Transform.1.Affine.D",
+      "target_y": "Transform.1.Affine.B",
+      "center_x": 0.0,
+      "center_y": 0.0,
+      "radius": 1.0,
+      "speed": -0.1,
+      "phase": 0.0
+    }
+  ],
+  "loop_mode": "Loop"
+}

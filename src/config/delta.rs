@@ -20,6 +20,8 @@ pub enum ConfigPath {
     // ===== View parameters (no fractal recalc needed) =====
     Zoom,
     Pan,  // Combined PanX and PanY into single Vec2 value
+    PanX, // Separate X component for animation
+    PanY, // Separate Y component for animation
     Rotation,
     CameraRotationX,
     CameraRotationY,
@@ -48,6 +50,9 @@ pub enum ConfigPath {
     PaletteRotation,
     SpeedFactor,
     BackgroundColor,
+    BackgroundColorR, // Separate R component for animation
+    BackgroundColorG, // Separate G component for animation
+    BackgroundColorB, // Separate B component for animation
 
     // ===== Rendering settings (affects iteration speed/quality) =====
     HistogramColorScale,
@@ -72,6 +77,18 @@ pub enum ConfigPath {
         variation: String,
         param: String,
     },
+    /// High-level transform origin X (translate X)
+    /// Computed from affine: origin_x = e
+    TransformOriginX { index: usize },
+    /// High-level transform origin Y (translate Y)
+    /// Computed from affine: origin_y = -f (Apophysis convention)
+    TransformOriginY { index: usize },
+    /// High-level transform rotation (angle in radians)
+    /// Computed from: atan2(b, a)
+    TransformRotation { index: usize },
+    /// High-level transform scale (uniform scaling)
+    /// Computed from: sqrt(a² + b²)
+    TransformScale { index: usize },
 
     // ===== Final Transform (require iteration reset) =====
     FinalTransformEnabled,
@@ -83,6 +100,14 @@ pub enum ConfigPath {
         variation: String,
         param: String,
     },
+    /// High-level final transform origin X (translate X)
+    FinalTransformOriginX,
+    /// High-level final transform origin Y (translate Y)
+    FinalTransformOriginY,
+    /// High-level final transform rotation (angle in radians)
+    FinalTransformRotation,
+    /// High-level final transform scale (uniform scaling)
+    FinalTransformScale,
 
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
@@ -115,6 +140,8 @@ impl Display for ConfigPath {
             // View
             ConfigPath::Zoom => write!(f, "Zoom"),
             ConfigPath::Pan => write!(f, "Pan"),
+            ConfigPath::PanX => write!(f, "Pan X"),
+            ConfigPath::PanY => write!(f, "Pan Y"),
             ConfigPath::Rotation => write!(f, "Rotation"),
             ConfigPath::CameraRotationX => write!(f, "Camera Pitch"),
             ConfigPath::CameraRotationY => write!(f, "Camera Yaw"),
@@ -143,6 +170,9 @@ impl Display for ConfigPath {
             ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
             ConfigPath::SpeedFactor => write!(f, "Speed Blend Factor"),
             ConfigPath::BackgroundColor => write!(f, "Background Color"),
+            ConfigPath::BackgroundColorR => write!(f, "Background Red"),
+            ConfigPath::BackgroundColorG => write!(f, "Background Green"),
+            ConfigPath::BackgroundColorB => write!(f, "Background Blue"),
 
             // Rendering
             ConfigPath::HistogramColorScale => write!(f, "Histogram Color Scale"),
@@ -187,6 +217,18 @@ impl Display for ConfigPath {
                     param
                 )
             }
+            ConfigPath::TransformOriginX { index } => {
+                write!(f, "Transform {} → Origin X", index + 1)
+            }
+            ConfigPath::TransformOriginY { index } => {
+                write!(f, "Transform {} → Origin Y", index + 1)
+            }
+            ConfigPath::TransformRotation { index } => {
+                write!(f, "Transform {} → Rotation", index + 1)
+            }
+            ConfigPath::TransformScale { index } => {
+                write!(f, "Transform {} → Scale", index + 1)
+            }
 
             // Final Transform
             ConfigPath::FinalTransformEnabled => write!(f, "Final Transform → Enabled"),
@@ -201,6 +243,10 @@ impl Display for ConfigPath {
             ConfigPath::FinalTransformVariationParam { variation, param } => {
                 write!(f, "Final Transform → {} → {}", variation, param)
             }
+            ConfigPath::FinalTransformOriginX => write!(f, "Final Transform → Origin X"),
+            ConfigPath::FinalTransformOriginY => write!(f, "Final Transform → Origin Y"),
+            ConfigPath::FinalTransformRotation => write!(f, "Final Transform → Rotation"),
+            ConfigPath::FinalTransformScale => write!(f, "Final Transform → Scale"),
 
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
@@ -608,6 +654,8 @@ impl ConfigPath {
             // View parameters - just math, no GPU work
             ConfigPath::Zoom
             | ConfigPath::Pan
+            | ConfigPath::PanX
+            | ConfigPath::PanY
             | ConfigPath::Rotation
             | ConfigPath::CameraRotationX
             | ConfigPath::CameraRotationY
@@ -628,7 +676,10 @@ impl ConfigPath {
             | ConfigPath::TonemapMode
             | ConfigPath::TonemapCurve
             | ConfigPath::UseCurve
-            | ConfigPath::BackgroundColor => UpdateType::ToneMappingOnly,
+            | ConfigPath::BackgroundColor
+            | ConfigPath::BackgroundColorR
+            | ConfigPath::BackgroundColorG
+            | ConfigPath::BackgroundColorB => UpdateType::ToneMappingOnly,
 
             // Color parameters - re-run accumulation with new colors
             ConfigPath::ColorMode
@@ -654,12 +705,20 @@ impl ConfigPath {
             | ConfigPath::TransformAffine { .. }
             | ConfigPath::TransformVariation { .. }
             | ConfigPath::TransformVariationParam { .. }
+            | ConfigPath::TransformOriginX { .. }
+            | ConfigPath::TransformOriginY { .. }
+            | ConfigPath::TransformRotation { .. }
+            | ConfigPath::TransformScale { .. }
             | ConfigPath::FinalTransformEnabled
             | ConfigPath::FinalTransformAffine { .. }
             | ConfigPath::FinalTransformColor
             | ConfigPath::FinalTransformColorSpeed
             | ConfigPath::FinalTransformVariation { .. }
             | ConfigPath::FinalTransformVariationParam { .. }
+            | ConfigPath::FinalTransformOriginX
+            | ConfigPath::FinalTransformOriginY
+            | ConfigPath::FinalTransformRotation
+            | ConfigPath::FinalTransformScale
             | ConfigPath::RenderMode
             | ConfigPath::PerspectiveStrength
             | ConfigPath::MaxIterations
@@ -670,6 +729,450 @@ impl ConfigPath {
             ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps => UpdateType::ViewOnly,
             ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage => UpdateType::None,
         }
+    }
+
+    /// Serialize ConfigPath to a stable string key for animation files
+    ///
+    /// Format examples:
+    /// - Simple: "Zoom", "Exposure", "Pan"
+    /// - Transform: "Transform.0.Weight", "Transform.0.Affine.A"
+    /// - Variation: "Transform.0.Variation.linear", "Transform.0.VariationParam.julian.power"
+    pub fn to_string_key(&self) -> String {
+        match self {
+            // View
+            ConfigPath::Zoom => "Zoom".to_string(),
+            ConfigPath::Pan => "Pan".to_string(),
+            ConfigPath::PanX => "PanX".to_string(),
+            ConfigPath::PanY => "PanY".to_string(),
+            ConfigPath::Rotation => "Rotation".to_string(),
+            ConfigPath::CameraRotationX => "CameraRotationX".to_string(),
+            ConfigPath::CameraRotationY => "CameraRotationY".to_string(),
+            ConfigPath::CameraZ => "CameraZ".to_string(),
+
+            // Tone mapping
+            ConfigPath::Exposure => "Exposure".to_string(),
+            ConfigPath::Gamma => "Gamma".to_string(),
+            ConfigPath::GammaThreshold => "GammaThreshold".to_string(),
+            ConfigPath::Brightness => "Brightness".to_string(),
+            ConfigPath::Vibrancy => "Vibrancy".to_string(),
+            ConfigPath::Saturation => "Saturation".to_string(),
+            ConfigPath::HueShift => "HueShift".to_string(),
+            ConfigPath::ValueScale => "ValueScale".to_string(),
+            ConfigPath::AlphaBlendLow => "AlphaBlendLow".to_string(),
+            ConfigPath::AlphaBlendHigh => "AlphaBlendHigh".to_string(),
+            ConfigPath::DensityScale => "DensityScale".to_string(),
+            ConfigPath::TonemapMode => "TonemapMode".to_string(),
+            ConfigPath::TonemapCurve => "TonemapCurve".to_string(),
+            ConfigPath::UseCurve => "UseCurve".to_string(),
+
+            // Color
+            ConfigPath::ColorMode => "ColorMode".to_string(),
+            ConfigPath::PaletteIndex => "PaletteIndex".to_string(),
+            ConfigPath::Palette => "Palette".to_string(),
+            ConfigPath::PaletteRotation => "PaletteRotation".to_string(),
+            ConfigPath::SpeedFactor => "SpeedFactor".to_string(),
+            ConfigPath::BackgroundColor => "BackgroundColor".to_string(),
+            ConfigPath::BackgroundColorR => "BackgroundColorR".to_string(),
+            ConfigPath::BackgroundColorG => "BackgroundColorG".to_string(),
+            ConfigPath::BackgroundColorB => "BackgroundColorB".to_string(),
+
+            // Rendering
+            ConfigPath::HistogramColorScale => "HistogramColorScale".to_string(),
+            ConfigPath::LowDensitySmoothing => "LowDensitySmoothing".to_string(),
+            ConfigPath::DensityCompressionStrength => "DensityCompressionStrength".to_string(),
+            ConfigPath::BlendFactor => "BlendFactor".to_string(),
+            ConfigPath::UseDynamicBlend => "UseDynamicBlend".to_string(),
+            ConfigPath::TargetIterationsPerPixel => "TargetIterationsPerPixel".to_string(),
+            ConfigPath::MaxIterations => "MaxIterations".to_string(),
+            ConfigPath::DeterministicRng => "DeterministicRng".to_string(),
+
+            // Transforms
+            ConfigPath::TransformCount => "TransformCount".to_string(),
+            ConfigPath::TransformWeight { index } => format!("Transform.{}.Weight", index),
+            ConfigPath::TransformColor { index } => format!("Transform.{}.Color", index),
+            ConfigPath::TransformColorSpeed { index } => format!("Transform.{}.ColorSpeed", index),
+            ConfigPath::TransformOpacity { index } => format!("Transform.{}.Opacity", index),
+            ConfigPath::TransformAffine { index, param } => {
+                format!("Transform.{}.Affine.{}", index, param.to_char())
+            }
+            ConfigPath::TransformVariation { index, variation } => {
+                format!("Transform.{}.Variation.{}", index, variation)
+            }
+            ConfigPath::TransformVariationParam { index, variation, param } => {
+                format!("Transform.{}.VariationParam.{}.{}", index, variation, param)
+            }
+            ConfigPath::TransformOriginX { index } => format!("Transform.{}.OriginX", index),
+            ConfigPath::TransformOriginY { index } => format!("Transform.{}.OriginY", index),
+            ConfigPath::TransformRotation { index } => format!("Transform.{}.Rotation", index),
+            ConfigPath::TransformScale { index } => format!("Transform.{}.Scale", index),
+
+            // Final Transform
+            ConfigPath::FinalTransformEnabled => "FinalTransform.Enabled".to_string(),
+            ConfigPath::FinalTransformAffine { param } => {
+                format!("FinalTransform.Affine.{}", param.to_char())
+            }
+            ConfigPath::FinalTransformColor => "FinalTransform.Color".to_string(),
+            ConfigPath::FinalTransformColorSpeed => "FinalTransform.ColorSpeed".to_string(),
+            ConfigPath::FinalTransformVariation { variation } => {
+                format!("FinalTransform.Variation.{}", variation)
+            }
+            ConfigPath::FinalTransformVariationParam { variation, param } => {
+                format!("FinalTransform.VariationParam.{}.{}", variation, param)
+            }
+            ConfigPath::FinalTransformOriginX => "FinalTransform.OriginX".to_string(),
+            ConfigPath::FinalTransformOriginY => "FinalTransform.OriginY".to_string(),
+            ConfigPath::FinalTransformRotation => "FinalTransform.Rotation".to_string(),
+            ConfigPath::FinalTransformScale => "FinalTransform.Scale".to_string(),
+
+            // Flame
+            ConfigPath::RenderMode => "RenderMode".to_string(),
+            ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
+
+            // System Settings (not typically animated, but included for completeness)
+            ConfigPath::SystemIterationsPerThread => "System.IterationsPerThread".to_string(),
+            ConfigPath::SystemVsyncEnabled => "System.VsyncEnabled".to_string(),
+            ConfigPath::SystemTargetFps => "System.TargetFps".to_string(),
+            ConfigPath::SystemExportWidth => "System.ExportWidth".to_string(),
+            ConfigPath::SystemExportHeight => "System.ExportHeight".to_string(),
+            ConfigPath::SystemLanguage => "System.Language".to_string(),
+        }
+    }
+
+    /// Parse ConfigPath from string key (inverse of to_string_key)
+    ///
+    /// Returns None if the string doesn't match a valid path format
+    pub fn from_string_key(s: &str) -> Option<Self> {
+        // Simple paths (no dots)
+        match s {
+            // View
+            "Zoom" => return Some(ConfigPath::Zoom),
+            "Pan" => return Some(ConfigPath::Pan),
+            "PanX" => return Some(ConfigPath::PanX),
+            "PanY" => return Some(ConfigPath::PanY),
+            "Rotation" => return Some(ConfigPath::Rotation),
+            "CameraRotationX" => return Some(ConfigPath::CameraRotationX),
+            "CameraRotationY" => return Some(ConfigPath::CameraRotationY),
+            "CameraZ" => return Some(ConfigPath::CameraZ),
+
+            // Tone mapping
+            "Exposure" => return Some(ConfigPath::Exposure),
+            "Gamma" => return Some(ConfigPath::Gamma),
+            "GammaThreshold" => return Some(ConfigPath::GammaThreshold),
+            "Brightness" => return Some(ConfigPath::Brightness),
+            "Vibrancy" => return Some(ConfigPath::Vibrancy),
+            "Saturation" => return Some(ConfigPath::Saturation),
+            "HueShift" => return Some(ConfigPath::HueShift),
+            "ValueScale" => return Some(ConfigPath::ValueScale),
+            "AlphaBlendLow" => return Some(ConfigPath::AlphaBlendLow),
+            "AlphaBlendHigh" => return Some(ConfigPath::AlphaBlendHigh),
+            "DensityScale" => return Some(ConfigPath::DensityScale),
+            "TonemapMode" => return Some(ConfigPath::TonemapMode),
+            "TonemapCurve" => return Some(ConfigPath::TonemapCurve),
+            "UseCurve" => return Some(ConfigPath::UseCurve),
+
+            // Color
+            "ColorMode" => return Some(ConfigPath::ColorMode),
+            "PaletteIndex" => return Some(ConfigPath::PaletteIndex),
+            "Palette" => return Some(ConfigPath::Palette),
+            "PaletteRotation" => return Some(ConfigPath::PaletteRotation),
+            "SpeedFactor" => return Some(ConfigPath::SpeedFactor),
+            "BackgroundColor" => return Some(ConfigPath::BackgroundColor),
+            "BackgroundColorR" => return Some(ConfigPath::BackgroundColorR),
+            "BackgroundColorG" => return Some(ConfigPath::BackgroundColorG),
+            "BackgroundColorB" => return Some(ConfigPath::BackgroundColorB),
+
+            // Rendering
+            "HistogramColorScale" => return Some(ConfigPath::HistogramColorScale),
+            "LowDensitySmoothing" => return Some(ConfigPath::LowDensitySmoothing),
+            "DensityCompressionStrength" => return Some(ConfigPath::DensityCompressionStrength),
+            "BlendFactor" => return Some(ConfigPath::BlendFactor),
+            "UseDynamicBlend" => return Some(ConfigPath::UseDynamicBlend),
+            "TargetIterationsPerPixel" => return Some(ConfigPath::TargetIterationsPerPixel),
+            "MaxIterations" => return Some(ConfigPath::MaxIterations),
+            "DeterministicRng" => return Some(ConfigPath::DeterministicRng),
+
+            // Flame
+            "TransformCount" => return Some(ConfigPath::TransformCount),
+            "RenderMode" => return Some(ConfigPath::RenderMode),
+            "PerspectiveStrength" => return Some(ConfigPath::PerspectiveStrength),
+
+            _ => {}
+        }
+
+        // Parse compound paths with dots
+        let parts: Vec<&str> = s.split('.').collect();
+
+        // Transform paths: Transform.{index}.{field}...
+        if parts.len() >= 3 && parts[0] == "Transform" {
+            let index: usize = parts[1].parse().ok()?;
+
+            match parts[2] {
+                "Weight" => return Some(ConfigPath::TransformWeight { index }),
+                "Color" => return Some(ConfigPath::TransformColor { index }),
+                "ColorSpeed" => return Some(ConfigPath::TransformColorSpeed { index }),
+                "Opacity" => return Some(ConfigPath::TransformOpacity { index }),
+                "Affine" if parts.len() == 4 => {
+                    let param = AffineParam::from_char(parts[3].chars().next()?)?;
+                    return Some(ConfigPath::TransformAffine { index, param });
+                }
+                "Variation" if parts.len() == 4 => {
+                    return Some(ConfigPath::TransformVariation {
+                        index,
+                        variation: parts[3].to_string(),
+                    });
+                }
+                "VariationParam" if parts.len() == 5 => {
+                    return Some(ConfigPath::TransformVariationParam {
+                        index,
+                        variation: parts[3].to_string(),
+                        param: parts[4].to_string(),
+                    });
+                }
+                "OriginX" => return Some(ConfigPath::TransformOriginX { index }),
+                "OriginY" => return Some(ConfigPath::TransformOriginY { index }),
+                "Rotation" => return Some(ConfigPath::TransformRotation { index }),
+                "Scale" => return Some(ConfigPath::TransformScale { index }),
+                _ => {}
+            }
+        }
+
+        // FinalTransform paths
+        if parts.len() >= 2 && parts[0] == "FinalTransform" {
+            match parts[1] {
+                "Enabled" => return Some(ConfigPath::FinalTransformEnabled),
+                "Color" => return Some(ConfigPath::FinalTransformColor),
+                "ColorSpeed" => return Some(ConfigPath::FinalTransformColorSpeed),
+                "Affine" if parts.len() == 3 => {
+                    let param = AffineParam::from_char(parts[2].chars().next()?)?;
+                    return Some(ConfigPath::FinalTransformAffine { param });
+                }
+                "Variation" if parts.len() == 3 => {
+                    return Some(ConfigPath::FinalTransformVariation {
+                        variation: parts[2].to_string(),
+                    });
+                }
+                "VariationParam" if parts.len() == 4 => {
+                    return Some(ConfigPath::FinalTransformVariationParam {
+                        variation: parts[2].to_string(),
+                        param: parts[3].to_string(),
+                    });
+                }
+                "OriginX" => return Some(ConfigPath::FinalTransformOriginX),
+                "OriginY" => return Some(ConfigPath::FinalTransformOriginY),
+                "Rotation" => return Some(ConfigPath::FinalTransformRotation),
+                "Scale" => return Some(ConfigPath::FinalTransformScale),
+                _ => {}
+            }
+        }
+
+        // System paths
+        if parts.len() == 2 && parts[0] == "System" {
+            match parts[1] {
+                "IterationsPerThread" => return Some(ConfigPath::SystemIterationsPerThread),
+                "VsyncEnabled" => return Some(ConfigPath::SystemVsyncEnabled),
+                "TargetFps" => return Some(ConfigPath::SystemTargetFps),
+                "ExportWidth" => return Some(ConfigPath::SystemExportWidth),
+                "ExportHeight" => return Some(ConfigPath::SystemExportHeight),
+                "Language" => return Some(ConfigPath::SystemLanguage),
+                _ => {}
+            }
+        }
+
+        None
+    }
+}
+
+impl AffineParam {
+    /// Convert to single character representation
+    pub fn to_char(&self) -> char {
+        match self {
+            AffineParam::A => 'A',
+            AffineParam::B => 'B',
+            AffineParam::C => 'C',
+            AffineParam::D => 'D',
+            AffineParam::E => 'E',
+            AffineParam::F => 'F',
+            AffineParam::G => 'G',
+        }
+    }
+
+    /// Parse from single character
+    pub fn from_char(c: char) -> Option<Self> {
+        match c {
+            'A' | 'a' => Some(AffineParam::A),
+            'B' | 'b' => Some(AffineParam::B),
+            'C' | 'c' => Some(AffineParam::C),
+            'D' | 'd' => Some(AffineParam::D),
+            'E' | 'e' => Some(AffineParam::E),
+            'F' | 'f' => Some(AffineParam::F),
+            'G' | 'g' => Some(AffineParam::G),
+            _ => None,
+        }
+    }
+}
+
+/// Convert JSON value to ConfigValue based on the expected type for a ConfigPath
+///
+/// This is used by the animation system to convert interpolated JSON values
+/// back to strongly-typed ConfigValues for the ConfigManager.
+///
+/// # Arguments
+/// * `json` - The JSON value to convert
+/// * `path` - The ConfigPath that determines the expected type
+///
+/// # Returns
+/// * `Some(ConfigValue)` on successful conversion
+/// * `None` if the JSON value cannot be converted to the expected type
+pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Option<ConfigValue> {
+    use serde_json::Value;
+
+    match path {
+        // Float parameters
+        ConfigPath::Zoom
+        | ConfigPath::PanX
+        | ConfigPath::PanY
+        | ConfigPath::Rotation
+        | ConfigPath::CameraRotationX
+        | ConfigPath::CameraRotationY
+        | ConfigPath::CameraZ
+        | ConfigPath::Exposure
+        | ConfigPath::Gamma
+        | ConfigPath::GammaThreshold
+        | ConfigPath::Brightness
+        | ConfigPath::Vibrancy
+        | ConfigPath::Saturation
+        | ConfigPath::HueShift
+        | ConfigPath::ValueScale
+        | ConfigPath::AlphaBlendLow
+        | ConfigPath::AlphaBlendHigh
+        | ConfigPath::DensityScale
+        | ConfigPath::PaletteRotation
+        | ConfigPath::SpeedFactor
+        | ConfigPath::BackgroundColorR
+        | ConfigPath::BackgroundColorG
+        | ConfigPath::BackgroundColorB
+        | ConfigPath::HistogramColorScale
+        | ConfigPath::LowDensitySmoothing
+        | ConfigPath::DensityCompressionStrength
+        | ConfigPath::BlendFactor
+        | ConfigPath::PerspectiveStrength
+        | ConfigPath::TransformWeight { .. }
+        | ConfigPath::TransformColor { .. }
+        | ConfigPath::TransformColorSpeed { .. }
+        | ConfigPath::TransformOpacity { .. }
+        | ConfigPath::TransformAffine { .. }
+        | ConfigPath::TransformVariation { .. }
+        | ConfigPath::TransformVariationParam { .. }
+        | ConfigPath::TransformOriginX { .. }
+        | ConfigPath::TransformOriginY { .. }
+        | ConfigPath::TransformRotation { .. }
+        | ConfigPath::TransformScale { .. }
+        | ConfigPath::FinalTransformAffine { .. }
+        | ConfigPath::FinalTransformColor
+        | ConfigPath::FinalTransformColorSpeed
+        | ConfigPath::FinalTransformVariation { .. }
+        | ConfigPath::FinalTransformVariationParam { .. }
+        | ConfigPath::FinalTransformOriginX
+        | ConfigPath::FinalTransformOriginY
+        | ConfigPath::FinalTransformRotation
+        | ConfigPath::FinalTransformScale
+        | ConfigPath::SystemTargetFps => {
+            json.as_f64().map(|f| ConfigValue::Float(f as f32))
+        }
+
+        // Vec2 (pan coordinates)
+        ConfigPath::Pan => {
+            if let Value::Array(arr) = json {
+                if arr.len() == 2 {
+                    let x = arr[0].as_f64()? as f32;
+                    let y = arr[1].as_f64()? as f32;
+                    return Some(ConfigValue::Vec2(x, y));
+                }
+            }
+            None
+        }
+
+        // RGB color
+        ConfigPath::BackgroundColor => {
+            if let Value::Array(arr) = json {
+                if arr.len() == 3 {
+                    let r = arr[0].as_f64()? as f32;
+                    let g = arr[1].as_f64()? as f32;
+                    let b = arr[2].as_f64()? as f32;
+                    return Some(ConfigValue::ColorRgb([r, g, b]));
+                }
+            }
+            None
+        }
+
+        // Boolean parameters
+        ConfigPath::UseCurve
+        | ConfigPath::UseDynamicBlend
+        | ConfigPath::DeterministicRng
+        | ConfigPath::FinalTransformEnabled
+        | ConfigPath::SystemVsyncEnabled => {
+            json.as_bool().map(ConfigValue::Bool)
+        }
+
+        // UInt parameters
+        ConfigPath::PaletteIndex
+        | ConfigPath::TargetIterationsPerPixel
+        | ConfigPath::TransformCount
+        | ConfigPath::SystemIterationsPerThread
+        | ConfigPath::SystemExportWidth
+        | ConfigPath::SystemExportHeight => {
+            json.as_u64().map(|u| ConfigValue::UInt(u as u32))
+        }
+
+        // UInt64 parameters
+        ConfigPath::MaxIterations => {
+            json.as_u64().map(ConfigValue::UInt64)
+        }
+
+        // String parameters
+        ConfigPath::SystemLanguage => {
+            json.as_str().map(|s| ConfigValue::String(s.to_string()))
+        }
+
+        // Enum types (need string parsing)
+        ConfigPath::TonemapMode => {
+            if let Some(s) = json.as_str() {
+                match s {
+                    "Linear" => Some(ConfigValue::ToneMapMode(ToneMapMode::Linear)),
+                    "Logarithmic" => Some(ConfigValue::ToneMapMode(ToneMapMode::Logarithmic)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
+        ConfigPath::ColorMode => {
+            if let Some(s) = json.as_str() {
+                match s {
+                    "Palette" => Some(ConfigValue::ColorMode(ColorMode::Palette)),
+                    "Speed" => Some(ConfigValue::ColorMode(ColorMode::Speed)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
+        ConfigPath::RenderMode => {
+            if let Some(s) = json.as_str() {
+                match s {
+                    "TwoD" => Some(ConfigValue::RenderMode(RenderMode::TwoD)),
+                    "ThreeD" => Some(ConfigValue::RenderMode(RenderMode::ThreeD)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
+        // Complex types not supported for animation (yet)
+        ConfigPath::TonemapCurve | ConfigPath::Palette => None,
     }
 }
 
@@ -747,5 +1250,107 @@ mod tests {
         assert_eq!(change.deltas.len(), 2);
         assert_eq!(change.description, "Reset View");
         assert_eq!(change.update_type(), UpdateType::ViewOnly);
+    }
+
+    #[test]
+    fn test_config_path_string_roundtrip_simple() {
+        // Test simple paths
+        let paths = vec![
+            ConfigPath::Zoom,
+            ConfigPath::Pan,
+            ConfigPath::Rotation,
+            ConfigPath::Exposure,
+            ConfigPath::Gamma,
+            ConfigPath::Brightness,
+            ConfigPath::ColorMode,
+            ConfigPath::RenderMode,
+        ];
+
+        for path in paths {
+            let key = path.to_string_key();
+            let parsed = ConfigPath::from_string_key(&key);
+            assert_eq!(parsed, Some(path.clone()), "Failed roundtrip for {:?}", path);
+        }
+    }
+
+    #[test]
+    fn test_config_path_string_roundtrip_transform() {
+        // Test transform paths
+        let paths = vec![
+            ConfigPath::TransformWeight { index: 0 },
+            ConfigPath::TransformWeight { index: 5 },
+            ConfigPath::TransformColor { index: 2 },
+            ConfigPath::TransformAffine { index: 1, param: AffineParam::A },
+            ConfigPath::TransformAffine { index: 3, param: AffineParam::G },
+            ConfigPath::TransformVariation { index: 0, variation: "linear".to_string() },
+            ConfigPath::TransformVariation { index: 2, variation: "sinusoidal".to_string() },
+            ConfigPath::TransformVariationParam {
+                index: 0,
+                variation: "julian".to_string(),
+                param: "power".to_string(),
+            },
+        ];
+
+        for path in paths {
+            let key = path.to_string_key();
+            let parsed = ConfigPath::from_string_key(&key);
+            assert_eq!(parsed, Some(path.clone()), "Failed roundtrip for key: {}", key);
+        }
+    }
+
+    #[test]
+    fn test_config_path_string_roundtrip_transform_operations() {
+        // Test high-level transform operation paths (origin, rotation, scale)
+        let paths = vec![
+            ConfigPath::TransformOriginX { index: 0 },
+            ConfigPath::TransformOriginX { index: 3 },
+            ConfigPath::TransformOriginY { index: 0 },
+            ConfigPath::TransformOriginY { index: 5 },
+            ConfigPath::TransformRotation { index: 1 },
+            ConfigPath::TransformRotation { index: 2 },
+            ConfigPath::TransformScale { index: 0 },
+            ConfigPath::TransformScale { index: 4 },
+        ];
+
+        for path in paths {
+            let key = path.to_string_key();
+            let parsed = ConfigPath::from_string_key(&key);
+            assert_eq!(parsed, Some(path.clone()), "Failed roundtrip for key: {}", key);
+        }
+    }
+
+    #[test]
+    fn test_config_path_string_roundtrip_final_transform() {
+        let paths = vec![
+            ConfigPath::FinalTransformEnabled,
+            ConfigPath::FinalTransformAffine { param: AffineParam::E },
+            ConfigPath::FinalTransformColor,
+            ConfigPath::FinalTransformVariation { variation: "spherical".to_string() },
+        ];
+
+        for path in paths {
+            let key = path.to_string_key();
+            let parsed = ConfigPath::from_string_key(&key);
+            assert_eq!(parsed, Some(path.clone()), "Failed roundtrip for key: {}", key);
+        }
+    }
+
+    #[test]
+    fn test_affine_param_char_roundtrip() {
+        let params = vec![
+            AffineParam::A,
+            AffineParam::B,
+            AffineParam::C,
+            AffineParam::D,
+            AffineParam::E,
+            AffineParam::F,
+            AffineParam::G,
+        ];
+
+        for param in params {
+            let c = param.to_char();
+            let parsed = AffineParam::from_char(c);
+            assert_eq!(parsed, Some(param));
+        }
     }
 }

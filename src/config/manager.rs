@@ -229,6 +229,12 @@ pub struct ConfigManager {
     /// When Some: transform edits don't create history entries
     /// When None: normal operation
     modify_session: Option<ModifySession>,
+
+    /// Animation mode flag
+    /// When true: all update_param calls are silent (no undo entries)
+    /// This allows users to tweak settings during animation playback
+    /// without corrupting the undo history
+    animation_mode: bool,
 }
 
 /// Session state for transform modification (triangle editor, etc.)
@@ -253,18 +259,40 @@ impl ConfigManager {
             system_settings,
             pending_actions: UpdateAction::none(),
             modify_session: None,
+            animation_mode: false,
         }
+    }
+
+    /// Set animation mode
+    ///
+    /// When true, all update_param calls become silent (no undo entries).
+    /// This allows tweaking settings during animation without corrupting undo history.
+    pub fn set_animation_mode(&mut self, enabled: bool) {
+        self.animation_mode = enabled;
+    }
+
+    /// Check if animation mode is active
+    pub fn is_animation_mode(&self) -> bool {
+        self.animation_mode
     }
 
     /// Apply a single parameter change
     ///
     /// All changes apply immediately and create history entries.
     /// Coalescing (in push_undo) automatically merges rapid changes to same parameter.
+    ///
+    /// Note: When animation_mode is true, delegates to update_param_silent
+    /// to avoid creating undo entries during animation playback.
     pub fn update_param(
         &mut self,
         path: ConfigPath,
         new_value: ConfigValue,
     ) -> Result<UpdateType, ConfigError> {
+        // Animation mode: use silent updates (no undo entries)
+        if self.animation_mode {
+            return self.update_param_silent(path, new_value);
+        }
+
         // Special case: modify session (skip history, commit on session end)
         if self.modify_session.is_some() {
             self.set_value(&path, new_value)?;
@@ -397,6 +425,46 @@ impl ConfigManager {
             .map_err(|e| ConfigError::InvalidPath(format!("Failed to save system settings: {}", e)))?;
 
         // Determine what GPU updates are needed and record them
+        let update_type = path.update_type();
+        self.record_action(update_type);
+
+        Ok(update_type)
+    }
+
+    /// Update a parameter silently (no undo point created)
+    ///
+    /// Used by the animation system during playback to update parameters
+    /// without creating undo history entries. This allows animations to
+    /// run smoothly without polluting the undo stack.
+    ///
+    /// # Arguments
+    /// * `path` - The ConfigPath identifying which parameter to update
+    /// * `new_value` - The new value to set
+    ///
+    /// # Returns
+    /// * `Ok(UpdateType)` - The type of GPU update needed
+    /// * `Err(ConfigError)` - If the path is invalid or value type doesn't match
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// // Animation controller updates zoom during playback
+    /// config_manager.update_param_silent(ConfigPath::Zoom, 2.5.into())?;
+    /// ```
+    pub fn update_param_silent(
+        &mut self,
+        path: ConfigPath,
+        new_value: ConfigValue,
+    ) -> Result<UpdateType, ConfigError> {
+        // Skip if value hasn't changed
+        let old_value = self.get_value(&path)?;
+        if old_value.approx_eq(&new_value) {
+            return Ok(UpdateType::None);
+        }
+
+        // Apply value directly (no history, no preview)
+        self.set_value(&path, new_value)?;
+
+        // Determine update type and record action
         let update_type = path.update_type();
         self.record_action(update_type);
 
@@ -679,6 +747,8 @@ impl ConfigManager {
             // View
             ConfigPath::Zoom => Ok(config.zoom.into()),
             ConfigPath::Pan => Ok((config.pan_x, config.pan_y).into()),
+            ConfigPath::PanX => Ok(config.pan_x.into()),
+            ConfigPath::PanY => Ok(config.pan_y.into()),
             ConfigPath::Rotation => Ok(config.rotation.into()),
             ConfigPath::CameraRotationX => Ok(config.camera_rotation_x.into()),
             ConfigPath::CameraRotationY => Ok(config.camera_rotation_y.into()),
@@ -713,6 +783,9 @@ impl ConfigManager {
             ConfigPath::PaletteRotation => Ok(config.palette_rotation.into()),
             ConfigPath::SpeedFactor => Ok(config.speed_factor.into()),
             ConfigPath::BackgroundColor => Ok(config.background_color.into()),
+            ConfigPath::BackgroundColorR => Ok(config.background_color[0].into()),
+            ConfigPath::BackgroundColorG => Ok(config.background_color[1].into()),
+            ConfigPath::BackgroundColorB => Ok(config.background_color[2].into()),
 
             // Rendering settings
             ConfigPath::HistogramColorScale => Ok(config.histogram_color_scale.into()),
@@ -809,6 +882,39 @@ impl ConfigManager {
                 );
                 Ok(value.into())
             }
+            // High-level transform operations (translate, rotate, scale)
+            ConfigPath::TransformOriginX { index } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.origin_x().into())
+            }
+            ConfigPath::TransformOriginY { index } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.origin_y().into())
+            }
+            ConfigPath::TransformRotation { index } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.rotation().into())
+            }
+            ConfigPath::TransformScale { index } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.scale().into())
+            }
 
             // Final Transform
             ConfigPath::FinalTransformEnabled => {
@@ -869,6 +975,38 @@ impl ConfigManager {
                 );
                 Ok(value.into())
             }
+            ConfigPath::FinalTransformOriginX => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(final_xform.origin_x().into())
+            }
+            ConfigPath::FinalTransformOriginY => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(final_xform.origin_y().into())
+            }
+            ConfigPath::FinalTransformRotation => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(final_xform.rotation().into())
+            }
+            ConfigPath::FinalTransformScale => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(final_xform.scale().into())
+            }
 
             // Flame
             ConfigPath::RenderMode => Ok(config.flame.render_mode.into()),
@@ -906,6 +1044,12 @@ impl ConfigManager {
                 let (x, y): (f32, f32) = value.try_into()?;
                 self.current.pan_x = x;
                 self.current.pan_y = y;
+            }
+            ConfigPath::PanX => {
+                self.current.pan_x = value.try_into()?;
+            }
+            ConfigPath::PanY => {
+                self.current.pan_y = value.try_into()?;
             }
             ConfigPath::Rotation => {
                 self.current.rotation = value.try_into()?;
@@ -995,6 +1139,15 @@ impl ConfigManager {
             }
             ConfigPath::BackgroundColor => {
                 self.current.background_color = value.try_into()?;
+            }
+            ConfigPath::BackgroundColorR => {
+                self.current.background_color[0] = value.try_into()?;
+            }
+            ConfigPath::BackgroundColorG => {
+                self.current.background_color[1] = value.try_into()?;
+            }
+            ConfigPath::BackgroundColorB => {
+                self.current.background_color[2] = value.try_into()?;
             }
 
             // Rendering settings
@@ -1111,6 +1264,47 @@ impl ConfigManager {
                 let key = format!("{}.{}", variation, param);
                 xform.variation_params.insert(key, new_value);
             }
+            // High-level transform operations (translate, rotate, scale)
+            ConfigPath::TransformOriginX { index } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                xform.set_origin_x(new_value);
+            }
+            ConfigPath::TransformOriginY { index } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                xform.set_origin_y(new_value);
+            }
+            ConfigPath::TransformRotation { index } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                xform.set_rotation(new_value);
+            }
+            ConfigPath::TransformScale { index } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                xform.set_scale(new_value);
+            }
 
             // Final Transform
             ConfigPath::FinalTransformEnabled => {
@@ -1185,6 +1379,46 @@ impl ConfigManager {
                 let new_value: f32 = value.try_into()?;
                 let key = format!("{}.{}", variation, param);
                 final_xform.variation_params.insert(key, new_value);
+            }
+            ConfigPath::FinalTransformOriginX => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                final_xform.set_origin_x(new_value);
+            }
+            ConfigPath::FinalTransformOriginY => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                final_xform.set_origin_y(new_value);
+            }
+            ConfigPath::FinalTransformRotation => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                final_xform.set_rotation(new_value);
+            }
+            ConfigPath::FinalTransformScale => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                final_xform.set_scale(new_value);
             }
 
             // Flame
@@ -1305,6 +1539,55 @@ impl ConfigManager {
         action.update_tone_curve = true;
         action.reset_accumulation = true;
         self.pending_actions.merge(&action);
+
+        Ok(())
+    }
+
+    /// Load a complete config silently (no undo entry)
+    /// Used when restoring base config after animation stops
+    /// The undo entry should have already been created by handle_animation_exit
+    pub fn load_config_silent(&mut self, new_config: FractalConfig) -> Result<(), ConfigError> {
+        // Clear any preview state
+        self.preview = None;
+
+        // Replace current config (no undo entry)
+        self.current = new_config;
+
+        // Record full config import action for GPU updates
+        let mut action = UpdateAction::none();
+        action.update_flame = true;
+        action.update_view = true;
+        action.update_palette = true;
+        action.update_tone_curve = true;
+        action.reset_accumulation = true;
+        self.pending_actions.merge(&action);
+
+        Ok(())
+    }
+
+    /// Load a complete config with explicit before/after states
+    /// Used for animation undo where we track the pre-animation state separately
+    /// The current config is NOT modified (we're just recording the transition)
+    pub fn load_config_with_explicit_before(
+        &mut self,
+        before_config: FractalConfig,
+        after_config: FractalConfig,
+        description: String,
+    ) -> Result<(), ConfigError> {
+        // Clear any preview state
+        self.preview = None;
+
+        // Create bidirectional snapshot with explicit before/after
+        let change = ConfigChange::full_config_snapshot(
+            before_config,   // before (pre-animation state)
+            after_config,    // after (post-animation state, should match current)
+            description,
+        );
+
+        self.push_undo(change);
+
+        // Note: We don't modify self.current because it already matches after_config
+        // (the animation has been applying changes continuously)
 
         Ok(())
     }

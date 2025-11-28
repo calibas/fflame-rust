@@ -19,6 +19,9 @@ pub struct PanelContext<'a> {
     // Renderer (optional, might not exist during init)
     pub flame_renderer: Option<&'a crate::renderer::compute_kernel::FlameRenderer>,
 
+    // Animation controller
+    pub animation_controller: &'a mut crate::animation::AnimationController,
+
     // Action flags
     pub add_transform: &'a mut bool,
     pub delete_transform: &'a mut Option<usize>,
@@ -66,6 +69,17 @@ pub struct PanelContext<'a> {
     // File browser panel state
     pub file_browser_panel: &'a mut Option<super::file_browser::FileBrowserPanel>,
     pub file_browser_open_requested: &'a mut bool,
+
+    // Animation export settings
+    pub animation_export_settings: &'a mut super::animation_panel::AnimationExportSettings,
+    pub animation_export_requested: &'a mut Option<super::animation_panel::AnimationExportSettings>,
+    pub animation_export_progress: &'a super::animation_panel::ExportProgress,
+
+    // Track editor state
+    pub track_editor_state: &'a mut super::track_editor::TrackEditorState,
+
+    // Animation seek changed flag (timeline was scrubbed)
+    pub animation_seek_changed: &'a mut bool,
 }
 
 /// Viewer for rendering each panel type
@@ -108,6 +122,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::History => {
                 self.render_history_panel(ui);
+            }
+            PanelType::Animation => {
+                self.render_animation_panel(ui);
             }
             PanelType::Performance => {
                 self.render_performance_panel(ui);
@@ -222,6 +239,85 @@ impl<'a> PanelViewer<'a> {
             self.context.config_manager,
             self.context.undo_requested,
             self.context.redo_requested,
+        );
+    }
+
+    /// Render Animation panel (playback controls, timeline)
+    fn render_animation_panel(&mut self, ui: &mut egui::Ui) {
+        let response = super::animation_panel::render_animation_content(
+            ui,
+            self.context.animation_controller,
+            self.context.animation_export_settings,
+            self.context.animation_export_progress,
+        );
+
+        // Handle new animation request
+        if response.new_animation {
+            let new_anim = crate::animation::Animation::new("New Animation".to_string(), 10.0);
+            self.context.animation_controller.load(new_anim);
+        }
+
+        // Handle animation load response
+        if let Some(animation) = response.load_animation {
+            // If animation has embedded config, load it first
+            if let Some(ref config) = animation.base_config {
+                log::info!("Animation '{}' has embedded config, loading it", animation.name);
+                let description = format!("Load Animation: {}", animation.name);
+                if let Err(e) = self.context.config_manager.load_config(config.clone(), description) {
+                    log::error!("Failed to load animation's embedded config: {}", e);
+                }
+                // Mark that preset changed (triggers GPU update)
+                *self.context.preset_changed = true;
+            }
+            self.context.animation_controller.load(animation);
+        }
+
+        // Handle animation save response
+        if response.save_animation {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(ref animation) = self.context.animation_controller.animation {
+                // Clone animation and embed current config
+                let mut animation_with_config = animation.clone();
+                animation_with_config.set_base_config(self.context.config_manager.active_config().clone());
+
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Animation", &["anim", "json"])
+                    .set_file_name(&format!("{}.anim", animation_with_config.name))
+                    .save_file()
+                {
+                    match animation_with_config.to_json() {
+                        Ok(json) => {
+                            if let Err(e) = std::fs::write(&path, json) {
+                                log::error!("Failed to save animation: {}", e);
+                            } else {
+                                log::info!("Saved animation with embedded config to {:?}", path);
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to serialize animation: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle animation export request
+        if let Some(settings) = response.export_animation {
+            *self.context.animation_export_requested = Some(settings);
+        }
+
+        // Handle timeline scrubbing
+        if response.seek_changed {
+            *self.context.animation_seek_changed = true;
+        }
+
+        // Track editor section
+        ui.separator();
+        super::track_editor::render_track_editor(
+            ui,
+            self.context.animation_controller,
+            self.context.track_editor_state,
+            self.context.flame,
         );
     }
 

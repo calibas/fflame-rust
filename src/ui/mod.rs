@@ -1,3 +1,4 @@
+pub mod animation_panel;
 mod config_dialog;
 pub mod file_browser;
 mod font_loader;
@@ -14,6 +15,7 @@ pub mod preset_library;
 mod response;
 mod settings;
 mod tone_mapping;
+pub mod track_editor;
 mod transforms;
 mod triangle_editor;
 mod undo_history;
@@ -22,6 +24,8 @@ mod variation_params;
 mod view;
 pub mod workspace;
 
+pub use animation_panel::ExportProgress;
+pub use track_editor::TrackEditorState;
 pub use font_loader::ensure_font_for_locale;
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
@@ -52,6 +56,12 @@ pub struct EguiLayer {
 
     // File browser panel state
     file_browser_panel: Option<file_browser::FileBrowserPanel>,
+
+    // Animation export settings
+    animation_export_settings: animation_panel::AnimationExportSettings,
+
+    // Track editor state
+    track_editor_state: track_editor::TrackEditorState,
 }
 
 impl EguiLayer {
@@ -88,6 +98,8 @@ impl EguiLayer {
             preset_library_panel: None,
             selected_preset_config: None,
             file_browser_panel: None,
+            animation_export_settings: animation_panel::AnimationExportSettings::default(),
+            track_editor_state: track_editor::TrackEditorState::default(),
         }
     }
 
@@ -180,6 +192,7 @@ impl EguiLayer {
         flame: &mut crate::scene::transforms::Flame,
         palette_library: &mut crate::scene::palette::PaletteLibrary,
         preset_library: &crate::scene::presets::PresetLibrary,
+        animation_controller: &mut crate::animation::AnimationController,
         current_preset_index: &mut usize,
         paused: &mut bool,
         quit_requested: &mut bool,
@@ -189,6 +202,7 @@ impl EguiLayer {
         export_width: &mut u32,
         export_height: &mut u32,
         use_custom_export_size: &mut bool,
+        animation_export_progress: &animation_panel::ExportProgress,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -231,6 +245,10 @@ impl EguiLayer {
 
         // File browser
         let mut file_browser_open_requested = false;
+
+        // Animation export
+        let mut animation_export_requested: Option<animation_panel::AnimationExportSettings> = None;
+        let mut animation_seek_changed = false;
 
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
@@ -277,6 +295,9 @@ impl EguiLayer {
 
                         // Renderer
                         flame_renderer: flame_renderer.as_ref().map(|v| &**v),
+
+                        // Animation controller
+                        animation_controller,
 
                         // Action flags
                         add_transform: &mut add_transform,
@@ -325,6 +346,17 @@ impl EguiLayer {
                         // File browser panel state
                         file_browser_panel: &mut self.file_browser_panel,
                         file_browser_open_requested: &mut file_browser_open_requested,
+
+                        // Animation export settings
+                        animation_export_settings: &mut self.animation_export_settings,
+                        animation_export_requested: &mut animation_export_requested,
+                        animation_export_progress,
+
+                        // Track editor state
+                        track_editor_state: &mut self.track_editor_state,
+
+                        // Animation seek changed flag
+                        animation_seek_changed: &mut animation_seek_changed,
                     },
                 });
 
@@ -489,6 +521,8 @@ impl EguiLayer {
             needs_repaint,
             selected_preset_config,
             file_browser_open_requested,
+            animation_export_requested,
+            animation_seek_changed,
         }
     }
 
