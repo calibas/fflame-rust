@@ -505,4 +505,123 @@ impl ShaderBuilder {
         code
     }
 
+    /// Build 2D TILED trajectory shader with active variations
+    /// Uses full-resolution coordinates and routes samples to tile buffers
+    pub fn build_trajectory_2d_tiled(&self, active_variations: &HashMap<String, f32>) -> String {
+        use crate::variations::VariationCategory;
+        use std::collections::HashMap;
+
+        let mut index_map: HashMap<String, u32> = HashMap::new();
+        for (i, name) in self.registry.names().iter().enumerate() {
+            if let Some(info) = self.registry.get(name) {
+                if matches!(info.category, VariationCategory::Basic2D | VariationCategory::Advanced2D) {
+                    index_map.insert(name.clone(), i as u32);
+                }
+            }
+        }
+
+        let active_2d: Vec<(String, u32)> = index_map
+            .iter()
+            .filter(|(name, _)| active_variations.contains_key(*name))
+            .map(|(name, idx)| (name.clone(), *idx))
+            .collect();
+
+        let mut shader = String::new();
+
+        // 1. Tiled header (includes TileParams binding)
+        shader.push_str(include_str!("../shaders/core/header_tiled.wgsl"));
+        shader.push('\n');
+
+        // 2. RNG
+        shader.push_str(include_str!("../shaders/core/rng.wgsl"));
+        shader.push('\n');
+
+        // 3. Affine
+        shader.push_str(include_str!("../shaders/core/affine.wgsl"));
+        shader.push('\n');
+
+        // 4. Core variations (2D)
+        shader.push_str(include_str!("../shaders/core/variations_2d.wgsl"));
+        shader.push('\n');
+
+        // 5. Plugin variations (2D only)
+        for (name, _) in &active_2d {
+            if let Some(info) = self.registry.get(name) {
+                if !info.is_core {
+                    if let Some(source) = &info.wgsl_source {
+                        shader.push_str(source);
+                        shader.push('\n');
+                    }
+                }
+            }
+        }
+
+        // 6. Generate apply_variations
+        shader.push_str(&self.build_apply_variations_2d(&active_2d));
+        shader.push('\n');
+
+        // 7. Tiled utilities (uses full_width/full_height)
+        shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
+        shader.push('\n');
+
+        // 8. Tiled main
+        shader.push_str(include_str!("../shaders/core/main_2d_tiled.wgsl"));
+
+        shader
+    }
+
+    /// Build 3D TILED trajectory shader with active variations
+    pub fn build_trajectory_3d_tiled(&self, active_variations: &HashMap<String, f32>) -> String {
+        use std::collections::HashMap;
+
+        let mut index_map: HashMap<String, u32> = HashMap::new();
+        for (i, name) in self.registry.names().iter().enumerate() {
+            index_map.insert(name.clone(), i as u32);
+        }
+
+        let active_3d: Vec<(String, u32)> = index_map
+            .iter()
+            .filter(|(name, _)| active_variations.contains_key(*name))
+            .map(|(name, idx)| (name.clone(), *idx))
+            .collect();
+
+        let mut shader = String::new();
+
+        // 1. Tiled header
+        shader.push_str(include_str!("../shaders/core/header_tiled.wgsl"));
+        shader.push('\n');
+
+        // 2. RNG
+        shader.push_str(include_str!("../shaders/core/rng.wgsl"));
+        shader.push('\n');
+
+        // 3. Core variations (3D)
+        shader.push_str(include_str!("../shaders/core/variations_3d.wgsl"));
+        shader.push('\n');
+
+        // 4. Plugin variations
+        for (name, _) in &active_3d {
+            if let Some(info) = self.registry.get(name) {
+                if !info.is_core {
+                    if let Some(source) = &info.wgsl_source {
+                        shader.push_str(source);
+                        shader.push('\n');
+                    }
+                }
+            }
+        }
+
+        // 5. Generate apply_variations
+        shader.push_str(&self.build_apply_variations_3d(&active_3d));
+        shader.push('\n');
+
+        // 6. Tiled utilities
+        shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
+        shader.push('\n');
+
+        // 7. Tiled main
+        shader.push_str(include_str!("../shaders/core/main_3d_tiled.wgsl"));
+
+        shader
+    }
 }
