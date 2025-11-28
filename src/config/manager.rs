@@ -389,6 +389,16 @@ impl ConfigManager {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.iterations_per_thread = value;
             }
+            ConfigPath::SystemSupersampleLevel => {
+                use crate::export::SupersampleLevel;
+                let value: u32 = new_value.try_into()?;
+                self.system_settings.supersample_level = match value {
+                    0 => SupersampleLevel::Off,
+                    1 => SupersampleLevel::X2,
+                    2 => SupersampleLevel::X4,
+                    _ => SupersampleLevel::Off, // Default to Off for invalid values
+                };
+            }
             ConfigPath::SystemVsyncEnabled => {
                 let value: bool = new_value.try_into()?;
                 self.system_settings.vsync_enabled = value;
@@ -1015,6 +1025,7 @@ impl ConfigManager {
             // System Settings - These should NOT be called via get_value (they're not in FractalConfig)
             // Use config_manager.system_settings() instead
             ConfigPath::SystemIterationsPerThread
+            | ConfigPath::SystemSupersampleLevel
             | ConfigPath::SystemVsyncEnabled
             | ConfigPath::SystemTargetFps
             | ConfigPath::SystemExportWidth
@@ -1432,6 +1443,7 @@ impl ConfigManager {
             // System Settings - These should NOT be called via apply_value (they're not in FractalConfig)
             // Use config_manager.update_system_setting() instead
             ConfigPath::SystemIterationsPerThread
+            | ConfigPath::SystemSupersampleLevel
             | ConfigPath::SystemVsyncEnabled
             | ConfigPath::SystemTargetFps
             | ConfigPath::SystemExportWidth

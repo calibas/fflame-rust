@@ -1,5 +1,6 @@
 use crate::scene::{presets::PresetLibrary, transforms::Flame};
 use crate::config::{ConfigManager, ConfigPath};
+use crate::export::SupersampleLevel;
 use super::formatting::format_iterations;
 
 /// Render settings content (for docking panels)
@@ -132,6 +133,37 @@ pub fn render_settings_content(
                     temp_iterations.into()
                 );
             }
+
+            // Supersampling level
+            let current_level = config_manager.system_settings().supersample_level;
+            egui::ComboBox::from_label("Supersampling")
+                .selected_text(current_level.display_name())
+                .show_ui(ui, |ui| {
+                    for level in SupersampleLevel::all() {
+                        let is_selected = current_level == *level;
+                        if ui.selectable_label(is_selected, level.display_name()).clicked() {
+                            let value: u32 = match level {
+                                SupersampleLevel::Off => 0,
+                                SupersampleLevel::X2 => 1,
+                                SupersampleLevel::X4 => 2,
+                            };
+                            let _ = config_manager.update_system_setting(
+                                ConfigPath::SystemSupersampleLevel,
+                                value.into()
+                            );
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "Anti-aliasing via supersampling.\n\
+                    Off = Standard rendering\n\
+                    2× = Render at 2× resolution, downsample (4 samples/pixel)\n\
+                    4× = Render at 4× resolution, downsample (16 samples/pixel)\n\n\
+                    Higher levels reduce jagged edges but use more GPU memory."
+                );
+
+            ui.separator();
 
             // Histogram color scale
             let mut temp_histogram = config.histogram_color_scale;
