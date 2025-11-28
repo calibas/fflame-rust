@@ -314,3 +314,6 @@ register_native_texture shouldn't run every frame.
 
 
 min/max iteration depths for transforms
+
+
+is wgpu::Limits::default() the reason we seem to be hitting a speed limit?

@@ -22,6 +22,21 @@ pub struct TileInfo {
     pub _padding: [u32; 2],
 }
 
+/// Downsample params for supersampling
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct DownsampleParams {
+    pub src_width: u32,
+    pub src_height: u32,
+    pub dst_width: u32,
+    pub dst_height: u32,
+    pub scale: u32,
+    pub _padding: [u32; 3],
+}
+
+// Re-use SupersampleLevel from tiled module
+use super::tiled::SupersampleLevel;
+
 /// Progress callback for tiled export
 pub trait TiledExportProgress {
     fn on_chunk_start(&mut self, chunk: u32, total_chunks: u32);
@@ -100,6 +115,26 @@ pub struct TiledRenderer {
 
     // State
     render_mode: RenderMode,
+
+    // Interactive rendering state
+    samples_accumulated: u64,
+    total_iterations: u64,
+    frame_counter: u32,
+    compute_bind_group: Option<BindGroup>,  // Cached for per-frame use
+
+    // Stitched display texture (full resolution, combines all tiles)
+    stitched_texture: Option<Texture>,
+    stitched_texture_view: Option<TextureView>,
+
+    // Downsample pass resources (for supersampling)
+    downsample_pipeline: Option<ComputePipeline>,
+    downsample_bind_group_layout: Option<BindGroupLayout>,
+    downsample_params_buffer: Option<Buffer>,
+    display_texture: Option<Texture>,  // Final display-sized output (after downsample)
+    display_texture_view: Option<TextureView>,
+    supersample_level: SupersampleLevel,
+    display_width: u32,  // Actual display dimensions (before supersampling)
+    display_height: u32,
 }
 
 impl TiledRenderer {
@@ -714,6 +749,23 @@ impl TiledRenderer {
             mapped_at_creation: false,
         });
 
+        // Create stitched display texture (full resolution)
+        let stitched_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Stitched Display Texture"),
+            size: Extent3d {
+                width: full_width,
+                height: full_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let stitched_texture_view = stitched_texture.create_view(&TextureViewDescriptor::default());
+
         Ok(Self {
             device,
             queue,
@@ -746,6 +798,453 @@ impl TiledRenderer {
             compute_pipeline,
             compute_bind_group_layout,
             render_mode: config.flame.render_mode,
+            samples_accumulated: 0,
+            total_iterations: 0,
+            frame_counter: 0,
+            compute_bind_group: None,
+            stitched_texture: Some(stitched_texture),
+            stitched_texture_view: Some(stitched_texture_view),
+            // Downsample resources initialized later via init_supersampling()
+            downsample_pipeline: None,
+            downsample_bind_group_layout: None,
+            downsample_params_buffer: None,
+            display_texture: None,
+            display_texture_view: None,
+            supersample_level: SupersampleLevel::Off,
+            display_width: full_width,
+            display_height: full_height,
+        })
+    }
+
+    /// Create a new tiled renderer using an existing device and queue (for interactive rendering)
+    ///
+    /// This variant shares the GPU context with the main application, enabling:
+    /// - Direct texture sharing with egui for display
+    /// - Supersampling in the interactive editor
+    pub fn new_with_device(
+        config: &FractalConfig,
+        full_width: u32,
+        full_height: u32,
+        device: Device,
+        queue: Queue,
+    ) -> Result<Self, String> {
+        log::info!(
+            "Creating TiledRenderer with shared device, max_storage_buffer_binding_size: {} bytes ({} MB)",
+            device.limits().max_storage_buffer_binding_size,
+            device.limits().max_storage_buffer_binding_size / (1024 * 1024)
+        );
+
+        // Calculate tile grid
+        let (tiles_x, tiles_y, tile_size) = calculate_tile_grid(full_width, full_height);
+        let total_tiles = tiles_x * tiles_y;
+        let max_tiles = max_tiles_per_buffer(tile_size);
+
+        if total_tiles > max_tiles {
+            return Err(format!(
+                "Too many tiles ({}) for single buffer (max {}). Chunked processing not yet implemented.",
+                total_tiles, max_tiles
+            ));
+        }
+
+        // Create transform buffer
+        let transforms: Vec<GpuTransform> = config.flame.transforms
+            .iter()
+            .map(|t| GpuTransform::from_transform(t, global_registry()))
+            .collect();
+
+        let transform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
+            label: Some("Transform Buffer"),
+            contents: bytemuck::cast_slice(&transforms),
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+        });
+
+        // Create params buffer
+        let params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Params Buffer"),
+            size: std::mem::size_of::<GpuParams>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create tile params buffer
+        let tile_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Tile Params Buffer"),
+            size: std::mem::size_of::<TileParams>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create histogram buffer for all tiles
+        let histogram_size = (tile_size as u64) * (tile_size as u64) * 4 * 4 * (total_tiles as u64);
+        let max_binding_size = device.limits().max_storage_buffer_binding_size as u64;
+
+        if histogram_size > max_binding_size {
+            return Err(format!(
+                "Histogram buffer size ({} MB) exceeds device limit ({} MB). \
+                Try reducing output resolution or number of tiles.",
+                histogram_size / (1024 * 1024),
+                max_binding_size / (1024 * 1024)
+            ));
+        }
+
+        log::info!(
+            "Creating histogram buffer: {} MB ({} tiles × {} pixels/tile × 16 bytes/pixel)",
+            histogram_size / (1024 * 1024),
+            total_tiles,
+            tile_size * tile_size
+        );
+
+        let histogram_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Tiled Histogram Buffer"),
+            size: histogram_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create iteration counts buffer
+        let counts_size = (tile_size as u64) * (tile_size as u64) * 4 * (total_tiles as u64);
+        let iteration_counts_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Iteration Counts Buffer"),
+            size: counts_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create variation params buffer
+        let max_transforms = 32;
+        let variation_params_size = max_transforms * 1200 * 4;
+        let variation_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Variation Params Buffer"),
+            size: variation_params_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create palette texture
+        let palette = config.palette.clone().unwrap_or_else(Palette::fire);
+        let palette_data = palette.generate_texture_data(256);
+        let palette_data_u8: Vec<u8> = palette_data
+            .iter()
+            .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
+            .collect();
+
+        let palette_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Palette Texture"),
+            size: Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: &palette_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &palette_data_u8,
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256 * 4),
+                rows_per_image: None,
+            },
+            Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+        );
+
+        let palette_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("Palette Sampler"),
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            ..Default::default()
+        });
+
+        // Build active variations map
+        let mut active_variations = std::collections::HashMap::new();
+        for transform in &config.flame.transforms {
+            for name in transform.active_variations() {
+                let weight = transform.get_variation(&name);
+                if weight != 0.0 {
+                    active_variations.insert(name, weight);
+                }
+            }
+        }
+
+        // Build shader
+        let shader_builder = ShaderBuilder::new(global_registry().clone());
+        let shader_source = match config.flame.render_mode {
+            RenderMode::TwoD => shader_builder.build_trajectory_2d_tiled(&active_variations),
+            RenderMode::ThreeD => shader_builder.build_trajectory_3d_tiled(&active_variations),
+        };
+
+        let shader_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Tiled Compute Shader"),
+            source: ShaderSource::Wgsl(shader_source.into()),
+        });
+
+        // Create bind group layout for tiled compute
+        let compute_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Tiled Compute Bind Group Layout"),
+            entries: &[
+                BindGroupLayoutEntry { binding: 0, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                BindGroupLayoutEntry { binding: 1, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                BindGroupLayoutEntry { binding: 2, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                BindGroupLayoutEntry { binding: 3, visibility: ShaderStages::COMPUTE, ty: BindingType::Texture { sample_type: TextureSampleType::Float { filterable: true }, view_dimension: TextureViewDimension::D2, multisampled: false }, count: None },
+                BindGroupLayoutEntry { binding: 4, visibility: ShaderStages::COMPUTE, ty: BindingType::Sampler(SamplerBindingType::Filtering), count: None },
+                BindGroupLayoutEntry { binding: 5, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                BindGroupLayoutEntry { binding: 6, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                BindGroupLayoutEntry { binding: 7, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+
+        let compute_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Tiled Compute Pipeline Layout"),
+            bind_group_layouts: &[&compute_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let compute_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Tiled Compute Pipeline"),
+            layout: Some(&compute_pipeline_layout),
+            module: &shader_module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // --- Create Accumulate Pass Resources ---
+        let tile_info_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Tile Info Buffer"),
+            size: std::mem::size_of::<TileParams>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let accumulate_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Accumulate Params Buffer"),
+            size: 16,  // blend_factor + padding
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let accumulation_texture_a = device.create_texture(&TextureDescriptor {
+            label: Some("Accumulation Texture A"),
+            size: Extent3d { width: tile_size, height: tile_size, depth_or_array_layers: total_tiles },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let accumulation_texture_b = device.create_texture(&TextureDescriptor {
+            label: Some("Accumulation Texture B"),
+            size: Extent3d { width: tile_size, height: tile_size, depth_or_array_layers: total_tiles },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        // Load accumulate shader
+        let accumulate_shader_source = include_str!("../../shaders/accumulate_tiled.wgsl");
+        let accumulate_shader_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Tiled Accumulate Shader"),
+            source: ShaderSource::Wgsl(accumulate_shader_source.into()),
+        });
+
+        let accumulate_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Tiled Accumulate Bind Group Layout"),
+            entries: &[
+                BindGroupLayoutEntry { binding: 0, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                BindGroupLayoutEntry { binding: 1, visibility: ShaderStages::COMPUTE, ty: BindingType::Texture { sample_type: TextureSampleType::Float { filterable: false }, view_dimension: TextureViewDimension::D2Array, multisampled: false }, count: None },
+                BindGroupLayoutEntry { binding: 2, visibility: ShaderStages::COMPUTE, ty: BindingType::StorageTexture { access: StorageTextureAccess::WriteOnly, format: TextureFormat::Rgba16Float, view_dimension: TextureViewDimension::D2Array }, count: None },
+                BindGroupLayoutEntry { binding: 3, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                BindGroupLayoutEntry { binding: 4, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+            ],
+        });
+
+        let accumulate_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Tiled Accumulate Pipeline Layout"),
+            bind_group_layouts: &[&accumulate_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let accumulate_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Tiled Accumulate Pipeline"),
+            layout: Some(&accumulate_pipeline_layout),
+            module: &accumulate_shader_module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // --- Create Tonemap Pass Resources ---
+        let tonemap_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Tonemap Params Buffer"),
+            size: std::mem::size_of::<TonemapParams>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let tonemap_output_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Tonemap Output Texture"),
+            size: Extent3d { width: tile_size, height: tile_size, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC | TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        let curve_lut_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Curve LUT Texture"),
+            size: Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::R32Float,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let curve_lut_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("Curve LUT Sampler"),
+            address_mode_u: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            ..Default::default()
+        });
+
+        // Load tonemap shader
+        let tonemap_shader_source = include_str!("../../shaders/tonemap.wgsl");
+        let tonemap_shader_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Tonemap Shader"),
+            source: ShaderSource::Wgsl(tonemap_shader_source.into()),
+        });
+
+        let tonemap_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Tonemap Bind Group Layout"),
+            entries: &[
+                BindGroupLayoutEntry { binding: 0, visibility: ShaderStages::FRAGMENT, ty: BindingType::Texture { sample_type: TextureSampleType::Float { filterable: false }, view_dimension: TextureViewDimension::D2, multisampled: false }, count: None },
+                BindGroupLayoutEntry { binding: 1, visibility: ShaderStages::FRAGMENT, ty: BindingType::Buffer { ty: BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                BindGroupLayoutEntry { binding: 2, visibility: ShaderStages::FRAGMENT, ty: BindingType::Texture { sample_type: TextureSampleType::Float { filterable: true }, view_dimension: TextureViewDimension::D2, multisampled: false }, count: None },
+                BindGroupLayoutEntry { binding: 3, visibility: ShaderStages::FRAGMENT, ty: BindingType::Sampler(SamplerBindingType::Filtering), count: None },
+            ],
+        });
+
+        let tonemap_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Tonemap Pipeline Layout"),
+            bind_group_layouts: &[&tonemap_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let tonemap_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("Tonemap Pipeline"),
+            layout: Some(&tonemap_pipeline_layout),
+            vertex: VertexState {
+                module: &tonemap_shader_module,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(FragmentState {
+                module: &tonemap_shader_module,
+                entry_point: Some("fs_main"),
+                targets: &[Some(ColorTargetState {
+                    format: TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // Create readback buffer
+        let bytes_per_row = (full_width * 4 + 255) & !255;
+        let readback_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Readback Buffer"),
+            size: (bytes_per_row * full_height) as u64,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Create stitched texture for full resolution output
+        let stitched_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Stitched Display Texture"),
+            size: Extent3d { width: full_width, height: full_height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let stitched_texture_view = stitched_texture.create_view(&TextureViewDescriptor::default());
+
+        Ok(Self {
+            device,
+            queue,
+            full_width,
+            full_height,
+            tile_size,
+            tiles_x,
+            tiles_y,
+            transform_buffer,
+            params_buffer,
+            tile_params_buffer,
+            histogram_buffer,
+            iteration_counts_buffer,
+            variation_params_buffer,
+            palette_texture,
+            palette_sampler,
+            tile_info_buffer,
+            accumulate_params_buffer,
+            accumulation_texture_a,
+            accumulation_texture_b,
+            accumulate_pipeline,
+            accumulate_bind_group_layout,
+            tonemap_params_buffer,
+            tonemap_output_texture,
+            curve_lut_texture,
+            curve_lut_sampler,
+            tonemap_pipeline,
+            tonemap_bind_group_layout,
+            readback_buffer,
+            compute_pipeline,
+            compute_bind_group_layout,
+            render_mode: config.flame.render_mode,
+            samples_accumulated: 0,
+            total_iterations: 0,
+            frame_counter: 0,
+            compute_bind_group: None,
+            stitched_texture: Some(stitched_texture),
+            stitched_texture_view: Some(stitched_texture_view),
+            downsample_pipeline: None,
+            downsample_bind_group_layout: None,
+            downsample_params_buffer: None,
+            display_texture: None,
+            display_texture_view: None,
+            supersample_level: SupersampleLevel::Off,
+            display_width: full_width,
+            display_height: full_height,
         })
     }
 
@@ -1136,5 +1635,553 @@ impl TiledRenderer {
         self.readback_buffer.unmap();
 
         Ok(result)
+    }
+
+    // ==================== Interactive Rendering Methods ====================
+
+    /// Initialize for interactive rendering (creates compute bind group)
+    pub fn init_interactive(&mut self, _config: &FractalConfig) {
+        // Update tile params
+        let tile_params = TileParams {
+            full_width: self.full_width,
+            full_height: self.full_height,
+            tile_size: self.tile_size,
+            tiles_x: self.tiles_x,
+            tiles_y: self.tiles_y,
+            num_tiles: self.tiles_x * self.tiles_y,
+            tile_offset: 0,
+            _padding: 0,
+        };
+        self.queue.write_buffer(&self.tile_params_buffer, 0, bytemuck::bytes_of(&tile_params));
+
+        // Create and cache compute bind group
+        let palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
+        self.compute_bind_group = Some(self.device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Tiled Compute Bind Group"),
+            layout: &self.compute_bind_group_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: self.transform_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 1, resource: self.params_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 2, resource: self.histogram_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 3, resource: BindingResource::TextureView(&palette_view) },
+                BindGroupEntry { binding: 4, resource: BindingResource::Sampler(&self.palette_sampler) },
+                BindGroupEntry { binding: 5, resource: self.variation_params_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 6, resource: self.iteration_counts_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 7, resource: self.tile_params_buffer.as_entire_binding() },
+            ],
+        }));
+
+        // Reset state
+        self.samples_accumulated = 0;
+        self.total_iterations = 0;
+        self.frame_counter = 0;
+    }
+
+    /// Reset accumulation (clear histogram and iteration counters)
+    pub fn reset_interactive(&mut self) {
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Reset Encoder"),
+        });
+        encoder.clear_buffer(&self.histogram_buffer, 0, None);
+        encoder.clear_buffer(&self.iteration_counts_buffer, 0, None);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        self.samples_accumulated = 0;
+        self.total_iterations = 0;
+        self.frame_counter = 0;
+    }
+
+    /// Run compute pass for one frame (generates samples into histogram)
+    /// Returns number of iterations performed
+    pub fn compute_pass_frame(
+        &mut self,
+        config: &FractalConfig,
+        num_workgroups: u32,
+        iterations_per_thread: u32,
+        clear_histogram: bool,
+    ) -> u64 {
+        let bind_group = match &self.compute_bind_group {
+            Some(bg) => bg,
+            None => {
+                log::warn!("TiledRenderer: compute_bind_group not initialized, call init_interactive first");
+                return 0;
+            }
+        };
+
+        // Generate seed for this frame
+        let seed = self.frame_counter * 12345;
+        self.frame_counter += 1;
+
+        // Update GPU params
+        let params = GpuParams {
+            num_transforms: config.flame.transforms.len() as u32,
+            iterations_per_thread,
+            burn_in: 20,
+            width: self.tile_size,  // Tile size for histogram indexing
+            height: self.tile_size,
+            seed,
+            color_mode: config.color_mode as u32,
+            render_mode: match self.render_mode {
+                RenderMode::TwoD => 0,
+                RenderMode::ThreeD => 1,
+            },
+            splat_size: 1.0,
+            zoom: config.zoom,
+            pan_x: config.pan_x,
+            pan_y: config.pan_y,
+            rotation: config.rotation,
+            speed_factor: config.speed_factor,
+            perspective_strength: config.flame.perspective_strength,
+            camera_rotation_x: config.camera_rotation_x,
+            camera_rotation_y: config.camera_rotation_y,
+            camera_z: config.camera_z,
+            histogram_color_scale: config.histogram_color_scale,
+            has_final_transform: 0,
+            final_transform_index: 0,
+            _pad3: 0.0,
+            _pad4: 0.0,
+        };
+        self.queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+
+        // Create encoder and run compute
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Frame Compute Encoder"),
+        });
+
+        // Optionally clear histogram
+        if clear_histogram {
+            encoder.clear_buffer(&self.histogram_buffer, 0, None);
+            encoder.clear_buffer(&self.iteration_counts_buffer, 0, None);
+        }
+
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Frame Compute Pass"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(&self.compute_pipeline);
+            compute_pass.set_bind_group(0, bind_group, &[]);
+            compute_pass.dispatch_workgroups(num_workgroups, 1, 1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Track iterations
+        let threads_per_workgroup = 64u64;
+        let samples = num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
+        self.samples_accumulated += samples;
+        self.total_iterations += samples;
+
+        samples
+    }
+
+    /// Get total samples accumulated
+    pub fn samples_accumulated(&self) -> u64 {
+        self.samples_accumulated
+    }
+
+    /// Get total iterations performed
+    pub fn total_iterations(&self) -> u64 {
+        self.total_iterations
+    }
+
+    /// Get the stitched display texture view (for rendering to screen)
+    pub fn get_display_texture_view(&self) -> Option<&TextureView> {
+        self.stitched_texture_view.as_ref()
+    }
+
+    /// Get full render dimensions
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.full_width, self.full_height)
+    }
+
+    /// Run accumulate pass for all tiles and stitch into display texture
+    /// This is the key method for interactive rendering - it processes the histogram
+    /// and produces a displayable result
+    pub fn accumulate_and_stitch(&mut self, config: &FractalConfig, blend_factor: f32) {
+        let total_tiles = self.tiles_x * self.tiles_y;
+
+        // Process each tile
+        for tile_idx in 0..total_tiles {
+            // Calculate tile position
+            let tile_x = tile_idx % self.tiles_x;
+            let tile_y = tile_idx / self.tiles_x;
+            let start_x = tile_x * self.tile_size;
+            let start_y = tile_y * self.tile_size;
+
+            // Update tile info for this tile
+            let tile_info = TileInfo {
+                tile_index: tile_idx,
+                tile_size: self.tile_size,
+                _padding: [0, 0],
+            };
+            self.queue.write_buffer(&self.tile_info_buffer, 0, bytemuck::bytes_of(&tile_info));
+
+            // Update accumulate params
+            let accumulate_params = AccumulateParams {
+                width: self.tile_size,
+                height: self.tile_size,
+                blend_factor,
+                histogram_color_scale: config.histogram_color_scale,
+                low_density_smoothing: config.low_density_smoothing,
+                density_compression_strength: config.density_compression_strength,
+                target_iterations_per_pixel: config.target_iterations_per_pixel,
+                _pad0: 0.0,
+                background_r: config.background_color[0],
+                background_g: config.background_color[1],
+                background_b: config.background_color[2],
+                _pad1: 0.0,
+            };
+            self.queue.write_buffer(&self.accumulate_params_buffer, 0, bytemuck::bytes_of(&accumulate_params));
+
+            // Create texture views (ping-pong based on frame)
+            let (prev_view, out_view) = if self.frame_counter % 2 == 0 {
+                (
+                    self.accumulation_texture_a.create_view(&TextureViewDescriptor::default()),
+                    self.accumulation_texture_b.create_view(&TextureViewDescriptor::default()),
+                )
+            } else {
+                (
+                    self.accumulation_texture_b.create_view(&TextureViewDescriptor::default()),
+                    self.accumulation_texture_a.create_view(&TextureViewDescriptor::default()),
+                )
+            };
+
+            // Create accumulate bind group
+            let accumulate_bind_group = self.device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Interactive Accumulate Bind Group"),
+                layout: &self.accumulate_bind_group_layout,
+                entries: &[
+                    BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&prev_view) },
+                    BindGroupEntry { binding: 1, resource: self.histogram_buffer.as_entire_binding() },
+                    BindGroupEntry { binding: 2, resource: BindingResource::TextureView(&out_view) },
+                    BindGroupEntry { binding: 3, resource: self.accumulate_params_buffer.as_entire_binding() },
+                    BindGroupEntry { binding: 4, resource: self.iteration_counts_buffer.as_entire_binding() },
+                    BindGroupEntry { binding: 5, resource: self.tile_info_buffer.as_entire_binding() },
+                ],
+            });
+
+            // Dispatch accumulate shader
+            let workgroups_x = (self.tile_size + 7) / 8;
+            let workgroups_y = (self.tile_size + 7) / 8;
+
+            let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Interactive Accumulate Encoder"),
+            });
+            {
+                let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                    label: Some("Interactive Accumulate Pass"),
+                    timestamp_writes: None,
+                });
+                compute_pass.set_pipeline(&self.accumulate_pipeline);
+                compute_pass.set_bind_group(0, &accumulate_bind_group, &[]);
+                compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+            }
+            self.queue.submit(std::iter::once(encoder.finish()));
+
+            // Run tonemap pass to convert accumulated data to displayable format
+            if let Err(e) = self.run_tonemap_pass(config, &out_view) {
+                log::error!("Tonemap pass failed for tile {}: {}", tile_idx, e);
+                continue;
+            }
+
+            // Copy tonemapped tile to stitched texture
+            if let Some(stitched_texture) = &self.stitched_texture {
+                // Calculate actual copy width/height (handle edge tiles)
+                let copy_width = (self.tile_size).min(self.full_width.saturating_sub(start_x));
+                let copy_height = (self.tile_size).min(self.full_height.saturating_sub(start_y));
+
+                if copy_width > 0 && copy_height > 0 {
+                    let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                        label: Some("Stitch Copy Encoder"),
+                    });
+                    encoder.copy_texture_to_texture(
+                        TexelCopyTextureInfo {
+                            texture: &self.tonemap_output_texture,
+                            mip_level: 0,
+                            origin: Origin3d::ZERO,
+                            aspect: TextureAspect::All,
+                        },
+                        TexelCopyTextureInfo {
+                            texture: stitched_texture,
+                            mip_level: 0,
+                            origin: Origin3d {
+                                x: start_x,
+                                y: start_y,
+                                z: 0,
+                            },
+                            aspect: TextureAspect::All,
+                        },
+                        Extent3d {
+                            width: copy_width,
+                            height: copy_height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    self.queue.submit(std::iter::once(encoder.finish()));
+                }
+            }
+        }
+    }
+
+    /// Get device and queue references for integration with existing render loop
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+
+    pub fn queue(&self) -> &Queue {
+        &self.queue
+    }
+
+    /// Clear accumulation textures (for reset)
+    pub fn clear_accumulation(&mut self) {
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Clear Accumulation Encoder"),
+        });
+
+        // Clear both ping-pong textures using clear_texture
+        // (requires CLEAR_TEXTURE feature which is enabled)
+        let range = ImageSubresourceRange {
+            aspect: TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: None,
+            base_array_layer: 0,
+            array_layer_count: None,
+        };
+        encoder.clear_texture(&self.accumulation_texture_a, &range);
+        encoder.clear_texture(&self.accumulation_texture_b, &range);
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Initialize supersampling resources
+    /// Call this after construction to enable supersampling
+    pub fn init_supersampling(&mut self, level: SupersampleLevel, display_width: u32, display_height: u32) {
+        if level == SupersampleLevel::Off {
+            self.supersample_level = level;
+            self.display_width = display_width;
+            self.display_height = display_height;
+            return;
+        }
+
+        self.supersample_level = level;
+        self.display_width = display_width;
+        self.display_height = display_height;
+
+        // Create downsample shader and pipeline
+        let downsample_shader_source = include_str!("../../shaders/downsample.wgsl");
+        let downsample_shader = self.device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Downsample Shader"),
+            source: ShaderSource::Wgsl(downsample_shader_source.into()),
+        });
+
+        let downsample_bind_group_layout = self.device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Downsample Bind Group Layout"),
+            entries: &[
+                // binding 0: source texture (stitched full-res)
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 1: destination texture (display-sized)
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::Rgba8Unorm,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                // binding 2: params
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let downsample_pipeline_layout = self.device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Downsample Pipeline Layout"),
+            bind_group_layouts: &[&downsample_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let downsample_pipeline = self.device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Downsample Pipeline"),
+            layout: Some(&downsample_pipeline_layout),
+            module: &downsample_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        // Create params buffer
+        let downsample_params_buffer = self.device.create_buffer(&BufferDescriptor {
+            label: Some("Downsample Params Buffer"),
+            size: std::mem::size_of::<DownsampleParams>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create display-sized output texture
+        let display_texture = self.device.create_texture(&TextureDescriptor {
+            label: Some("Display Output Texture"),
+            size: Extent3d {
+                width: display_width,
+                height: display_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let display_texture_view = display_texture.create_view(&TextureViewDescriptor::default());
+
+        self.downsample_pipeline = Some(downsample_pipeline);
+        self.downsample_bind_group_layout = Some(downsample_bind_group_layout);
+        self.downsample_params_buffer = Some(downsample_params_buffer);
+        self.display_texture = Some(display_texture);
+        self.display_texture_view = Some(display_texture_view);
+
+        log::info!(
+            "Initialized supersampling: {}x ({}x{} → {}x{})",
+            level.multiplier(),
+            self.full_width, self.full_height,
+            display_width, display_height
+        );
+    }
+
+    /// Run downsample pass (converts stitched high-res to display resolution)
+    pub fn downsample(&mut self) {
+        if self.supersample_level == SupersampleLevel::Off {
+            return;  // No supersampling, stitched texture is already display size
+        }
+
+        let (pipeline, bind_group_layout, params_buffer, display_view) = match (
+            &self.downsample_pipeline,
+            &self.downsample_bind_group_layout,
+            &self.downsample_params_buffer,
+            &self.display_texture_view,
+        ) {
+            (Some(p), Some(l), Some(b), Some(v)) => (p, l, b, v),
+            _ => {
+                log::warn!("Downsample resources not initialized");
+                return;
+            }
+        };
+
+        let stitched_view = match &self.stitched_texture_view {
+            Some(v) => v,
+            None => {
+                log::warn!("Stitched texture not available for downsample");
+                return;
+            }
+        };
+
+        // Update params
+        let params = DownsampleParams {
+            src_width: self.full_width,
+            src_height: self.full_height,
+            dst_width: self.display_width,
+            dst_height: self.display_height,
+            scale: self.supersample_level.multiplier(),
+            _padding: [0, 0, 0],
+        };
+        self.queue.write_buffer(params_buffer, 0, bytemuck::bytes_of(&params));
+
+        // Create bind group
+        let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Downsample Bind Group"),
+            layout: bind_group_layout,
+            entries: &[
+                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(stitched_view) },
+                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(display_view) },
+                BindGroupEntry { binding: 2, resource: params_buffer.as_entire_binding() },
+            ],
+        });
+
+        // Dispatch compute
+        let workgroups_x = (self.display_width + 7) / 8;
+        let workgroups_y = (self.display_height + 7) / 8;
+
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Downsample Encoder"),
+        });
+        {
+            let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("Downsample Pass"),
+                timestamp_writes: None,
+            });
+            compute_pass.set_pipeline(pipeline);
+            compute_pass.set_bind_group(0, &bind_group, &[]);
+            compute_pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    /// Get the final display texture view
+    /// Returns downsampled texture if supersampling, otherwise stitched texture
+    pub fn get_final_display_view(&self) -> Option<&TextureView> {
+        if self.supersample_level != SupersampleLevel::Off {
+            self.display_texture_view.as_ref()
+        } else {
+            self.stitched_texture_view.as_ref()
+        }
+    }
+
+    /// Get current supersampling level
+    pub fn supersample_level(&self) -> SupersampleLevel {
+        self.supersample_level
+    }
+
+    /// Get display dimensions (after any downsampling)
+    pub fn display_dimensions(&self) -> (u32, u32) {
+        (self.display_width, self.display_height)
+    }
+
+    /// Update palette texture with new palette data
+    pub fn update_palette(&mut self, palette: &Palette, _rotation: f32) {
+        // Generate palette texture data
+        let palette_data = palette.generate_texture_data(256);
+        // Convert f32 to u8
+        let palette_data_u8: Vec<u8> = palette_data
+            .iter()
+            .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
+            .collect();
+
+        self.queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: &self.palette_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &palette_data_u8,
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256 * 4),
+                rows_per_image: None,
+            },
+            Extent3d { width: 256, height: 1, depth_or_array_layers: 1 },
+        );
+
+        // Note: palette_rotation is not currently used in the tiled renderer
+        // TODO: Implement palette rotation support
     }
 }
