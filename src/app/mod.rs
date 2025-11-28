@@ -3,6 +3,9 @@
 mod input;
 mod config;
 pub mod export;
+pub mod render_mode;
+
+pub use render_mode::{RenderModeFSM, RenderModeState, TransitionResult};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use export::export_headless;
@@ -12,15 +15,18 @@ pub use export::export_headless_wasm;
 
 use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, window::Window};
 use egui_wgpu::wgpu::SurfaceError;
+use std::sync::{Arc, Mutex};
 
 use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
+use crate::ui::animation_panel::ExportProgress;
 use crate::renderer::FlameRenderer;
 use crate::scene::transforms::Flame;
 use crate::scene::palette::PaletteLibrary;
 use crate::scene::presets::PresetLibrary;
 use crate::util::PerformanceMetrics;
 use crate::config::{FractalConfig, ConfigManager};
+use crate::animation::{AnimationController, PlaybackState};
 
 pub struct App {
     // Core state management
@@ -44,6 +50,9 @@ pub struct App {
     pub(super) preset_library: PresetLibrary,
     pub(super) current_preset_index: usize,  // UI state, not config
 
+    // Animation system
+    pub(super) animation_controller: AnimationController,
+
     // Performance tracking
     pub(super) metrics: PerformanceMetrics,
 
@@ -64,6 +73,12 @@ pub struct App {
     pub(super) export_width: u32,
     pub(super) export_height: u32,
     pub(super) use_custom_export_size: bool,
+
+    // Animation export progress (shared with background export thread)
+    pub(super) animation_export_progress: Arc<Mutex<ExportProgress>>,
+
+    // Rendering mode state machine (Normal, Animating, Overwrite)
+    pub(super) render_mode: RenderModeFSM,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
@@ -117,6 +132,7 @@ impl App {
             palette_library,
             preset_library,
             current_preset_index: 0,
+            animation_controller: AnimationController::new(),
             metrics: PerformanceMetrics::new(),
             last_frame_time: None,
             accumulation_batch_size: 4, // EXPERIMENT: Test batching
@@ -130,6 +146,8 @@ impl App {
             export_width,
             export_height,
             use_custom_export_size: false,  // Default to viewport size
+            animation_export_progress: Arc::new(Mutex::new(ExportProgress::default())),
+            render_mode: RenderModeFSM::new(),
         };
 
         #[allow(deprecated)]
@@ -228,12 +246,15 @@ impl App {
                         max_iterations.map_or(true, |max| r.total_iterations() < max)
                     });
 
+                    // Check if animation is playing (needs continuous redraws)
+                    let animation_playing = app.animation_controller.is_playing();
+
                     // Update present mode based on system settings
                     app.gpu.set_present_mode(app.config_manager.system_settings().vsync_enabled);
 
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
-                    if is_rendering || app.pending_redraws > 0 {
+                    if is_rendering || animation_playing || app.pending_redraws > 0 {
                         // Actively rendering fractals OR UI animations pending
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
@@ -294,13 +315,10 @@ impl App {
 
         let render_start = Instant::now();
 
-        // Log frame timing for GPU usage investigation
-        // if let Some(last_frame) = self.last_frame_time {
-        //     let frame_time = render_start.duration_since(last_frame);
-        //     log::info!("Frame interval: {:.3}ms (rendering_complete={})",
-        //         frame_time.as_secs_f64() * 1000.0,
-        //         self.rendering_complete);
-        // }
+        // Calculate delta time BEFORE updating last_frame_time (for animation)
+        let delta_time = self.last_frame_time
+            .map(|last| render_start.duration_since(last).as_secs_f64())
+            .unwrap_or(1.0 / 60.0);
 
         self.last_frame_time = Some(render_start);
 
@@ -337,6 +355,9 @@ impl App {
             );
         }
 
+        // Get a snapshot of export progress for UI display
+        let export_progress = self.animation_export_progress.lock().unwrap().clone();
+
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -350,6 +371,7 @@ impl App {
             &mut self.flame,
             &mut self.palette_library,
             &self.preset_library,
+            &mut self.animation_controller,
             &mut self.current_preset_index,
             &mut self.paused,
             &mut self.quit_requested,
@@ -359,6 +381,7 @@ impl App {
             &mut self.export_width,
             &mut self.export_height,
             &mut self.use_custom_export_size,
+            &export_progress,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
@@ -1300,6 +1323,103 @@ impl App {
             }
         }
 
+        // Handle animation export request
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(export_settings) = ui_response.animation_export_requested {
+            // Check if already exporting
+            let already_exporting = self.animation_export_progress.lock().unwrap().is_exporting;
+            if already_exporting {
+                log::warn!("Animation export already in progress");
+            } else if let Some(ref animation) = self.animation_controller.animation {
+                use crate::animation::export::{AnimationExportConfig, UiProgressCallback, export_animation_fast, VideoEncodingSettings};
+
+                let export_config = AnimationExportConfig {
+                    config: self.config_manager.active_config().clone(),
+                    animation: animation.clone(),
+                    output_path: export_settings.output_path.clone(),
+                    width: export_settings.width,
+                    height: export_settings.height,
+                    fps: export_settings.fps,
+                    iterations_per_thread: export_settings.iterations_per_thread,
+                    video_settings: VideoEncodingSettings {
+                        codec: export_settings.video_codec,
+                        hardware_accel: export_settings.hardware_accel,
+                        quality: export_settings.video_quality,
+                    },
+                };
+
+                println!("Starting animation export (background thread)...");
+                println!("  Output: {}", export_config.output_path.display());
+                println!("  Resolution: {}x{} @ {} FPS", export_config.width, export_config.height, export_config.fps);
+                println!("  Total frames: {}", export_config.total_frames());
+                println!("  Codec: {} (CRF {})", export_config.video_settings.codec.display_name(), export_config.video_settings.quality);
+
+                // Set initial export progress
+                {
+                    let mut p = self.animation_export_progress.lock().unwrap();
+                    p.is_exporting = true;
+                    p.current_frame = 0;
+                    p.total_frames = export_config.total_frames();
+                    p.seconds_per_frame = 0.0;
+                    p.status = "Starting export...".to_string();
+                }
+
+                // Clone progress Arc for the background thread
+                let progress_arc = Arc::clone(&self.animation_export_progress);
+
+                // Spawn background thread for export
+                std::thread::spawn(move || {
+                    let mut progress = UiProgressCallback::new(Arc::clone(&progress_arc));
+
+                    match pollster::block_on(export_animation_fast(export_config, &mut progress)) {
+                        Ok(result) => {
+                            println!("\nAnimation export complete!");
+                            println!("  {} frames in {:.1}s", result.total_frames, result.total_time_ms / 1000.0);
+                            println!("  Output: {}", result.output_path.display());
+
+                            // Mark export complete
+                            if let Ok(mut p) = progress_arc.lock() {
+                                p.is_exporting = false;
+                                p.status = format!("Complete: {}", result.output_path.display());
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Animation export failed: {}", e);
+                            if let Ok(mut p) = progress_arc.lock() {
+                                p.is_exporting = false;
+                                p.status = format!("Failed: {}", e);
+                            }
+                        }
+                    }
+                });
+            } else {
+                eprintln!("No animation loaded for export");
+            }
+        }
+
+        // Handle animation timeline scrubbing (slider drag or frame step)
+        if ui_response.animation_seek_changed {
+            // Evaluate animation at current scrubbed time and apply to config
+            let frame_values = self.animation_controller.evaluate_frame();
+
+            for (path_str, json_value) in frame_values {
+                if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
+                    if let Some(config_value) = crate::config::json_to_config_value(&json_value, &path) {
+                        // Apply silently (no undo point) - just preview the position
+                        if let Err(e) = self.config_manager.update_param_silent(path, config_value) {
+                            log::warn!("Animation scrub: failed to update {}: {}", path_str, e);
+                        }
+                    }
+                }
+            }
+
+            // Sync flame from config
+            self.flame = self.config_manager.active_config().flame.clone();
+
+            // Force a GPU update to show the scrubbed frame
+            self.use_overwrite_next_frame = true;
+        }
+
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         // Get pending actions from ConfigManager (replaces individual boolean flags)
         let actions = self.config_manager.get_pending_actions();
@@ -1430,6 +1550,90 @@ impl App {
         self.view_changed_by_keyboard = false;
 
         // ============================================================================
+        // ANIMATION UPDATE (between UI processing and rendering)
+        // ============================================================================
+        // Detect animation state transitions and update FSM accordingly
+        let was_fsm_animating = self.render_mode.is_animating();
+        let is_controller_playing = self.animation_controller.state == PlaybackState::Playing;
+
+        // Detect play start: controller started playing but FSM not yet in animation mode
+        if is_controller_playing && !was_fsm_animating {
+            self.render_mode.enter_animation(self.config_manager.active_config());
+            // Enable animation mode in ConfigManager - UI changes become silent (no undo)
+            self.config_manager.set_animation_mode(true);
+        }
+
+        // Detect user stop/pause: FSM was animating but controller is no longer playing
+        // (This catches manual stop/pause clicks from UI - auto-stop is handled below after update())
+        if was_fsm_animating && !is_controller_playing {
+            // Disable animation mode before exit so undo entry creation works
+            self.config_manager.set_animation_mode(false);
+            self.handle_animation_exit();
+
+            // Only restore base config when animation is STOPPED (not paused)
+            // When paused, the fractal should stay at the current timeline position
+            if self.animation_controller.state == PlaybackState::Stopped {
+                if let Some(ref animation) = self.animation_controller.animation {
+                    if let Some(ref base_config) = animation.base_config {
+                        // Load the base config silently (the undo entry was already created by handle_animation_exit)
+                        if let Err(e) = self.config_manager.load_config_silent(base_config.clone()) {
+                            log::error!("Failed to restore base config: {}", e);
+                        }
+                        self.flame = base_config.flame.clone();
+                        self.use_overwrite_next_frame = true;
+                    }
+                }
+            }
+        }
+
+        if is_controller_playing {
+            // Update animation time (delta_time calculated at frame start, before last_frame_time update)
+            self.animation_controller.update(delta_time);
+
+            // Check if animation auto-stopped (LoopMode::Once reached end)
+            let auto_stopped = self.animation_controller.state != PlaybackState::Playing;
+            if auto_stopped {
+                // Disable animation mode before exit so undo entry creation works
+                self.config_manager.set_animation_mode(false);
+                // Animation finished naturally - exit animation mode and create undo snapshot
+                self.handle_animation_exit();
+
+                // Restore base config when animation stops (returns to original state)
+                if let Some(ref animation) = self.animation_controller.animation {
+                    if let Some(ref base_config) = animation.base_config {
+                        // Load the base config silently (the undo entry was already created by handle_animation_exit)
+                        if let Err(e) = self.config_manager.load_config_silent(base_config.clone()) {
+                            log::error!("Failed to restore base config: {}", e);
+                        }
+                        self.flame = base_config.flame.clone();
+                        self.use_overwrite_next_frame = true;
+                    }
+                }
+            }
+
+            // Evaluate all tracks and apply values to ConfigManager (silently, no undo)
+            let frame_values = self.animation_controller.evaluate_frame();
+
+            for (path_str, json_value) in frame_values {
+                // Parse the string key back to ConfigPath
+                if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
+                    // Convert JSON value to ConfigValue
+                    if let Some(config_value) = crate::config::json_to_config_value(&json_value, &path) {
+                        // Apply silently (no undo point)
+                        if let Err(e) = self.config_manager.update_param_silent(path, config_value) {
+                            log::warn!("Animation: failed to update {}: {}", path_str, e);
+                        }
+                    }
+                } else {
+                    log::warn!("Animation: unknown path key: {}", path_str);
+                }
+            }
+
+            // Sync flame from config (animation may have changed transform parameters)
+            self.flame = self.config_manager.active_config().flame.clone();
+        }
+
+        // ============================================================================
         // PHASE 3: Get FINAL Config and Render Fractal
         // ============================================================================
         // Single config read after all updates are complete
@@ -1445,14 +1649,21 @@ impl App {
             // Overwrite mode logic:
             // - Use flag set in previous frame (changes were detected then, applied now)
             // - When fractal stopped: Always allow overwrite to enable live parameter updates
+            // - During animation playback: Depends on quality mode setting
+            //   - Responsive mode: Use overwrite for smooth real-time preview
+            //   - HighQuality mode: Use batched accumulation for better quality
             let has_stopped = renderer.total_iterations() >= final_config.max_iterations;
-            let use_overwrite = self.use_overwrite_next_frame || has_stopped;
+            let animation_uses_overwrite = is_controller_playing && self.animation_controller.use_overwrite_mode();
+            let use_overwrite = self.use_overwrite_next_frame || has_stopped || animation_uses_overwrite;
             renderer.set_overwrite_mode(use_overwrite);
 
             // Check if we should continue iterating
+            // During animation playback, always iterate (ignore max_iterations limit)
             let max_iterations = Some(final_config.max_iterations);
-            let should_iterate = !self.paused &&
-                max_iterations.map_or(true, |max| renderer.total_iterations() < max);
+            let should_iterate = !self.paused && (
+                is_controller_playing ||
+                max_iterations.map_or(true, |max| renderer.total_iterations() < max)
+            );
 
             // Mark rendering as complete the frame after max_iterations is reached
             if !should_iterate && !self.rendering_complete {

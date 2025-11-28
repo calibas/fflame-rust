@@ -1,4 +1,5 @@
 use crate::app::App;
+use crate::app::render_mode::TransitionResult;
 use crate::config::FractalConfig;
 
 impl App {
@@ -80,6 +81,24 @@ impl App {
 
     pub fn can_redo(&self) -> bool {
         self.config_manager.can_redo()
+    }
+
+    /// Handle exiting animation mode
+    ///
+    /// Called when animation stops (user stop, pause, or auto-stop from LoopMode::Once).
+    /// Creates undo entry if the FSM transition requires it.
+    pub fn handle_animation_exit(&mut self) {
+        let result = self.render_mode.exit_animation(self.config_manager.active_config());
+
+        if let TransitionResult::CreateUndo { before, after, description } = result {
+            if let Err(e) = self.config_manager.load_config_with_explicit_before(
+                before,
+                after,
+                description,
+            ) {
+                log::error!("Failed to create animation undo snapshot: {}", e);
+            }
+        }
     }
 
     /// Export PNG at custom dimensions (creates temporary renderer)

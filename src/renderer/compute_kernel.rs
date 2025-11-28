@@ -526,6 +526,11 @@ impl FlameRenderer {
         &self.fractal_texture_view
     }
 
+    /// Get fractal output texture (for copy operations)
+    pub fn fractal_texture(&self) -> &Texture {
+        &self.fractal_texture
+    }
+
     /// Create a staging buffer for reading fractal pixels
     /// Returns (buffer, padded_bytes_per_row)
     pub fn create_pixel_staging_buffer(&self, device: &Device) -> (Buffer, u32) {
