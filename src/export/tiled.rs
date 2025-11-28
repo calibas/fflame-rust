@@ -119,7 +119,7 @@ impl Default for TileParams {
         Self {
             full_width: 0,
             full_height: 0,
-            tile_size: 2000,
+            tile_size: 1000,
             tiles_x: 1,
             tiles_y: 1,
             num_tiles: 1,
@@ -189,17 +189,18 @@ mod tests {
 
     #[test]
     fn test_tile_grid_large() {
-        // 8000×8000 should need 4×4 tiles
+        // 8000×8000 should need 8×8 tiles (tile_size = 1000)
         let (tiles_x, tiles_y, tile_size) = calculate_tile_grid(8000, 8000);
-        assert!(tiles_x >= 4);
-        assert!(tiles_y >= 4);
-        assert!(tile_size <= 2000);
+        assert!(tiles_x >= 8);
+        assert!(tiles_y >= 8);
+        assert!(tile_size <= 1000);
     }
 
     #[test]
     fn test_needs_tiling() {
-        assert!(!needs_tiling(800, 600));
-        assert!(!needs_tiling(1920, 1080));
+        assert!(!needs_tiling(800, 600));      // 480K pixels < 1M limit
+        assert!(!needs_tiling(1000, 1000));    // 1M pixels = 1M limit (edge case)
+        assert!(needs_tiling(1920, 1080));     // 2M pixels > 1M limit
         assert!(needs_tiling(4000, 4000));
         assert!(needs_tiling(8000, 8000));
     }
