@@ -122,13 +122,25 @@ impl GpuContext {
         log::info!("  Driver: {}", adapter_info.driver);
         log::info!("  Driver Info: {}", adapter_info.driver_info);
 
+        // Get adapter limits to request higher storage buffer size for large resolutions
+        let adapter_limits = adapter.limits();
+        log::info!(
+            "Adapter max_storage_buffer_binding_size: {} bytes ({} MB)",
+            adapter_limits.max_storage_buffer_binding_size,
+            adapter_limits.max_storage_buffer_binding_size / (1024 * 1024)
+        );
+
         // Use WebGL2-compatible limits for WASM, full limits for desktop
         #[cfg(target_arch = "wasm32")]
-        let limits = Limits::downlevel_webgl2_defaults();
+        let mut limits = Limits::downlevel_webgl2_defaults();
         #[cfg(not(target_arch = "wasm32"))]
-        let limits = Limits::default();
+        let mut limits = Limits::default();
 
-        log::info!("Requesting device with limits: {:?}", limits);
+        // Request adapter's max storage buffer size (for 4K+ resolutions)
+        limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+
+        log::info!("Requesting device with limits: max_storage_buffer_binding_size = {} MB",
+            limits.max_storage_buffer_binding_size / (1024 * 1024));
 
         // Check adapter features for timestamp query support
         let adapter_features = adapter.features();
@@ -146,6 +158,12 @@ impl GpuContext {
                 trace: Default::default(),
             }
         ).await?;
+
+        log::info!(
+            "Device max_storage_buffer_binding_size: {} bytes ({} MB)",
+            device.limits().max_storage_buffer_binding_size,
+            device.limits().max_storage_buffer_binding_size / (1024 * 1024)
+        );
 
         log::info!("✓ GPU device created successfully");
 
