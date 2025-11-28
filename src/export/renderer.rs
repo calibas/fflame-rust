@@ -124,12 +124,25 @@ impl TiledRenderer {
             .await
             .map_err(|e| format!("Failed to find GPU adapter: {}", e))?;
 
+        // Get adapter limits to request higher storage buffer size if available
+        let adapter_limits = adapter.limits();
+        log::info!(
+            "Adapter max_storage_buffer_binding_size: {} bytes ({} MB)",
+            adapter_limits.max_storage_buffer_binding_size,
+            adapter_limits.max_storage_buffer_binding_size / (1024 * 1024)
+        );
+
+        // Request limits with higher storage buffer size (up to adapter's max)
+        let mut required_limits = Limits::default();
+        required_limits.max_storage_buffer_binding_size =
+            adapter_limits.max_storage_buffer_binding_size;
+
         let (device, queue) = adapter
             .request_device(
                 &DeviceDescriptor {
                     label: Some("Tiled Export Device"),
                     required_features: Features::empty(),
-                    required_limits: Limits::default(),
+                    required_limits,
                     memory_hints: MemoryHints::default(),
                     trace: Default::default(),
                     experimental_features: Default::default(),
@@ -137,6 +150,12 @@ impl TiledRenderer {
             )
             .await
             .map_err(|e| format!("Failed to create device: {}", e))?;
+
+        log::info!(
+            "Device max_storage_buffer_binding_size: {} bytes ({} MB)",
+            device.limits().max_storage_buffer_binding_size,
+            device.limits().max_storage_buffer_binding_size / (1024 * 1024)
+        );
 
         // Calculate tile grid
         let (tiles_x, tiles_y, tile_size) = calculate_tile_grid(full_width, full_height);
@@ -181,6 +200,24 @@ impl TiledRenderer {
         // Create histogram buffer for all tiles
         // Each tile: tile_size × tile_size × 4 channels × 4 bytes
         let histogram_size = (tile_size as u64) * (tile_size as u64) * 4 * 4 * (total_tiles as u64);
+        let max_binding_size = device.limits().max_storage_buffer_binding_size as u64;
+
+        if histogram_size > max_binding_size {
+            return Err(format!(
+                "Histogram buffer size ({} MB) exceeds device limit ({} MB). \
+                Try reducing output resolution or number of tiles.",
+                histogram_size / (1024 * 1024),
+                max_binding_size / (1024 * 1024)
+            ));
+        }
+
+        log::info!(
+            "Creating histogram buffer: {} MB ({} tiles × {} pixels/tile × 16 bytes/pixel)",
+            histogram_size / (1024 * 1024),
+            total_tiles,
+            tile_size * tile_size
+        );
+
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Tiled Histogram Buffer"),
             size: histogram_size,
