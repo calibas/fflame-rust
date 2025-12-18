@@ -956,8 +956,8 @@ impl HighResExporter {
         let pixels_per_unit_zoomed = base_pixels_per_unit * 2.0_f32.powf(apophysis_zoom);
         let area = (self.width as f32 * self.height as f32) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: scaled by iterations_per_thread, divided by 100 for our CPU histogram format
-        // GPU stores 0.01 per hit, we already converted to that format above
+        // Sample density: scaled by iterations_per_thread
+        // NOTE: No resolution normalization here - CPU export was already calibrated for large resolutions
         let sample_density = 5000.0 * (self.iterations_per_thread as f32 / 256.0);
 
         let tonemap_mode = match config.tonemap_mode {
