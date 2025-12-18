@@ -1,7 +1,7 @@
 use egui_wgpu::wgpu::*;
 use crate::gpu::{buffers::*, pipelines::FlamePipelines};
 use crate::scene::transforms::Flame;
-use crate::scene::palette::{Palette, ColorMode};
+use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
 use crate::config::FractalConfig;
 
 /// Manages fractal flame rendering via GPU compute shaders
@@ -23,6 +23,7 @@ pub struct FlameRenderer {
     total_iterations: u64,
     effective_iterations: u64, // For brightness calculation - doesn't reset during overwrite mode
     color_mode: ColorMode,
+    path_map_style: PathMapStyle,
     density_scale: f32,
     background_color: [f32; 3],
     current_render_mode: crate::scene::transforms::RenderMode,
@@ -99,6 +100,7 @@ impl FlameRenderer {
             total_iterations: 0,
             effective_iterations: 0,
             color_mode: ColorMode::Palette,
+            path_map_style: PathMapStyle::default(),
             density_scale: 1.0,
             background_color: [0.0, 0.0, 0.0],
             current_render_mode: flame.render_mode,
@@ -210,7 +212,7 @@ impl FlameRenderer {
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms, // Final transform is appended after regular transforms
-            _pad3: 0.0,
+            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
@@ -357,8 +359,9 @@ impl FlameRenderer {
         // 1. Update transforms in GPU buffer
         self.buffers.update_transforms(queue, &config.flame);
 
-        // 2. Update color mode
+        // 2. Update color mode and path map style
         self.color_mode = config.color_mode;
+        self.path_map_style = config.path_map_style;
 
         // 3. Update density and background
         self.density_scale = config.density_scale;
@@ -406,7 +409,7 @@ impl FlameRenderer {
             histogram_color_scale: config.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
-            _pad3: 0.0,
+            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
@@ -471,7 +474,7 @@ impl FlameRenderer {
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
-            _pad3: 0.0,
+            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             _pad4: 0.0,
         };
 
@@ -508,7 +511,11 @@ impl FlameRenderer {
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
             transparent_mode: 0,
-            _pad_alpha: 0.0,
+            color_mode: self.color_mode as u32,
+            width: self.width,
+            height: self.height,
+            path_map_style: self.path_map_style as u32,
+            _pad2: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -663,7 +670,7 @@ impl FlameRenderer {
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
-            _pad3: 0.0,
+            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
@@ -697,7 +704,11 @@ impl FlameRenderer {
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
             transparent_mode: 0,
-            _pad_alpha: 0.0,
+            color_mode: self.color_mode as u32,
+            width: self.width,
+            height: self.height,
+            path_map_style: self.path_map_style as u32,
+            _pad2: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -757,7 +768,11 @@ impl FlameRenderer {
             alpha_blend_low: config.alpha_blend_low,
             alpha_blend_high: config.alpha_blend_high,
             transparent_mode: if transparent { 1 } else { 0 },
-            _pad_alpha: 0.0,
+            color_mode: self.color_mode as u32,
+            width: self.width,
+            height: self.height,
+            path_map_style: self.path_map_style as u32,
+            _pad2: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -852,7 +867,11 @@ impl FlameRenderer {
             alpha_blend_low,
             alpha_blend_high,
             transparent_mode: 0,
-            _pad_alpha: 0.0,
+            color_mode: self.color_mode as u32,
+            width: self.width,
+            height: self.height,
+            path_map_style: self.path_map_style as u32,
+            _pad2: 0,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -899,7 +918,7 @@ impl FlameRenderer {
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
-            _pad3: 0.0,
+            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             _pad4: 0.0,
         };
         self.buffers.update_params(queue, &params);
@@ -908,6 +927,17 @@ impl FlameRenderer {
     /// Get current color mode
     pub fn color_mode(&self) -> ColorMode {
         self.color_mode
+    }
+
+    /// Set path map style (Prefix = color by path start, Suffix = color by path end)
+    pub fn set_path_map_style(&mut self, path_map_style: PathMapStyle) {
+        self.path_map_style = path_map_style;
+        // Note: tonemap params will be updated on next render via update_tonemap
+    }
+
+    /// Get current path map style
+    pub fn path_map_style(&self) -> PathMapStyle {
+        self.path_map_style
     }
 
     /// Read pixels from the fractal_texture (after tonemap_pass has rendered to it)

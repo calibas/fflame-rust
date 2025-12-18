@@ -50,7 +50,7 @@ struct Params {
     histogram_color_scale: f32,  // Not used for export, but kept for struct compatibility
     has_final_transform: u32,
     final_transform_index: u32,
-    _pad3: f32,
+    bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
     _pad4: f32,
 }
 

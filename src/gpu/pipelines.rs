@@ -101,6 +101,17 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Path buffer (storage, read-write for PathMap color mode)
+                BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -152,6 +163,17 @@ impl FlamePipelines {
                     binding: 4,
                     visibility: ShaderStages::FRAGMENT,
                     ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Path buffer (storage, read-only for PathMap color mode visualization)
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
                     count: None,
                 },
             ],
@@ -344,6 +366,10 @@ impl FlamePipelines {
                     binding: 6,
                     resource: buffers.iteration_count_buffer.as_entire_binding(),
                 },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: buffers.path_buffer.as_entire_binding(),
+                },
             ],
         })
     }
@@ -413,6 +439,10 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 4,
                     resource: BindingResource::Sampler(&buffers.curve_lut_sampler),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: buffers.path_buffer.as_entire_binding(),
                 },
             ],
         })

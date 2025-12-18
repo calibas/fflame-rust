@@ -35,6 +35,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var color = vec3<f32>(1.0, 1.0, 1.0);
     var color_index = 0.0;
+
+    // Path tracking for PathMap mode (using hash for tiled since no path buffer)
     var path_hash = 0u;
 
     // Pre-calculate tile buffer size (pixels per tile × 4 channels)
@@ -71,7 +73,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         } else {
-            path_hash = (path_hash << 4u) | (xform_idx & 0xFu);
+            // Path map mode: use hash for tiled (simpler, no separate buffer)
+            path_hash = (path_hash << params.bits_per_transform) | (xform_idx & ((1u << params.bits_per_transform) - 1u));
         }
 
         // Skip burn-in

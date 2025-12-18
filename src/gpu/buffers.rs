@@ -113,6 +113,26 @@ impl GpuVariationParams {
     }
 }
 
+/// Calculate bits needed per transform index based on transform count
+/// - 1-2 transforms: 1 bit
+/// - 3-4 transforms: 2 bits
+/// - 5-8 transforms: 3 bits
+/// - 9-16 transforms: 4 bits
+/// - 17-32 transforms: 5 bits
+pub fn bits_per_transform(num_transforms: u32) -> u32 {
+    if num_transforms <= 2 {
+        1
+    } else if num_transforms <= 4 {
+        2
+    } else if num_transforms <= 8 {
+        3
+    } else if num_transforms <= 16 {
+        4
+    } else {
+        5  // Up to 32 transforms
+    }
+}
+
 /// Dispatch parameters for compute shader
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -123,7 +143,7 @@ pub struct GpuParams {
     pub width: u32,
     pub height: u32,
     pub seed: u32,
-    pub color_mode: u32, // 0 = transform colors, 1 = palette, 2 = speed
+    pub color_mode: u32, // 0 = palette, 1 = speed, 2 = path_map
     pub render_mode: u32, // 0 = 2D, 1 = 3D
     pub splat_size: f32,
     pub zoom: f32,
@@ -138,7 +158,7 @@ pub struct GpuParams {
     pub histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
     pub has_final_transform: u32, // 0 = disabled, 1 = enabled
     pub final_transform_index: u32, // Index in transform buffer (always last slot)
-    pub _pad3: f32,
+    pub bits_per_transform: u32, // Bits needed per transform index (1-4 based on num_transforms)
     pub _pad4: f32,
 }
 
@@ -167,7 +187,11 @@ pub struct TonemapParams {
     pub alpha_blend_low: f32,  // Start blending toward linear alpha at this gamma-corrected value
     pub alpha_blend_high: f32,  // Full linear alpha above this value
     pub transparent_mode: u32,  // 0 = normal (blend with background), 1 = transparent export
-    pub _pad_alpha: f32,  // Padding to align to 16 bytes
+    pub color_mode: u32,  // 0 = palette, 1 = speed, 2 = path_map
+    pub width: u32,  // Texture width for path buffer indexing
+    pub height: u32,  // Texture height for path buffer indexing
+    pub path_map_style: u32,  // 0 = Prefix (color by path start), 1 = Suffix (color by path end)
+    pub _pad2: u32,  // Padding for 16-byte alignment (std140)
 }
 
 impl Default for TonemapParams {
@@ -195,7 +219,11 @@ impl Default for TonemapParams {
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
             transparent_mode: 0,  // Normal display mode
-            _pad_alpha: 0.0,
+            color_mode: 0,  // Palette mode by default
+            width: 800,  // Default width (will be updated per frame)
+            height: 600,  // Default height (will be updated per frame)
+            path_map_style: 0,  // Prefix mode by default
+            _pad2: 0,
         }
     }
 }
@@ -244,6 +272,12 @@ pub struct FlameBuffers {
     // Layout: 1× u32 per pixel (total iteration hits)
     // Used to stop accumulating pixels after target iteration count
     pub iteration_count_buffer: Buffer,
+
+    // Per-pixel path buffer for PathMap color mode
+    // Layout: 2× u32 per pixel (stores u64 path as vec2<u32>)
+    // Path is packed MSB-first: transform indices stored from high bits down
+    // Last-write-wins semantics (not accumulated)
+    pub path_buffer: Buffer,
 
     // Per-pixel scale buffer for adaptive histogram scaling
     // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
@@ -324,7 +358,7 @@ impl FlameBuffers {
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             has_final_transform: if flame.final_transform.is_some() { 1 } else { 0 },
             final_transform_index: flame.transforms.len() as u32,
-            _pad3: 0.0,
+            bits_per_transform: bits_per_transform(flame.transforms.len() as u32),
             _pad4: 0.0,
         };
 
@@ -423,6 +457,19 @@ impl FlameBuffers {
         let iteration_count_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Iteration Count Buffer"),
             size: iteration_count_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create path buffer (2× u32 per pixel for u64 path storage)
+        // Used for PathMap color mode to track transform sequence leading to each pixel
+        // Path is packed MSB-first for efficient prefix matching
+        // Size: width × height × 2 × sizeof(u32)
+        // Memory: ~3.8MB @ 800×600, ~16.6MB @ 1920×1080
+        let path_buffer_size = (width * height * 2 * std::mem::size_of::<u32>() as u32) as u64;
+        let path_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Path Buffer"),
+            size: path_buffer_size,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -558,6 +605,7 @@ impl FlameBuffers {
             temp_samples_view,
             histogram_buffer,
             iteration_count_buffer,
+            path_buffer,
             // scale_buffer removed - using params.histogram_color_scale instead
             palette_texture,
             palette_view,
@@ -601,6 +649,9 @@ impl FlameBuffers {
 
         // Clear iteration count buffer (zero out all iteration counts)
         encoder.clear_buffer(&self.iteration_count_buffer, 0, None);
+
+        // Clear path buffer (zero out all paths)
+        encoder.clear_buffer(&self.path_buffer, 0, None);
     }
 
     #[cfg(target_arch = "wasm32")]
