@@ -17,11 +17,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var color_index = 0.0;  // For palette mode
 
     // Path tracking for PathMap mode
-    // Stored as u64 in two u32s: path_hi (high 32 bits), path_lo (low 32 bits)
-    // Path is packed MSB-first: first transform goes into highest bits
-    var path_hi = 0u;
-    var path_lo = 0u;
-    var path_bits_used = 0u;  // How many bits have been written (from MSB)
+    // path_prefix: First transforms encountered (frozen after filling)
+    // path_suffix: Rolling hash of recent transforms (continuously updated)
+    var path_prefix = 0u;
+    var path_suffix = 0u;
+    var prefix_bits_used = 0u;  // How many bits written to prefix (max 32)
 
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
@@ -59,32 +59,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         } else {
-            // Path map mode: pack transform index MSB-first into u64 path
-            // bits_per_transform determines how many bits per index (1-5)
+            // Path map mode: track both prefix and suffix
             let bits = params.bits_per_transform;
+            let masked_idx = xform_idx & ((1u << bits) - 1u);
 
-            // Only add to path if we have room (64 bits total)
-            if (path_bits_used + bits <= 64u) {
-                // Calculate bit position from MSB (bit 63 is MSB)
-                let bit_pos = 64u - path_bits_used - bits;
-
-                if (bit_pos >= 32u) {
-                    // Bits go into high word
-                    let shift = bit_pos - 32u;
-                    path_hi = path_hi | (xform_idx << shift);
-                } else if (bit_pos + bits <= 32u) {
-                    // All bits go into low word
-                    path_lo = path_lo | (xform_idx << bit_pos);
-                } else {
-                    // Bits span both words (rare edge case)
-                    let hi_bits = bit_pos + bits - 32u;
-                    let lo_bits = bits - hi_bits;
-                    path_hi = path_hi | (xform_idx >> lo_bits);
-                    path_lo = path_lo | ((xform_idx & ((1u << lo_bits) - 1u)) << (32u - lo_bits));
-                }
-
-                path_bits_used = path_bits_used + bits;
+            // Prefix: store first transforms until we fill 32 bits
+            if (prefix_bits_used + bits <= 32u) {
+                // Pack from high bits down (first transform in MSB)
+                let shift = 32u - prefix_bits_used - bits;
+                path_prefix = path_prefix | (masked_idx << shift);
+                prefix_bits_used = prefix_bits_used + bits;
             }
+
+            // Suffix: rolling hash (always updates, recent in low bits)
+            path_suffix = (path_suffix << bits) | masked_idx;
         }
 
         // Skip burn-in iterations
@@ -115,10 +103,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // Speed mode: uses accumulated RGB color
                     final_color = color;
                 } else {
-                    // Path map mode: store path to buffer, use white for histogram
-                    // (actual color computed in tonemap shader from path buffer)
-                    path_buffer[pixel_idx].hi = path_hi;
-                    path_buffer[pixel_idx].lo = path_lo;
+                    // Path map mode: store path prefix/suffix to buffer
+                    // hi = prefix (first ~10 transforms, for Prefix mode)
+                    // lo = suffix (recent transforms rolling hash, for Suffix mode)
+                    path_buffer[pixel_idx].hi = path_prefix;
+                    path_buffer[pixel_idx].lo = path_suffix;
                     final_color = vec3<f32>(1.0, 1.0, 1.0);
                 }
 
