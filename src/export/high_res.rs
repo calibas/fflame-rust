@@ -577,7 +577,7 @@ impl HighResExporter {
         progress.on_tonemapping();
 
         // Tonemap histogram to RGBA
-        let pixels = self.tonemap(&histogram, config);
+        let pixels = self.tonemap(&histogram, config, total_samples_accumulated);
 
         progress.on_complete();
 
@@ -633,60 +633,257 @@ impl HighResExporter {
     }
 
     /// CPU tonemap: histogram → RGBA pixels
-    fn tonemap(&self, histogram: &[HistogramPixel], config: &FractalConfig) -> Vec<u8> {
+    /// Implements Apophysis-compatible tone mapping matching GPU tonemap.wgsl
+    fn tonemap(&self, histogram: &[HistogramPixel], config: &FractalConfig, _total_samples: u64) -> Vec<u8> {
+        use crate::config::defaults::{DEFAULT_WHITE_LEVEL, PREFILTER_WHITE, BRIGHT_ADJUST};
+
         let num_pixels = (self.width as usize) * (self.height as usize);
         let mut pixels = vec![0u8; num_pixels * 4];
 
-        // Find max density for normalization
-        let max_density = histogram
-            .iter()
-            .map(|p| p.count)
-            .fold(0.0f64, |a, b| a.max(b));
+        // Apophysis constants (from tonemap.wgsl / config/defaults.rs)
+        let white_level = DEFAULT_WHITE_LEVEL as f64;
+        let prefilter_white = PREFILTER_WHITE as f64;
+        let bright_adjust = BRIGHT_ADJUST as f64;
 
-        if max_density == 0.0 {
-            // No samples, return background color
-            for i in 0..num_pixels {
-                pixels[i * 4] = (config.background_color[0] * 255.0) as u8;
-                pixels[i * 4 + 1] = (config.background_color[1] * 255.0) as u8;
-                pixels[i * 4 + 2] = (config.background_color[2] * 255.0) as u8;
-                pixels[i * 4 + 3] = 255;
-            }
-            return pixels;
-        }
+        // Calculate area in FRACTAL SPACE (not pixel space!) - matches GPU export mode
+        // GPU: let base_pixels_per_unit = (width.min(height) as f32) * 0.25;
+        //      let pixels_per_unit_zoomed = base_pixels_per_unit * 2^(log2(zoom))
+        //      let area = (width * height) / (pixels_per_unit_zoomed^2)
+        let zoom = config.zoom as f64;
+        let base_pixels_per_unit = (self.width.min(self.height) as f64) * 0.25;
+        let apophysis_zoom = zoom.log2();
+        let pixels_per_unit_zoomed = base_pixels_per_unit * 2.0_f64.powf(apophysis_zoom);
+        let area = (self.width as f64 * self.height as f64) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        let log_max = (1.0 + max_density).ln();
+        // Sample density: Use GPU's fixed formula (not based on total iterations)
+        // GPU export mode: sample_density = 5000.0 * (iterations_per_thread / 256.0)
+        // We use 256 as reference (default iterations_per_thread)
+        let sample_density = 5000.0; // Fixed reference value matching GPU default
+
+        let gamma_threshold = config.gamma_threshold as f64;
+
         let exposure = config.exposure as f64;
         let gamma = config.gamma as f64;
+        // Invert gamma (Apophysis ImageMaker.pas:410)
+        let inv_gamma = if gamma == 0.0 { gamma } else { 1.0 / gamma };
+        let brightness = config.brightness as f64;
+        let vibrancy = config.vibrancy as f64;
+        let saturation = config.saturation as f64;
+        let hue_shift = config.hue_shift as f64;
+        let value_scale = config.value_scale as f64;
+
+        // Background color (already in 0-1 range)
+        let bg_r = config.background_color[0] as f64;
+        let bg_g = config.background_color[1] as f64;
+        let bg_b = config.background_color[2] as f64;
+
+        // Calculate k1 and k2 for brightness_scale function (from tonemap.wgsl)
+        let contrast = 1.0;
+        let k1 = contrast * bright_adjust * brightness * 268.0 * prefilter_white / 256.0;
+        let k2 = 1.0 / (contrast * area * white_level * sample_density);
+
+        // Pre-calculate funcval for gamma threshold (Apophysis setup phase)
+        let funcval = if gamma_threshold != 0.0 {
+            gamma_threshold.powf(inv_gamma - 1.0)
+        } else {
+            0.0
+        };
+
+        // Vibrancy blend factors (Apophysis ImageMaker.pas:412)
+        let vib = (vibrancy * 256.0).round();
+        let notvib = 256.0 - vib;
 
         for (i, pixel) in histogram.iter().enumerate() {
-            if pixel.count > 0.0 {
-                // Average color
-                let r = pixel.r / pixel.count;
-                let g = pixel.g / pixel.count;
-                let b = pixel.b / pixel.count;
-
-                // Log density scaling
-                let log_density = (1.0 + pixel.count).ln() / log_max;
-                let brightness = log_density * exposure;
-
-                // Apply brightness and gamma
-                let r_out = (r * brightness).powf(1.0 / gamma).clamp(0.0, 1.0);
-                let g_out = (g * brightness).powf(1.0 / gamma).clamp(0.0, 1.0);
-                let b_out = (b * brightness).powf(1.0 / gamma).clamp(0.0, 1.0);
-
-                pixels[i * 4] = (r_out * 255.0) as u8;
-                pixels[i * 4 + 1] = (g_out * 255.0) as u8;
-                pixels[i * 4 + 2] = (b_out * 255.0) as u8;
+            if pixel.count < 0.001 {
+                // Background color (apply sRGB conversion)
+                let srgb_r = bg_r.powf(1.0 / 2.2);
+                let srgb_g = bg_g.powf(1.0 / 2.2);
+                let srgb_b = bg_b.powf(1.0 / 2.2);
+                pixels[i * 4] = (srgb_r * 255.0).clamp(0.0, 255.0) as u8;
+                pixels[i * 4 + 1] = (srgb_g * 255.0).clamp(0.0, 255.0) as u8;
+                pixels[i * 4 + 2] = (srgb_b * 255.0).clamp(0.0, 255.0) as u8;
                 pixels[i * 4 + 3] = 255;
-            } else {
-                // Background color
-                pixels[i * 4] = (config.background_color[0] * 255.0) as u8;
-                pixels[i * 4 + 1] = (config.background_color[1] * 255.0) as u8;
-                pixels[i * 4 + 2] = (config.background_color[2] * 255.0) as u8;
-                pixels[i * 4 + 3] = 255;
+                continue;
             }
+
+            // Scale count to match GPU accumulation buffer format
+            // GPU stores 0.01 per hit, we store 1.0 per sample
+            // GPU reads: bucket_count = accum.a * 100.0
+            // So our count is already in the right scale (1 sample = 1 count)
+            let bucket_count = pixel.count;
+
+            // Raw accumulated sums (GPU format: bucket = sum, not average)
+            let bucket_red = pixel.r;
+            let bucket_green = pixel.g;
+            let bucket_blue = pixel.b;
+
+            // ===== STAGE 3A: Apply Brightness to Palette Colors =====
+            // Calculate brightness scaling factor (ls) from logarithmic curve
+            let ls = if bucket_count < 0.001 {
+                0.0
+            } else {
+                // lsa[i] = (k1 * log10(1 + white_level * i * k2)) / (white_level * i)
+                let log10_value = (1.0 + white_level * bucket_count * k2).log10();
+                (k1 * log10_value) / (white_level * bucket_count)
+            };
+
+            // Apply brightness scaling to accumulated color sums
+            let ls_scaled = ls / prefilter_white;
+            let fp0 = ls_scaled * bucket_red;     // brightness-scaled red
+            let fp1 = ls_scaled * bucket_green;   // brightness-scaled green
+            let fp2 = ls_scaled * bucket_blue;    // brightness-scaled blue
+            let fp3 = ls_scaled * bucket_count * white_level;  // weighted density
+
+            // ===== STAGE 3B: Apply Gamma to Density =====
+            let alpha = if fp3 <= 0.0 {
+                0.0
+            } else if fp3 <= gamma_threshold {
+                // Blend between linear and gamma curves at low densities
+                let frac = fp3 / gamma_threshold;
+                (1.0 - frac) * fp3 * funcval + frac * fp3.powf(inv_gamma)
+            } else {
+                // Standard gamma curve
+                fp3.powf(inv_gamma)
+            };
+
+            // ===== STAGE 3C: Calculate Vibrancy-Weighted Multiplier =====
+            let ls2 = if fp3 > 0.0 {
+                vib * alpha / fp3
+            } else {
+                0.0
+            };
+
+            // ===== STAGE 3D: Vibrancy Blend =====
+            // Blend between new (gamma on brightness) and old (gamma on colors) algorithms
+            // IMPORTANT: This is ADDITIVE, not weighted average!
+            let (mut r, mut g, mut b) = if notvib > 0.0 {
+                // NEW algorithm: ls * fp[x] (vibrancy-weighted brightness × brightness-scaled color)
+                let new_r = ls2 * fp0;
+                let new_g = ls2 * fp1;
+                let new_b = ls2 * fp2;
+
+                // OLD algorithm: notvib * power(fp[x], gamma) (gamma applied to colors)
+                let old_r = notvib * fp0.powf(inv_gamma);
+                let old_g = notvib * fp1.powf(inv_gamma);
+                let old_b = notvib * fp2.powf(inv_gamma);
+
+                // Additive blend (NOT weighted average!)
+                (new_r + old_r, new_g + old_g, new_b + old_b)
+            } else {
+                // Pure new algorithm (vibrancy >= 1.0)
+                (ls2 * fp0, ls2 * fp1, ls2 * fp2)
+            };
+
+            // ===== STAGE 3E: HSV Adjustments =====
+            let needs_hsv = saturation != 1.0 || hue_shift != 0.0 || value_scale != 1.0;
+            if needs_hsv {
+                let (mut h, mut s, mut v) = rgb_to_hsv(r, g, b);
+
+                // Hue shift
+                if hue_shift != 0.0 {
+                    h += hue_shift;
+                    if h < 0.0 {
+                        h += 360.0;
+                    } else if h >= 360.0 {
+                        h -= 360.0;
+                    }
+                }
+
+                // Saturation boost
+                if saturation != 1.0 {
+                    s = (s * saturation).clamp(0.0, 1.0);
+                }
+
+                // Value scaling
+                if value_scale != 1.0 {
+                    v = (v * value_scale).clamp(0.0, 1.0);
+                }
+
+                let (r_new, g_new, b_new) = hsv_to_rgb(h, s, v);
+                r = r_new;
+                g = g_new;
+                b = b_new;
+            }
+
+            // Apply exposure
+            r *= exposure;
+            g *= exposure;
+            b *= exposure;
+
+            // Clamp to valid range
+            r = r.clamp(0.0, 1.0);
+            g = g.clamp(0.0, 1.0);
+            b = b.clamp(0.0, 1.0);
+
+            // ===== STAGE 3F: Background Blending =====
+            let fractal_alpha = alpha.clamp(0.0, 1.0);
+
+            // Composite with background (normal mode, not transparent export)
+            let final_r = bg_r * (1.0 - fractal_alpha) + r * fractal_alpha;
+            let final_g = bg_g * (1.0 - fractal_alpha) + g * fractal_alpha;
+            let final_b = bg_b * (1.0 - fractal_alpha) + b * fractal_alpha;
+
+            // Convert from linear to sRGB for display
+            let srgb_r = final_r.powf(1.0 / 2.2);
+            let srgb_g = final_g.powf(1.0 / 2.2);
+            let srgb_b = final_b.powf(1.0 / 2.2);
+
+            pixels[i * 4] = (srgb_r * 255.0).clamp(0.0, 255.0) as u8;
+            pixels[i * 4 + 1] = (srgb_g * 255.0).clamp(0.0, 255.0) as u8;
+            pixels[i * 4 + 2] = (srgb_b * 255.0).clamp(0.0, 255.0) as u8;
+            pixels[i * 4 + 3] = 255;
         }
 
         pixels
+    }
+}
+
+// Helper: RGB to HSV
+fn rgb_to_hsv(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+    let max_val = r.max(g).max(b);
+    let min_val = r.min(g).min(b);
+    let delta = max_val - min_val;
+
+    let v = max_val;
+
+    if delta < 0.00001 || max_val < 0.00001 {
+        return (0.0, 0.0, v);
+    }
+
+    let s = delta / max_val;
+
+    let h = if r >= max_val {
+        (g - b) / delta
+    } else if g >= max_val {
+        2.0 + (b - r) / delta
+    } else {
+        4.0 + (r - g) / delta
+    } * 60.0;
+
+    let h = if h < 0.0 { h + 360.0 } else { h };
+
+    (h, s, v)
+}
+
+// Helper: HSV to RGB
+fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (f64, f64, f64) {
+    if s <= 0.0 {
+        return (v, v, v);
+    }
+
+    let hh = if h >= 360.0 { 0.0 } else { h } / 60.0;
+    let i = hh as u32;
+    let ff = hh - i as f64;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * ff);
+    let t = v * (1.0 - s * (1.0 - ff));
+
+    match i {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
     }
 }
