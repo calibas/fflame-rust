@@ -772,6 +772,7 @@ impl ConfigManager {
 
             // Color
             ConfigPath::ColorMode => Ok(config.color_mode.into()),
+            ConfigPath::PathMapStyle => Ok(config.path_map_style.into()),
             ConfigPath::PaletteIndex => Ok((config.palette_index as u32).into()),
             ConfigPath::Palette => {
                 // Return embedded palette if it exists, otherwise None
@@ -1111,6 +1112,9 @@ impl ConfigManager {
             // Color
             ConfigPath::ColorMode => {
                 self.current.color_mode = value.try_into()?;
+            }
+            ConfigPath::PathMapStyle => {
+                self.current.path_map_style = value.try_into()?;
             }
             ConfigPath::PaletteIndex => {
                 let idx: u32 = value.try_into()?;
@@ -1890,7 +1894,7 @@ impl TryFrom<ConfigValue> for [f32; 3] {
 }
 
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-use crate::scene::palette::ColorMode;
+use crate::scene::palette::{ColorMode, PathMapStyle};
 use crate::scene::transforms::RenderMode;
 
 impl TryFrom<ConfigValue> for ToneMapMode {
@@ -1908,6 +1912,16 @@ impl TryFrom<ConfigValue> for ColorMode {
     fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
         match v {
             ConfigValue::ColorMode(m) => Ok(m),
+            _ => Err(ConfigError::TypeMismatch),
+        }
+    }
+}
+
+impl TryFrom<ConfigValue> for PathMapStyle {
+    type Error = ConfigError;
+    fn try_from(v: ConfigValue) -> Result<Self, Self::Error> {
+        match v {
+            ConfigValue::PathMapStyle(m) => Ok(m),
             _ => Err(ConfigError::TypeMismatch),
         }
     }

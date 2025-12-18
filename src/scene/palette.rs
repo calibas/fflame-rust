@@ -17,6 +17,16 @@ impl Default for ColorMode {
     }
 }
 
+/// PathMap coloring style - determines which part of the path determines color
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PathMapStyle {
+    /// Color based on path prefix (beginning) - paths with same start have similar colors
+    #[default]
+    Prefix,
+    /// Color based on path suffix (end) - paths with same ending have similar colors
+    Suffix,
+}
+
 /// A single color stop in a gradient palette
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct ColorStop {

@@ -416,6 +416,7 @@ impl App {
                     renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.config_manager.system_settings().iterations_per_thread,
                         resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
+                    renderer.set_path_map_style(resize_config.path_map_style);
 
                     // Restore tonemap parameters after buffer recreation (not in live preview mode)
                     renderer.update_tonemap(&self.gpu.queue, resize_config.tonemap_mode, resize_config.use_curve, resize_config.exposure, resize_config.gamma,
@@ -1724,6 +1725,7 @@ impl App {
             // 4. Update tonemap parameters and render to fractal texture
             renderer.update_density_scale(&self.gpu.queue, final_config.density_scale);
             renderer.update_background_color(&self.gpu.queue, final_config.background_color);
+            renderer.set_path_map_style(final_config.path_map_style);
             // Calculate batch_size for tonemap (same logic as accumulation)
             let batch_size_for_tonemap = if use_overwrite { 1 } else { self.accumulation_batch_size };
             // is_live_preview: Only during active editing, not when rendering stops

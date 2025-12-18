@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::scene::transforms::Flame;
-use crate::scene::palette::{ColorMode, Palette};
+use crate::scene::palette::{ColorMode, Palette, PathMapStyle};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 
 /// Current config format version
@@ -61,6 +61,9 @@ pub struct FractalConfig {
     /// Color settings
     #[serde(default)]
     pub color_mode: ColorMode,
+    /// PathMap coloring style (Prefix = color by path start, Suffix = color by path end)
+    #[serde(default)]
+    pub path_map_style: PathMapStyle,
     #[serde(default)]
     pub palette_index: usize,
     /// The actual palette data (for complete reproducibility)
@@ -228,6 +231,7 @@ impl Default for FractalConfig {
             use_dynamic_blend: default_use_dynamic_blend(),
             target_iterations_per_pixel: 0,
             color_mode: ColorMode::Palette,
+            path_map_style: PathMapStyle::default(),
             palette_index: 0,
             palette: None,
             palette_rotation: default_palette_rotation(),

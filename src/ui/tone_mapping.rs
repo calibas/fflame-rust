@@ -1,5 +1,5 @@
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-use crate::scene::palette::{ColorMode, PaletteLibrary};
+use crate::scene::palette::{ColorMode, PathMapStyle, PaletteLibrary};
 use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
 
 /// Render curve editor UI with ConfigManager integration
@@ -422,6 +422,36 @@ pub fn render_colors_content(
                 if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::SpeedFactor, 0.0..=1.0, "Speed Blend Factor") {
                     max_update = max_update.max(result.update_type);
                 }
+            }
+
+            if matches!(current_color_mode, ColorMode::PathMap) {
+                let current_style = config_manager.active_config().path_map_style;
+                let style_text = match current_style {
+                    PathMapStyle::Prefix => "Prefix (Start)",
+                    PathMapStyle::Suffix => "Suffix (End)",
+                };
+
+                let mut temp_style = current_style;
+                egui::ComboBox::from_label("Path Style")
+                    .selected_text(style_text)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::Prefix, "Prefix (Start)")
+                            .on_hover_text("Color based on path beginning - same start = similar colors")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::Suffix, "Suffix (End)")
+                            .on_hover_text("Color based on path ending - same end = similar colors")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                    });
             }
 
             ui.separator();

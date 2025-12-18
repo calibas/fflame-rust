@@ -7,9 +7,8 @@
 /// - ConfigChange: Batch of deltas (single undo point)
 /// - UpdateType: What kind of update is needed for a change
 
-use crate::scene::palette::Palette;
+use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-use crate::scene::palette::ColorMode;
 use crate::scene::transforms::RenderMode;
 use std::fmt::{self, Display, Formatter};
 use web_time::Instant;
@@ -45,6 +44,7 @@ pub enum ConfigPath {
 
     // ===== Color (no iteration reset, just color buffer update) =====
     ColorMode,
+    PathMapStyle,  // Prefix or Suffix coloring for PathMap mode
     PaletteIndex,
     Palette, // Embedded palette data (custom palettes)
     PaletteRotation,
@@ -165,6 +165,7 @@ impl Display for ConfigPath {
 
             // Color
             ConfigPath::ColorMode => write!(f, "Color Mode"),
+            ConfigPath::PathMapStyle => write!(f, "PathMap Style"),
             ConfigPath::PaletteIndex => write!(f, "Palette"),
             ConfigPath::Palette => write!(f, "Palette Data"),
             ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
@@ -276,6 +277,7 @@ pub enum ConfigValue {
     ColorRgb([f32; 3]),
     ToneMapMode(ToneMapMode),
     ColorMode(ColorMode),
+    PathMapStyle(PathMapStyle),
     RenderMode(RenderMode),
     ToneCurve(ToneCurve),
     Palette(Palette),
@@ -324,6 +326,7 @@ impl Display for ConfigValue {
             }
             ConfigValue::ToneMapMode(m) => write!(f, "{:?}", m),
             ConfigValue::ColorMode(m) => write!(f, "{:?}", m),
+            ConfigValue::PathMapStyle(m) => write!(f, "{:?}", m),
             ConfigValue::RenderMode(m) => write!(f, "{:?}", m),
             ConfigValue::ToneCurve(curve) => {
                 write!(f, "[Tone Curve: {} pts: {:?}]",
@@ -399,6 +402,12 @@ impl From<ToneMapMode> for ConfigValue {
 impl From<ColorMode> for ConfigValue {
     fn from(v: ColorMode) -> Self {
         ConfigValue::ColorMode(v)
+    }
+}
+
+impl From<PathMapStyle> for ConfigValue {
+    fn from(v: PathMapStyle) -> Self {
+        ConfigValue::PathMapStyle(v)
     }
 }
 
@@ -688,6 +697,9 @@ impl ConfigPath {
             | ConfigPath::PaletteRotation
             | ConfigPath::SpeedFactor => UpdateType::ColorOnly,
 
+            // PathMapStyle only affects tonemap interpretation, not accumulation
+            ConfigPath::PathMapStyle => UpdateType::ToneMappingOnly,
+
             // Rendering settings - affect iteration behavior
             ConfigPath::HistogramColorScale
             | ConfigPath::LowDensitySmoothing
@@ -767,6 +779,7 @@ impl ConfigPath {
 
             // Color
             ConfigPath::ColorMode => "ColorMode".to_string(),
+            ConfigPath::PathMapStyle => "PathMapStyle".to_string(),
             ConfigPath::PaletteIndex => "PaletteIndex".to_string(),
             ConfigPath::Palette => "Palette".to_string(),
             ConfigPath::PaletteRotation => "PaletteRotation".to_string(),
@@ -1153,6 +1166,18 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
                     "Palette" => Some(ConfigValue::ColorMode(ColorMode::Palette)),
                     "Speed" => Some(ConfigValue::ColorMode(ColorMode::Speed)),
                     "PathMap" => Some(ConfigValue::ColorMode(ColorMode::PathMap)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
+        ConfigPath::PathMapStyle => {
+            if let Some(s) = json.as_str() {
+                match s {
+                    "Prefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Prefix)),
+                    "Suffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Suffix)),
                     _ => None,
                 }
             } else {

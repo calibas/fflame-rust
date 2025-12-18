@@ -50,7 +50,7 @@ struct Params {
     histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
     has_final_transform: u32,  // 0 = disabled, 1 = enabled
     final_transform_index: u32,  // Index in transform buffer (after regular transforms)
-    _pad3: f32,
+    bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
     _pad4: f32,
 }
 
@@ -58,6 +58,14 @@ struct Params {
 // Indexed as: params[variation_id * 12 + param_slot]
 struct VariationParams {
     params: array<f32, 1200>,  // 100 variations × 12 params
+}
+
+// Path storage for PathMap color mode
+// Stores u64 path as vec2<u32> (hi, lo) per pixel
+// Path is packed MSB-first: transform indices stored from high bits down
+struct PathEntry {
+    hi: u32,  // High 32 bits of path
+    lo: u32,  // Low 32 bits of path
 }
 
 // Bindings
@@ -68,3 +76,4 @@ struct VariationParams {
 @group(0) @binding(4) var palette_sampler: sampler;
 @group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;
 @group(0) @binding(6) var<storage, read_write> iteration_counts: array<atomic<u32>>;
+@group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;

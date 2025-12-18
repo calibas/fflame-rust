@@ -28,7 +28,17 @@ struct TonemapParams {
     alpha_blend_low: f32,  // Start blending toward linear alpha at this value
     alpha_blend_high: f32,  // Full linear alpha above this value
     transparent_mode: u32,  // 0 = normal (blend with background), 1 = transparent export
-    _pad_alpha: f32,  // Padding to align to 16 bytes
+    color_mode: u32,  // 0 = palette, 1 = speed, 2 = path_map
+    width: u32,  // Texture width for path buffer indexing
+    height: u32,  // Texture height for path buffer indexing
+    path_map_style: u32,  // 0 = Prefix (color by path start), 1 = Suffix (color by path end)
+    _pad2: u32,  // Padding for 16-byte alignment (std140)
+}
+
+// Path storage entry (matches compute shader PathEntry)
+struct PathEntry {
+    hi: u32,  // High 32 bits of path
+    lo: u32,  // Low 32 bits of path
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -36,6 +46,7 @@ struct TonemapParams {
 @group(0) @binding(2) var<uniform> tonemap_params: TonemapParams;
 @group(0) @binding(3) var curve_lut_texture: texture_2d<f32>;
 @group(0) @binding(4) var curve_lut_sampler: sampler;
+@group(0) @binding(5) var<storage, read> path_buffer: array<PathEntry>;
 
 // Vertex shader for fullscreen quad
 @vertex
@@ -50,6 +61,54 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     output.uv = vec2<f32>(x * 0.5, y * 0.5);
 
     return output;
+}
+
+// Convert path (u64 as hi/lo) to RGB color
+// path_map_style: 0 = Prefix (color by path start), 1 = Suffix (color by path end)
+fn path_to_color(path_hi: u32, path_lo: u32) -> vec3<f32> {
+    let golden_ratio = 0.618033988749895;
+    var hue: f32;
+
+    if (tonemap_params.path_map_style == 0u) {
+        // PREFIX mode: High bits (early transforms) determine base hue
+        // Low bits (later transforms) add small variations
+        let base_hue = fract(f32(path_hi) * golden_ratio);
+        let variation = f32(path_lo) / 4294967296.0 * 0.15;  // 0-15% hue shift
+        hue = fract(base_hue + variation);
+    } else {
+        // SUFFIX mode: Low bits (recent transforms) determine base hue
+        // High bits (early transforms) add small variations
+        let base_hue = fract(f32(path_lo) * golden_ratio);
+        let variation = f32(path_hi) / 4294967296.0 * 0.15;  // 0-15% hue shift
+        hue = fract(base_hue + variation);
+    }
+
+    // Convert HSV to RGB (full saturation and value for vibrant colors)
+    let h = hue * 6.0;
+    let i = floor(h);
+    let f = h - i;
+    let q = 1.0 - f;
+
+    var r: f32;
+    var g: f32;
+    var b: f32;
+
+    let sector = i32(i) % 6;
+    if (sector == 0) {
+        r = 1.0; g = f; b = 0.0;
+    } else if (sector == 1) {
+        r = q; g = 1.0; b = 0.0;
+    } else if (sector == 2) {
+        r = 0.0; g = 1.0; b = f;
+    } else if (sector == 3) {
+        r = 0.0; g = q; b = 1.0;
+    } else if (sector == 4) {
+        r = f; g = 0.0; b = 1.0;
+    } else {
+        r = 1.0; g = 0.0; b = q;
+    }
+
+    return vec3<f32>(r, g, b);
 }
 
 // Helper function: Calculate brightness scaling factor from logarithmic curve
@@ -278,6 +337,25 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Only apply curve where there's significant fractal density
     let should_apply_curve = tonemap_params.use_curve != 0u && bucket_count > 0.001;
     var fractal_color = select(color, vec3<f32>(curve_r, curve_g, curve_b), should_apply_curve);
+
+    // ===== PathMap Mode: Override Color from Path Buffer =====
+    // In PathMap mode, the accumulation buffer stores white (density only)
+    // The actual color is derived from the path stored in path_buffer
+    if (tonemap_params.color_mode == 2u) {
+        // Calculate pixel coordinates from UV
+        let pixel_x = u32(input.uv.x * f32(tonemap_params.width));
+        let pixel_y = u32(input.uv.y * f32(tonemap_params.height));
+        let pixel_idx = pixel_y * tonemap_params.width + pixel_x;
+
+        // Read path from buffer
+        let path = path_buffer[pixel_idx];
+
+        // Only color pixels with actual path data (not background)
+        if (path.hi != 0u || path.lo != 0u) {
+            // Convert path to color
+            fractal_color = path_to_color(path.hi, path.lo);
+        }
+    }
 
     // ===== STAGE 3F: Background Blending =====
     // We need an alpha curve that:

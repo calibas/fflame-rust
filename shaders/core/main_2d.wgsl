@@ -1,37 +1,3 @@
-// Convert path hash to RGB color using golden ratio hue distribution
-fn path_hash_to_color(hash: u32) -> vec3<f32> {
-    // Use golden ratio for well-distributed hues
-    let golden_ratio = 0.618033988749895;
-    let hue = fract(f32(hash) * golden_ratio);
-
-    // Convert HSV to RGB (full saturation and value for vibrant colors)
-    let h = hue * 6.0;
-    let i = floor(h);
-    let f = h - i;
-    let q = 1.0 - f;
-
-    var r: f32;
-    var g: f32;
-    var b: f32;
-
-    let sector = i32(i) % 6;
-    if (sector == 0) {
-        r = 1.0; g = f; b = 0.0;
-    } else if (sector == 1) {
-        r = q; g = 1.0; b = 0.0;
-    } else if (sector == 2) {
-        r = 0.0; g = 1.0; b = f;
-    } else if (sector == 3) {
-        r = 0.0; g = q; b = 1.0;
-    } else if (sector == 4) {
-        r = f; g = 0.0; b = 1.0;
-    } else {
-        r = 1.0; g = 0.0; b = q;
-    }
-
-    return vec3<f32>(r, g, b);
-}
-
 // Main compute shader entry point for 2D mode
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -48,7 +14,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var color = vec3<f32>(1.0, 1.0, 1.0);
     var color_index = 0.0;  // For palette mode
-    var path_hash = 0u;     // For path map mode - rolling hash of transform indices
+
+    // Path tracking for PathMap mode
+    // Stored as u64 in two u32s: path_hi (high 32 bits), path_lo (low 32 bits)
+    // Path is packed MSB-first: first transform goes into highest bits
+    var path_hi = 0u;
+    var path_lo = 0u;
+    var path_bits_used = 0u;  // How many bits have been written (from MSB)
 
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
@@ -86,10 +58,32 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         } else {
-            // Path map mode: rolling hash of transform path
-            // Shift existing hash left by 4 bits (supports up to 16 transforms)
-            // and add current transform index
-            path_hash = (path_hash << 4u) | (xform_idx & 0xFu);
+            // Path map mode: pack transform index MSB-first into u64 path
+            // bits_per_transform determines how many bits per index (1-5)
+            let bits = params.bits_per_transform;
+
+            // Only add to path if we have room (64 bits total)
+            if (path_bits_used + bits <= 64u) {
+                // Calculate bit position from MSB (bit 63 is MSB)
+                let bit_pos = 64u - path_bits_used - bits;
+
+                if (bit_pos >= 32u) {
+                    // Bits go into high word
+                    let shift = bit_pos - 32u;
+                    path_hi = path_hi | (xform_idx << shift);
+                } else if (bit_pos + bits <= 32u) {
+                    // All bits go into low word
+                    path_lo = path_lo | (xform_idx << bit_pos);
+                } else {
+                    // Bits span both words (rare edge case)
+                    let hi_bits = bit_pos + bits - 32u;
+                    let lo_bits = bits - hi_bits;
+                    path_hi = path_hi | (xform_idx >> lo_bits);
+                    path_lo = path_lo | ((xform_idx & ((1u << lo_bits) - 1u)) << (32u - lo_bits));
+                }
+
+                path_bits_used = path_bits_used + bits;
+            }
         }
 
         // Skip burn-in iterations
@@ -109,6 +103,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if (pixel.x >= 0 && pixel.x < i32(params.width) &&
                 pixel.y >= 0 && pixel.y < i32(params.height)) {
 
+                let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
+
                 // Determine final color based on mode
                 var final_color: vec3<f32>;
                 if (params.color_mode == 0u) {
@@ -118,13 +114,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // Speed mode: uses accumulated RGB color
                     final_color = color;
                 } else {
-                    // Path map mode: convert path hash to color
-                    final_color = path_hash_to_color(path_hash);
+                    // Path map mode: store path to buffer, use white for histogram
+                    // (actual color computed in tonemap shader from path buffer)
+                    path_buffer[pixel_idx].hi = path_hi;
+                    path_buffer[pixel_idx].lo = path_lo;
+                    final_color = vec3<f32>(1.0, 1.0, 1.0);
                 }
 
                 // Atomic accumulation to histogram buffer
                 // Write RGB as 4× u32 (unpacked, full 32-bit precision)
-                let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
                 let base_idx = pixel_idx * 4u;  // 4 words per pixel (R, G, B, density)
 
                 // Use global color scale from params (uniform constant, fast access)
