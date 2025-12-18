@@ -895,7 +895,7 @@ impl HighResExporter {
                     let r = (pixel.r / pixel.count) as f32;
                     let g = (pixel.g / pixel.count) as f32;
                     let b = (pixel.b / pixel.count) as f32;
-                    let density = (pixel.count * 0.01) as f32;
+                    let density = pixel.count as f32;
                     (r, g, b, density)
                 } else {
                     (0.0, 0.0, 0.0, 0.0)
