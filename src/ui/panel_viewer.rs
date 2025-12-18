@@ -18,6 +18,7 @@ pub struct PanelContext<'a> {
 
     // Renderer (optional, might not exist during init)
     pub flame_renderer: Option<&'a crate::renderer::compute_kernel::FlameRenderer>,
+    pub tiled_renderer: Option<&'a crate::export::TiledRenderer>,
 
     // Animation controller
     pub animation_controller: &'a mut crate::animation::AnimationController,
@@ -225,6 +226,7 @@ impl<'a> PanelViewer<'a> {
             self.context.preset_changed,
             self.context.flame,
             self.context.flame_renderer,
+            self.context.tiled_renderer,
             self.context.paused,
             self.context.config_manager,
             self.context.open_config_dialog,

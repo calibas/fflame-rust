@@ -352,17 +352,18 @@ impl App {
 
         // Register renderer's fractal texture with egui for display
         // Use TiledRenderer's texture when supersampling is active
-        if self.active_supersample_level != SupersampleLevel::Off {
-            if let Some(ref tiled) = self.tiled_renderer {
-                if let Some(view) = tiled.get_final_display_view() {
-                    let (display_w, display_h) = tiled.display_dimensions();
-                    self.egui_layer.register_fractal_texture(
-                        &self.gpu.device,
-                        view,
-                        display_w,
-                        display_h,
-                    );
-                }
+        // Use TiledRenderer if available, otherwise fall back to FlameRenderer
+        if let Some(ref tiled) = self.tiled_renderer {
+            if let Some((view, tex_w, tex_h)) = tiled.get_final_display_view() {
+                log::debug!("Registering TiledRenderer texture: {}x{}", tex_w, tex_h);
+                self.egui_layer.register_fractal_texture(
+                    &self.gpu.device,
+                    view,
+                    tex_w,
+                    tex_h,
+                );
+            } else {
+                log::warn!("TiledRenderer has no display view");
             }
         } else if let Some(ref renderer) = self.flame_renderer {
             self.egui_layer.register_fractal_texture(
@@ -386,6 +387,7 @@ impl App {
             &self.metrics,
             &mut self.config_manager,
             self.flame_renderer.as_mut(),
+            self.tiled_renderer.as_ref(),
             &mut self.flame,
             &mut self.palette_library,
             &self.preset_library,
@@ -1667,6 +1669,7 @@ impl App {
                 SupersampleLevel::Off => {
                     // Destroy TiledRenderer, use FlameRenderer
                     self.tiled_renderer = None;
+                    self.active_supersample_level = SupersampleLevel::Off;
                     log::info!("Supersampling disabled, using FlameRenderer");
                 }
                 SupersampleLevel::X2 | SupersampleLevel::X4 => {
@@ -1696,6 +1699,8 @@ impl App {
                                 tiled.init_interactive(final_config);
                                 // Setup supersampling downscale
                                 tiled.init_supersampling(new_supersample_level, display_width, display_height);
+                                // Clear accumulation textures to ensure clean start
+                                tiled.clear_accumulation();
 
                                 // Update palette
                                 let palette = final_config.palette.as_ref()
@@ -1705,11 +1710,17 @@ impl App {
                                 }
 
                                 self.tiled_renderer = Some(tiled);
-                                log::info!("TiledRenderer created successfully");
+                                self.active_supersample_level = new_supersample_level;
+                                log::info!("TiledRenderer created successfully for {:?}", new_supersample_level);
                             }
                             Err(e) => {
                                 log::error!("Failed to create TiledRenderer: {}", e);
-                                // Fall back to FlameRenderer
+                                // Fall back to FlameRenderer, but mark level as synced to prevent retry loop
+                                // The renderer will use FlameRenderer since tiled_renderer is None
+                                // This prevents the error from spamming every frame
+                                self.active_supersample_level = new_supersample_level;
+                                // Note: We don't reset the UI setting here to avoid borrow issues
+                                // The user can manually select "Off" if they want
                             }
                         }
                     }
@@ -1722,8 +1733,6 @@ impl App {
                     }
                 }
             }
-
-            self.active_supersample_level = new_supersample_level;
         }
 
         // Create new encoder for rendering phase
@@ -1738,16 +1747,25 @@ impl App {
             // ============================================================================
             // TILED RENDERER PATH (Supersampling)
             // ============================================================================
+            log::info!("Using TILED renderer path");
             if let Some(ref mut tiled) = self.tiled_renderer {
                 let has_stopped = tiled.total_iterations() >= final_config.max_iterations;
                 let animation_uses_overwrite = is_controller_playing && self.animation_controller.use_overwrite_mode();
-                let use_overwrite = self.use_overwrite_next_frame || has_stopped || animation_uses_overwrite;
+                // Multi-tile rendering MUST use overwrite mode because the accumulation buffers
+                // are shared across tiles - blending would cause cross-tile contamination
+                let multi_tile_forces_overwrite = tiled.is_multi_tile();
+                let use_overwrite = self.use_overwrite_next_frame || has_stopped || animation_uses_overwrite || multi_tile_forces_overwrite;
 
                 // Check if we should continue iterating
                 let max_iterations = Some(final_config.max_iterations);
                 let should_iterate = !self.paused && (
                     is_controller_playing ||
                     max_iterations.map_or(true, |max| tiled.total_iterations() < max)
+                );
+
+                log::info!(
+                    "TiledRenderer: paused={}, should_iterate={}, iterations={}, max={}, use_tiled={}",
+                    self.paused, should_iterate, tiled.total_iterations(), final_config.max_iterations, use_tiled
                 );
 
                 if !should_iterate && !self.rendering_complete {
@@ -1762,7 +1780,8 @@ impl App {
                     let t_compute = Instant::now();
                     // Compute pass - clear histogram on first frame of batch or in overwrite mode
                     let clear = use_overwrite || self.frames_since_accumulation == 0;
-                    tiled.compute_pass_frame(final_config, NUM_WORKGROUPS, iterations_per_thread, clear);
+                    let samples = tiled.compute_pass_frame(final_config, NUM_WORKGROUPS, iterations_per_thread, clear);
+                    log::info!("TiledRenderer compute: {} samples, total={}", samples, tiled.total_iterations());
                     self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
 
                     let t_accumulate = Instant::now();
