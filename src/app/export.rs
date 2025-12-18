@@ -409,7 +409,7 @@ async fn export_headless_cpu(
     let export_start = Instant::now();
 
     // Create exporter
-    let mut exporter = HighResExporter::new(config, width, height).await?;
+    let mut exporter = HighResExporter::new(config, width, height, None).await?;
 
     // Calculate total iterations
     let total_iterations = config.max_iterations;
