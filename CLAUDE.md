@@ -59,6 +59,9 @@
     - Desktop: User data directory, WASM: browser localStorage
   - `src/renderer/compute_kernel.rs` - GPU rendering orchestration
   - `src/renderer/thumbnail.rs` - **Thumbnail rendering** (Added 2025-11-24)
+  - `src/export/` - **High-resolution export system** (Added 2025-12-18)
+    - `high_res.rs` - CPU histogram + GPU tonemap for any resolution
+    - `mod.rs` - `needs_cpu_export()` threshold check
   - `src/scene/transforms.rs` - Flame algorithm (CPU + GPU)
   - `src/ui/` - **Dockable panel UI system** (Migrated to egui_dock 2025-11-13)
     - `mod.rs` - Main UI coordinator, docking integration
@@ -251,7 +254,6 @@
 - GPU buffers use **std430 layout** (storage buffers) and **std140 layout** (uniform buffers) for cross-platform compatibility
 
 ### Current Limitations
-- PNG export only at current viewport resolution (no tiled high-res export)
 - No transform clone/duplicate button
 - No randomize button
 
@@ -319,6 +321,9 @@ The main app supports headless batch PNG export for testing and automation:
 # Export single file
 fractal_flame_wgpu export -i config.fflame -o output.png --width 1920 --height 1080
 
+# High-resolution export (automatically uses CPU histogram for large sizes)
+fractal_flame_wgpu export -i config.fflame -o output.png --width 4000 --height 4000
+
 # Batch export directory
 fractal_flame_wgpu export -i tests/visual/configs -o tests/visual/current
 
@@ -327,17 +332,25 @@ fractal_flame_wgpu export -i tests/visual/configs/variations -o tests/visual/cur
 ```
 
 **Features:**
-- Uses same fast rendering code as interactive app (~0.5s for 10M iterations @ 800x600)
+- **High-resolution support**: Exports at any resolution (4K, 8K, or larger)
+- Automatic GPU/CPU path selection based on resolution
 - Renders exact `max_iterations` from config for reproducibility
 - Progress indicator shows iteration count and percentage
 - Full PNG metadata embedding (build info, config, render settings)
 - Batch processes entire directories
 - Headless GPU rendering (no window required)
 
+**High-Resolution Export Architecture:**
+- **GPU path** (≤128MB histogram): Fast GPU-only rendering
+- **CPU path** (>128MB histogram): GPU compute + CPU histogram + GPU tonemap
+- Threshold: 4K (3840×2160) uses GPU, larger uses CPU path
+- ~24 seconds for 4000×4000 @ 10M iterations
+
 **Performance:**
 - 128 workgroups × 256 iterations = 32,768 iterations/dispatch
 - Automatically calculates dispatch count from `config.max_iterations`
 - Example: 10M iterations @ 800x600 renders in ~0.5 seconds
+- Example: 10M iterations @ 4000x4000 renders in ~24 seconds (CPU path)
 
 **Output:**
 - PNG files with embedded metadata (see PNG Metadata section below)
@@ -871,7 +884,6 @@ cargo build --target aarch64-linux-android
 Features that could be added in future development (see [docs/STATUS.md](docs/STATUS.md) for detailed priority breakdown):
 
 ### High Priority
-- **Tiled high-resolution export** - Currently only exports at viewport resolution; tiled rendering would enable 4K+ exports
 - **Randomize button** - Generate random flames with seeded generation for exploration
 - **Async export progress UI** - Currently export blocks the UI during rendering
 - **Depth effects for 3D mode** - Optional visual enhancements:

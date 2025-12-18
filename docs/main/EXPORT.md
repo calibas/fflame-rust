@@ -12,12 +12,14 @@ Complete guide to PNG export functionality, metadata embedding, and CLI batch ex
 
 ## PNG Export Overview
 
-The renderer supports two types of PNG export:
+The renderer supports multiple export modes:
 
 1. **Interactive Export** - Save button in UI (transparent or opaque)
 2. **CLI Batch Export** - Headless rendering for testing and automation
+3. **High-Resolution Export** - Any resolution via hybrid GPU/CPU architecture (Added 2025-12-18)
 
-Both use the same fast GPU rendering code (~0.5s for 10M iterations @ 800×600).
+Standard resolutions (up to 4K) use fast GPU-only rendering (~0.5s for 10M iterations @ 800×600).
+Larger resolutions automatically use the CPU histogram path (~24s for 4000×4000 @ 10M iterations).
 
 ---
 
@@ -679,21 +681,87 @@ pub fn read_png_metadata(path: &std::path::Path) -> Result<PngMetadata, Box<dyn 
 
 ---
 
+## High-Resolution Export System (Added 2025-12-18)
+
+The renderer now supports PNG export at **any resolution** via a hybrid GPU/CPU architecture.
+
+### Architecture Overview
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  GPU Compute    │────▶│  CPU Histogram   │────▶│  GPU Tonemap    │
+│  (samples)      │     │  (row-binned)    │     │  (final pass)   │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+```
+
+**Two export paths based on resolution:**
+
+| Path | Condition | Method |
+|------|-----------|--------|
+| **GPU** | Histogram ≤128MB | Standard GPU-only rendering |
+| **CPU** | Histogram >128MB | GPU compute + CPU histogram + GPU tonemap |
+
+### Resolution Thresholds
+
+| Resolution | Histogram Size | Export Path |
+|------------|---------------|-------------|
+| 1920×1080 (1080p) | 31.6 MB | GPU |
+| 2560×1440 (1440p) | 56.2 MB | GPU |
+| 3840×2160 (4K) | 126.6 MB | GPU |
+| 4096×2160 (4K DCI) | 135.0 MB | **CPU** |
+| 4000×4000 | 244.1 MB | **CPU** |
+| 7680×4320 (8K) | 506.2 MB | **CPU** |
+
+### Implementation Details
+
+**Location:** [src/export/high_res.rs](../../src/export/high_res.rs)
+
+**Key components:**
+- `HighResExporter` - Main export struct with GPU/CPU hybrid pipeline
+- `needs_cpu_export(width, height)` - Threshold check function
+- Row-based parallel histogram accumulation using rayon
+- GPU tonemapping via tonemap.wgsl shader
+
+**CPU Histogram Accumulation:**
+```rust
+// Row-based binning eliminates lock contention
+let row_bins: Vec<Vec<HistogramPixel>> = (0..height)
+    .into_par_iter()
+    .map(|y| {
+        let mut row = vec![HistogramPixel::default(); width];
+        // Process samples for this row
+        row
+    })
+    .collect();
+```
+
+**GPU Tonemapping:**
+- Uploads CPU histogram as f16 texture (Rgba16Float)
+- Runs same tonemap.wgsl shader as interactive rendering
+- Ensures visual consistency between preview and export
+
+### Performance
+
+- **4000×4000 @ 10M iterations**: ~24 seconds
+- **Bottleneck**: CPU histogram accumulation (~60% of time)
+- **Parallelization**: rayon for row-based accumulation and texture conversion
+
+### UI Integration
+
+Both UI and CLI exports automatically use the high-res path when needed:
+
+```rust
+// In src/app/config.rs
+if crate::export::needs_cpu_export(self.export_width, self.export_height) {
+    self.export_high_res_cpu(transparent, config);
+} else {
+    // Standard GPU export
+}
+```
+
+---
+
 ## Current Limitations
-
-### Resolution Limits
-
-**Problem:** PNG export only supports current viewport resolution.
-
-**Impact:**
-- Cannot export higher resolution than screen
-- No tiled rendering for 4K+ images
-
-**Workaround:**
-- Maximize window before export
-- Use CLI with `--width` and `--height` (still limited by GPU memory)
-
-**Future:** Tiled high-resolution export (see Optional/Future Features in CLAUDE.md)
 
 ### Export Formats
 
@@ -813,5 +881,5 @@ For processing many configs:
 
 ---
 
-**Last Updated:** 2025-10-28
+**Last Updated:** 2025-12-18
 **Related Docs:** [ARCHITECTURE.md](../ARCHITECTURE.md), [RENDERER.md](RENDERER.md), [CONFIG.md](CONFIG.md), [TESTING-GUIDE.md](../TESTING-GUIDE.md)
