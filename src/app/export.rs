@@ -178,8 +178,39 @@ pub async fn export_headless_wasm(
 }
 
 /// Headless PNG export for CLI mode
+///
+/// Automatically selects between:
+/// - GPU histogram (fast, for resolutions up to ~4000x4000)
+/// - CPU histogram (unlimited resolution, for larger exports)
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn export_headless(
+    config: &FractalConfig,
+    output_path: &std::path::Path,
+    width: u32,
+    height: u32,
+    test_category: Option<String>,
+    iterations_per_thread: u32,
+    transparent: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    use std::time::Instant;
+
+    // Check if we need CPU-based export for large resolutions
+    if crate::export::needs_cpu_export(width, height) {
+        let histogram_size = crate::export::calculate_histogram_size(width, height);
+        log::info!(
+            "Using CPU histogram export for {}x{} (histogram would be {} MB)",
+            width, height, histogram_size / (1024 * 1024)
+        );
+        return export_headless_cpu(config, output_path, width, height, test_category, iterations_per_thread, transparent).await;
+    }
+
+    // Use standard GPU-based export for smaller resolutions
+    export_headless_gpu(config, output_path, width, height, test_category, iterations_per_thread, transparent).await
+}
+
+/// GPU-based export (original implementation, fast but limited by buffer size)
+#[cfg(not(target_arch = "wasm32"))]
+async fn export_headless_gpu(
     config: &FractalConfig,
     output_path: &std::path::Path,
     width: u32,
@@ -357,6 +388,56 @@ pub async fn export_headless(
 
     // Overwrite file with metadata version
     std::fs::write(output_path, png_data_with_metadata)?;
+
+    Ok(true)
+}
+
+/// CPU-based export for large resolutions (histogram on CPU, no buffer size limits)
+#[cfg(not(target_arch = "wasm32"))]
+async fn export_headless_cpu(
+    config: &FractalConfig,
+    output_path: &std::path::Path,
+    width: u32,
+    height: u32,
+    test_category: Option<String>,
+    iterations_per_thread: u32,
+    _transparent: bool, // TODO: implement transparent mode for CPU export
+) -> Result<bool, Box<dyn std::error::Error>> {
+    use crate::export::{HighResExporter, CliExportProgress};
+    use std::time::Instant;
+
+    let export_start = Instant::now();
+
+    // Create exporter
+    let mut exporter = HighResExporter::new(config, width, height).await?;
+
+    // Calculate total iterations
+    let total_iterations = config.max_iterations;
+
+    // Run export with progress reporting
+    let mut progress = CliExportProgress;
+    let rgba_data = exporter.export(config, total_iterations, &mut progress).await?;
+
+    // Calculate total export time
+    let total_export_time_ms = export_start.elapsed().as_secs_f64() * 1000.0;
+
+    // Build metadata
+    let mut metadata = crate::png_metadata::PngMetadata::from_app_state(
+        width,
+        height,
+        total_iterations,
+        total_export_time_ms,
+        iterations_per_thread,
+        config.speed_factor,
+        config,
+    );
+    metadata.test_category = test_category;
+
+    // Encode PNG with metadata
+    let png_data = crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata))?;
+
+    // Save to file
+    std::fs::write(output_path, png_data)?;
 
     Ok(true)
 }
