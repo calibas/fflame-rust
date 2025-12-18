@@ -117,6 +117,13 @@ impl App {
         println!("  use_dynamic_blend: {}", config.use_dynamic_blend);
         println!("  blend_factor: {}", config.blend_factor);
 
+        // Check if we need CPU-based high-res export (for large resolutions)
+        if crate::export::needs_cpu_export(self.export_width, self.export_height) {
+            println!("  Using high-res CPU export (resolution exceeds GPU buffer limits)");
+            self.export_high_res_cpu(transparent, config);
+            return;
+        }
+
         // Create temporary renderer at export dimensions
         let surface_format = egui_wgpu::wgpu::TextureFormat::Rgba8Unorm;
         let mut temp_renderer = FlameRenderer::new(
@@ -265,6 +272,73 @@ impl App {
                 }
             }
             Err(e) => eprintln!("Failed to capture pixels: {}", e),
+        }
+    }
+
+    /// High-resolution CPU export using HighResExporter (same system as CLI)
+    #[cfg(not(target_arch = "wasm32"))]
+    fn export_high_res_cpu(&self, _transparent: bool, config: FractalConfig) {
+        use crate::export::{HighResExporter, CliExportProgress};
+        use std::time::Instant;
+
+        let export_start = Instant::now();
+        let width = self.export_width;
+        let height = self.export_height;
+
+        // Create exporter (async, but we block on it)
+        let exporter_result = pollster::block_on(HighResExporter::new(&config, width, height, None));
+
+        let mut exporter = match exporter_result {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("Failed to create high-res exporter: {}", e);
+                return;
+            }
+        };
+
+        // Run export with CLI-style progress (prints to console)
+        let mut progress = CliExportProgress;
+        let rgba_result = pollster::block_on(exporter.export(&config, config.max_iterations, &mut progress));
+
+        let rgba_data = match rgba_result {
+            Ok(data) => data,
+            Err(e) => {
+                eprintln!("Failed to export: {}", e);
+                return;
+            }
+        };
+
+        let total_export_time_ms = export_start.elapsed().as_secs_f64() * 1000.0;
+
+        // Build metadata
+        let metadata = crate::png_metadata::PngMetadata::from_app_state(
+            width,
+            height,
+            config.max_iterations,
+            total_export_time_ms,
+            self.config_manager.system_settings().iterations_per_thread,
+            config.speed_factor,
+            &config,
+        );
+
+        // Encode PNG with metadata
+        match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
+            Ok(png_data) => {
+                // Open file dialog
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("PNG Image", &["png"])
+                    .set_file_name("fractal.png")
+                    .save_file()
+                {
+                    if let Err(e) = std::fs::write(&path, png_data) {
+                        eprintln!("Failed to save PNG: {}", e);
+                    } else {
+                        println!("PNG exported to: {} ({}×{}, {:.2}s)",
+                            path.display(), width, height, total_export_time_ms / 1000.0);
+                    }
+                }
+            }
+            Err(e) => eprintln!("Failed to encode PNG: {}", e),
         }
     }
 }
