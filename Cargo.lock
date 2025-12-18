@@ -1406,6 +1406,7 @@ dependencies = [
  "pollster",
  "quick-xml 0.36.2",
  "rand 0.8.5",
+ "rayon",
  "rfd",
  "ron",
  "rust-i18n",

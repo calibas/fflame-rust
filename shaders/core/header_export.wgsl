@@ -1,0 +1,88 @@
+// Shared header for export shaders (CPU histogram accumulation)
+// Outputs samples to buffer instead of GPU histogram
+
+// Transform structure (matching CPU-side Transform)
+struct Transform {
+    // Affine matrix coefficients
+    a: f32,
+    b: f32,
+    c: f32,
+    d: f32,
+    e: f32,
+    f: f32,
+
+    // Z offset for 3D mode
+    g: f32,
+
+    // Probability weight
+    weight: f32,
+
+    // Variation weights (100 slots: supports all Apophysis 7X + future expansion)
+    variations: array<f32, 100>,
+
+    // Color (palette position) + color_speed + opacity + padding (vec4 for alignment)
+    color: f32,
+    color_speed: f32,
+    opacity: f32,
+    _padding: f32,
+}
+
+// Dispatch parameters
+struct Params {
+    num_transforms: u32,
+    iterations_per_thread: u32,
+    burn_in: u32,
+    width: u32,       // Full output width
+    height: u32,      // Full output height
+    seed: u32,
+    color_mode: u32,  // 0 = transform colors, 1 = palette, 2 = speed
+    render_mode: u32, // 0 = 2D, 1 = 3D
+    splat_size: f32,
+    zoom: f32,
+    pan_x: f32,
+    pan_y: f32,
+    rotation: f32,
+    speed_factor: f32,
+    perspective_strength: f32,
+    camera_rotation_x: f32,
+    camera_rotation_y: f32,
+    camera_z: f32,
+    histogram_color_scale: f32,  // Not used for export, but kept for struct compatibility
+    has_final_transform: u32,
+    final_transform_index: u32,
+    _pad3: f32,
+    _pad4: f32,
+}
+
+// Variation parameters for one transform
+struct VariationParams {
+    params: array<f32, 1200>,  // 100 variations × 12 params
+}
+
+// Output sample structure (x, y, r, g, b with padding for alignment)
+// WGSL arrays require element strides to be multiples of 16 bytes
+// 5 floats = 20 bytes, rounded up to 32 bytes (8 floats) for proper alignment
+struct Sample {
+    x: f32,
+    y: f32,
+    r: f32,
+    g: f32,
+    b: f32,
+    _pad1: f32,
+    _pad2: f32,
+    _pad3: f32,
+}
+
+// Atomic counter for sample count
+struct SampleCounter {
+    count: atomic<u32>,
+}
+
+// Bindings
+@group(0) @binding(0) var<storage, read> transforms: array<Transform>;
+@group(0) @binding(1) var<uniform> params: Params;
+@group(0) @binding(2) var<storage, read_write> samples: array<Sample>;
+@group(0) @binding(3) var palette_texture: texture_2d<f32>;
+@group(0) @binding(4) var palette_sampler: sampler;
+@group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;
+@group(0) @binding(6) var<storage, read_write> sample_counter: SampleCounter;
