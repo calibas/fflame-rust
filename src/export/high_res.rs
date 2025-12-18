@@ -657,8 +657,9 @@ impl HighResExporter {
 
         // Sample density: Use GPU's fixed formula (not based on total iterations)
         // GPU export mode: sample_density = 5000.0 * (iterations_per_thread / 256.0)
-        // We use 256 as reference (default iterations_per_thread)
-        let sample_density = 5000.0; // Fixed reference value matching GPU default
+        // GPU stores 0.01 per hit, we store 1.0 per hit (100× more)
+        // Scale down sample_density to compensate for our higher per-sample density
+        let sample_density = 5000.0 / 100.0; // 50.0 - compensate for 100× density difference
 
         let gamma_threshold = config.gamma_threshold as f64;
 
