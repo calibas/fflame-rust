@@ -1,6 +1,6 @@
 use crate::scene::{presets::PresetLibrary, transforms::Flame};
 use crate::config::{ConfigManager, ConfigPath};
-use crate::export::SupersampleLevel;
+use crate::export::{SupersampleLevel, TiledRenderer};
 use super::formatting::format_iterations;
 
 /// Render settings content (for docking panels)
@@ -17,6 +17,7 @@ pub fn render_settings_content(
     preset_changed: &mut bool,
     flame: &mut Flame,
     flame_renderer: Option<&crate::renderer::compute_kernel::FlameRenderer>,
+    tiled_renderer: Option<&TiledRenderer>,
     paused: &mut bool,
     config_manager: &mut ConfigManager,
     open_config_dialog: &mut bool,
@@ -86,11 +87,14 @@ pub fn render_settings_content(
             ui.separator();
 
             // Max iterations control
-            if let Some(renderer) = &flame_renderer {
+            // Get current iterations from whichever renderer is active
+            let current_iterations = tiled_renderer.map(|t| t.total_iterations())
+                .or_else(|| flame_renderer.map(|r| r.total_iterations()));
+
+            if let Some(current) = current_iterations {
                 ui.label("Max Iterations");
 
                 // Show progress
-                let current = renderer.total_iterations();
                 let max = config.max_iterations;
                 if current >= max {
                     ui.label("✅ Max iterations reached");

@@ -55,6 +55,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let b_sum = f32(histogram[base_idx + 2u]);
     let density = f32(histogram[base_idx + 3u]);
 
+    // DEBUG: Show density as white - any non-zero histogram data shows as white
+    let debug_val = min(density / 100.0, 1.0);
+    textureStore(output_texture, pixel, vec4<f32>(debug_val, debug_val, debug_val, 1.0));
+    return;
+
     // Read iteration count for convergence check
     let count_offset = tile_info.tile_index * pixels_per_tile;
     let pixel_iterations = iteration_counts[count_offset + local_pixel_idx];
@@ -62,7 +67,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let is_converged = params.target_iterations_per_pixel > 0u && has_some_density && pixel_iterations >= params.target_iterations_per_pixel;
     let convergence_gate = select(1.0, 0.0, is_converged);
 
-    // Detect overwrite mode
+    // Detect overwrite mode (multi-tile rendering must use overwrite to avoid cross-tile contamination)
     let is_overwrite_mode = params.blend_factor >= 0.99;
 
     if (density == 0.0) {
@@ -78,7 +83,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         b_sum / density
     ), vec3<f32>(0.0), vec3<f32>(1.0));
 
-    // Adaptive blending
+    // In overwrite mode, skip blending entirely - just use the new values directly
+    // This is critical for multi-tile rendering where the previous accumulation buffer
+    // contains data from a different tile
+    if (is_overwrite_mode) {
+        let new_alpha = density / params.histogram_color_scale * 0.01;
+        textureStore(output_texture, pixel, vec4<f32>(new_color, new_alpha));
+        return;
+    }
+
+    // Normal blending mode (single-tile or when properly accumulated)
     let density_threshold = 0.1;
     let density_factor = mix(1.0, min(prev.a / density_threshold, 1.0), params.low_density_smoothing);
     let compression_factor = 1.0 / (1.0 + prev.a * params.density_compression_strength * 0.01);
@@ -89,13 +103,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let blended_rgb = prev.rgb * (1.0 - final_blend) + new_color * final_blend;
     let rgb_accumulated = mix(new_color, blended_rgb, blend_trust);
 
-    // Alpha accumulation
-    let new_alpha = density * 0.01 * params.blend_factor * convergence_gate;
-    let alpha_accumulated = select(
-        prev.a + new_alpha,
-        new_alpha,
-        params.blend_factor >= 0.99
-    );
+    // Alpha accumulation (density represents accumulated hits scaled by histogram_color_scale)
+    let new_alpha = density / params.histogram_color_scale * 0.01 * params.blend_factor * convergence_gate;
+    let alpha_accumulated = prev.a + new_alpha;
 
     textureStore(output_texture, pixel, vec4<f32>(rgb_accumulated, alpha_accumulated));
 }

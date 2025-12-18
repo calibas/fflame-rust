@@ -11,7 +11,7 @@ use crate::scene::palette::Palette;
 use crate::scene::transforms::RenderMode;
 use crate::shader_builder_v2::ShaderBuilder;
 use crate::variations::global_registry;
-use super::{TileParams, calculate_tile_grid, max_tiles_per_buffer};
+use super::{TileParams, calculate_tile_grid};
 
 /// Tile info uniform for accumulate shader
 #[repr(C)]
@@ -195,14 +195,7 @@ impl TiledRenderer {
         // Calculate tile grid
         let (tiles_x, tiles_y, tile_size) = calculate_tile_grid(full_width, full_height);
         let total_tiles = tiles_x * tiles_y;
-        let max_tiles = max_tiles_per_buffer(tile_size);
-
-        if total_tiles > max_tiles {
-            return Err(format!(
-                "Too many tiles ({}) for single buffer (max {}). Chunked processing not yet implemented.",
-                total_tiles, max_tiles
-            ));
-        }
+        // Note: Actual buffer size is checked against device limit later (histogram buffer creation)
 
         // Create transform buffer
         let transforms: Vec<GpuTransform> = config.flame.transforms
@@ -236,21 +229,26 @@ impl TiledRenderer {
         // Each tile: tile_size × tile_size × 4 channels × 4 bytes
         let histogram_size = (tile_size as u64) * (tile_size as u64) * 4 * 4 * (total_tiles as u64);
         let max_binding_size = device.limits().max_storage_buffer_binding_size as u64;
+        let max_buffer_size = device.limits().max_buffer_size;
+        let effective_max = max_binding_size.min(max_buffer_size);
 
-        if histogram_size > max_binding_size {
+        if histogram_size > effective_max {
             return Err(format!(
                 "Histogram buffer size ({} MB) exceeds device limit ({} MB). \
-                Try reducing output resolution or number of tiles.",
+                Render: {}×{}, {} tiles ({}×{} grid), tile_size={}. \
+                Try reducing window size or supersampling level.",
                 histogram_size / (1024 * 1024),
-                max_binding_size / (1024 * 1024)
+                effective_max / (1024 * 1024),
+                full_width, full_height, total_tiles, tiles_x, tiles_y, tile_size
             ));
         }
 
         log::info!(
-            "Creating histogram buffer: {} MB ({} tiles × {} pixels/tile × 16 bytes/pixel)",
+            "Creating histogram buffer: {} MB ({} tiles × {} pixels/tile × 16 bytes/pixel) for {}×{}",
             histogram_size / (1024 * 1024),
             total_tiles,
-            tile_size * tile_size
+            tile_size * tile_size,
+            full_width, full_height
         );
 
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
@@ -829,22 +827,16 @@ impl TiledRenderer {
         queue: Queue,
     ) -> Result<Self, String> {
         log::info!(
-            "Creating TiledRenderer with shared device, max_storage_buffer_binding_size: {} bytes ({} MB)",
-            device.limits().max_storage_buffer_binding_size,
+            "Creating TiledRenderer {}×{}, max_buffer_size: {} MB, max_storage_buffer_binding_size: {} MB",
+            full_width, full_height,
+            device.limits().max_buffer_size / (1024 * 1024),
             device.limits().max_storage_buffer_binding_size / (1024 * 1024)
         );
 
         // Calculate tile grid
         let (tiles_x, tiles_y, tile_size) = calculate_tile_grid(full_width, full_height);
         let total_tiles = tiles_x * tiles_y;
-        let max_tiles = max_tiles_per_buffer(tile_size);
-
-        if total_tiles > max_tiles {
-            return Err(format!(
-                "Too many tiles ({}) for single buffer (max {}). Chunked processing not yet implemented.",
-                total_tiles, max_tiles
-            ));
-        }
+        // Note: Actual buffer size is checked against device limit later (histogram buffer creation)
 
         // Create transform buffer
         let transforms: Vec<GpuTransform> = config.flame.transforms
@@ -877,21 +869,26 @@ impl TiledRenderer {
         // Create histogram buffer for all tiles
         let histogram_size = (tile_size as u64) * (tile_size as u64) * 4 * 4 * (total_tiles as u64);
         let max_binding_size = device.limits().max_storage_buffer_binding_size as u64;
+        let max_buffer_size = device.limits().max_buffer_size;
+        let effective_max = max_binding_size.min(max_buffer_size);
 
-        if histogram_size > max_binding_size {
+        if histogram_size > effective_max {
             return Err(format!(
                 "Histogram buffer size ({} MB) exceeds device limit ({} MB). \
-                Try reducing output resolution or number of tiles.",
+                Render: {}×{}, {} tiles ({}×{} grid), tile_size={}. \
+                Try reducing window size or supersampling level.",
                 histogram_size / (1024 * 1024),
-                max_binding_size / (1024 * 1024)
+                effective_max / (1024 * 1024),
+                full_width, full_height, total_tiles, tiles_x, tiles_y, tile_size
             ));
         }
 
         log::info!(
-            "Creating histogram buffer: {} MB ({} tiles × {} pixels/tile × 16 bytes/pixel)",
+            "Creating histogram buffer: {} MB ({} tiles × {} pixels/tile × 16 bytes/pixel) for {}×{}",
             histogram_size / (1024 * 1024),
             total_tiles,
-            tile_size * tile_size
+            tile_size * tile_size,
+            full_width, full_height
         );
 
         let histogram_buffer = device.create_buffer(&BufferDescriptor {
@@ -1027,30 +1024,30 @@ impl TiledRenderer {
 
         let accumulate_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Accumulate Params Buffer"),
-            size: 16,  // blend_factor + padding
+            size: std::mem::size_of::<AccumulateParams>() as u64,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let accumulation_texture_a = device.create_texture(&TextureDescriptor {
             label: Some("Accumulation Texture A"),
-            size: Extent3d { width: tile_size, height: tile_size, depth_or_array_layers: total_tiles },
+            size: Extent3d { width: tile_size, height: tile_size, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: TextureFormat::Rgba16Float,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING | TextureUsages::COPY_DST,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
 
         let accumulation_texture_b = device.create_texture(&TextureDescriptor {
             label: Some("Accumulation Texture B"),
-            size: Extent3d { width: tile_size, height: tile_size, depth_or_array_layers: total_tiles },
+            size: Extent3d { width: tile_size, height: tile_size, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: TextureFormat::Rgba16Float,
-            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING | TextureUsages::COPY_DST,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
             view_formats: &[],
         });
 
@@ -1064,11 +1061,72 @@ impl TiledRenderer {
         let accumulate_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Tiled Accumulate Bind Group Layout"),
             entries: &[
-                BindGroupLayoutEntry { binding: 0, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                BindGroupLayoutEntry { binding: 1, visibility: ShaderStages::COMPUTE, ty: BindingType::Texture { sample_type: TextureSampleType::Float { filterable: false }, view_dimension: TextureViewDimension::D2Array, multisampled: false }, count: None },
-                BindGroupLayoutEntry { binding: 2, visibility: ShaderStages::COMPUTE, ty: BindingType::StorageTexture { access: StorageTextureAccess::WriteOnly, format: TextureFormat::Rgba16Float, view_dimension: TextureViewDimension::D2Array }, count: None },
-                BindGroupLayoutEntry { binding: 3, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                BindGroupLayoutEntry { binding: 4, visibility: ShaderStages::COMPUTE, ty: BindingType::Buffer { ty: BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
+                // binding 0: previous accumulation texture
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 1: histogram buffer
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 2: output texture
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::Rgba16Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                // binding 3: accumulate params
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 4: iteration counts
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 5: tile info
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -1112,7 +1170,7 @@ impl TiledRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
-            format: TextureFormat::R32Float,
+            format: TextureFormat::R8Unorm,  // Must be filterable for textureSample in shader
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -1135,10 +1193,53 @@ impl TiledRenderer {
         let tonemap_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("Tonemap Bind Group Layout"),
             entries: &[
-                BindGroupLayoutEntry { binding: 0, visibility: ShaderStages::FRAGMENT, ty: BindingType::Texture { sample_type: TextureSampleType::Float { filterable: false }, view_dimension: TextureViewDimension::D2, multisampled: false }, count: None },
-                BindGroupLayoutEntry { binding: 1, visibility: ShaderStages::FRAGMENT, ty: BindingType::Buffer { ty: BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None },
-                BindGroupLayoutEntry { binding: 2, visibility: ShaderStages::FRAGMENT, ty: BindingType::Texture { sample_type: TextureSampleType::Float { filterable: true }, view_dimension: TextureViewDimension::D2, multisampled: false }, count: None },
-                BindGroupLayoutEntry { binding: 3, visibility: ShaderStages::FRAGMENT, ty: BindingType::Sampler(SamplerBindingType::Filtering), count: None },
+                // binding 0: accumulation texture
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 1: sampler
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // binding 2: tonemap params
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 3: curve lut texture
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // binding 4: curve lut sampler
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
 
@@ -1360,6 +1461,13 @@ impl TiledRenderer {
     /// Get tile grid info
     pub fn tile_info(&self) -> (u32, u32, u32) {
         (self.tiles_x, self.tiles_y, self.tile_size)
+    }
+
+    /// Check if this renderer uses multiple tiles
+    /// Multi-tile rendering requires overwrite mode to avoid cross-tile contamination
+    /// in the shared accumulation buffers
+    pub fn is_multi_tile(&self) -> bool {
+        self.tiles_x > 1 || self.tiles_y > 1
     }
 
     /// Run complete tiled export: compute → accumulate → tonemap → stitch
@@ -1641,6 +1749,8 @@ impl TiledRenderer {
 
     /// Initialize for interactive rendering (creates compute bind group)
     pub fn init_interactive(&mut self, _config: &FractalConfig) {
+        log::info!("TiledRenderer::init_interactive called");
+
         // Update tile params
         let tile_params = TileParams {
             full_width: self.full_width,
@@ -1652,6 +1762,9 @@ impl TiledRenderer {
             tile_offset: 0,
             _padding: 0,
         };
+        log::info!("TileParams: full={}x{}, tile_size={}, tiles={}x{}, num_tiles={}",
+            tile_params.full_width, tile_params.full_height, tile_params.tile_size,
+            tile_params.tiles_x, tile_params.tiles_y, tile_params.num_tiles);
         self.queue.write_buffer(&self.tile_params_buffer, 0, bytemuck::bytes_of(&tile_params));
 
         // Create and cache compute bind group
@@ -1670,6 +1783,7 @@ impl TiledRenderer {
                 BindGroupEntry { binding: 7, resource: self.tile_params_buffer.as_entire_binding() },
             ],
         }));
+        log::info!("TiledRenderer::init_interactive: compute_bind_group created = {}", self.compute_bind_group.is_some());
 
         // Reset state
         self.samples_accumulated = 0;
@@ -1713,6 +1827,9 @@ impl TiledRenderer {
         self.frame_counter += 1;
 
         // Update GPU params
+        // Note: zoom is NOT adjusted for supersampling here because the tiled shader's
+        // world_to_pixel function already uses tile_params.full_width/full_height for scaling,
+        // which automatically accounts for the larger render resolution.
         let params = GpuParams {
             num_transforms: config.flame.transforms.len() as u32,
             iterations_per_thread,
@@ -1762,8 +1879,10 @@ impl TiledRenderer {
             compute_pass.set_pipeline(&self.compute_pipeline);
             compute_pass.set_bind_group(0, bind_group, &[]);
             compute_pass.dispatch_workgroups(num_workgroups, 1, 1);
+            log::info!("COMPUTE DISPATCH: {} workgroups", num_workgroups);
         }
         self.queue.submit(std::iter::once(encoder.finish()));
+        log::info!("COMPUTE SUBMITTED to queue");
 
         // Track iterations
         let threads_per_workgroup = 64u64;
@@ -1799,6 +1918,8 @@ impl TiledRenderer {
     /// and produces a displayable result
     pub fn accumulate_and_stitch(&mut self, config: &FractalConfig, blend_factor: f32) {
         let total_tiles = self.tiles_x * self.tiles_y;
+        log::info!("accumulate_and_stitch: {} tiles ({}x{}), tile_size={}, blend={}",
+            total_tiles, self.tiles_x, self.tiles_y, self.tile_size, blend_factor);
 
         // Process each tile
         for tile_idx in 0..total_tiles {
@@ -1953,6 +2074,42 @@ impl TiledRenderer {
         self.queue.submit(std::iter::once(encoder.finish()));
     }
 
+    /// DEBUG: Fill stitched texture with magenta to test display path
+    pub fn debug_fill_stitched_magenta(&self) {
+        if let Some(ref stitched) = self.stitched_texture {
+            // Create magenta pixel data (RGBA8)
+            let pixel_count = (self.full_width * self.full_height) as usize;
+            let mut data = Vec::with_capacity(pixel_count * 4);
+            for _ in 0..pixel_count {
+                data.push(255); // R
+                data.push(0);   // G
+                data.push(255); // B
+                data.push(255); // A
+            }
+
+            self.queue.write_texture(
+                TexelCopyTextureInfo {
+                    texture: stitched,
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                &data,
+                TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(self.full_width * 4),
+                    rows_per_image: Some(self.full_height),
+                },
+                Extent3d {
+                    width: self.full_width,
+                    height: self.full_height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            log::info!("DEBUG: Filled stitched texture with magenta {}x{}", self.full_width, self.full_height);
+        }
+    }
+
     /// Initialize supersampling resources
     /// Call this after construction to enable supersampling
     pub fn init_supersampling(&mut self, level: SupersampleLevel, display_width: u32, display_height: u32) {
@@ -2073,6 +2230,9 @@ impl TiledRenderer {
             return;  // No supersampling, stitched texture is already display size
         }
 
+        log::info!("Downsample: running with level {:?}, full={}x{}, display={}x{}",
+            self.supersample_level, self.full_width, self.full_height, self.display_width, self.display_height);
+
         let (pipeline, bind_group_layout, params_buffer, display_view) = match (
             &self.downsample_pipeline,
             &self.downsample_bind_group_layout,
@@ -2135,14 +2295,32 @@ impl TiledRenderer {
         self.queue.submit(std::iter::once(encoder.finish()));
     }
 
-    /// Get the final display texture view
-    /// Returns downsampled texture if supersampling, otherwise stitched texture
-    pub fn get_final_display_view(&self) -> Option<&TextureView> {
+    /// Get the final display texture view and its dimensions
+    /// Returns (view, width, height) - using downsampled texture if available, otherwise stitched
+    pub fn get_final_display_view(&self) -> Option<(&TextureView, u32, u32)> {
+        log::debug!(
+            "get_final_display_view: supersample={:?}, display_view={}, stitched_view={}, full={}x{}, display={}x{}",
+            self.supersample_level,
+            self.display_texture_view.is_some(),
+            self.stitched_texture_view.is_some(),
+            self.full_width, self.full_height,
+            self.display_width, self.display_height
+        );
+
+        // When supersampling is active, return the downsampled display texture
         if self.supersample_level != SupersampleLevel::Off {
-            self.display_texture_view.as_ref()
-        } else {
-            self.stitched_texture_view.as_ref()
+            if let Some(ref view) = self.display_texture_view {
+                log::debug!("get_final_display_view: returning downsampled texture {}x{}",
+                    self.display_width, self.display_height);
+                return Some((view, self.display_width, self.display_height));
+            }
         }
+
+        // Fall back to stitched texture (for 1× or if downsample not available)
+        log::debug!("get_final_display_view: returning stitched texture {}x{}",
+            self.full_width, self.full_height);
+        self.stitched_texture_view.as_ref()
+            .map(|v| (v, self.full_width, self.full_height))
     }
 
     /// Get current supersampling level
