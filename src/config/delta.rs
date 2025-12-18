@@ -1152,6 +1152,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
                 match s {
                     "Palette" => Some(ConfigValue::ColorMode(ColorMode::Palette)),
                     "Speed" => Some(ConfigValue::ColorMode(ColorMode::Speed)),
+                    "PathMap" => Some(ConfigValue::ColorMode(ColorMode::PathMap)),
                     _ => None,
                 }
             } else {

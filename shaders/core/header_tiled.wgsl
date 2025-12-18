@@ -35,7 +35,7 @@ struct Params {
     width: u32,       // Tile width (for histogram indexing)
     height: u32,      // Tile height (for histogram indexing)
     seed: u32,
-    color_mode: u32,  // 0 = transform colors, 1 = palette, 2 = speed
+    color_mode: u32,  // 0 = palette, 1 = speed, 2 = path_map
     render_mode: u32, // 0 = 2D, 1 = 3D
     splat_size: f32,
     zoom: f32,

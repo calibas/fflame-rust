@@ -7,6 +7,8 @@ pub enum ColorMode {
     Palette,
     /// Use speed-based coloring (distance traveled per iteration)
     Speed,
+    /// Use transform path history as color (IFS tree visualization)
+    PathMap,
 }
 
 impl Default for ColorMode {
