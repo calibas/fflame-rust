@@ -189,7 +189,6 @@ impl EguiLayer {
         metrics: &crate::util::PerformanceMetrics,
         config_manager: &mut crate::config::ConfigManager,
         flame_renderer: Option<&mut crate::renderer::compute_kernel::FlameRenderer>,
-        tiled_renderer: Option<&crate::export::TiledRenderer>,
         flame: &mut crate::scene::transforms::Flame,
         palette_library: &mut crate::scene::palette::PaletteLibrary,
         preset_library: &crate::scene::presets::PresetLibrary,
@@ -296,7 +295,6 @@ impl EguiLayer {
 
                         // Renderer
                         flame_renderer: flame_renderer.as_ref().map(|v| &**v),
-                        tiled_renderer,
 
                         // Animation controller
                         animation_controller,
