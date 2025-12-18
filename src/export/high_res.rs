@@ -2,17 +2,21 @@
 //!
 //! This approach avoids GPU buffer size limits by:
 //! 1. GPU generates samples → outputs to buffer (x, y, r, g, b)
-//! 2. CPU reads samples → accumulates into per-pixel f64 histogram
-//! 3. CPU tonemaps → outputs final RGBA pixels
+//! 2. CPU reads samples → accumulates into per-pixel f64 histogram (parallelized with rayon)
+//! 3. Upload histogram to GPU texture → GPU tonemaps → outputs final RGBA pixels
 //!
-//! This allows exports of any resolution limited only by system RAM.
+//! This allows exports of any resolution limited only by system RAM,
+//! while still using GPU for fast tonemapping.
 
 use egui_wgpu::wgpu::util::DeviceExt;
 use egui_wgpu::wgpu::*;
+use half::f16;
+use rayon::prelude::*;
 
 use crate::config::FractalConfig;
-use crate::gpu::buffers::{GpuParams, GpuTransform, GpuVariationParams};
+use crate::gpu::buffers::{GpuParams, GpuTransform, GpuVariationParams, TonemapParams};
 use crate::scene::palette::Palette;
+use crate::scene::tonemap::ToneCurve;
 use crate::scene::transforms::RenderMode;
 use crate::shader_builder_v2::ShaderBuilder;
 use crate::variations::global_registry;
@@ -80,7 +84,7 @@ pub struct HighResExporter {
     width: u32,
     height: u32,
 
-    // GPU resources
+    // GPU resources for sample generation
     transform_buffer: Buffer,
     params_buffer: Buffer,
     sample_buffer: Buffer,
@@ -89,9 +93,17 @@ pub struct HighResExporter {
     palette_texture: Texture,
     palette_sampler: Sampler,
 
-    // Pipeline
+    // Compute pipeline for sample generation
     compute_pipeline: ComputePipeline,
     bind_group_layout: BindGroupLayout,
+
+    // GPU resources for tonemapping
+    tonemap_pipeline: RenderPipeline,
+    tonemap_bind_group_layout: BindGroupLayout,
+    tonemap_params_buffer: Buffer,
+    curve_lut_texture: Texture,
+    curve_lut_sampler: Sampler,
+    accumulation_sampler: Sampler,
 
     // Configuration
     render_mode: RenderMode,
@@ -100,16 +112,34 @@ pub struct HighResExporter {
 }
 
 impl HighResExporter {
-    /// Base workgroups and threads per dispatch
-    const WORKGROUPS: u64 = 128;
+    /// Threads per workgroup (fixed by shader)
     const THREADS_PER_WORKGROUP: u64 = 64;
 
-    /// Default iterations per thread (matches interactive renderer)
+    /// Default iterations per thread for high-res export
     const DEFAULT_ITERATIONS_PER_THREAD: u32 = 256;
+
+    /// Target buffer size in bytes (~128MB - within GPU max_storage_buffer_binding_size)
+    /// Most GPUs have a limit of 128-134MB, so we use 128MB to be safe
+    /// Larger buffer = fewer round-trips = faster export
+    const TARGET_BUFFER_SIZE: u64 = 128 * 1024 * 1024;
+
+    /// Calculate optimal workgroups based on target buffer size and iterations_per_thread
+    fn calculate_workgroups(iterations_per_thread: u32) -> u64 {
+        let sample_size = std::mem::size_of::<Sample>() as u64; // 32 bytes
+        let samples_per_workgroup = Self::THREADS_PER_WORKGROUP * iterations_per_thread as u64;
+        let bytes_per_workgroup = samples_per_workgroup * sample_size;
+
+        // Calculate workgroups to fill target buffer
+        let workgroups = Self::TARGET_BUFFER_SIZE / bytes_per_workgroup;
+
+        // Clamp to reasonable range (min 128, max 65535 for GPU compatibility)
+        workgroups.clamp(128, 65535)
+    }
 
     /// Calculate samples per dispatch for given iterations_per_thread
     fn samples_per_dispatch(iterations_per_thread: u32) -> u64 {
-        Self::WORKGROUPS * Self::THREADS_PER_WORKGROUP * iterations_per_thread as u64
+        let workgroups = Self::calculate_workgroups(iterations_per_thread);
+        workgroups * Self::THREADS_PER_WORKGROUP * iterations_per_thread as u64
     }
 
     /// Create a new high-resolution exporter
@@ -144,7 +174,14 @@ impl HighResExporter {
             .await
             .map_err(|e| format!("Failed to create device: {}", e))?;
 
-        log::info!("High-res export: {}x{}", width, height);
+        // Log export configuration
+        let workgroups = Self::calculate_workgroups(iterations_per_thread);
+        let samples_per_dispatch = Self::samples_per_dispatch(iterations_per_thread);
+        let buffer_size_mb = (samples_per_dispatch * std::mem::size_of::<Sample>() as u64) / (1024 * 1024);
+        log::info!(
+            "High-res export: {}x{}, {} workgroups, {} samples/dispatch (~{}MB buffer)",
+            width, height, workgroups, samples_per_dispatch, buffer_size_mb
+        );
 
         // Create transform buffer
         let transforms: Vec<GpuTransform> = config
@@ -376,6 +413,166 @@ impl HighResExporter {
             cache: None,
         });
 
+        // ===== Create tonemap pipeline for GPU tonemapping =====
+        let tonemap_shader = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Export Tonemap Shader"),
+            source: ShaderSource::Wgsl(include_str!("../../shaders/tonemap.wgsl").into()),
+        });
+
+        // Tonemap bind group layout (matches FlamePipelines)
+        let tonemap_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Export Tonemap Bind Group Layout"),
+            entries: &[
+                // Accumulation texture (sampled)
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Sampler
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // Tonemap params (uniform)
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // Curve LUT texture
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Curve LUT sampler
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let tonemap_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Export Tonemap Pipeline Layout"),
+            bind_group_layouts: &[&tonemap_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let tonemap_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("Export Tonemap Pipeline"),
+            layout: Some(&tonemap_pipeline_layout),
+            vertex: VertexState {
+                module: &tonemap_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(FragmentState {
+                module: &tonemap_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(ColorTargetState {
+                    format: TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // Create tonemap params buffer
+        let tonemap_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Tonemap Params Buffer"),
+            size: std::mem::size_of::<TonemapParams>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create curve LUT texture (linear curve by default)
+        let default_curve = ToneCurve::linear();
+        let curve_lut_data = default_curve.generate_lut();
+
+        let curve_lut_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Export Curve LUT Texture"),
+            size: Extent3d {
+                width: 256,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: &curve_lut_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &curve_lut_data,
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: None,
+                rows_per_image: None,
+            },
+            Extent3d {
+                width: 256,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let curve_lut_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("Export Curve LUT Sampler"),
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let accumulation_sampler = device.create_sampler(&SamplerDescriptor {
+            label: Some("Export Accumulation Sampler"),
+            address_mode_u: AddressMode::ClampToEdge,
+            address_mode_v: AddressMode::ClampToEdge,
+            mag_filter: FilterMode::Linear,
+            min_filter: FilterMode::Linear,
+            ..Default::default()
+        });
+
         Ok(Self {
             device,
             queue,
@@ -390,6 +587,12 @@ impl HighResExporter {
             palette_sampler,
             compute_pipeline,
             bind_group_layout,
+            tonemap_pipeline,
+            tonemap_bind_group_layout,
+            tonemap_params_buffer,
+            curve_lut_texture,
+            curve_lut_sampler,
+            accumulation_sampler,
             render_mode: config.flame.render_mode,
             samples_per_dispatch,
             iterations_per_thread,
@@ -460,11 +663,9 @@ impl HighResExporter {
             mapped_at_creation: false,
         });
 
-        // Calculate dispatch parameters
-        let workgroups_per_dispatch = 128u32;
-        let threads_per_workgroup = 64u64;
-        let iterations_per_dispatch =
-            workgroups_per_dispatch as u64 * threads_per_workgroup * self.iterations_per_thread as u64;
+        // Calculate dispatch parameters using dynamic workgroup count
+        let workgroups_per_dispatch = Self::calculate_workgroups(self.iterations_per_thread) as u32;
+        let iterations_per_dispatch = self.samples_per_dispatch;
         let num_dispatches =
             (total_iterations + iterations_per_dispatch - 1) / iterations_per_dispatch;
 
@@ -562,27 +763,45 @@ impl HighResExporter {
                 );
                 self.queue.submit(std::iter::once(encoder.finish()));
 
-                // Read and accumulate samples
+                // Read and accumulate samples (parallelized by row)
                 let samples = self
                     .read_samples(&readback_buffer, sample_count.min(self.samples_per_dispatch as u32))
                     .await?;
 
-                for sample in &samples {
-                    let x = sample.x as i32;
-                    let y = sample.y as i32;
+                // Strategy: Bin samples by row, then accumulate each row in parallel
+                // This avoids allocating full histogram copies while still parallelizing
+                let width = self.width as i32;
+                let height = self.height as i32;
+                let width_usize = self.width as usize;
+                let height_usize = self.height as usize;
 
-                    if x >= 0
-                        && x < self.width as i32
-                        && y >= 0
-                        && y < self.height as i32
-                    {
-                        let idx = (y as usize) * (self.width as usize) + (x as usize);
-                        histogram[idx].r += sample.r as f64;
-                        histogram[idx].g += sample.g as f64;
-                        histogram[idx].b += sample.b as f64;
-                        histogram[idx].count += 1.0;
+                // Pre-bin samples by their Y coordinate (row)
+                // Vec of samples for each row
+                let mut row_samples: Vec<Vec<&Sample>> = vec![Vec::new(); height_usize];
+                for sample in &samples {
+                    let y = sample.y as i32;
+                    if y >= 0 && y < height {
+                        row_samples[y as usize].push(sample);
                     }
                 }
+
+                // Parallel accumulation: each thread processes a chunk of rows
+                histogram
+                    .par_chunks_mut(width_usize)
+                    .enumerate()
+                    .for_each(|(row_idx, row_pixels)| {
+                        // Process all samples that land in this row
+                        for sample in &row_samples[row_idx] {
+                            let x = sample.x as i32;
+                            if x >= 0 && x < width {
+                                let pixel = &mut row_pixels[x as usize];
+                                pixel.r += sample.r as f64;
+                                pixel.g += sample.g as f64;
+                                pixel.b += sample.b as f64;
+                                pixel.count += 1.0;
+                            }
+                        }
+                    });
 
                 total_samples_accumulated += samples.len() as u64;
             }
@@ -591,8 +810,8 @@ impl HighResExporter {
         progress.on_accumulating(total_samples_accumulated);
         progress.on_tonemapping();
 
-        // Tonemap histogram to RGBA
-        let pixels = self.tonemap(&histogram, config, total_samples_accumulated);
+        // Tonemap histogram to RGBA using GPU
+        let pixels = self.tonemap_gpu(&histogram, config).await?;
 
         progress.on_complete();
 
@@ -647,259 +866,299 @@ impl HighResExporter {
         Ok(samples)
     }
 
-    /// CPU tonemap: histogram → RGBA pixels
-    /// Implements Apophysis-compatible tone mapping matching GPU tonemap.wgsl
-    fn tonemap(&self, histogram: &[HistogramPixel], config: &FractalConfig, _total_samples: u64) -> Vec<u8> {
+    /// GPU tonemap: histogram → RGBA pixels using GPU shader
+    /// Uploads CPU histogram to GPU texture, runs tonemap shader, reads back result
+    async fn tonemap_gpu(
+        &self,
+        histogram: &[HistogramPixel],
+        config: &FractalConfig,
+    ) -> Result<Vec<u8>, String> {
         use crate::config::defaults::{DEFAULT_WHITE_LEVEL, PREFILTER_WHITE, BRIGHT_ADJUST};
 
-        let num_pixels = (self.width as usize) * (self.height as usize);
-        let mut pixels = vec![0u8; num_pixels * 4];
+        // ===== Step 1: Convert histogram to Rgba16Float format (parallelized) =====
+        // The GPU accumulation buffer stores:
+        // - R, G, B: averaged colors (sum/count)
+        // - A: density as count * 0.01
+        //
+        // Our CPU histogram stores:
+        // - r, g, b: raw sums
+        // - count: raw hit count
+        //
+        // Convert to GPU format: average the colors, scale density
+        // Pre-allocate buffer and write in parallel chunks for efficiency
+        let mut texture_data = vec![0u8; histogram.len() * 8];
+        texture_data
+            .par_chunks_mut(8)
+            .zip(histogram.par_iter())
+            .for_each(|(chunk, pixel)| {
+                let (r, g, b, density) = if pixel.count > 0.0 {
+                    let r = (pixel.r / pixel.count) as f32;
+                    let g = (pixel.g / pixel.count) as f32;
+                    let b = (pixel.b / pixel.count) as f32;
+                    let density = (pixel.count * 0.01) as f32;
+                    (r, g, b, density)
+                } else {
+                    (0.0, 0.0, 0.0, 0.0)
+                };
 
-        // Apophysis constants (from tonemap.wgsl / config/defaults.rs)
-        let white_level = DEFAULT_WHITE_LEVEL as f64;
-        let prefilter_white = PREFILTER_WHITE as f64;
-        let bright_adjust = BRIGHT_ADJUST as f64;
+                // Convert to f16 bytes (8 bytes per pixel)
+                chunk[0..2].copy_from_slice(&f16::from_f32(r).to_le_bytes());
+                chunk[2..4].copy_from_slice(&f16::from_f32(g).to_le_bytes());
+                chunk[4..6].copy_from_slice(&f16::from_f32(b).to_le_bytes());
+                chunk[6..8].copy_from_slice(&f16::from_f32(density).to_le_bytes());
+            });
 
-        // Calculate area in FRACTAL SPACE (not pixel space!) - matches GPU export mode
-        // GPU: let base_pixels_per_unit = (width.min(height) as f32) * 0.25;
-        //      let pixels_per_unit_zoomed = base_pixels_per_unit * 2^(log2(zoom))
-        //      let area = (width * height) / (pixels_per_unit_zoomed^2)
-        let zoom = config.zoom as f64;
-        let base_pixels_per_unit = (self.width.min(self.height) as f64) * 0.25;
+
+        // ===== Step 2: Create and upload accumulation texture =====
+        let accumulation_texture = self.device.create_texture(&TextureDescriptor {
+            label: Some("Export Accumulation Texture"),
+            size: Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba16Float,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let bytes_per_row = self.width * 8; // 4 channels × 2 bytes (f16)
+        self.queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: &accumulation_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &texture_data,
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(bytes_per_row),
+                rows_per_image: Some(self.height),
+            },
+            Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let accumulation_view = accumulation_texture.create_view(&TextureViewDescriptor::default());
+
+        // ===== Step 3: Set up tonemap params =====
+        // Calculate area and sample_density matching GPU formula
+        let zoom = config.zoom;
+        let base_pixels_per_unit = (self.width.min(self.height) as f32) * 0.25;
         let apophysis_zoom = zoom.log2();
-        let pixels_per_unit_zoomed = base_pixels_per_unit * 2.0_f64.powf(apophysis_zoom);
-        let area = (self.width as f64 * self.height as f64) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
+        let pixels_per_unit_zoomed = base_pixels_per_unit * 2.0_f32.powf(apophysis_zoom);
+        let area = (self.width as f32 * self.height as f32) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: Use GPU's formula scaled by iterations_per_thread
-        // GPU export mode: sample_density = 5000.0 * (iterations_per_thread / 256.0)
-        // GPU stores 0.01 per hit, we store 1.0 per hit (100× more)
-        // Scale down by 100 to compensate for our higher per-sample density
-        let sample_density = 5000.0 * (self.iterations_per_thread as f64 / 256.0) / 100.0;
+        // Sample density: scaled by iterations_per_thread, divided by 100 for our CPU histogram format
+        // GPU stores 0.01 per hit, we already converted to that format above
+        let sample_density = 5000.0 * (self.iterations_per_thread as f32 / 256.0);
 
-        let gamma_threshold = config.gamma_threshold as f64;
-
-        let exposure = config.exposure as f64;
-        let gamma = config.gamma as f64;
-        // Invert gamma (Apophysis ImageMaker.pas:410)
-        let inv_gamma = if gamma == 0.0 { gamma } else { 1.0 / gamma };
-        let brightness = config.brightness as f64;
-        let vibrancy = config.vibrancy as f64;
-        let saturation = config.saturation as f64;
-        let hue_shift = config.hue_shift as f64;
-        let value_scale = config.value_scale as f64;
-
-        // Background color (already in 0-1 range)
-        let bg_r = config.background_color[0] as f64;
-        let bg_g = config.background_color[1] as f64;
-        let bg_b = config.background_color[2] as f64;
-
-        // Calculate k1 and k2 for brightness_scale function (from tonemap.wgsl)
-        let contrast = 1.0;
-        let k1 = contrast * bright_adjust * brightness * 268.0 * prefilter_white / 256.0;
-        let k2 = 1.0 / (contrast * area * white_level * sample_density);
-
-        // Pre-calculate funcval for gamma threshold (Apophysis setup phase)
-        let funcval = if gamma_threshold != 0.0 {
-            gamma_threshold.powf(inv_gamma - 1.0)
-        } else {
-            0.0
+        let tonemap_mode = match config.tonemap_mode {
+            crate::scene::tonemap::ToneMapMode::Linear => 0u32,
+            crate::scene::tonemap::ToneMapMode::Logarithmic => 1u32,
+            crate::scene::tonemap::ToneMapMode::DensityVisualization => 2u32,
         };
 
-        // Vibrancy blend factors (Apophysis ImageMaker.pas:412)
-        let vib = (vibrancy * 256.0).round();
-        let notvib = 256.0 - vib;
+        let tonemap_params = TonemapParams {
+            exposure: config.exposure,
+            gamma: config.gamma,
+            density_scale: config.density_scale,
+            tonemap_mode,
+            background_color: config.background_color,
+            _pad_bg: 0.0,
+            use_curve: if config.use_curve { 1 } else { 0 },
+            vibrancy: config.vibrancy,
+            brightness: config.brightness,
+            white_level: DEFAULT_WHITE_LEVEL,
+            prefilter_white: PREFILTER_WHITE,
+            bright_adjust: BRIGHT_ADJUST,
+            area,
+            sample_density,
+            saturation: config.saturation,
+            hue_shift: config.hue_shift,
+            value_scale: config.value_scale,
+            gamma_threshold: config.gamma_threshold,
+            alpha_blend_low: config.alpha_blend_low,
+            alpha_blend_high: config.alpha_blend_high,
+            transparent_mode: 0, // Normal display mode (blend with background)
+            _pad_alpha: 0.0,
+        };
 
-        for (i, pixel) in histogram.iter().enumerate() {
-            if pixel.count < 0.001 {
-                // Background color (apply sRGB conversion)
-                let srgb_r = bg_r.powf(1.0 / 2.2);
-                let srgb_g = bg_g.powf(1.0 / 2.2);
-                let srgb_b = bg_b.powf(1.0 / 2.2);
-                pixels[i * 4] = (srgb_r * 255.0).clamp(0.0, 255.0) as u8;
-                pixels[i * 4 + 1] = (srgb_g * 255.0).clamp(0.0, 255.0) as u8;
-                pixels[i * 4 + 2] = (srgb_b * 255.0).clamp(0.0, 255.0) as u8;
-                pixels[i * 4 + 3] = 255;
-                continue;
-            }
+        self.queue.write_buffer(
+            &self.tonemap_params_buffer,
+            0,
+            bytemuck::bytes_of(&tonemap_params),
+        );
 
-            // Scale count to match GPU accumulation buffer format
-            // GPU stores 0.01 per hit, we store 1.0 per sample
-            // GPU reads: bucket_count = accum.a * 100.0
-            // So our count is already in the right scale (1 sample = 1 count)
-            let bucket_count = pixel.count;
-
-            // Raw accumulated sums (GPU format: bucket = sum, not average)
-            let bucket_red = pixel.r;
-            let bucket_green = pixel.g;
-            let bucket_blue = pixel.b;
-
-            // ===== STAGE 3A: Apply Brightness to Palette Colors =====
-            // Calculate brightness scaling factor (ls) from logarithmic curve
-            let ls = if bucket_count < 0.001 {
-                0.0
-            } else {
-                // lsa[i] = (k1 * log10(1 + white_level * i * k2)) / (white_level * i)
-                let log10_value = (1.0 + white_level * bucket_count * k2).log10();
-                (k1 * log10_value) / (white_level * bucket_count)
-            };
-
-            // Apply brightness scaling to accumulated color sums
-            let ls_scaled = ls / prefilter_white;
-            let fp0 = ls_scaled * bucket_red;     // brightness-scaled red
-            let fp1 = ls_scaled * bucket_green;   // brightness-scaled green
-            let fp2 = ls_scaled * bucket_blue;    // brightness-scaled blue
-            let fp3 = ls_scaled * bucket_count * white_level;  // weighted density
-
-            // ===== STAGE 3B: Apply Gamma to Density =====
-            let alpha = if fp3 <= 0.0 {
-                0.0
-            } else if fp3 <= gamma_threshold {
-                // Blend between linear and gamma curves at low densities
-                let frac = fp3 / gamma_threshold;
-                (1.0 - frac) * fp3 * funcval + frac * fp3.powf(inv_gamma)
-            } else {
-                // Standard gamma curve
-                fp3.powf(inv_gamma)
-            };
-
-            // ===== STAGE 3C: Calculate Vibrancy-Weighted Multiplier =====
-            let ls2 = if fp3 > 0.0 {
-                vib * alpha / fp3
-            } else {
-                0.0
-            };
-
-            // ===== STAGE 3D: Vibrancy Blend =====
-            // Blend between new (gamma on brightness) and old (gamma on colors) algorithms
-            // IMPORTANT: This is ADDITIVE, not weighted average!
-            let (mut r, mut g, mut b) = if notvib > 0.0 {
-                // NEW algorithm: ls * fp[x] (vibrancy-weighted brightness × brightness-scaled color)
-                let new_r = ls2 * fp0;
-                let new_g = ls2 * fp1;
-                let new_b = ls2 * fp2;
-
-                // OLD algorithm: notvib * power(fp[x], gamma) (gamma applied to colors)
-                let old_r = notvib * fp0.powf(inv_gamma);
-                let old_g = notvib * fp1.powf(inv_gamma);
-                let old_b = notvib * fp2.powf(inv_gamma);
-
-                // Additive blend (NOT weighted average!)
-                (new_r + old_r, new_g + old_g, new_b + old_b)
-            } else {
-                // Pure new algorithm (vibrancy >= 1.0)
-                (ls2 * fp0, ls2 * fp1, ls2 * fp2)
-            };
-
-            // ===== STAGE 3E: HSV Adjustments =====
-            let needs_hsv = saturation != 1.0 || hue_shift != 0.0 || value_scale != 1.0;
-            if needs_hsv {
-                let (mut h, mut s, mut v) = rgb_to_hsv(r, g, b);
-
-                // Hue shift
-                if hue_shift != 0.0 {
-                    h += hue_shift;
-                    if h < 0.0 {
-                        h += 360.0;
-                    } else if h >= 360.0 {
-                        h -= 360.0;
-                    }
-                }
-
-                // Saturation boost
-                if saturation != 1.0 {
-                    s = (s * saturation).clamp(0.0, 1.0);
-                }
-
-                // Value scaling
-                if value_scale != 1.0 {
-                    v = (v * value_scale).clamp(0.0, 1.0);
-                }
-
-                let (r_new, g_new, b_new) = hsv_to_rgb(h, s, v);
-                r = r_new;
-                g = g_new;
-                b = b_new;
-            }
-
-            // Apply exposure
-            r *= exposure;
-            g *= exposure;
-            b *= exposure;
-
-            // Clamp to valid range
-            r = r.clamp(0.0, 1.0);
-            g = g.clamp(0.0, 1.0);
-            b = b.clamp(0.0, 1.0);
-
-            // ===== STAGE 3F: Background Blending =====
-            let fractal_alpha = alpha.clamp(0.0, 1.0);
-
-            // Composite with background (normal mode, not transparent export)
-            let final_r = bg_r * (1.0 - fractal_alpha) + r * fractal_alpha;
-            let final_g = bg_g * (1.0 - fractal_alpha) + g * fractal_alpha;
-            let final_b = bg_b * (1.0 - fractal_alpha) + b * fractal_alpha;
-
-            // Convert from linear to sRGB for display
-            let srgb_r = final_r.powf(1.0 / 2.2);
-            let srgb_g = final_g.powf(1.0 / 2.2);
-            let srgb_b = final_b.powf(1.0 / 2.2);
-
-            pixels[i * 4] = (srgb_r * 255.0).clamp(0.0, 255.0) as u8;
-            pixels[i * 4 + 1] = (srgb_g * 255.0).clamp(0.0, 255.0) as u8;
-            pixels[i * 4 + 2] = (srgb_b * 255.0).clamp(0.0, 255.0) as u8;
-            pixels[i * 4 + 3] = 255;
+        // Update curve LUT if using curve
+        if config.use_curve {
+            let curve_lut_data = config.tonemap_curve.generate_lut();
+            self.queue.write_texture(
+                TexelCopyTextureInfo {
+                    texture: &self.curve_lut_texture,
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                &curve_lut_data,
+                TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: None,
+                    rows_per_image: None,
+                },
+                Extent3d {
+                    width: 256,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+            );
         }
 
-        pixels
-    }
-}
+        // ===== Step 4: Create bind group and output texture =====
+        let curve_lut_view = self.curve_lut_texture.create_view(&TextureViewDescriptor::default());
 
-// Helper: RGB to HSV
-fn rgb_to_hsv(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
-    let max_val = r.max(g).max(b);
-    let min_val = r.min(g).min(b);
-    let delta = max_val - min_val;
+        let tonemap_bind_group = self.device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Export Tonemap Bind Group"),
+            layout: &self.tonemap_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&accumulation_view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Sampler(&self.accumulation_sampler),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: self.tonemap_params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(&curve_lut_view),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::Sampler(&self.curve_lut_sampler),
+                },
+            ],
+        });
 
-    let v = max_val;
+        // Create output texture
+        let output_texture = self.device.create_texture(&TextureDescriptor {
+            label: Some("Export Output Texture"),
+            size: Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let output_view = output_texture.create_view(&TextureViewDescriptor::default());
 
-    if delta < 0.00001 || max_val < 0.00001 {
-        return (0.0, 0.0, v);
-    }
+        // ===== Step 5: Run tonemap render pass =====
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Export Tonemap Encoder"),
+        });
 
-    let s = delta / max_val;
+        {
+            let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Export Tonemap Pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &output_view,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(Color::BLACK),
+                        store: StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
 
-    let h = if r >= max_val {
-        (g - b) / delta
-    } else if g >= max_val {
-        2.0 + (b - r) / delta
-    } else {
-        4.0 + (r - g) / delta
-    } * 60.0;
+            render_pass.set_pipeline(&self.tonemap_pipeline);
+            render_pass.set_bind_group(0, &tonemap_bind_group, &[]);
+            render_pass.draw(0..3, 0..1); // Fullscreen triangle
+        }
 
-    let h = if h < 0.0 { h + 360.0 } else { h };
+        // ===== Step 6: Read back result =====
+        let bytes_per_pixel = 4u32; // RGBA8
+        let unpadded_bytes_per_row = self.width * bytes_per_pixel;
+        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * self.height) as u64;
 
-    (h, s, v)
-}
+        let readback_buffer = self.device.create_buffer(&BufferDescriptor {
+            label: Some("Export Tonemap Readback Buffer"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
 
-// Helper: HSV to RGB
-fn hsv_to_rgb(h: f64, s: f64, v: f64) -> (f64, f64, f64) {
-    if s <= 0.0 {
-        return (v, v, v);
-    }
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: &output_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &readback_buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
 
-    let hh = if h >= 360.0 { 0.0 } else { h } / 60.0;
-    let i = hh as u32;
-    let ff = hh - i as f64;
-    let p = v * (1.0 - s);
-    let q = v * (1.0 - s * ff);
-    let t = v * (1.0 - s * (1.0 - ff));
+        self.queue.submit(std::iter::once(encoder.finish()));
 
-    match i {
-        0 => (v, t, p),
-        1 => (q, v, p),
-        2 => (p, v, t),
-        3 => (p, q, v),
-        4 => (t, p, v),
-        _ => (v, p, q),
+        // Map and read pixels
+        let buffer_slice = readback_buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).ok();
+        });
+
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+        rx.await
+            .map_err(|_| "Failed to receive tonemap readback result".to_string())?
+            .map_err(|e| format!("Failed to map tonemap readback buffer: {:?}", e))?;
+
+        let data = buffer_slice.get_mapped_range();
+
+        // Copy pixels, removing row padding
+        let mut pixels = Vec::with_capacity((self.width * self.height * 4) as usize);
+        for y in 0..self.height {
+            let row_start = (y * padded_bytes_per_row) as usize;
+            let row_end = row_start + (self.width * bytes_per_pixel) as usize;
+            pixels.extend_from_slice(&data[row_start..row_end]);
+        }
+
+        drop(data);
+        readback_buffer.unmap();
+
+        Ok(pixels)
     }
 }
