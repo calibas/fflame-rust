@@ -31,5 +31,8 @@ pub fn needs_cpu_export(width: u32, height: u32) -> bool {
     // Most GPUs have a max_storage_buffer_binding_size around 128-134 MB
     // Use conservative 128 MB limit to ensure compatibility
     const MAX_GPU_HISTOGRAM_SIZE: u64 = 128 * 1024 * 1024; // 128 MB
-    calculate_histogram_size(width, height) > MAX_GPU_HISTOGRAM_SIZE
+
+    // Simple calculation: width × height × 16 bytes (4 channels × 4 bytes per f32)
+    let histogram_size = (width as u64) * (height as u64) * 16;
+    histogram_size > MAX_GPU_HISTOGRAM_SIZE
 }
