@@ -1,3 +1,22 @@
+// Convert path hash to RGB color using golden ratio hue distribution
+fn path_hash_to_color(hash: u32) -> vec3<f32> {
+    let golden_ratio = 0.618033988749895;
+    let hue = fract(f32(hash) * golden_ratio);
+    let h = hue * 6.0;
+    let i = floor(h);
+    let f = h - i;
+    let q = 1.0 - f;
+    var r: f32; var g: f32; var b: f32;
+    let sector = i32(i) % 6;
+    if (sector == 0) { r = 1.0; g = f; b = 0.0; }
+    else if (sector == 1) { r = q; g = 1.0; b = 0.0; }
+    else if (sector == 2) { r = 0.0; g = 1.0; b = f; }
+    else if (sector == 3) { r = 0.0; g = q; b = 1.0; }
+    else if (sector == 4) { r = f; g = 0.0; b = 1.0; }
+    else { r = 1.0; g = 0.0; b = q; }
+    return vec3<f32>(r, g, b);
+}
+
 // Main compute shader entry point for 2D tiled rendering
 // Samples are routed to appropriate tile buffers based on screen coordinates
 
@@ -16,6 +35,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var color = vec3<f32>(1.0, 1.0, 1.0);
     var color_index = 0.0;
+    var path_hash = 0u;
 
     // Pre-calculate tile buffer size (pixels per tile × 4 channels)
     let tile_buffer_size = tile_params.tile_size * tile_params.tile_size * 4u;
@@ -47,9 +67,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let colorC1 = (1.0 + symmetry) / 2.0;
             let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
             color_index = color_index * colorC1 + colorC2;
-        } else {
+        } else if (params.color_mode == 1u) {
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
+        } else {
+            path_hash = (path_hash << 4u) | (xform_idx & 0xFu);
         }
 
         // Skip burn-in
@@ -80,8 +102,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     var final_color: vec3<f32>;
                     if (params.color_mode == 0u) {
                         final_color = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
-                    } else {
+                    } else if (params.color_mode == 1u) {
                         final_color = color;
+                    } else {
+                        final_color = path_hash_to_color(path_hash);
                     }
 
                     // Calculate histogram offset for this tile

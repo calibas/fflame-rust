@@ -305,6 +305,7 @@ pub fn render_colors_content(
             let selected_text = match current_mode {
                 ColorMode::Palette => "Palette",
                 ColorMode::Speed => "Speed",
+                ColorMode::PathMap => "Path Map",
             };
 
             let mut temp_color_mode = current_mode;
@@ -317,6 +318,14 @@ pub fn render_colors_content(
                         }
                     }
                     if ui.selectable_value(&mut temp_color_mode, ColorMode::Speed, "Speed").changed() {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    if ui.selectable_value(&mut temp_color_mode, ColorMode::PathMap, "Path Map")
+                        .on_hover_text("Color based on transform path history (IFS tree visualization)")
+                        .changed()
+                    {
                         if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
                             max_update = max_update.max(update);
                         }
