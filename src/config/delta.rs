@@ -115,7 +115,6 @@ pub enum ConfigPath {
 
     // ===== System Settings (device-specific, not tracked for undo) =====
     SystemIterationsPerThread,
-    SystemSupersampleLevel,
     SystemVsyncEnabled,
     SystemTargetFps,
     SystemExportWidth,
@@ -255,7 +254,6 @@ impl Display for ConfigPath {
 
             // System Settings
             ConfigPath::SystemIterationsPerThread => write!(f, "System: Iterations Per Thread"),
-            ConfigPath::SystemSupersampleLevel => write!(f, "System: Supersample Level"),
             ConfigPath::SystemVsyncEnabled => write!(f, "System: VSync Enabled"),
             ConfigPath::SystemTargetFps => write!(f, "System: Target FPS"),
             ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
@@ -727,7 +725,7 @@ impl ConfigPath {
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
 
             // System Settings
-            ConfigPath::SystemIterationsPerThread | ConfigPath::SystemSupersampleLevel => UpdateType::IterationReset,
+            ConfigPath::SystemIterationsPerThread => UpdateType::IterationReset,
             ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps => UpdateType::ViewOnly,
             ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage => UpdateType::None,
         }
@@ -832,7 +830,6 @@ impl ConfigPath {
 
             // System Settings (not typically animated, but included for completeness)
             ConfigPath::SystemIterationsPerThread => "System.IterationsPerThread".to_string(),
-            ConfigPath::SystemSupersampleLevel => "System.SupersampleLevel".to_string(),
             ConfigPath::SystemVsyncEnabled => "System.VsyncEnabled".to_string(),
             ConfigPath::SystemTargetFps => "System.TargetFps".to_string(),
             ConfigPath::SystemExportWidth => "System.ExportWidth".to_string(),
@@ -972,7 +969,6 @@ impl ConfigPath {
         if parts.len() == 2 && parts[0] == "System" {
             match parts[1] {
                 "IterationsPerThread" => return Some(ConfigPath::SystemIterationsPerThread),
-                "SupersampleLevel" => return Some(ConfigPath::SystemSupersampleLevel),
                 "VsyncEnabled" => return Some(ConfigPath::SystemVsyncEnabled),
                 "TargetFps" => return Some(ConfigPath::SystemTargetFps),
                 "ExportWidth" => return Some(ConfigPath::SystemExportWidth),
@@ -1123,7 +1119,6 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TargetIterationsPerPixel
         | ConfigPath::TransformCount
         | ConfigPath::SystemIterationsPerThread
-        | ConfigPath::SystemSupersampleLevel
         | ConfigPath::SystemExportWidth
         | ConfigPath::SystemExportHeight => {
             json.as_u64().map(|u| ConfigValue::UInt(u as u32))

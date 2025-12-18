@@ -12,7 +12,6 @@
 //! See docs/projects/config-versioning.md for details.
 
 use serde::{Deserialize, Serialize};
-use crate::export::SupersampleLevel;
 
 /// Current system settings format version
 pub const CURRENT_SETTINGS_VERSION: u32 = 1;
@@ -38,10 +37,6 @@ pub struct SystemSettings {
     /// Iterations per thread (GPU workgroup performance tuning, default: 256)
     #[serde(default = "default_iterations_per_thread")]
     pub iterations_per_thread: u32,
-
-    /// Supersampling level for anti-aliasing (Off, 2x, 4x)
-    #[serde(default)]
-    pub supersample_level: SupersampleLevel,
 
     // UI/UX
     /// Application language (ISO 639-1 code, e.g., "en", "es", "fr")
@@ -105,7 +100,6 @@ impl Default for SystemSettings {
             vsync_enabled: default_vsync_enabled(),
             target_fps: default_target_fps(),
             iterations_per_thread: default_iterations_per_thread(),
-            supersample_level: SupersampleLevel::default(),
             language: default_language(),
             default_export_width: default_export_width(),
             default_export_height: default_export_height(),
@@ -160,9 +154,6 @@ impl SystemSettings {
         }
         if current.iterations_per_thread == defaults.iterations_per_thread {
             obj.remove("iterations_per_thread");
-        }
-        if current.supersample_level == defaults.supersample_level {
-            obj.remove("supersample_level");
         }
 
         // UI/UX
