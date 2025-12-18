@@ -63,24 +63,22 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return output;
 }
 
-// Convert path (u64 as hi/lo) to RGB color
+// Convert path prefix/suffix to RGB color
+// path_hi = prefix (first ~10 transforms packed MSB-first)
+// path_lo = suffix (rolling hash of recent transforms)
 // path_map_style: 0 = Prefix (color by path start), 1 = Suffix (color by path end)
 fn path_to_color(path_hi: u32, path_lo: u32) -> vec3<f32> {
     let golden_ratio = 0.618033988749895;
     var hue: f32;
 
     if (tonemap_params.path_map_style == 0u) {
-        // PREFIX mode: High bits (early transforms) determine base hue
-        // Low bits (later transforms) add small variations
-        let base_hue = fract(f32(path_hi) * golden_ratio);
-        let variation = f32(path_lo) / 4294967296.0 * 0.15;  // 0-15% hue shift
-        hue = fract(base_hue + variation);
+        // PREFIX mode: Use the first transforms to determine color
+        // path_hi contains the first ~10 transforms packed MSB-first
+        hue = fract(f32(path_hi) * golden_ratio);
     } else {
-        // SUFFIX mode: Low bits (recent transforms) determine base hue
-        // High bits (early transforms) add small variations
-        let base_hue = fract(f32(path_lo) * golden_ratio);
-        let variation = f32(path_hi) / 4294967296.0 * 0.15;  // 0-15% hue shift
-        hue = fract(base_hue + variation);
+        // SUFFIX mode: Use recent transforms to determine color
+        // path_lo is rolling hash where recent transforms dominate
+        hue = fract(f32(path_lo) * golden_ratio);
     }
 
     // Convert HSV to RGB (full saturation and value for vibrant colors)
