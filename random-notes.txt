@@ -314,3 +314,22 @@ register_native_texture shouldn't run every frame.
 
 
 min/max iteration depths for transforms
+
+Whole new rendering method:
+Track every iteration as a "density" buffer, store as f32.
+Track multiple colors per pixel within a second histogram.
+Combine these to draw the image.
+Different modes for blending the second histogram:
+Less Noise
+More Detail
+Special edge detection mode?
+
+
+is wgpu::Limits::default() the reason we seem to be hitting a speed limit?
+
+
+
+Check downsampling method. Have everything use TIledRenderer.
+
+
+FFT Image Analysis for fracticality when auto-training.

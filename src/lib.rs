@@ -20,6 +20,7 @@ pub mod apophysis_xml;
 pub mod i18n;
 pub mod animation;
 pub mod storage;
+pub mod export;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
 mod shader_builder_v2;
 mod shader_cache;

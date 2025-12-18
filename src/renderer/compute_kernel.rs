@@ -730,7 +730,10 @@ impl FlameRenderer {
         let base_pixels_per_unit = (self.width.min(self.height) as f32) * 0.25;
         let pixels_per_unit_zoomed = base_pixels_per_unit * (2.0_f32).powf(apophysis_zoom);
         let area = (self.width * self.height) as f32 / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
-        let sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0);
+        // Resolution normalization: scale inversely with pixel count (reference: 1M pixels)
+        let total_pixels = (self.width * self.height) as f32;
+        let reference_pixels = 1_000_000.0;
+        let sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0) * (reference_pixels / total_pixels);
 
         let params = TonemapParams {
             exposure: config.exposure,
@@ -812,7 +815,13 @@ impl FlameRenderer {
         // - Both bucket_count growth and sample_density scale together
         // - The ratio stays constant → brightness stays constant
         // - iterations_per_thread only affects render speed, not appearance
-        let mut sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0);
+        //
+        // Resolution normalization: Scale sample_density inversely with pixel count
+        // to keep area × sample_density constant across different render sizes.
+        // Reference: 1,000,000 pixels (1000×1000)
+        let total_pixels = (width * height) as f32;
+        let reference_pixels = 1_000_000.0;
+        let mut sample_density = 5000.0 * (iterations_per_thread as f32 / 256.0) * (reference_pixels / total_pixels);
 
         // Live preview mode: Divide by 8 for brighter preview
         // This compensates for lower density accumulation during live parameter editing
