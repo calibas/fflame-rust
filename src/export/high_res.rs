@@ -96,20 +96,34 @@ pub struct HighResExporter {
     // Configuration
     render_mode: RenderMode,
     samples_per_dispatch: u64,
+    iterations_per_thread: u32,
 }
 
 impl HighResExporter {
-    /// Maximum samples per dispatch (sized to fit in reasonable buffer)
-    /// 128 workgroups × 64 threads × 256 iterations = ~2M samples
-    /// At 20 bytes per sample = 40 MB buffer
-    const MAX_SAMPLES_PER_DISPATCH: u64 = 128 * 64 * 256;
+    /// Base workgroups and threads per dispatch
+    const WORKGROUPS: u64 = 128;
+    const THREADS_PER_WORKGROUP: u64 = 64;
+
+    /// Default iterations per thread (matches interactive renderer)
+    const DEFAULT_ITERATIONS_PER_THREAD: u32 = 256;
+
+    /// Calculate samples per dispatch for given iterations_per_thread
+    fn samples_per_dispatch(iterations_per_thread: u32) -> u64 {
+        Self::WORKGROUPS * Self::THREADS_PER_WORKGROUP * iterations_per_thread as u64
+    }
 
     /// Create a new high-resolution exporter
+    ///
+    /// `iterations_per_thread`: Number of iterations each GPU thread performs per dispatch.
+    /// Higher values = fewer dispatches but same total work. Affects tonemap brightness scaling.
+    /// Use `None` for default (256).
     pub async fn new(
         config: &FractalConfig,
         width: u32,
         height: u32,
+        iterations_per_thread: Option<u32>,
     ) -> Result<Self, String> {
+        let iterations_per_thread = iterations_per_thread.unwrap_or(Self::DEFAULT_ITERATIONS_PER_THREAD);
         // Create GPU instance
         let instance = Instance::new(&InstanceDescriptor {
             backends: Backends::all(),
@@ -154,8 +168,9 @@ impl HighResExporter {
             mapped_at_creation: false,
         });
 
-        // Create sample output buffer (sized for max samples per dispatch)
-        let sample_buffer_size = Self::MAX_SAMPLES_PER_DISPATCH * std::mem::size_of::<Sample>() as u64;
+        // Create sample output buffer (sized for samples per dispatch based on iterations_per_thread)
+        let samples_per_dispatch = Self::samples_per_dispatch(iterations_per_thread);
+        let sample_buffer_size = samples_per_dispatch * std::mem::size_of::<Sample>() as u64;
         let sample_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Export Sample Buffer"),
             size: sample_buffer_size,
@@ -376,7 +391,8 @@ impl HighResExporter {
             compute_pipeline,
             bind_group_layout,
             render_mode: config.flame.render_mode,
-            samples_per_dispatch: Self::MAX_SAMPLES_PER_DISPATCH,
+            samples_per_dispatch,
+            iterations_per_thread,
         })
     }
 
@@ -447,9 +463,8 @@ impl HighResExporter {
         // Calculate dispatch parameters
         let workgroups_per_dispatch = 128u32;
         let threads_per_workgroup = 64u64;
-        let iterations_per_thread = 256u32;
         let iterations_per_dispatch =
-            workgroups_per_dispatch as u64 * threads_per_workgroup * iterations_per_thread as u64;
+            workgroups_per_dispatch as u64 * threads_per_workgroup * self.iterations_per_thread as u64;
         let num_dispatches =
             (total_iterations + iterations_per_dispatch - 1) / iterations_per_dispatch;
 
@@ -467,7 +482,7 @@ impl HighResExporter {
 
             let params = GpuParams {
                 num_transforms: config.flame.transforms.len() as u32,
-                iterations_per_thread,
+                iterations_per_thread: self.iterations_per_thread,
                 burn_in: 20,
                 width: self.width,
                 height: self.height,
@@ -655,11 +670,11 @@ impl HighResExporter {
         let pixels_per_unit_zoomed = base_pixels_per_unit * 2.0_f64.powf(apophysis_zoom);
         let area = (self.width as f64 * self.height as f64) / (pixels_per_unit_zoomed * pixels_per_unit_zoomed);
 
-        // Sample density: Use GPU's fixed formula (not based on total iterations)
+        // Sample density: Use GPU's formula scaled by iterations_per_thread
         // GPU export mode: sample_density = 5000.0 * (iterations_per_thread / 256.0)
         // GPU stores 0.01 per hit, we store 1.0 per hit (100× more)
-        // Scale down sample_density to compensate for our higher per-sample density
-        let sample_density = 5000.0 / 100.0; // 50.0 - compensate for 100× density difference
+        // Scale down by 100 to compensate for our higher per-sample density
+        let sample_density = 5000.0 * (self.iterations_per_thread as f64 / 256.0) / 100.0;
 
         let gamma_threshold = config.gamma_threshold as f64;
 
