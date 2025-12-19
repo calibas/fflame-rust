@@ -66,6 +66,7 @@ pub struct EguiLayer {
     // PathMap mode: clicked pixel and cached path
     clicked_pixel: Option<(u32, u32)>,
     clicked_path: Option<crate::renderer::PathEntry>,
+    close_path_overlay: bool,
 }
 
 impl EguiLayer {
@@ -106,6 +107,7 @@ impl EguiLayer {
             track_editor_state: track_editor::TrackEditorState::default(),
             clicked_pixel: None,
             clicked_path: None,
+            close_path_overlay: false,
         }
     }
 
@@ -150,6 +152,13 @@ impl EguiLayer {
     /// Update the cached path entry for display
     pub fn set_clicked_path(&mut self, path: Option<crate::renderer::PathEntry>) {
         self.clicked_path = path;
+    }
+
+    /// Check if the path overlay should be closed and reset the flag
+    pub fn take_close_path_overlay(&mut self) -> bool {
+        let close = self.close_path_overlay;
+        self.close_path_overlay = false;
+        close
     }
 
     /// Register the renderer's fractal texture with egui for display
@@ -378,6 +387,7 @@ impl EguiLayer {
                         // PathMap mode: clicked pixel and path
                         hovered_pixel: &mut self.clicked_pixel,
                         hovered_path: &self.clicked_path,
+                        close_path_overlay: &mut self.close_path_overlay,
                     },
                 });
 
