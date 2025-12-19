@@ -427,24 +427,42 @@ pub fn render_colors_content(
             if matches!(current_color_mode, ColorMode::PathMap) {
                 let current_style = config_manager.active_config().path_map_style;
                 let style_text = match current_style {
-                    PathMapStyle::Similar => "Similar",
-                    PathMapStyle::Distinct => "Distinct",
+                    PathMapStyle::Prefix => "Prefix",
+                    PathMapStyle::Suffix => "Suffix",
+                    PathMapStyle::PrefixDistinct => "Prefix (Distinct)",
+                    PathMapStyle::SuffixDistinct => "Suffix (Distinct)",
                 };
 
                 let mut temp_style = current_style;
                 egui::ComboBox::from_label("Path Style")
                     .selected_text(style_text)
                     .show_ui(ui, |ui| {
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::Similar, "Similar")
-                            .on_hover_text("Similar paths get similar colors")
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::Prefix, "Prefix")
+                            .on_hover_text("Color by path beginning (first ~8 transforms)")
                             .changed()
                         {
                             if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
                                 max_update = max_update.max(update);
                             }
                         }
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::Distinct, "Distinct")
-                            .on_hover_text("Similar paths get very different colors")
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::Suffix, "Suffix")
+                            .on_hover_text("Color by path end (recent transforms)")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::PrefixDistinct, "Prefix (Distinct)")
+                            .on_hover_text("Path beginning with hash scrambling for distinct colors")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::SuffixDistinct, "Suffix (Distinct)")
+                            .on_hover_text("Path end with hash scrambling for distinct colors")
                             .changed()
                         {
                             if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {

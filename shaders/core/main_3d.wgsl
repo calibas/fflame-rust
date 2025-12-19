@@ -9,18 +9,20 @@ fn scramble_hash(x: u32) -> u32 {
     return h;
 }
 
-// Convert path hash to RGB color using golden ratio hue distribution
-// path_map_style: 0 = Similar (direct), 1 = Distinct (scrambled)
-fn path_hash_to_color(hash: u32) -> vec3<f32> {
+// Convert path to RGB color using golden ratio hue distribution
+// path_map_style: 0 = Prefix, 1 = Suffix, 2 = Prefix (Distinct), 3 = Suffix (Distinct)
+fn path_to_color(prefix: u32, suffix: u32) -> vec3<f32> {
     let golden_ratio = 0.618033988749895;
     var hue: f32;
 
     if (params.path_map_style == 0u) {
-        // Similar: direct golden ratio mapping
-        hue = fract(f32(hash) * golden_ratio);
+        hue = fract(f32(prefix) * golden_ratio);
+    } else if (params.path_map_style == 1u) {
+        hue = fract(f32(suffix) * golden_ratio);
+    } else if (params.path_map_style == 2u) {
+        hue = fract(f32(scramble_hash(prefix)) * golden_ratio);
     } else {
-        // Distinct: scramble hash first for maximum color spread
-        hue = fract(f32(scramble_hash(hash)) * golden_ratio);
+        hue = fract(f32(scramble_hash(suffix)) * golden_ratio);
     }
 
     // Convert HSV to RGB (full saturation and value for vibrant colors)
@@ -69,8 +71,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var color = vec3<f32>(1.0, 1.0, 1.0);
     var color_index = 0.0;  // For palette mode
 
-    // Path tracking for PathMap mode - simple rolling hash like f5943a8
-    var path_hash = 0u;
+    // Path tracking for PathMap mode
+    var path_prefix = 0u;
+    var path_suffix = 0u;
+    var prefix_bits_used = 0u;
 
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
@@ -108,8 +112,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         } else {
-            // Path map mode: rolling hash of transform indices
-            path_hash = (path_hash << 4u) | (xform_idx & 0xFu);
+            // Path map mode: track both prefix and suffix
+            if (prefix_bits_used < 32u) {
+                path_prefix = (path_prefix << 4u) | (xform_idx & 0xFu);
+                prefix_bits_used = prefix_bits_used + 4u;
+            }
+            path_suffix = (path_suffix << 4u) | (xform_idx & 0xFu);
         }
 
         // Skip burn-in iterations
@@ -140,8 +148,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // Speed mode: uses accumulated RGB color
                     final_color = color;
                 } else {
-                    // Path map mode: convert path hash to color directly
-                    final_color = path_hash_to_color(path_hash);
+                    // Path map mode: convert path to color based on style
+                    final_color = path_to_color(path_prefix, path_suffix);
                 }
 
                 // Atomic accumulation to histogram buffer
