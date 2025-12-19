@@ -17,18 +17,14 @@ impl Default for ColorMode {
     }
 }
 
-/// PathMap coloring style - determines which part of the path determines color
+/// PathMap coloring style - how path hash maps to colors
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PathMapStyle {
-    /// Color based on path prefix (beginning) - paths with same start have similar colors
+    /// Similar paths get similar colors (direct golden ratio mapping)
     #[default]
-    Prefix,
-    /// Color based on path suffix (end) - paths with same ending have similar colors
-    Suffix,
-    /// Scrambled prefix - similar paths get very different colors (bit mixing)
-    ScrambledPrefix,
-    /// Scrambled suffix - similar paths get very different colors (bit mixing)
-    ScrambledSuffix,
+    Similar,
+    /// Similar paths get very different colors (hash scrambling)
+    Distinct,
 }
 
 /// A single color stop in a gradient palette
