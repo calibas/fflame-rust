@@ -63,22 +63,37 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return output;
 }
 
+// Hash function for scrambling - spreads similar values across color space
+fn scramble_hash(x: u32) -> u32 {
+    var h = x;
+    h = h ^ (h >> 16u);
+    h = h * 0x85ebca6bu;
+    h = h ^ (h >> 13u);
+    h = h * 0xc2b2ae35u;
+    h = h ^ (h >> 16u);
+    return h;
+}
+
 // Convert path prefix/suffix to RGB color
 // path_hi = prefix (first ~10 transforms packed MSB-first)
 // path_lo = suffix (rolling hash of recent transforms)
-// path_map_style: 0 = Prefix (color by path start), 1 = Suffix (color by path end)
+// path_map_style: 0 = Prefix, 1 = Suffix, 2 = ScrambledPrefix, 3 = ScrambledSuffix
 fn path_to_color(path_hi: u32, path_lo: u32) -> vec3<f32> {
     let golden_ratio = 0.618033988749895;
     var hue: f32;
 
     if (tonemap_params.path_map_style == 0u) {
-        // PREFIX mode: Use the first transforms to determine color
-        // path_hi contains the first ~10 transforms packed MSB-first
+        // PREFIX mode: Similar paths = similar colors
         hue = fract(f32(path_hi) * golden_ratio);
-    } else {
-        // SUFFIX mode: Use recent transforms to determine color
-        // path_lo is rolling hash where recent transforms dominate
+    } else if (tonemap_params.path_map_style == 1u) {
+        // SUFFIX mode: Similar paths = similar colors
         hue = fract(f32(path_lo) * golden_ratio);
+    } else if (tonemap_params.path_map_style == 2u) {
+        // SCRAMBLED PREFIX: Similar paths = very different colors
+        hue = fract(f32(scramble_hash(path_hi)) * golden_ratio);
+    } else {
+        // SCRAMBLED SUFFIX: Similar paths = very different colors
+        hue = fract(f32(scramble_hash(path_lo)) * golden_ratio);
     }
 
     // Convert HSV to RGB (full saturation and value for vibrant colors)

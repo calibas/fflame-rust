@@ -427,24 +427,45 @@ pub fn render_colors_content(
             if matches!(current_color_mode, ColorMode::PathMap) {
                 let current_style = config_manager.active_config().path_map_style;
                 let style_text = match current_style {
-                    PathMapStyle::Prefix => "Prefix (Start)",
-                    PathMapStyle::Suffix => "Suffix (End)",
+                    PathMapStyle::Prefix => "Prefix (Similar)",
+                    PathMapStyle::Suffix => "Suffix (Similar)",
+                    PathMapStyle::ScrambledPrefix => "Prefix (Distinct)",
+                    PathMapStyle::ScrambledSuffix => "Suffix (Distinct)",
                 };
 
                 let mut temp_style = current_style;
                 egui::ComboBox::from_label("Path Style")
                     .selected_text(style_text)
                     .show_ui(ui, |ui| {
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::Prefix, "Prefix (Start)")
-                            .on_hover_text("Color based on path beginning - same start = similar colors")
+                        ui.label("Similar colors for similar paths:");
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::Prefix, "Prefix (Similar)")
+                            .on_hover_text("Same path start = similar colors")
                             .changed()
                         {
                             if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
                                 max_update = max_update.max(update);
                             }
                         }
-                        if ui.selectable_value(&mut temp_style, PathMapStyle::Suffix, "Suffix (End)")
-                            .on_hover_text("Color based on path ending - same end = similar colors")
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::Suffix, "Suffix (Similar)")
+                            .on_hover_text("Same path end = similar colors")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        ui.separator();
+                        ui.label("Distinct colors for similar paths:");
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::ScrambledPrefix, "Prefix (Distinct)")
+                            .on_hover_text("Similar path starts = very different colors")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::ScrambledSuffix, "Suffix (Distinct)")
+                            .on_hover_text("Similar path ends = very different colors")
                             .changed()
                         {
                             if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {

@@ -1178,6 +1178,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
                 match s {
                     "Prefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Prefix)),
                     "Suffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Suffix)),
+                    "ScrambledPrefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::ScrambledPrefix)),
+                    "ScrambledSuffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::ScrambledSuffix)),
                     _ => None,
                 }
             } else {
