@@ -1775,6 +1775,28 @@ impl App {
             window.request_redraw();
         }
 
+        // Handle PathMap mode: query path at clicked pixel
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((pixel_x, pixel_y)) = self.egui_layer.take_clicked_pixel() {
+            if let Some(ref renderer) = self.flame_renderer {
+                // Use pollster to block on the async path lookup (user-initiated, not every frame)
+                match pollster::block_on(renderer.get_path_at(&self.gpu.device, &self.gpu.queue, pixel_x, pixel_y)) {
+                    Ok(Some(path_entry)) => {
+                        log::info!("Path at ({}, {}): {:?}", pixel_x, pixel_y, path_entry.to_vec());
+                        self.egui_layer.set_clicked_path(Some(path_entry));
+                    }
+                    Ok(None) => {
+                        log::debug!("No path at ({}, {})", pixel_x, pixel_y);
+                        self.egui_layer.set_clicked_path(None);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to get path at ({}, {}): {}", pixel_x, pixel_y, e);
+                        self.egui_layer.set_clicked_path(None);
+                    }
+                }
+            }
+        }
+
         let t5 = Instant::now();
 
         frame.present();

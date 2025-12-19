@@ -36,9 +36,13 @@ struct TonemapParams {
 }
 
 // Path storage entry (matches compute shader PathEntry)
+// Stores first 32 iterations losslessly (4 bits per transform, up to 16 transforms)
 struct PathEntry {
-    hi: u32,  // High 32 bits of path
-    lo: u32,  // Low 32 bits of path
+    path0: u32,  // Iterations 0-7 (4 bits each, LSB = iteration 0)
+    path1: u32,  // Iterations 8-15
+    path2: u32,  // Iterations 16-23
+    path3: u32,  // Iterations 24-31
+    iteration_count: u32,  // Number of valid iterations stored (0-32)
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -74,27 +78,20 @@ fn scramble_hash(x: u32) -> u32 {
     return h;
 }
 
-// Convert path prefix/suffix to RGB color
-// path_hi = prefix (first ~10 transforms packed MSB-first)
-// path_lo = suffix (rolling hash of recent transforms)
-// path_map_style: 0 = Prefix, 1 = Suffix, 2 = ScrambledPrefix, 3 = ScrambledSuffix
-fn path_to_color(path_hi: u32, path_lo: u32) -> vec3<f32> {
+// Convert path to RGB color by hashing all 4 u32s
+// This gives a unique color for each distinct full path
+fn path_to_color(path: PathEntry) -> vec3<f32> {
     let golden_ratio = 0.618033988749895;
-    var hue: f32;
 
-    if (tonemap_params.path_map_style == 0u) {
-        // PREFIX mode: Similar paths = similar colors
-        hue = fract(f32(path_hi) * golden_ratio);
-    } else if (tonemap_params.path_map_style == 1u) {
-        // SUFFIX mode: Similar paths = similar colors
-        hue = fract(f32(path_lo) * golden_ratio);
-    } else if (tonemap_params.path_map_style == 2u) {
-        // SCRAMBLED PREFIX: Similar paths = very different colors
-        hue = fract(f32(scramble_hash(path_hi)) * golden_ratio);
-    } else {
-        // SCRAMBLED SUFFIX: Similar paths = very different colors
-        hue = fract(f32(scramble_hash(path_lo)) * golden_ratio);
-    }
+    // Combine all 4 path u32s into a single hash
+    // XOR them together, then apply scramble_hash for good distribution
+    var combined = path.path0;
+    combined = combined ^ (path.path1 * 0x9e3779b9u);  // Golden ratio constant
+    combined = combined ^ (path.path2 * 0x517cc1b7u);  // Another prime
+    combined = combined ^ (path.path3 * 0x85ebca6bu);  // MurmurHash constant
+    combined = scramble_hash(combined);
+
+    let hue = fract(f32(combined) * golden_ratio);
 
     // Convert HSV to RGB (full saturation and value for vibrant colors)
     let h = hue * 6.0;
@@ -363,10 +360,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         // Read path from buffer
         let path = path_buffer[pixel_idx];
 
-        // Only color pixels with actual path data (not background)
-        if (path.hi != 0u || path.lo != 0u) {
-            // Convert path to color
-            fractal_color = path_to_color(path.hi, path.lo);
+        // Only color pixels with actual path data (iteration_count > 0)
+        if (path.iteration_count > 0u) {
+            // Convert path to color by hashing all 4 u32s
+            fractal_color = path_to_color(path);
         }
     }
 
