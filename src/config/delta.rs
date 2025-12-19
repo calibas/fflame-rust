@@ -695,10 +695,9 @@ impl ConfigPath {
             | ConfigPath::PaletteIndex
             | ConfigPath::Palette
             | ConfigPath::PaletteRotation
-            | ConfigPath::SpeedFactor => UpdateType::ColorOnly,
-
-            // PathMapStyle only affects tonemap interpretation, not accumulation
-            ConfigPath::PathMapStyle => UpdateType::ToneMappingOnly,
+            | ConfigPath::SpeedFactor
+            // PathMapStyle affects color computation in compute shader, needs accumulation reset
+            | ConfigPath::PathMapStyle => UpdateType::ColorOnly,
 
             // Rendering settings - affect iteration behavior
             ConfigPath::HistogramColorScale
@@ -1176,11 +1175,15 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::PathMapStyle => {
             if let Some(s) = json.as_str() {
                 match s {
-                    "Similar" => Some(ConfigValue::PathMapStyle(PathMapStyle::Similar)),
-                    "Distinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::Distinct)),
+                    "Prefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Prefix)),
+                    "Suffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Suffix)),
+                    "PrefixDistinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::PrefixDistinct)),
+                    "SuffixDistinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::SuffixDistinct)),
                     // Backward compatibility with old config files
-                    "Prefix" | "Suffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Similar)),
-                    "ScrambledPrefix" | "ScrambledSuffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Distinct)),
+                    "Similar" => Some(ConfigValue::PathMapStyle(PathMapStyle::Prefix)),
+                    "Distinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::PrefixDistinct)),
+                    "ScrambledPrefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::PrefixDistinct)),
+                    "ScrambledSuffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::SuffixDistinct)),
                     _ => None,
                 }
             } else {

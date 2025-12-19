@@ -159,7 +159,7 @@ pub struct GpuParams {
     pub has_final_transform: u32, // 0 = disabled, 1 = enabled
     pub final_transform_index: u32, // Index in transform buffer (always last slot)
     pub bits_per_transform: u32, // Bits needed per transform index (1-4 based on num_transforms)
-    pub path_map_style: u32, // 0=Similar, 1=Distinct
+    pub path_map_style: u32, // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct
 }
 
 /// Tonemap parameters
@@ -190,7 +190,7 @@ pub struct TonemapParams {
     pub color_mode: u32,  // 0 = palette, 1 = speed, 2 = path_map
     pub width: u32,  // Texture width for path buffer indexing
     pub height: u32,  // Texture height for path buffer indexing
-    pub path_map_style: u32,  // 0 = Prefix (color by path start), 1 = Suffix (color by path end)
+    pub path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct
     pub _pad2: u32,  // Padding for 16-byte alignment (std140)
 }
 
