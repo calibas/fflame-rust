@@ -213,7 +213,7 @@ impl FlameRenderer {
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms, // Final transform is appended after regular transforms
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
-            _pad4: 0.0,
+            path_map_style: self.path_map_style as u32,
         };
         self.buffers.update_params(queue, &params);
 
@@ -410,7 +410,7 @@ impl FlameRenderer {
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
-            _pad4: 0.0,
+            path_map_style: self.path_map_style as u32,
         };
         self.buffers.update_params(queue, &params);
 
@@ -475,7 +475,7 @@ impl FlameRenderer {
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
-            _pad4: 0.0,
+            path_map_style: self.path_map_style as u32,
         };
 
         self.buffers.update_params(queue, &params);
@@ -671,7 +671,7 @@ impl FlameRenderer {
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
-            _pad4: 0.0,
+            path_map_style: self.path_map_style as u32,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -919,7 +919,7 @@ impl FlameRenderer {
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
-            _pad4: 0.0,
+            path_map_style: self.path_map_style as u32,
         };
         self.buffers.update_params(queue, &params);
     }

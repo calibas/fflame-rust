@@ -707,7 +707,7 @@ impl HighResExporter {
                 has_final_transform: 0,
                 final_transform_index: 0,
                 bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
-                _pad4: 0.0,
+                path_map_style: 0,
             };
             self.queue
                 .write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));

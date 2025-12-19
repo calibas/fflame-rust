@@ -51,7 +51,7 @@ struct Params {
     has_final_transform: u32,  // 0 = disabled, 1 = enabled
     final_transform_index: u32,  // Index in transform buffer (after regular transforms)
     bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
-    _pad4: f32,
+    path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=ScrambledPrefix, 3=ScrambledSuffix
 }
 
 // Variation parameters for one transform
