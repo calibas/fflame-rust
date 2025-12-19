@@ -25,6 +25,10 @@ pub enum PathMapStyle {
     Prefix,
     /// Color based on path suffix (end) - paths with same ending have similar colors
     Suffix,
+    /// Scrambled prefix - similar paths get very different colors (bit mixing)
+    ScrambledPrefix,
+    /// Scrambled suffix - similar paths get very different colors (bit mixing)
+    ScrambledSuffix,
 }
 
 /// A single color stop in a gradient palette
