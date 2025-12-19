@@ -1,63 +1,3 @@
-// Hash function for scrambling - spreads similar values across color space
-fn scramble_hash(x: u32) -> u32 {
-    var h = x;
-    h = h ^ (h >> 16u);
-    h = h * 0x85ebca6bu;
-    h = h ^ (h >> 13u);
-    h = h * 0xc2b2ae35u;
-    h = h ^ (h >> 16u);
-    return h;
-}
-
-// Convert path to RGB color using golden ratio hue distribution
-// path_map_style: 0 = Prefix, 1 = Suffix, 2 = Prefix (Distinct), 3 = Suffix (Distinct)
-fn path_to_color(prefix: u32, suffix: u32) -> vec3<f32> {
-    let golden_ratio = 0.618033988749895;
-    var hue: f32;
-
-    // Select which path value to use and whether to scramble
-    if (params.path_map_style == 0u) {
-        // Prefix: color by path beginning (similar paths = similar colors)
-        hue = fract(f32(prefix) * golden_ratio);
-    } else if (params.path_map_style == 1u) {
-        // Suffix: color by path end (similar paths = similar colors)
-        hue = fract(f32(suffix) * golden_ratio);
-    } else if (params.path_map_style == 2u) {
-        // Prefix (Distinct): scramble for different colors
-        hue = fract(f32(scramble_hash(prefix)) * golden_ratio);
-    } else {
-        // Suffix (Distinct): scramble for different colors
-        hue = fract(f32(scramble_hash(suffix)) * golden_ratio);
-    }
-
-    // Convert HSV to RGB (full saturation and value for vibrant colors)
-    let h = hue * 6.0;
-    let i = floor(h);
-    let f = h - i;
-    let q = 1.0 - f;
-
-    var r: f32;
-    var g: f32;
-    var b: f32;
-
-    let sector = i32(i) % 6;
-    if (sector == 0) {
-        r = 1.0; g = f; b = 0.0;
-    } else if (sector == 1) {
-        r = q; g = 1.0; b = 0.0;
-    } else if (sector == 2) {
-        r = 0.0; g = 1.0; b = f;
-    } else if (sector == 3) {
-        r = 0.0; g = q; b = 1.0;
-    } else if (sector == 4) {
-        r = f; g = 0.0; b = 1.0;
-    } else {
-        r = 1.0; g = 0.0; b = q;
-    }
-
-    return vec3<f32>(r, g, b);
-}
-
 // Main compute shader entry point for 2D mode
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -76,11 +16,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var color_index = 0.0;  // For palette mode
 
     // Path tracking for PathMap mode
-    // path_prefix: First N transforms (frozen once full) - for Prefix mode
-    // path_suffix: Rolling hash of recent transforms - for Suffix mode
-    var path_prefix = 0u;
-    var path_suffix = 0u;
-    var prefix_bits_used = 0u;
+    // Stores first 32 iterations losslessly (4 bits per transform, supports up to 16 transforms)
+    // path[0] = iterations 0-7, path[1] = 8-15, path[2] = 16-23, path[3] = 24-31
+    var path = array<u32, 4>(0u, 0u, 0u, 0u);
+    var path_iteration = 0u;  // Count of iterations stored in path
 
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
@@ -118,14 +57,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         } else {
-            // Path map mode: track both prefix (beginning) and suffix (end)
-            // Prefix: store first transforms until we fill 32 bits (frozen after that)
-            if (prefix_bits_used < 32u) {
-                path_prefix = (path_prefix << 4u) | (xform_idx & 0xFu);
-                prefix_bits_used = prefix_bits_used + 4u;
+            // Path map mode: store first 32 iterations losslessly
+            // Each u32 holds 8 iterations at 4 bits each
+            if (path_iteration < 32u) {
+                let slot = path_iteration / 8u;  // Which u32 (0-3)
+                let pos = (path_iteration % 8u) * 4u;  // Bit position within u32 (0,4,8,12,16,20,24,28)
+                path[slot] = path[slot] | ((xform_idx & 0xFu) << pos);
+                path_iteration = path_iteration + 1u;
             }
-            // Suffix: rolling hash that always updates (recent transforms dominate)
-            path_suffix = (path_suffix << 4u) | (xform_idx & 0xFu);
         }
 
         // Skip burn-in iterations
@@ -156,8 +95,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // Speed mode: uses accumulated RGB color
                     final_color = color;
                 } else {
-                    // Path map mode: convert path to color based on style
-                    final_color = path_to_color(path_prefix, path_suffix);
+                    // Path map mode: store path to buffer (first hit only)
+                    // Color will be computed in tonemap pass from path buffer
+
+                    // First-hit: only write if no path stored yet (iteration_count == 0)
+                    // Use atomic to check and set in one operation
+                    if (path_buffer[pixel_idx].iteration_count == 0u) {
+                        path_buffer[pixel_idx].path0 = path[0];
+                        path_buffer[pixel_idx].path1 = path[1];
+                        path_buffer[pixel_idx].path2 = path[2];
+                        path_buffer[pixel_idx].path3 = path[3];
+                        path_buffer[pixel_idx].iteration_count = path_iteration;
+                    }
+
+                    // Use white for histogram (actual color computed in tonemap from path buffer)
+                    final_color = vec3<f32>(1.0, 1.0, 1.0);
                 }
 
                 // Atomic accumulation to histogram buffer

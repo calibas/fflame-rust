@@ -61,11 +61,14 @@ struct VariationParams {
 }
 
 // Path storage for PathMap color mode
-// Stores u64 path as vec2<u32> (hi, lo) per pixel
-// Path is packed MSB-first: transform indices stored from high bits down
+// Stores first 32 iterations losslessly (4 bits per transform, up to 16 transforms)
+// First-hit semantics: only written when iteration_count == 0
 struct PathEntry {
-    hi: u32,  // High 32 bits of path
-    lo: u32,  // Low 32 bits of path
+    path0: u32,  // Iterations 0-7 (4 bits each, LSB = iteration 0)
+    path1: u32,  // Iterations 8-15
+    path2: u32,  // Iterations 16-23
+    path3: u32,  // Iterations 24-31
+    iteration_count: u32,  // Number of valid iterations stored (0-32)
 }
 
 // Bindings

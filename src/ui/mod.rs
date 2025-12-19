@@ -62,6 +62,10 @@ pub struct EguiLayer {
 
     // Track editor state
     track_editor_state: track_editor::TrackEditorState,
+
+    // PathMap mode: clicked pixel and cached path
+    clicked_pixel: Option<(u32, u32)>,
+    clicked_path: Option<crate::renderer::PathEntry>,
 }
 
 impl EguiLayer {
@@ -100,6 +104,8 @@ impl EguiLayer {
             file_browser_panel: None,
             animation_export_settings: animation_panel::AnimationExportSettings::default(),
             track_editor_state: track_editor::TrackEditorState::default(),
+            clicked_pixel: None,
+            clicked_path: None,
         }
     }
 
@@ -133,6 +139,17 @@ impl EguiLayer {
 
     pub fn update_palette_editor(&mut self, palette: crate::scene::palette::Palette) {
         self.palette_editor.current_palette = palette;
+    }
+
+    /// Get the clicked pixel coordinates (for PathMap mode)
+    /// Returns Some((x, y)) if user clicked on the fractal viewport
+    pub fn take_clicked_pixel(&mut self) -> Option<(u32, u32)> {
+        self.clicked_pixel.take()
+    }
+
+    /// Update the cached path entry for display
+    pub fn set_clicked_path(&mut self, path: Option<crate::renderer::PathEntry>) {
+        self.clicked_path = path;
     }
 
     /// Register the renderer's fractal texture with egui for display
@@ -357,6 +374,10 @@ impl EguiLayer {
 
                         // Animation seek changed flag
                         animation_seek_changed: &mut animation_seek_changed,
+
+                        // PathMap mode: clicked pixel and path
+                        hovered_pixel: &mut self.clicked_pixel,
+                        hovered_path: &self.clicked_path,
                     },
                 });
 

@@ -80,6 +80,10 @@ pub struct PanelContext<'a> {
 
     // Animation seek changed flag (timeline was scrubbed)
     pub animation_seek_changed: &'a mut bool,
+
+    // PathMap mode: hovered pixel coordinates and cached path
+    pub hovered_pixel: &'a mut Option<(u32, u32)>,
+    pub hovered_path: &'a Option<crate::renderer::PathEntry>,
 }
 
 /// Viewer for rendering each panel type
@@ -393,6 +397,27 @@ impl<'a> PanelViewer<'a> {
                     self.handle_fractal_scroll(scroll_delta, response.hover_pos(), response.rect, available_size);
                 }
             }
+
+            // Handle right-click to query path at pixel (PathMap mode)
+            if response.clicked_by(egui::PointerButton::Secondary) {
+                if let Some(click_pos) = response.interact_pointer_pos() {
+                    // Convert from panel coordinates to texture coordinates
+                    let local_x = click_pos.x - response.rect.min.x;
+                    let local_y = click_pos.y - response.rect.min.y;
+                    let pixel_x = (local_x / available_size.x * width as f32) as u32;
+                    let pixel_y = (local_y / available_size.y * height as f32) as u32;
+                    *self.context.hovered_pixel = Some((pixel_x.min(width - 1), pixel_y.min(height - 1)));
+                }
+            }
+
+            // Display path info overlay when available (PathMap mode only)
+            let is_path_map_mode = self.context.config_manager.active_config().color_mode
+                == crate::scene::palette::ColorMode::PathMap;
+            if is_path_map_mode {
+                if let Some(path_entry) = self.context.hovered_path {
+                    self.render_path_overlay(ui, &response, path_entry);
+                }
+            }
         } else {
             // Fallback if texture not available yet
             ui.centered_and_justified(|ui| {
@@ -509,6 +534,73 @@ impl<'a> PanelViewer<'a> {
                 );
             }
         }
+    }
+
+    /// Render path overlay showing the transform sequence at a clicked pixel
+    fn render_path_overlay(
+        &self,
+        ui: &mut egui::Ui,
+        _image_response: &egui::Response,
+        path_entry: &crate::renderer::PathEntry,
+    ) {
+        // Get transform names for display
+        let flame = &self.context.config_manager.active_config().flame;
+        let transform_count = flame.transforms.len();
+
+        // Build path string
+        let path_vec = path_entry.to_vec();
+        if path_vec.is_empty() {
+            return;
+        }
+
+        // Format path: show transform indices and names
+        let path_str: Vec<String> = path_vec.iter().map(|&idx| {
+            let idx = idx as usize;
+            if idx < transform_count {
+                format!("T{}", idx)
+            } else {
+                format!("?{}", idx)
+            }
+        }).collect();
+
+        // Create overlay window anchored to top-left of viewport
+        egui::Area::new(egui::Id::new("path_overlay"))
+            .fixed_pos(ui.min_rect().min + egui::vec2(10.0, 10.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200))
+                    .inner_margin(egui::Margin::same(8))
+                    .corner_radius(egui::CornerRadius::same(4))
+                    .show(ui, |ui| {
+                        ui.set_max_width(400.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Path:").strong().color(egui::Color32::WHITE));
+                            ui.label(egui::RichText::new(format!("{} iterations", path_entry.iteration_count))
+                                .color(egui::Color32::GRAY));
+                        });
+
+                        ui.add_space(4.0);
+
+                        // Wrap path in a scrollable area if it's long
+                        egui::ScrollArea::horizontal().max_width(380.0).show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                for (i, name) in path_str.iter().enumerate() {
+                                    // Add arrow separator between transforms
+                                    if i > 0 {
+                                        ui.label(egui::RichText::new("→").color(egui::Color32::GRAY));
+                                    }
+                                    ui.label(egui::RichText::new(name).color(egui::Color32::LIGHT_BLUE));
+                                }
+                            });
+                        });
+
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new("Right-click on fractal to query path")
+                            .small()
+                            .color(egui::Color32::GRAY));
+                    });
+            });
     }
 
     /// Render Preset Library panel (browse and select presets with thumbnails)

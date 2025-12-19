@@ -4,6 +4,50 @@ use crate::scene::transforms::Flame;
 use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
 use crate::config::FractalConfig;
 
+/// Path entry storing first 32 iterations of transform sequence
+/// Matches GPU PathEntry struct layout (5 × u32)
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct PathEntry {
+    /// Iterations 0-7 (4 bits each, LSB = iteration 0)
+    pub path0: u32,
+    /// Iterations 8-15
+    pub path1: u32,
+    /// Iterations 16-23
+    pub path2: u32,
+    /// Iterations 24-31
+    pub path3: u32,
+    /// Number of valid iterations stored (0-32)
+    pub iteration_count: u32,
+}
+
+impl PathEntry {
+    /// Extract transform index at given iteration (0-31)
+    /// Returns None if iteration >= iteration_count
+    pub fn get_transform(&self, iteration: u32) -> Option<u32> {
+        if iteration >= self.iteration_count {
+            return None;
+        }
+        let slot = iteration / 8;
+        let pos = (iteration % 8) * 4;
+        let path = match slot {
+            0 => self.path0,
+            1 => self.path1,
+            2 => self.path2,
+            3 => self.path3,
+            _ => return None,
+        };
+        Some((path >> pos) & 0xF)
+    }
+
+    /// Get full path as Vec of transform indices
+    pub fn to_vec(&self) -> Vec<u32> {
+        (0..self.iteration_count)
+            .filter_map(|i| self.get_transform(i))
+            .collect()
+    }
+}
+
 /// Manages fractal flame rendering via GPU compute shaders
 pub struct FlameRenderer {
     pipelines: FlamePipelines,
@@ -1048,6 +1092,104 @@ impl FlameRenderer {
         }
 
         Ok((self.width, self.height, rgba_data))
+    }
+
+    /// Read path buffer from GPU for CPU-side path queries
+    /// Returns a 2D array of PathEntry indexed by [y][x]
+    pub async fn read_path_buffer(
+        &self,
+        device: &Device,
+        queue: &Queue,
+    ) -> Result<Vec<Vec<PathEntry>>, String> {
+        // Wait for any pending rendering to complete
+        let sync_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Pre-Read Path Sync"),
+        });
+        queue.submit(std::iter::once(sync_encoder.finish()));
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+        // PathEntry is 5 × u32 = 20 bytes per pixel
+        let bytes_per_entry = 5 * std::mem::size_of::<u32>() as u32;
+        let buffer_size = (self.width * self.height * bytes_per_entry) as u64;
+
+        // Create staging buffer for readback
+        let staging_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Path Buffer Staging"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Copy path buffer to staging buffer
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Path Buffer Read Encoder"),
+        });
+        encoder.copy_buffer_to_buffer(
+            &self.buffers.path_buffer,
+            0,
+            &staging_buffer,
+            0,
+            buffer_size,
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map and read
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "Failed to map path buffer".to_string())?
+            .map_err(|e| format!("Path buffer map error: {:?}", e))?;
+
+        let data = buffer_slice.get_mapped_range();
+
+        // Convert raw bytes to PathEntry grid
+        let mut result = Vec::with_capacity(self.height as usize);
+        for y in 0..self.height {
+            let mut row = Vec::with_capacity(self.width as usize);
+            for x in 0..self.width {
+                let idx = ((y * self.width + x) * bytes_per_entry) as usize;
+                let path0 = u32::from_le_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
+                let path1 = u32::from_le_bytes([data[idx + 4], data[idx + 5], data[idx + 6], data[idx + 7]]);
+                let path2 = u32::from_le_bytes([data[idx + 8], data[idx + 9], data[idx + 10], data[idx + 11]]);
+                let path3 = u32::from_le_bytes([data[idx + 12], data[idx + 13], data[idx + 14], data[idx + 15]]);
+                let iteration_count = u32::from_le_bytes([data[idx + 16], data[idx + 17], data[idx + 18], data[idx + 19]]);
+
+                row.push(PathEntry {
+                    path0,
+                    path1,
+                    path2,
+                    path3,
+                    iteration_count,
+                });
+            }
+            result.push(row);
+        }
+
+        drop(data);
+        staging_buffer.unmap();
+
+        Ok(result)
+    }
+
+    /// Get path at a specific pixel coordinate
+    /// This is a convenience method that reads the entire buffer
+    /// For frequent queries, cache the result of read_path_buffer()
+    pub async fn get_path_at(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        x: u32,
+        y: u32,
+    ) -> Result<Option<PathEntry>, String> {
+        if x >= self.width || y >= self.height {
+            return Ok(None);
+        }
+        let paths = self.read_path_buffer(device, queue).await?;
+        Ok(Some(paths[y as usize][x as usize]))
     }
 
     #[allow(dead_code)]

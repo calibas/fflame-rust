@@ -463,14 +463,15 @@ impl FlameBuffers {
 
         // Create path buffer (2× u32 per pixel for u64 path storage)
         // Used for PathMap color mode to track transform sequence leading to each pixel
-        // Path is packed MSB-first for efficient prefix matching
-        // Size: width × height × 2 × sizeof(u32)
-        // Memory: ~3.8MB @ 800×600, ~16.6MB @ 1920×1080
-        let path_buffer_size = (width * height * 2 * std::mem::size_of::<u32>() as u32) as u64;
+        // Stores first 32 iterations losslessly (4 bits per transform, up to 16 transforms)
+        // PathEntry: 5 × u32 (path[4] + iteration_count)
+        // Size: width × height × 5 × sizeof(u32)
+        // Memory: ~9.6MB @ 800×600, ~41.5MB @ 1920×1080
+        let path_buffer_size = (width * height * 5 * std::mem::size_of::<u32>() as u32) as u64;
         let path_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Path Buffer"),
             size: path_buffer_size,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
 
