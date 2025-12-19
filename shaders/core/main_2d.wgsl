@@ -10,16 +10,16 @@ fn scramble_hash(x: u32) -> u32 {
 }
 
 // Convert path hash to RGB color using golden ratio hue distribution
-// path_map_style: 0 = Similar colors, 1 = Similar colors (suffix - same as 0 for rolling hash)
-//                 2 = Distinct colors (scrambled), 3 = Distinct colors (scrambled)
+// path_map_style: 0 = Similar (direct), 1 = Distinct (scrambled)
 fn path_hash_to_color(hash: u32) -> vec3<f32> {
     let golden_ratio = 0.618033988749895;
     var hue: f32;
 
-    // Styles 0,1 use direct hash; styles 2,3 use scrambled hash
-    if (params.path_map_style < 2u) {
+    if (params.path_map_style == 0u) {
+        // Similar: direct golden ratio mapping
         hue = fract(f32(hash) * golden_ratio);
     } else {
+        // Distinct: scramble hash first for maximum color spread
         hue = fract(f32(scramble_hash(hash)) * golden_ratio);
     }
 

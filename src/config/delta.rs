@@ -1176,10 +1176,11 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::PathMapStyle => {
             if let Some(s) = json.as_str() {
                 match s {
-                    "Prefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Prefix)),
-                    "Suffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Suffix)),
-                    "ScrambledPrefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::ScrambledPrefix)),
-                    "ScrambledSuffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::ScrambledSuffix)),
+                    "Similar" => Some(ConfigValue::PathMapStyle(PathMapStyle::Similar)),
+                    "Distinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::Distinct)),
+                    // Backward compatibility with old config files
+                    "Prefix" | "Suffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Similar)),
+                    "ScrambledPrefix" | "ScrambledSuffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Distinct)),
                     _ => None,
                 }
             } else {

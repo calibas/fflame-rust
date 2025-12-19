@@ -159,7 +159,7 @@ pub struct GpuParams {
     pub has_final_transform: u32, // 0 = disabled, 1 = enabled
     pub final_transform_index: u32, // Index in transform buffer (always last slot)
     pub bits_per_transform: u32, // Bits needed per transform index (1-4 based on num_transforms)
-    pub path_map_style: u32, // 0=Prefix, 1=Suffix, 2=ScrambledPrefix, 3=ScrambledSuffix
+    pub path_map_style: u32, // 0=Similar, 1=Distinct
 }
 
 /// Tonemap parameters
