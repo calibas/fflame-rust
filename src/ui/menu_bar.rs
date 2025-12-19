@@ -172,7 +172,7 @@ pub fn render_menu_bar(
 
                 // Iterations per Thread submenu
                 ui.menu_button("Iterations per Thread ▶", |ui| {
-                    for &ipt in &[64u32, 128, 256, 512, 1024] {
+                    for &ipt in &[32u32, 64, 128, 256, 512, 1024] {
                         if ui.button(format!("{}", ipt)).clicked() {
                             menu_actions.rendering.set_iterations_per_thread = Some(ipt);
 

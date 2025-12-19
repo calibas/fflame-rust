@@ -554,7 +554,7 @@ fn render_export_controls(
                     // Iterations
                     ui.horizontal(|ui| {
                         ui.label("Iterations/thread:");
-                        ui.add(egui::DragValue::new(&mut settings.iterations_per_thread).range(64..=4096));
+                        ui.add(egui::DragValue::new(&mut settings.iterations_per_thread).range(32..=4096));
                     });
 
                     // Estimate
