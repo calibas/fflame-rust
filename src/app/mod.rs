@@ -1663,8 +1663,12 @@ impl App {
 
             // Check if we should continue iterating
             // During animation playback, always iterate (ignore max_iterations limit)
+            // Skip GPU work during video export to avoid GPU contention (separate device in background thread)
+            let is_video_exporting = self.animation_export_progress.lock()
+                .map(|p| p.is_exporting)
+                .unwrap_or(false);
             let max_iterations = Some(final_config.max_iterations);
-            let should_iterate = !self.paused && (
+            let should_iterate = !self.paused && !is_video_exporting && (
                 is_controller_playing ||
                 max_iterations.map_or(true, |max| renderer.total_iterations() < max)
             );
