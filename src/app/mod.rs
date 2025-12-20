@@ -1832,12 +1832,12 @@ impl App {
                                     found_x, found_y, width, height, config
                                 );
 
-                                // Read 5x5 color preview from fractal texture
+                                // Read 9x9 color preview from fractal texture
                                 let color_preview = match pollster::block_on(
-                                    renderer.read_pixel_region(&self.gpu.device, &self.gpu.queue, found_x, found_y, 5, 5)
+                                    renderer.read_pixel_region(&self.gpu.device, &self.gpu.queue, found_x, found_y, 9, 9)
                                 ) {
                                     Ok(pixels) => pixels,
-                                    Err(_) => vec![[0, 0, 0, 255]; 25], // Fallback to black
+                                    Err(_) => vec![[0, 0, 0, 255]; 81], // Fallback to black
                                 };
 
                                 let click_info = crate::ui::PathClickInfo {
@@ -1847,7 +1847,7 @@ impl App {
                                     search_distance,
                                     path_entry,
                                     color_preview,
-                                    preview_size: (5, 5),
+                                    preview_size: (9, 9),
                                 };
 
                                 log::info!("Path at ({}, {}): {:?}", found_x, found_y, path_entry.to_vec());
