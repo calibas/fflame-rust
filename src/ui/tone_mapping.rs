@@ -1,5 +1,5 @@
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-use crate::scene::palette::{ColorMode, PathMapStyle, PaletteLibrary};
+use crate::scene::palette::{ColorMode, PathMapStyle, PathCaptureMode, PaletteLibrary};
 use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
 
 /// Render curve editor UI with ConfigManager integration
@@ -507,6 +507,44 @@ pub fn render_colors_content(
                             .changed()
                         {
                             if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                    });
+
+                // Path Capture Mode dropdown
+                let current_capture = config_manager.active_config().path_capture_mode;
+                let capture_text = match current_capture {
+                    PathCaptureMode::FirstHit => "First Hit",
+                    PathCaptureMode::FirstAfterBurnIn => "First After Burn-in",
+                    PathCaptureMode::LastHit => "Last Hit",
+                };
+
+                let mut temp_capture = current_capture;
+                egui::ComboBox::from_label("Capture Mode")
+                    .selected_text(capture_text)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut temp_capture, PathCaptureMode::FirstHit, "First Hit")
+                            .on_hover_text("Capture path on first pixel hit (includes burn-in transforms)")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathCaptureMode, temp_capture.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_capture, PathCaptureMode::FirstAfterBurnIn, "First After Burn-in")
+                            .on_hover_text("Capture path on first hit, but only track transforms after burn-in")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathCaptureMode, temp_capture.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_capture, PathCaptureMode::LastHit, "Last Hit")
+                            .on_hover_text("Always overwrite - shows most recent path to each pixel")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathCaptureMode, temp_capture.into()) {
                                 max_update = max_update.max(update);
                             }
                         }

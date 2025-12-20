@@ -831,7 +831,8 @@ impl TiledRenderer {
                 has_final_transform: 0,
                 final_transform_index: 0,
                 bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
-                path_map_style: 0,
+                path_map_style: config.path_map_style as u32,
+                path_capture_mode: config.path_capture_mode as u32,
             };
             self.queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 

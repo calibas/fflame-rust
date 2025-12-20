@@ -52,6 +52,7 @@ struct Params {
     final_transform_index: u32,  // Index in transform buffer (after regular transforms)
     bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
     path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=Prefix (Distinct), 3=Suffix (Distinct)
+    path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
 }
 
 // Variation parameters for one transform
