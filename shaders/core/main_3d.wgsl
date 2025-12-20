@@ -63,7 +63,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         } else {
             // Path map mode: store first 32 iterations losslessly
             // Each u32 holds 8 iterations at 4 bits each
-            if (path_iteration < 32u) {
+            // For FirstAfterBurnIn mode (1), only track path after burn-in
+            let should_track = (params.path_capture_mode != 1u) || (i >= params.burn_in);
+            if (should_track && path_iteration < 32u) {
                 let slot = path_iteration / 8u;  // Which u32 (0-3)
                 let pos = (path_iteration % 8u) * 4u;  // Bit position within u32 (0,4,8,12,16,20,24,28)
                 path[slot] = path[slot] | ((xform_idx & 0xFu) << pos);
@@ -99,11 +101,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // Speed mode: uses accumulated RGB color
                     final_color = color;
                 } else {
-                    // Path map mode: store path to buffer (first hit only)
+                    // Path map mode: store path to buffer
                     // Color will be computed in tonemap pass from path buffer
 
-                    // First-hit: only write if no path stored yet (iteration_count == 0)
-                    if (path_buffer[pixel_idx].iteration_count == 0u) {
+                    // Capture mode determines when to write:
+                    // 0 = FirstHit: only write if no path stored yet
+                    // 1 = FirstAfterBurnIn: same as FirstHit (we're already past burn-in here)
+                    // 2 = LastHit: always overwrite
+                    let should_write = (params.path_capture_mode == 2u) ||
+                                       (path_buffer[pixel_idx].iteration_count == 0u);
+
+                    if (should_write) {
                         path_buffer[pixel_idx].path0 = path[0];
                         path_buffer[pixel_idx].path1 = path[1];
                         path_buffer[pixel_idx].path2 = path[2];

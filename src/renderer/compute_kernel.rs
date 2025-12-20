@@ -1,7 +1,7 @@
 use egui_wgpu::wgpu::*;
 use crate::gpu::{buffers::*, pipelines::FlamePipelines};
 use crate::scene::transforms::Flame;
-use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
+use crate::scene::palette::{Palette, ColorMode, PathMapStyle, PathCaptureMode};
 use crate::config::FractalConfig;
 
 /// Path entry storing first 32 iterations of transform sequence
@@ -73,6 +73,7 @@ pub struct FlameRenderer {
     effective_iterations: u64, // For brightness calculation - doesn't reset during overwrite mode
     color_mode: ColorMode,
     path_map_style: PathMapStyle,
+    path_capture_mode: PathCaptureMode,
     density_scale: f32,
     background_color: [f32; 3],
     current_render_mode: crate::scene::transforms::RenderMode,
@@ -151,6 +152,7 @@ impl FlameRenderer {
             effective_iterations: 0,
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
+            path_capture_mode: PathCaptureMode::default(),
             density_scale: 1.0,
             background_color: [0.0, 0.0, 0.0],
             current_render_mode: flame.render_mode,
@@ -265,6 +267,7 @@ impl FlameRenderer {
             final_transform_index: self.num_transforms, // Final transform is appended after regular transforms
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
+            path_capture_mode: self.path_capture_mode as u32,
         };
         self.buffers.update_params(queue, &params);
 
@@ -274,9 +277,10 @@ impl FlameRenderer {
         let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
         self.total_iterations += samples_this_frame;
 
-        // Clear histogram buffer before rendering new samples (optional for batched accumulation)
+        // Clear histogram and path buffers before rendering new samples (optional for batched accumulation)
+        // Path buffer must also be cleared when starting fresh to avoid stale data from previous view
         if clear_histogram {
-            self.buffers.clear_histogram(encoder);
+            self.buffers.clear_histogram_and_paths(encoder);
         }
 
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
@@ -410,9 +414,10 @@ impl FlameRenderer {
         // 1. Update transforms in GPU buffer
         self.buffers.update_transforms(queue, &config.flame);
 
-        // 2. Update color mode and path map style
+        // 2. Update color mode, path map style, and capture mode
         self.color_mode = config.color_mode;
         self.path_map_style = config.path_map_style;
+        self.path_capture_mode = config.path_capture_mode;
 
         // 3. Update density and background
         self.density_scale = config.density_scale;
@@ -463,6 +468,7 @@ impl FlameRenderer {
             final_transform_index: self.num_transforms,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
+            path_capture_mode: self.path_capture_mode as u32,
         };
         self.buffers.update_params(queue, &params);
 
@@ -528,6 +534,7 @@ impl FlameRenderer {
             final_transform_index: self.num_transforms,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
+            path_capture_mode: self.path_capture_mode as u32,
         };
 
         self.buffers.update_params(queue, &params);
@@ -725,6 +732,7 @@ impl FlameRenderer {
             final_transform_index: self.num_transforms,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
+            path_capture_mode: self.path_capture_mode as u32,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -973,6 +981,7 @@ impl FlameRenderer {
             final_transform_index: self.num_transforms,
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
+            path_capture_mode: self.path_capture_mode as u32,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -991,6 +1000,17 @@ impl FlameRenderer {
     /// Get current path map style
     pub fn path_map_style(&self) -> PathMapStyle {
         self.path_map_style
+    }
+
+    /// Set path capture mode (FirstHit, FirstAfterBurnIn, or LastHit)
+    pub fn set_path_capture_mode(&mut self, path_capture_mode: PathCaptureMode) {
+        self.path_capture_mode = path_capture_mode;
+        // Note: GPU params will be updated on next render
+    }
+
+    /// Get current path capture mode
+    pub fn path_capture_mode(&self) -> PathCaptureMode {
+        self.path_capture_mode
     }
 
     /// Read pixels from the fractal_texture (after tonemap_pass has rendered to it)

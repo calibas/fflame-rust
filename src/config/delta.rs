@@ -7,7 +7,7 @@
 /// - ConfigChange: Batch of deltas (single undo point)
 /// - UpdateType: What kind of update is needed for a change
 
-use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
+use crate::scene::palette::{Palette, ColorMode, PathCaptureMode, PathMapStyle};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::transforms::RenderMode;
 use std::fmt::{self, Display, Formatter};
@@ -45,6 +45,7 @@ pub enum ConfigPath {
     // ===== Color (no iteration reset, just color buffer update) =====
     ColorMode,
     PathMapStyle,  // Prefix or Suffix coloring for PathMap mode
+    PathCaptureMode,  // FirstHit, FirstAfterBurnIn, or LastHit
     PaletteIndex,
     Palette, // Embedded palette data (custom palettes)
     PaletteRotation,
@@ -167,6 +168,7 @@ impl Display for ConfigPath {
             // Color
             ConfigPath::ColorMode => write!(f, "Color Mode"),
             ConfigPath::PathMapStyle => write!(f, "PathMap Style"),
+            ConfigPath::PathCaptureMode => write!(f, "PathMap Capture Mode"),
             ConfigPath::PaletteIndex => write!(f, "Palette"),
             ConfigPath::Palette => write!(f, "Palette Data"),
             ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
@@ -280,6 +282,7 @@ pub enum ConfigValue {
     ToneMapMode(ToneMapMode),
     ColorMode(ColorMode),
     PathMapStyle(PathMapStyle),
+    PathCaptureMode(PathCaptureMode),
     RenderMode(RenderMode),
     ToneCurve(ToneCurve),
     Palette(Palette),
@@ -329,6 +332,7 @@ impl Display for ConfigValue {
             ConfigValue::ToneMapMode(m) => write!(f, "{:?}", m),
             ConfigValue::ColorMode(m) => write!(f, "{:?}", m),
             ConfigValue::PathMapStyle(m) => write!(f, "{:?}", m),
+            ConfigValue::PathCaptureMode(m) => write!(f, "{:?}", m),
             ConfigValue::RenderMode(m) => write!(f, "{:?}", m),
             ConfigValue::ToneCurve(curve) => {
                 write!(f, "[Tone Curve: {} pts: {:?}]",
@@ -410,6 +414,12 @@ impl From<ColorMode> for ConfigValue {
 impl From<PathMapStyle> for ConfigValue {
     fn from(v: PathMapStyle) -> Self {
         ConfigValue::PathMapStyle(v)
+    }
+}
+
+impl From<PathCaptureMode> for ConfigValue {
+    fn from(v: PathCaptureMode) -> Self {
+        ConfigValue::PathCaptureMode(v)
     }
 }
 
@@ -701,6 +711,9 @@ impl ConfigPath {
             // PathMapStyle affects color computation in compute shader, needs accumulation reset
             | ConfigPath::PathMapStyle => UpdateType::ColorOnly,
 
+            // PathCaptureMode affects path buffer capture logic in compute shader
+            ConfigPath::PathCaptureMode => UpdateType::IterationReset,
+
             // Rendering settings - affect iteration behavior
             ConfigPath::HistogramColorScale
             | ConfigPath::LowDensitySmoothing
@@ -781,6 +794,7 @@ impl ConfigPath {
             // Color
             ConfigPath::ColorMode => "ColorMode".to_string(),
             ConfigPath::PathMapStyle => "PathMapStyle".to_string(),
+            ConfigPath::PathCaptureMode => "PathCaptureMode".to_string(),
             ConfigPath::PaletteIndex => "PaletteIndex".to_string(),
             ConfigPath::Palette => "Palette".to_string(),
             ConfigPath::PaletteRotation => "PaletteRotation".to_string(),
@@ -1189,6 +1203,19 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
                     "Distinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::PrefixDistinct)),
                     "ScrambledPrefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::PrefixDistinct)),
                     "ScrambledSuffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::SuffixDistinct)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
+        ConfigPath::PathCaptureMode => {
+            if let Some(s) = json.as_str() {
+                match s {
+                    "FirstHit" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::FirstHit)),
+                    "FirstAfterBurnIn" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::FirstAfterBurnIn)),
+                    "LastHit" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::LastHit)),
                     _ => None,
                 }
             } else {

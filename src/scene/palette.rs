@@ -17,6 +17,18 @@ impl Default for ColorMode {
     }
 }
 
+/// PathMap capture mode - when to capture the path for each pixel
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PathCaptureMode {
+    /// Capture on first hit to the pixel (original behavior)
+    #[default]
+    FirstHit,
+    /// Capture first hit after burn-in iterations complete
+    FirstAfterBurnIn,
+    /// Always overwrite - shows most recent path to hit pixel
+    LastHit,
+}
+
 /// PathMap coloring style - how path hash maps to colors
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PathMapStyle {

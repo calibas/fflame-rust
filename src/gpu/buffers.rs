@@ -160,6 +160,7 @@ pub struct GpuParams {
     pub final_transform_index: u32, // Index in transform buffer (always last slot)
     pub bits_per_transform: u32, // Bits needed per transform index (1-4 based on num_transforms)
     pub path_map_style: u32, // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct
+    pub path_capture_mode: u32, // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
 }
 
 /// Tonemap parameters
@@ -360,6 +361,7 @@ impl FlameBuffers {
             final_transform_index: flame.transforms.len() as u32,
             bits_per_transform: bits_per_transform(flame.transforms.len() as u32),
             path_map_style: 0,
+            path_capture_mode: 0, // FirstHit by default
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -688,6 +690,12 @@ impl FlameBuffers {
     pub fn clear_histogram(&self, encoder: &mut CommandEncoder) {
         // Clear histogram buffer to zero for new frame
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
+    }
+
+    /// Clear histogram and path buffers (when starting fresh accumulation)
+    pub fn clear_histogram_and_paths(&self, encoder: &mut CommandEncoder) {
+        encoder.clear_buffer(&self.histogram_buffer, 0, None);
+        encoder.clear_buffer(&self.path_buffer, 0, None);
     }
 
     // Note: reset_scale_buffer() removed - scale is now a uniform constant
