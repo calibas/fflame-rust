@@ -118,7 +118,7 @@ pub fn render_settings_content(
 
             // Render settings - Iterations per thread
             let mut temp_iterations = config_manager.system_settings().iterations_per_thread;
-            let response = ui.add(egui::Slider::new(&mut temp_iterations, 32..=4096)
+            let response = ui.add(egui::Slider::new(&mut temp_iterations, 1..=4096)
                 .text("Iterations per Thread"))
                 .on_hover_text(
                     "GPU workgroup performance tuning.\n\

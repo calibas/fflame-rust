@@ -992,7 +992,7 @@ impl HighResExporter {
             width: self.width,
             height: self.height,
             path_map_style: config.path_map_style as u32,
-            _pad2: 0,
+            burn_in: 20, // Default burn-in for export
         };
 
         self.queue.write_buffer(

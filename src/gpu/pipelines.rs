@@ -176,6 +176,24 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Palette texture (for gradient-based PathMap styles)
+                BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: true },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // Palette sampler
+                BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: ShaderStages::FRAGMENT,
+                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
 
@@ -443,6 +461,14 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 5,
                     resource: buffers.path_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: BindingResource::TextureView(&buffers.palette_view),
+                },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: BindingResource::Sampler(&buffers.sampler),
                 },
             ],
         })
