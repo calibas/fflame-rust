@@ -32,6 +32,27 @@ pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
 pub use workspace::Workspace;
 
+/// Information about a clicked pixel in PathMap mode
+/// Includes pixel coordinates, fractal space coordinates, path data, and a 5x5 color preview
+#[derive(Clone, Debug)]
+pub struct PathClickInfo {
+    /// View space pixel coordinates (where user clicked)
+    pub click_pixel: (u32, u32),
+    /// Actual pixel with valid path data (may differ if click was empty)
+    pub found_pixel: (u32, u32),
+    /// Fractal space coordinates of the found pixel
+    pub fractal_coords: (f32, f32),
+    /// Distance from click to found pixel (0 if exact match)
+    pub search_distance: f32,
+    /// Path data at the found pixel
+    pub path_entry: crate::renderer::PathEntry,
+    /// 5x5 color preview centered on found pixel (RGBA, row-major)
+    /// May be smaller if near edges
+    pub color_preview: Vec<[u8; 4]>,
+    /// Dimensions of the color preview (width, height) - usually 5x5
+    pub preview_size: (u32, u32),
+}
+
 use egui_wgpu::wgpu::*;
 use egui_wgpu::{Renderer as EguiRenderer, RendererOptions};
 use egui_winit::State as EguiWinitState;
@@ -63,9 +84,9 @@ pub struct EguiLayer {
     // Track editor state
     track_editor_state: track_editor::TrackEditorState,
 
-    // PathMap mode: clicked pixel and cached path
+    // PathMap mode: clicked pixel info (includes path, coordinates, color preview)
     clicked_pixel: Option<(u32, u32)>,
-    clicked_path: Option<crate::renderer::PathEntry>,
+    path_click_info: Option<PathClickInfo>,
     close_path_overlay: bool,
 }
 
@@ -106,7 +127,7 @@ impl EguiLayer {
             animation_export_settings: animation_panel::AnimationExportSettings::default(),
             track_editor_state: track_editor::TrackEditorState::default(),
             clicked_pixel: None,
-            clicked_path: None,
+            path_click_info: None,
             close_path_overlay: false,
         }
     }
@@ -149,9 +170,14 @@ impl EguiLayer {
         self.clicked_pixel.take()
     }
 
-    /// Update the cached path entry for display
-    pub fn set_clicked_path(&mut self, path: Option<crate::renderer::PathEntry>) {
-        self.clicked_path = path;
+    /// Update the cached path click info for display
+    pub fn set_path_click_info(&mut self, info: Option<PathClickInfo>) {
+        self.path_click_info = info;
+    }
+
+    /// Get reference to current path click info
+    pub fn path_click_info(&self) -> Option<&PathClickInfo> {
+        self.path_click_info.as_ref()
     }
 
     /// Check if the path overlay should be closed and reset the flag
@@ -384,9 +410,9 @@ impl EguiLayer {
                         // Animation seek changed flag
                         animation_seek_changed: &mut animation_seek_changed,
 
-                        // PathMap mode: clicked pixel and path
+                        // PathMap mode: clicked pixel and path info
                         hovered_pixel: &mut self.clicked_pixel,
-                        hovered_path: &self.clicked_path,
+                        path_click_info: &self.path_click_info,
                         close_path_overlay: &mut self.close_path_overlay,
                     },
                 });
