@@ -1225,6 +1225,107 @@ impl FlameRenderer {
         Ok(Some(paths[y as usize][x as usize]))
     }
 
+    /// Read a region of pixels from the fractal texture centered at (center_x, center_y)
+    /// Returns a Vec of [R, G, B, A] values in row-major order
+    /// Region is clamped to texture boundaries
+    pub async fn read_pixel_region(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        center_x: u32,
+        center_y: u32,
+        region_width: u32,
+        region_height: u32,
+    ) -> Result<Vec<[u8; 4]>, String> {
+        // Calculate region bounds, clamped to texture size
+        let half_w = region_width / 2;
+        let half_h = region_height / 2;
+
+        let start_x = center_x.saturating_sub(half_w);
+        let start_y = center_y.saturating_sub(half_h);
+        let end_x = (center_x + half_w + 1).min(self.width);
+        let end_y = (center_y + half_h + 1).min(self.height);
+
+        let actual_width = end_x - start_x;
+        let actual_height = end_y - start_y;
+
+        if actual_width == 0 || actual_height == 0 {
+            return Ok(vec![]);
+        }
+
+        // Create staging buffer for readback
+        let bytes_per_pixel = 4u32; // RGBA8
+        let bytes_per_row = actual_width * bytes_per_pixel;
+        // wgpu requires rows to be aligned
+        let align = 256u32;
+        let padded_bytes_per_row = ((bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * actual_height) as u64;
+
+        let staging_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Pixel Region Staging"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Copy from fractal texture to staging buffer
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Pixel Region Read Encoder"),
+        });
+
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: &self.fractal_texture,
+                mip_level: 0,
+                origin: Origin3d { x: start_x, y: start_y, z: 0 },
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(actual_height),
+                },
+            },
+            Extent3d {
+                width: actual_width,
+                height: actual_height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map and read
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "Failed to map pixel region buffer".to_string())?
+            .map_err(|e| format!("Pixel region map error: {:?}", e))?;
+
+        let data = buffer_slice.get_mapped_range();
+
+        // Extract pixels (accounting for row padding)
+        let mut pixels = Vec::with_capacity((actual_width * actual_height) as usize);
+        for y in 0..actual_height {
+            let row_start = (y * padded_bytes_per_row) as usize;
+            for x in 0..actual_width {
+                let idx = row_start + (x * bytes_per_pixel) as usize;
+                pixels.push([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
+            }
+        }
+
+        drop(data);
+        staging_buffer.unmap();
+
+        Ok(pixels)
+    }
+
     #[allow(dead_code)]
     /// OLD METHOD - DEPRECATED - Use read_fractal_pixels() instead
     /// blends RGB channels with the background before outputting. Even though it outputs

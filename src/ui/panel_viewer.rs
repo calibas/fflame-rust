@@ -81,9 +81,9 @@ pub struct PanelContext<'a> {
     // Animation seek changed flag (timeline was scrubbed)
     pub animation_seek_changed: &'a mut bool,
 
-    // PathMap mode: hovered pixel coordinates and cached path
+    // PathMap mode: hovered pixel coordinates and cached path info
     pub hovered_pixel: &'a mut Option<(u32, u32)>,
-    pub hovered_path: &'a Option<crate::renderer::PathEntry>,
+    pub path_click_info: &'a Option<super::PathClickInfo>,
     pub close_path_overlay: &'a mut bool,
 }
 
@@ -415,8 +415,8 @@ impl<'a> PanelViewer<'a> {
             let is_path_map_mode = self.context.config_manager.active_config().color_mode
                 == crate::scene::palette::ColorMode::PathMap;
             if is_path_map_mode {
-                if let Some(path_entry) = self.context.hovered_path {
-                    self.render_path_overlay(ui, &response, path_entry);
+                if let Some(click_info) = self.context.path_click_info {
+                    self.render_path_overlay(ui, &response, click_info);
                 }
             }
         } else {
@@ -537,22 +537,19 @@ impl<'a> PanelViewer<'a> {
         }
     }
 
-    /// Render path overlay showing the transform sequence at a clicked pixel
+    /// Render path overlay showing pixel info, coordinates, path, and color preview
     fn render_path_overlay(
         &mut self,
         ui: &mut egui::Ui,
         _image_response: &egui::Response,
-        path_entry: &crate::renderer::PathEntry,
+        click_info: &super::PathClickInfo,
     ) {
         // Get transform names for display
         let flame = &self.context.config_manager.active_config().flame;
         let transform_count = flame.transforms.len();
 
         // Build path string
-        let path_vec = path_entry.to_vec();
-        if path_vec.is_empty() {
-            return;
-        }
+        let path_vec = click_info.path_entry.to_vec();
 
         // Format path: show transform indices and names
         let path_str: Vec<String> = path_vec.iter().map(|&idx| {
@@ -569,17 +566,15 @@ impl<'a> PanelViewer<'a> {
             .fixed_pos(ui.min_rect().min + egui::vec2(10.0, 10.0))
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style())
-                    .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200))
-                    .inner_margin(egui::Margin::same(8))
-                    .corner_radius(egui::CornerRadius::same(4))
+                    .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 220))
+                    .inner_margin(egui::Margin::same(10))
+                    .corner_radius(egui::CornerRadius::same(6))
                     .show(ui, |ui| {
-                        ui.set_max_width(400.0);
+                        ui.set_max_width(420.0);
 
                         // Header row with close button
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Path:").strong().color(egui::Color32::WHITE));
-                            ui.label(egui::RichText::new(format!("{} iterations", path_entry.iteration_count))
-                                .color(egui::Color32::GRAY));
+                            ui.label(egui::RichText::new("Path Info").strong().color(egui::Color32::WHITE));
 
                             // Push close button to the right
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -589,32 +584,140 @@ impl<'a> PanelViewer<'a> {
                             });
                         });
 
-                        // Show initial coordinates
+                        ui.add_space(6.0);
+
+                        // Two-column layout: info on left, color preview on right
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Start:").color(egui::Color32::GRAY));
-                            ui.label(egui::RichText::new(format!("({:.4}, {:.4})", path_entry.initial_x, path_entry.initial_y))
-                                .color(egui::Color32::LIGHT_GREEN));
-                        });
+                            // Left column: coordinates and path info
+                            ui.vertical(|ui| {
+                                ui.set_min_width(280.0);
 
-                        ui.add_space(4.0);
+                                // Pixel coordinates section
+                                ui.label(egui::RichText::new("Coordinates").strong().color(egui::Color32::LIGHT_GRAY));
+                                ui.add_space(2.0);
 
-                        // Wrap path in a scrollable area if it's long
-                        egui::ScrollArea::horizontal().max_width(380.0).show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                for (i, name) in path_str.iter().enumerate() {
-                                    // Add arrow separator between transforms
-                                    if i > 0 {
-                                        ui.label(egui::RichText::new("→").color(egui::Color32::GRAY));
+                                // View space (pixel) coordinates
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("  Pixel:").color(egui::Color32::GRAY));
+                                    ui.label(egui::RichText::new(format!("({}, {})",
+                                        click_info.found_pixel.0, click_info.found_pixel.1))
+                                        .color(egui::Color32::WHITE));
+                                    if click_info.search_distance > 0.0 {
+                                        ui.label(egui::RichText::new(format!("(+{:.1}px)", click_info.search_distance))
+                                            .small()
+                                            .color(egui::Color32::YELLOW));
                                     }
-                                    ui.label(egui::RichText::new(name).color(egui::Color32::LIGHT_BLUE));
+                                });
+
+                                // Fractal space coordinates
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("  Fractal:").color(egui::Color32::GRAY));
+                                    ui.label(egui::RichText::new(format!("({:.6}, {:.6})",
+                                        click_info.fractal_coords.0, click_info.fractal_coords.1))
+                                        .color(egui::Color32::LIGHT_GREEN));
+                                });
+
+                                // IFS starting point
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("  IFS Start:").color(egui::Color32::GRAY));
+                                    ui.label(egui::RichText::new(format!("({:.4}, {:.4})",
+                                        click_info.path_entry.initial_x, click_info.path_entry.initial_y))
+                                        .color(egui::Color32::LIGHT_BLUE));
+                                });
+
+                                ui.add_space(6.0);
+
+                                // Path section
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Path").strong().color(egui::Color32::LIGHT_GRAY));
+                                    ui.label(egui::RichText::new(format!("({} iterations)",
+                                        click_info.path_entry.iteration_count))
+                                        .small()
+                                        .color(egui::Color32::GRAY));
+                                });
+                                ui.add_space(2.0);
+
+                                // Wrap path in a scrollable area if it's long
+                                if !path_str.is_empty() {
+                                    egui::ScrollArea::horizontal().max_width(260.0).show(ui, |ui| {
+                                        ui.horizontal_wrapped(|ui| {
+                                            for (i, name) in path_str.iter().enumerate() {
+                                                if i > 0 {
+                                                    ui.label(egui::RichText::new("→").color(egui::Color32::DARK_GRAY));
+                                                }
+                                                ui.label(egui::RichText::new(name).color(egui::Color32::from_rgb(100, 180, 255)));
+                                            }
+                                        });
+                                    });
+                                } else {
+                                    ui.label(egui::RichText::new("  (empty)").color(egui::Color32::GRAY));
+                                }
+                            });
+
+                            ui.add_space(12.0);
+
+                            // Right column: 5x5 color preview
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("Preview").strong().color(egui::Color32::LIGHT_GRAY));
+                                ui.add_space(4.0);
+
+                                // Render 5x5 color grid
+                                let (preview_w, preview_h) = click_info.preview_size;
+                                let pixel_size = 12.0;
+                                let total_size = egui::vec2(
+                                    preview_w as f32 * pixel_size,
+                                    preview_h as f32 * pixel_size,
+                                );
+
+                                let (rect, _response) = ui.allocate_exact_size(total_size, egui::Sense::hover());
+                                let painter = ui.painter();
+
+                                // Draw border around preview
+                                painter.add(egui::epaint::RectShape::stroke(
+                                    rect.expand(1.0),
+                                    egui::CornerRadius::same(2),
+                                    egui::Stroke::new(1.0, egui::Color32::GRAY),
+                                    egui::epaint::StrokeKind::Outside,
+                                ));
+
+                                // Draw each pixel
+                                for py in 0..preview_h {
+                                    for px in 0..preview_w {
+                                        let idx = (py * preview_w + px) as usize;
+                                        if idx < click_info.color_preview.len() {
+                                            let rgba = click_info.color_preview[idx];
+                                            let color = egui::Color32::from_rgba_unmultiplied(
+                                                rgba[0], rgba[1], rgba[2], rgba[3]
+                                            );
+
+                                            let pixel_rect = egui::Rect::from_min_size(
+                                                rect.min + egui::vec2(px as f32 * pixel_size, py as f32 * pixel_size),
+                                                egui::vec2(pixel_size, pixel_size),
+                                            );
+
+                                            painter.rect_filled(pixel_rect, 0.0, color);
+
+                                            // Highlight center pixel
+                                            let center_x = preview_w / 2;
+                                            let center_y = preview_h / 2;
+                                            if px == center_x && py == center_y {
+                                                painter.add(egui::epaint::RectShape::stroke(
+                                                    pixel_rect,
+                                                    egui::CornerRadius::ZERO,
+                                                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                                                    egui::epaint::StrokeKind::Inside,
+                                                ));
+                                            }
+                                        }
+                                    }
                                 }
                             });
                         });
 
-                        ui.add_space(4.0);
-                        ui.label(egui::RichText::new("Click ✕ or right-click elsewhere to close")
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new("Right-click elsewhere to close")
                             .small()
-                            .color(egui::Color32::GRAY));
+                            .color(egui::Color32::DARK_GRAY));
                     });
             });
     }

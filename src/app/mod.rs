@@ -1788,25 +1788,78 @@ impl App {
         {
             // Check if close was requested
             if self.egui_layer.take_close_path_overlay() {
-                self.egui_layer.set_clicked_path(None);
+                self.egui_layer.set_path_click_info(None);
             }
 
             // Handle new path query
-            if let Some((pixel_x, pixel_y)) = self.egui_layer.take_clicked_pixel() {
+            if let Some((click_x, click_y)) = self.egui_layer.take_clicked_pixel() {
                 if let Some(ref renderer) = self.flame_renderer {
-                    // Use pollster to block on the async path lookup (user-initiated, not every frame)
-                    match pollster::block_on(renderer.get_path_at(&self.gpu.device, &self.gpu.queue, pixel_x, pixel_y)) {
-                        Ok(Some(path_entry)) => {
-                            log::info!("Path at ({}, {}): {:?}", pixel_x, pixel_y, path_entry.to_vec());
-                            self.egui_layer.set_clicked_path(Some(path_entry));
-                        }
-                        Ok(None) => {
-                            log::debug!("No path at ({}, {})", pixel_x, pixel_y);
-                            self.egui_layer.set_clicked_path(None);
+                    // Read path buffer and find closest valid pixel within search radius
+                    match pollster::block_on(renderer.read_path_buffer(&self.gpu.device, &self.gpu.queue)) {
+                        Ok(path_buffer) => {
+                            let config = self.config_manager.active_config();
+                            let width = renderer.width;
+                            let height = renderer.height;
+
+                            // Search for nearest valid pixel within radius
+                            const SEARCH_RADIUS: i32 = 10;
+                            let mut best_pixel: Option<(u32, u32, f32)> = None; // (x, y, distance)
+
+                            for dy in -SEARCH_RADIUS..=SEARCH_RADIUS {
+                                for dx in -SEARCH_RADIUS..=SEARCH_RADIUS {
+                                    let px = click_x as i32 + dx;
+                                    let py = click_y as i32 + dy;
+
+                                    if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
+                                        let ux = px as usize;
+                                        let uy = py as usize;
+
+                                        if path_buffer[uy][ux].iteration_count > 0 {
+                                            let dist = ((dx * dx + dy * dy) as f32).sqrt();
+                                            if best_pixel.is_none() || dist < best_pixel.unwrap().2 {
+                                                best_pixel = Some((px as u32, py as u32, dist));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some((found_x, found_y, search_distance)) = best_pixel {
+                                let path_entry = path_buffer[found_y as usize][found_x as usize];
+
+                                // Calculate fractal space coordinates
+                                let fractal_coords = Self::pixel_to_fractal(
+                                    found_x, found_y, width, height, config
+                                );
+
+                                // Read 5x5 color preview from fractal texture
+                                let color_preview = match pollster::block_on(
+                                    renderer.read_pixel_region(&self.gpu.device, &self.gpu.queue, found_x, found_y, 5, 5)
+                                ) {
+                                    Ok(pixels) => pixels,
+                                    Err(_) => vec![[0, 0, 0, 255]; 25], // Fallback to black
+                                };
+
+                                let click_info = crate::ui::PathClickInfo {
+                                    click_pixel: (click_x, click_y),
+                                    found_pixel: (found_x, found_y),
+                                    fractal_coords,
+                                    search_distance,
+                                    path_entry,
+                                    color_preview,
+                                    preview_size: (5, 5),
+                                };
+
+                                log::info!("Path at ({}, {}): {:?}", found_x, found_y, path_entry.to_vec());
+                                self.egui_layer.set_path_click_info(Some(click_info));
+                            } else {
+                                log::debug!("No path within {}px of ({}, {})", SEARCH_RADIUS, click_x, click_y);
+                                self.egui_layer.set_path_click_info(None);
+                            }
                         }
                         Err(e) => {
-                            log::error!("Failed to get path at ({}, {}): {}", pixel_x, pixel_y, e);
-                            self.egui_layer.set_clicked_path(None);
+                            log::error!("Failed to read path buffer: {}", e);
+                            self.egui_layer.set_path_click_info(None);
                         }
                     }
                 }
@@ -1834,5 +1887,36 @@ impl App {
 
         log::info!("Graceful shutdown initiated");
         event_loop.exit();
+    }
+
+    /// Convert pixel coordinates to fractal space coordinates
+    /// Takes into account zoom, pan, and rotation
+    fn pixel_to_fractal(
+        pixel_x: u32,
+        pixel_y: u32,
+        width: u32,
+        height: u32,
+        config: &crate::config::FractalConfig,
+    ) -> (f32, f32) {
+        // Convert pixel to normalized device coordinates (-1 to 1)
+        let ndc_x = (pixel_x as f32 / width as f32) * 2.0 - 1.0;
+        let ndc_y = (pixel_y as f32 / height as f32) * 2.0 - 1.0;
+
+        // Account for aspect ratio
+        let aspect = width as f32 / height as f32;
+        let scaled_x = ndc_x * aspect;
+        let scaled_y = ndc_y;
+
+        // Apply inverse rotation
+        let cos_r = (-config.rotation).cos();
+        let sin_r = (-config.rotation).sin();
+        let rotated_x = scaled_x * cos_r - scaled_y * sin_r;
+        let rotated_y = scaled_x * sin_r + scaled_y * cos_r;
+
+        // Apply inverse zoom and add pan
+        let fractal_x = rotated_x / config.zoom + config.pan_x;
+        let fractal_y = rotated_y / config.zoom + config.pan_y;
+
+        (fractal_x, fractal_y)
     }
 }
