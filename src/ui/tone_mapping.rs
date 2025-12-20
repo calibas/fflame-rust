@@ -431,12 +431,18 @@ pub fn render_colors_content(
                     PathMapStyle::Suffix => "Suffix",
                     PathMapStyle::PrefixDistinct => "Prefix (Distinct)",
                     PathMapStyle::SuffixDistinct => "Suffix (Distinct)",
+                    PathMapStyle::Depth => "Depth",
+                    PathMapStyle::OriginRadial => "Origin (Radial)",
+                    PathMapStyle::OriginHorizontal => "Origin (Horizontal)",
+                    PathMapStyle::OriginVertical => "Origin (Vertical)",
                 };
 
                 let mut temp_style = current_style;
                 egui::ComboBox::from_label("Path Style")
                     .selected_text(style_text)
                     .show_ui(ui, |ui| {
+                        // Hash-based styles
+                        ui.label("Hash-based:");
                         if ui.selectable_value(&mut temp_style, PathMapStyle::Prefix, "Prefix")
                             .on_hover_text("Color by path beginning (first ~8 transforms)")
                             .changed()
@@ -463,6 +469,41 @@ pub fn render_colors_content(
                         }
                         if ui.selectable_value(&mut temp_style, PathMapStyle::SuffixDistinct, "Suffix (Distinct)")
                             .on_hover_text("Path end with hash scrambling for distinct colors")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+
+                        ui.separator();
+                        ui.label("Palette gradient:");
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::Depth, "Depth")
+                            .on_hover_text("Color by iteration depth (burn_in to 32), uses current palette")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::OriginRadial, "Origin (Radial)")
+                            .on_hover_text("Color by distance from origin (0 to √2), uses current palette")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::OriginHorizontal, "Origin (Horizontal)")
+                            .on_hover_text("Color by initial X position (-1 to 1), uses current palette")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::OriginVertical, "Origin (Vertical)")
+                            .on_hover_text("Color by initial Y position (-1 to 1), uses current palette")
                             .changed()
                         {
                             if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {

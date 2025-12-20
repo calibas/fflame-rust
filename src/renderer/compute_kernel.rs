@@ -82,6 +82,7 @@ pub struct FlameRenderer {
     histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
     low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
     density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression (default: 0.0)
+    burn_in: u32, // Burn-in iterations (for Depth gradient in PathMap mode)
     blend_factor: f32, // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
     target_iterations_per_pixel: u32, // Per-pixel convergence: stop updating pixel after N iterations (0 = disabled)
@@ -159,6 +160,7 @@ impl FlameRenderer {
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             low_density_smoothing: 0.5, // Moderate smoothing default
             density_compression_strength: 0.0, // Linear accumulation default (no compression)
+            burn_in: 20, // Default burn-in iterations
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
             use_dynamic_blend: true, // Default to clamped exponential (0.8 → 0.01)
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
@@ -421,6 +423,7 @@ impl FlameRenderer {
         self.perspective_strength = config.flame.perspective_strength;
         self.histogram_color_scale = config.histogram_color_scale;
         self.low_density_smoothing = config.low_density_smoothing;
+        self.burn_in = burn_in;
 
         // 5. Update palette with hue rotation
         self.buffers.update_palette(queue, palette, config.palette_rotation);
@@ -564,7 +567,7 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             path_map_style: self.path_map_style as u32,
-            _pad2: 0,
+            burn_in: self.burn_in,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -693,6 +696,7 @@ impl FlameRenderer {
 
     /// Update iterations per thread
     pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
+        self.burn_in = burn_in;
 
         let params = GpuParams {
             num_transforms: self.num_transforms,
@@ -757,7 +761,7 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             path_map_style: self.path_map_style as u32,
-            _pad2: 0,
+            burn_in: self.burn_in,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -821,7 +825,7 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             path_map_style: self.path_map_style as u32,
-            _pad2: 0,
+            burn_in: self.burn_in,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -920,7 +924,7 @@ impl FlameRenderer {
             width: self.width,
             height: self.height,
             path_map_style: self.path_map_style as u32,
-            _pad2: 0,
+            burn_in: self.burn_in,
         };
         self.buffers.update_tonemap_params(queue, &params);
     }

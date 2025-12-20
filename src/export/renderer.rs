@@ -1024,7 +1024,7 @@ impl TiledRenderer {
             width: self.tile_size,
             height: self.tile_size,
             path_map_style: config.path_map_style as u32,
-            _pad2: 0,
+            burn_in: 20, // Default burn-in for export
         };
         self.queue.write_buffer(&self.tonemap_params_buffer, 0, bytemuck::bytes_of(&tonemap_params));
 

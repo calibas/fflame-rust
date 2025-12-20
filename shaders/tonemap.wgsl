@@ -31,18 +31,21 @@ struct TonemapParams {
     color_mode: u32,  // 0 = palette, 1 = speed, 2 = path_map
     width: u32,  // Texture width for path buffer indexing
     height: u32,  // Texture height for path buffer indexing
-    path_map_style: u32,  // 0 = Prefix (color by path start), 1 = Suffix (color by path end)
-    _pad2: u32,  // Padding for 16-byte alignment (std140)
+    path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct, 4=Depth, 5=OriginRadial, 6=OriginHorizontal, 7=OriginVertical
+    burn_in: u32,  // Burn-in iterations (for Depth gradient: start depth)
 }
 
 // Path storage entry (matches compute shader PathEntry)
 // Stores first 32 iterations losslessly (4 bits per transform, up to 16 transforms)
+// Also stores initial random X/Y coordinates for gradient-based coloring
 struct PathEntry {
     path0: u32,  // Iterations 0-7 (4 bits each, LSB = iteration 0)
     path1: u32,  // Iterations 8-15
     path2: u32,  // Iterations 16-23
     path3: u32,  // Iterations 24-31
     iteration_count: u32,  // Number of valid iterations stored (0-32)
+    initial_x: f32,  // Initial random X coordinate [-1, 1]
+    initial_y: f32,  // Initial random Y coordinate [-1, 1]
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -51,6 +54,8 @@ struct PathEntry {
 @group(0) @binding(3) var curve_lut_texture: texture_2d<f32>;
 @group(0) @binding(4) var curve_lut_sampler: sampler;
 @group(0) @binding(5) var<storage, read> path_buffer: array<PathEntry>;
+@group(0) @binding(6) var palette_texture: texture_2d<f32>;
+@group(0) @binding(7) var palette_sampler: sampler;
 
 // Vertex shader for fullscreen quad
 @vertex
@@ -351,6 +356,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // ===== PathMap Mode: Override Color from Path Buffer =====
     // In PathMap mode, the accumulation buffer stores white (density only)
     // The actual color is derived from the path stored in path_buffer
+    //
+    // Styles 0-3: Hash-based coloring (Prefix, Suffix, PrefixDistinct, SuffixDistinct)
+    // Styles 4-7: Gradient-based coloring using palette (Depth, OriginRadial, OriginHorizontal, OriginVertical)
     if (tonemap_params.color_mode == 2u) {
         // Calculate pixel coordinates from UV
         let pixel_x = u32(input.uv.x * f32(tonemap_params.width));
@@ -362,8 +370,41 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
         // Only color pixels with actual path data (iteration_count > 0)
         if (path.iteration_count > 0u) {
-            // Convert path to color by hashing all 4 u32s
-            fractal_color = path_to_color(path);
+            let style = tonemap_params.path_map_style;
+
+            if (style <= 3u) {
+                // Hash-based coloring (existing styles)
+                fractal_color = path_to_color(path);
+            } else {
+                // Gradient-based coloring using palette
+                var t: f32 = 0.0;
+
+                if (style == 4u) {
+                    // Depth: Color by iteration count
+                    // Map from burn_in to 32 onto 0.0 to 1.0
+                    let min_depth = f32(tonemap_params.burn_in);
+                    let max_depth = 32.0;
+                    let depth = f32(path.iteration_count);
+                    t = clamp((depth - min_depth) / (max_depth - min_depth), 0.0, 1.0);
+                } else if (style == 5u) {
+                    // OriginRadial: Color by distance from origin
+                    // Map from 0 to sqrt(2) ≈ 1.4142 onto 0.0 to 1.0
+                    let dist = sqrt(path.initial_x * path.initial_x + path.initial_y * path.initial_y);
+                    t = clamp(dist / 1.4142135, 0.0, 1.0);
+                } else if (style == 6u) {
+                    // OriginHorizontal: Color by X position
+                    // Map from -1 to 1 onto 0.0 to 1.0
+                    t = clamp((path.initial_x + 1.0) * 0.5, 0.0, 1.0);
+                } else {
+                    // OriginVertical (style == 7u): Color by Y position
+                    // Map from -1 to 1 onto 0.0 to 1.0
+                    t = clamp((path.initial_y + 1.0) * 0.5, 0.0, 1.0);
+                }
+
+                // Sample palette texture at position t
+                // Palette is 256x1 texture, sample at (t, 0.5)
+                fractal_color = textureSample(palette_texture, palette_sampler, vec2<f32>(t, 0.5)).rgb;
+            }
         }
     }
 

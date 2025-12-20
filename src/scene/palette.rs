@@ -29,6 +29,14 @@ pub enum PathMapStyle {
     PrefixDistinct,
     /// Color by path end with hash scrambling for distinct colors
     SuffixDistinct,
+    /// Color by iteration depth (burn_in to 32), uses palette gradient
+    Depth,
+    /// Color by distance from origin (0 to sqrt(2)), uses palette gradient
+    OriginRadial,
+    /// Color by horizontal position (-1 to 1), uses palette gradient
+    OriginHorizontal,
+    /// Color by vertical position (-1 to 1), uses palette gradient
+    OriginVertical,
 }
 
 /// A single color stop in a gradient palette
