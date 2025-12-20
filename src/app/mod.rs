@@ -1794,74 +1794,50 @@ impl App {
             // Handle new path query
             if let Some((click_x, click_y)) = self.egui_layer.take_clicked_pixel() {
                 if let Some(ref renderer) = self.flame_renderer {
-                    // Read path buffer and find closest valid pixel within search radius
-                    match pollster::block_on(renderer.read_path_buffer(&self.gpu.device, &self.gpu.queue)) {
-                        Ok(path_buffer) => {
-                            let config = self.config_manager.active_config();
-                            let width = renderer.width;
-                            let height = renderer.height;
+                    let config = self.config_manager.active_config();
+                    let width = renderer.width;
+                    let height = renderer.height;
 
-                            // Search for nearest valid pixel within radius
-                            const SEARCH_RADIUS: i32 = 10;
-                            let mut best_pixel: Option<(u32, u32, f32)> = None; // (x, y, distance)
+                    // Clamp to valid pixel coordinates
+                    let pixel_x = click_x.min(width - 1);
+                    let pixel_y = click_y.min(height - 1);
 
-                            for dy in -SEARCH_RADIUS..=SEARCH_RADIUS {
-                                for dx in -SEARCH_RADIUS..=SEARCH_RADIUS {
-                                    let px = click_x as i32 + dx;
-                                    let py = click_y as i32 + dy;
-
-                                    if px >= 0 && px < width as i32 && py >= 0 && py < height as i32 {
-                                        let ux = px as usize;
-                                        let uy = py as usize;
-
-                                        if path_buffer[uy][ux].iteration_count > 0 {
-                                            let dist = ((dx * dx + dy * dy) as f32).sqrt();
-                                            if best_pixel.is_none() || dist < best_pixel.unwrap().2 {
-                                                best_pixel = Some((px as u32, py as u32, dist));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if let Some((found_x, found_y, search_distance)) = best_pixel {
-                                let path_entry = path_buffer[found_y as usize][found_x as usize];
-
-                                // Calculate fractal space coordinates
-                                let fractal_coords = Self::pixel_to_fractal(
-                                    found_x, found_y, width, height, config
-                                );
-
-                                // Read 9x9 color preview from fractal texture
-                                let color_preview = match pollster::block_on(
-                                    renderer.read_pixel_region(&self.gpu.device, &self.gpu.queue, found_x, found_y, 9, 9)
-                                ) {
-                                    Ok(pixels) => pixels,
-                                    Err(_) => vec![[0, 0, 0, 255]; 81], // Fallback to black
-                                };
-
-                                let click_info = crate::ui::PathClickInfo {
-                                    click_pixel: (click_x, click_y),
-                                    found_pixel: (found_x, found_y),
-                                    fractal_coords,
-                                    search_distance,
-                                    path_entry,
-                                    color_preview,
-                                    preview_size: (9, 9),
-                                };
-
-                                log::info!("Path at ({}, {}): {:?}", found_x, found_y, path_entry.to_vec());
-                                self.egui_layer.set_path_click_info(Some(click_info));
-                            } else {
-                                log::debug!("No path within {}px of ({}, {})", SEARCH_RADIUS, click_x, click_y);
-                                self.egui_layer.set_path_click_info(None);
-                            }
-                        }
+                    // Read path entry for this specific pixel
+                    let path_entry = match pollster::block_on(renderer.read_path_buffer(&self.gpu.device, &self.gpu.queue)) {
+                        Ok(path_buffer) => path_buffer[pixel_y as usize][pixel_x as usize],
                         Err(e) => {
                             log::error!("Failed to read path buffer: {}", e);
-                            self.egui_layer.set_path_click_info(None);
+                            crate::renderer::PathEntry::default()
                         }
+                    };
+
+                    // Calculate fractal space coordinates
+                    let fractal_coords = Self::pixel_to_fractal(pixel_x, pixel_y, width, height, config);
+
+                    // Read 9x9 color preview from fractal texture
+                    let color_preview = match pollster::block_on(
+                        renderer.read_pixel_region(&self.gpu.device, &self.gpu.queue, pixel_x, pixel_y, 9, 9)
+                    ) {
+                        Ok(pixels) => pixels,
+                        Err(_) => vec![[0, 0, 0, 255]; 81], // Fallback to black
+                    };
+
+                    let click_info = crate::ui::PathClickInfo {
+                        click_pixel: (click_x, click_y),
+                        found_pixel: (pixel_x, pixel_y),
+                        fractal_coords,
+                        search_distance: 0.0, // No search, exact pixel
+                        path_entry,
+                        color_preview,
+                        preview_size: (9, 9),
+                    };
+
+                    if path_entry.iteration_count > 0 {
+                        log::info!("Path at ({}, {}): {:?}", pixel_x, pixel_y, path_entry.to_vec());
+                    } else {
+                        log::debug!("No path data at ({}, {})", pixel_x, pixel_y);
                     }
+                    self.egui_layer.set_path_click_info(Some(click_info));
                 }
             }
         }
