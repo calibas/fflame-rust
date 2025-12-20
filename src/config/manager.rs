@@ -389,6 +389,10 @@ impl ConfigManager {
                 let value: u32 = new_value.try_into()?;
                 self.system_settings.iterations_per_thread = value;
             }
+            ConfigPath::SystemBurnIn => {
+                let value: u32 = new_value.try_into()?;
+                self.system_settings.burn_in = value;
+            }
             ConfigPath::SystemVsyncEnabled => {
                 let value: bool = new_value.try_into()?;
                 self.system_settings.vsync_enabled = value;
@@ -1020,7 +1024,8 @@ impl ConfigManager {
             | ConfigPath::SystemTargetFps
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
-            | ConfigPath::SystemLanguage => {
+            | ConfigPath::SystemLanguage
+            | ConfigPath::SystemBurnIn => {
                 panic!("System settings should not be accessed via get_value(). Use config_manager.system_settings() instead.");
             }
         }
@@ -1440,7 +1445,8 @@ impl ConfigManager {
             | ConfigPath::SystemTargetFps
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
-            | ConfigPath::SystemLanguage => {
+            | ConfigPath::SystemLanguage
+            | ConfigPath::SystemBurnIn => {
                 panic!("System settings should not be modified via apply_value(). Use config_manager.update_system_setting() instead.");
             }
         }

@@ -38,6 +38,10 @@ pub struct SystemSettings {
     #[serde(default = "default_iterations_per_thread")]
     pub iterations_per_thread: u32,
 
+    /// Burn-in iterations (skip first N iterations before plotting, default: 20)
+    #[serde(default = "default_burn_in")]
+    pub burn_in: u32,
+
     // UI/UX
     /// Application language (ISO 639-1 code, e.g., "en", "es", "fr")
     #[serde(default = "default_language")]
@@ -82,6 +86,10 @@ fn default_iterations_per_thread() -> u32 {
     256
 }
 
+fn default_burn_in() -> u32 {
+    20
+}
+
 fn default_language() -> String {
     "en".to_string()
 }
@@ -100,6 +108,7 @@ impl Default for SystemSettings {
             vsync_enabled: default_vsync_enabled(),
             target_fps: default_target_fps(),
             iterations_per_thread: default_iterations_per_thread(),
+            burn_in: default_burn_in(),
             language: default_language(),
             default_export_width: default_export_width(),
             default_export_height: default_export_height(),
@@ -154,6 +163,9 @@ impl SystemSettings {
         }
         if current.iterations_per_thread == defaults.iterations_per_thread {
             obj.remove("iterations_per_thread");
+        }
+        if current.burn_in == defaults.burn_in {
+            obj.remove("burn_in");
         }
 
         // UI/UX

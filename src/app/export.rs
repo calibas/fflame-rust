@@ -73,7 +73,7 @@ pub async fn export_headless_wasm(
         .or_else(|| palette_library.get(config.palette_index))
         .ok_or("No palette found")?;
 
-    renderer.load_config(&device, &mut encoder, &queue, config, palette, iterations_per_thread);
+    renderer.load_config(&device, &mut encoder, &queue, config, palette, iterations_per_thread, 20); // burn_in default
 
     queue.submit(std::iter::once(encoder.finish()));
 
@@ -102,6 +102,7 @@ pub async fn export_headless_wasm(
             &queue,
             NUM_WORKGROUPS,
             iterations_per_thread,
+            20, // burn_in default
             config.zoom,
             config.pan_x,
             config.pan_y,
@@ -269,7 +270,7 @@ async fn export_headless_gpu(
         .or_else(|| palette_library.get(config.palette_index))
         .ok_or("No palette found")?;
 
-    renderer.load_config(&device, &mut encoder, &queue, config, palette, iterations_per_thread);
+    renderer.load_config(&device, &mut encoder, &queue, config, palette, iterations_per_thread, 20); // burn_in default
 
     queue.submit(std::iter::once(encoder.finish()));
 
@@ -297,6 +298,7 @@ async fn export_headless_gpu(
             &queue,
             NUM_WORKGROUPS,
             iterations_per_thread, // CHANGED: Use full value like viewport
+            20, // burn_in default
             config.zoom,
             config.pan_x,
             config.pan_y,

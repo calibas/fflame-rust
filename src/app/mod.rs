@@ -413,7 +413,7 @@ impl App {
                     if let Some(palette) = palette {
                         renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, resize_config.palette_rotation);
                     }
-                    renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.config_manager.system_settings().iterations_per_thread,
+                    renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                         resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
                     renderer.set_path_map_style(resize_config.path_map_style);
@@ -1101,7 +1101,7 @@ impl App {
                         .cloned()
                         .unwrap_or_default();
 
-                    temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &export_config, &palette, iterations_per_thread);
+                    temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &export_config, &palette, iterations_per_thread, 20); // burn_in - use default for WASM export
                     self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
                     // Render frames until we reach max_iterations
@@ -1126,6 +1126,7 @@ impl App {
                             &self.gpu.queue,
                             NUM_WORKGROUPS,
                             iterations_per_thread,
+                            20, // burn_in - use default for WASM export
                             export_config.zoom,
                             export_config.pan_x,
                             export_config.pan_y,
@@ -1446,14 +1447,15 @@ impl App {
                 // Update flame if UpdateAction indicates (includes preview mode live updates)
                 if actions.update_flame {
                     renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame,
-                        self.config_manager.system_settings().iterations_per_thread, update_config.zoom, update_config.pan_x, update_config.pan_y,
+                        self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
+                        update_config.zoom, update_config.pan_x, update_config.pan_y,
                         update_config.rotation, update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                 }
 
                 // Update view parameters (includes view changes and iteration changes)
                 if actions.update_view || view_changed_by_keyboard {
                     renderer.set_deterministic_rng(update_config.deterministic_rng);
-                    renderer.update_iterations(&self.gpu.queue, self.config_manager.system_settings().iterations_per_thread,
+                    renderer.update_iterations(&self.gpu.queue, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                 }
@@ -1470,7 +1472,8 @@ impl App {
 
                     // Update color mode in GPU params (ColorMode changes trigger update_palette)
                     renderer.set_color_mode(&self.gpu.queue, update_config.color_mode,
-                        self.config_manager.system_settings().iterations_per_thread, update_config.zoom, update_config.pan_x,
+                        self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
+                        update_config.zoom, update_config.pan_x,
                         update_config.pan_y, update_config.rotation, update_config.camera_rotation_x,
                         update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                 }
@@ -1689,7 +1692,8 @@ impl App {
                 let clear_histogram = self.frames_since_accumulation == 1;
 
                 let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, NUM_WORKGROUPS,
-                    self.config_manager.system_settings().iterations_per_thread, final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
+                    self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
+                    final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
                     final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram);
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
