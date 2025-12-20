@@ -57,6 +57,7 @@ pub fn render_thumbnail(
         config,
         &palette,
         THUMBNAIL_ITERATIONS_PER_THREAD,
+        20, // burn_in default
     );
 
     queue.submit(std::iter::once(encoder.finish()));
@@ -81,6 +82,7 @@ pub fn render_thumbnail(
             queue,
             NUM_WORKGROUPS,
             THUMBNAIL_ITERATIONS_PER_THREAD,
+            20, // burn_in default
             config.zoom,
             config.pan_x,
             config.pan_y,

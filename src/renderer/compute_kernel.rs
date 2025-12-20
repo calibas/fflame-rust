@@ -230,7 +230,7 @@ impl FlameRenderer {
 
     /// Run compute pass to generate flame samples
     /// Returns the number of samples generated this frame
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool) -> u64 {
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool) -> u64 {
         // Update seed for new random samples each frame
         // projection_type removed - shader now uses perspective_strength directly
         // 0.0 = orthographic (flat), higher values = increasing perspective
@@ -239,7 +239,7 @@ impl FlameRenderer {
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
-            burn_in: 20,
+            burn_in,
             width: self.width,
             height: self.height,
             seed,
@@ -396,7 +396,7 @@ impl FlameRenderer {
 
     /// Load a complete FractalConfig (preset or imported config)
     /// This ensures all GPU state is properly synchronized
-    pub fn load_config(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32) {
+    pub fn load_config(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32, burn_in: u32) {
         // 0. Check if shaders need to be recompiled (variations changed)
         let shaders_changed = self.pipelines.ensure_shaders_current(device, &config.flame);
         if shaders_changed {
@@ -436,7 +436,7 @@ impl FlameRenderer {
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
-            burn_in: 20,
+            burn_in,
             width: self.width,
             height: self.height,
             seed: self.get_rng_seed(),
@@ -478,7 +478,7 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         // Check if shaders need to be recompiled (variations changed)
         let shaders_changed = self.pipelines.ensure_shaders_current(device, flame);
         if shaders_changed {
@@ -501,7 +501,7 @@ impl FlameRenderer {
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
-            burn_in: 20,
+            burn_in,
             width: self.width,
             height: self.height,
             seed: self.get_rng_seed(),
@@ -651,10 +651,10 @@ impl FlameRenderer {
         self.deterministic_rng = deterministic;
     }
 
-    pub fn set_histogram_color_scale(&mut self, queue: &Queue, scale: f32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
+    pub fn set_histogram_color_scale(&mut self, queue: &Queue, scale: f32, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         self.histogram_color_scale = scale;
         // Update GPU params immediately so new scale takes effect
-        self.update_iterations(queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
+        self.update_iterations(queue, iterations_per_thread, burn_in, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
     }
 
     pub fn set_low_density_smoothing(&mut self, smoothing: f32) {
@@ -692,12 +692,12 @@ impl FlameRenderer {
     }
 
     /// Update iterations per thread
-    pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
+    pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
 
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
-            burn_in: 20,
+            burn_in,
             width: self.width,
             height: self.height,
             seed: self.get_rng_seed(),
@@ -938,14 +938,14 @@ impl FlameRenderer {
     }
 
     /// Set color mode
-    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
+    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         self.color_mode = color_mode;
 
         // Update params to reflect new color mode
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
-            burn_in: 20,
+            burn_in,
             width: self.width,
             height: self.height,
             seed: self.get_rng_seed(),
