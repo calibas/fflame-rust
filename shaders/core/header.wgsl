@@ -62,6 +62,7 @@ struct VariationParams {
 
 // Path storage for PathMap color mode
 // Stores first 32 iterations losslessly (4 bits per transform, up to 16 transforms)
+// Also stores initial random X/Y coordinates for complete path reconstruction
 // First-hit semantics: only written when iteration_count == 0
 struct PathEntry {
     path0: u32,  // Iterations 0-7 (4 bits each, LSB = iteration 0)
@@ -69,6 +70,8 @@ struct PathEntry {
     path2: u32,  // Iterations 16-23
     path3: u32,  // Iterations 24-31
     iteration_count: u32,  // Number of valid iterations stored (0-32)
+    initial_x: f32,  // Initial random X coordinate [-1, 1]
+    initial_y: f32,  // Initial random Y coordinate [-1, 1]
 }
 
 // Bindings

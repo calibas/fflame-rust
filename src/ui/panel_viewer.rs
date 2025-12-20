@@ -583,10 +583,17 @@ impl<'a> PanelViewer<'a> {
 
                             // Push close button to the right
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("X").clicked() {
+                                if ui.small_button("✕").clicked() {
                                     *self.context.close_path_overlay = true;
                                 }
                             });
+                        });
+
+                        // Show initial coordinates
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Start:").color(egui::Color32::GRAY));
+                            ui.label(egui::RichText::new(format!("({:.4}, {:.4})", path_entry.initial_x, path_entry.initial_y))
+                                .color(egui::Color32::LIGHT_GREEN));
                         });
 
                         ui.add_space(4.0);
@@ -597,7 +604,7 @@ impl<'a> PanelViewer<'a> {
                                 for (i, name) in path_str.iter().enumerate() {
                                     // Add arrow separator between transforms
                                     if i > 0 {
-                                        ui.label(egui::RichText::new(">").color(egui::Color32::GRAY));
+                                        ui.label(egui::RichText::new("→").color(egui::Color32::GRAY));
                                     }
                                     ui.label(egui::RichText::new(name).color(egui::Color32::LIGHT_BLUE));
                                 }
@@ -605,7 +612,7 @@ impl<'a> PanelViewer<'a> {
                         });
 
                         ui.add_space(4.0);
-                        ui.label(egui::RichText::new("Click X or right-click elsewhere to close")
+                        ui.label(egui::RichText::new("Click ✕ or right-click elsewhere to close")
                             .small()
                             .color(egui::Color32::GRAY));
                     });
