@@ -399,12 +399,14 @@ impl<'a> PanelViewer<'a> {
                 }
             }
 
-            // Handle right-click to query path at pixel (PathMap mode)
-            if response.clicked_by(egui::PointerButton::Secondary) {
-                if let Some(click_pos) = response.interact_pointer_pos() {
+            // Handle right-click (or drag with right button held) to query path at pixel (PathMap mode)
+            // Use down() to detect when button is held, allowing continuous updates while dragging
+            let secondary_held = ui.input(|i| i.pointer.secondary_down());
+            if secondary_held && response.hovered() {
+                if let Some(pointer_pos) = ui.input(|i| i.pointer.hover_pos()) {
                     // Convert from panel coordinates to texture coordinates
-                    let local_x = click_pos.x - response.rect.min.x;
-                    let local_y = click_pos.y - response.rect.min.y;
+                    let local_x = pointer_pos.x - response.rect.min.x;
+                    let local_y = pointer_pos.y - response.rect.min.y;
                     let pixel_x = (local_x / available_size.x * width as f32) as u32;
                     let pixel_y = (local_y / available_size.y * height as f32) as u32;
                     *self.context.hovered_pixel = Some((pixel_x.min(width - 1), pixel_y.min(height - 1)));
@@ -578,7 +580,7 @@ impl<'a> PanelViewer<'a> {
 
                             // Push close button to the right
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("✕").clicked() {
+                                if ui.small_button("X").clicked() {
                                     *self.context.close_path_overlay = true;
                                 }
                             });
@@ -643,7 +645,7 @@ impl<'a> PanelViewer<'a> {
                                         ui.horizontal_wrapped(|ui| {
                                             for (i, name) in path_str.iter().enumerate() {
                                                 if i > 0 {
-                                                    ui.label(egui::RichText::new("→").color(egui::Color32::DARK_GRAY));
+                                                    ui.label(egui::RichText::new(">").color(egui::Color32::DARK_GRAY));
                                                 }
                                                 ui.label(egui::RichText::new(name).color(egui::Color32::from_rgb(100, 180, 255)));
                                             }
@@ -656,12 +658,12 @@ impl<'a> PanelViewer<'a> {
 
                             ui.add_space(12.0);
 
-                            // Right column: 5x5 color preview
+                            // Right column: 9x9 color preview (clickable)
                             ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("Preview").strong().color(egui::Color32::LIGHT_GRAY));
+                                ui.label(egui::RichText::new("Preview (click to select)").strong().color(egui::Color32::LIGHT_GRAY));
                                 ui.add_space(4.0);
 
-                                // Render 5x5 color grid
+                                // Render color grid
                                 let (preview_w, preview_h) = click_info.preview_size;
                                 let pixel_size = 12.0;
                                 let total_size = egui::vec2(
@@ -669,8 +671,34 @@ impl<'a> PanelViewer<'a> {
                                     preview_h as f32 * pixel_size,
                                 );
 
-                                let (rect, _response) = ui.allocate_exact_size(total_size, egui::Sense::hover());
+                                // Make clickable to allow selecting other pixels
+                                let (rect, response) = ui.allocate_exact_size(total_size, egui::Sense::click());
                                 let painter = ui.painter();
+
+                                // Handle click on preview to select a different pixel
+                                if response.clicked() {
+                                    if let Some(click_pos) = response.interact_pointer_pos() {
+                                        // Calculate which cell was clicked
+                                        let local_x = click_pos.x - rect.min.x;
+                                        let local_y = click_pos.y - rect.min.y;
+                                        let cell_x = (local_x / pixel_size) as i32;
+                                        let cell_y = (local_y / pixel_size) as i32;
+
+                                        // Calculate offset from center
+                                        let center_x = preview_w as i32 / 2;
+                                        let center_y = preview_h as i32 / 2;
+                                        let offset_x = cell_x - center_x;
+                                        let offset_y = cell_y - center_y;
+
+                                        // Calculate new target pixel
+                                        let (found_x, found_y) = click_info.found_pixel;
+                                        let new_x = (found_x as i32 + offset_x).max(0) as u32;
+                                        let new_y = (found_y as i32 + offset_y).max(0) as u32;
+
+                                        // Update hovered_pixel to trigger re-query
+                                        *self.context.hovered_pixel = Some((new_x, new_y));
+                                    }
+                                }
 
                                 // Draw border around preview
                                 painter.add(egui::epaint::RectShape::stroke(
@@ -697,14 +725,22 @@ impl<'a> PanelViewer<'a> {
 
                                             painter.rect_filled(pixel_rect, 0.0, color);
 
-                                            // Highlight center pixel
+                                            // Highlight center pixel with black and white outline (not filled)
                                             let center_x = preview_w / 2;
                                             let center_y = preview_h / 2;
                                             if px == center_x && py == center_y {
+                                                // Outer black stroke
                                                 painter.add(egui::epaint::RectShape::stroke(
-                                                    pixel_rect,
+                                                    pixel_rect.shrink(0.5),
                                                     egui::CornerRadius::ZERO,
-                                                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                                                    egui::Stroke::new(2.0, egui::Color32::BLACK),
+                                                    egui::epaint::StrokeKind::Inside,
+                                                ));
+                                                // Inner white stroke
+                                                painter.add(egui::epaint::RectShape::stroke(
+                                                    pixel_rect.shrink(2.5),
+                                                    egui::CornerRadius::ZERO,
+                                                    egui::Stroke::new(1.0, egui::Color32::WHITE),
                                                     egui::epaint::StrokeKind::Inside,
                                                 ));
                                             }
