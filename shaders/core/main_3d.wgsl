@@ -7,9 +7,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var rng = rng_init(thread_id, params.seed);
 
     // Starting point (random in [-1, 1], including Z for 3D)
+    let initial_x = rng_nextf(&rng) * 2.0 - 1.0;
+    let initial_y = rng_nextf(&rng) * 2.0 - 1.0;
     var current = vec3<f32>(
-        rng_nextf(&rng) * 2.0 - 1.0,
-        rng_nextf(&rng) * 2.0 - 1.0,
+        initial_x,
+        initial_y,
         rng_nextf(&rng) * 2.0 - 1.0
     );
 
@@ -19,6 +21,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Path tracking for PathMap mode
     // Stores first 32 iterations losslessly (4 bits per transform, supports up to 16 transforms)
     // path[0] = iterations 0-7, path[1] = 8-15, path[2] = 16-23, path[3] = 24-31
+    // Also stores initial_x, initial_y for complete path reconstruction
     var path = array<u32, 4>(0u, 0u, 0u, 0u);
     var path_iteration = 0u;  // Count of iterations stored in path
 
@@ -106,6 +109,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         path_buffer[pixel_idx].path2 = path[2];
                         path_buffer[pixel_idx].path3 = path[3];
                         path_buffer[pixel_idx].iteration_count = path_iteration;
+                        path_buffer[pixel_idx].initial_x = initial_x;
+                        path_buffer[pixel_idx].initial_y = initial_y;
                     }
 
                     // Use white for histogram (actual color computed in tonemap from path buffer)

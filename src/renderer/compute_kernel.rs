@@ -5,7 +5,8 @@ use crate::scene::palette::{Palette, ColorMode, PathMapStyle};
 use crate::config::FractalConfig;
 
 /// Path entry storing first 32 iterations of transform sequence
-/// Matches GPU PathEntry struct layout (5 × u32)
+/// Also stores initial random X/Y coordinates for complete path reconstruction
+/// Matches GPU PathEntry struct layout (7 × u32 = 5 u32 + 2 f32)
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct PathEntry {
@@ -19,6 +20,10 @@ pub struct PathEntry {
     pub path3: u32,
     /// Number of valid iterations stored (0-32)
     pub iteration_count: u32,
+    /// Initial random X coordinate [-1, 1]
+    pub initial_x: f32,
+    /// Initial random Y coordinate [-1, 1]
+    pub initial_y: f32,
 }
 
 impl PathEntry {
@@ -1108,8 +1113,8 @@ impl FlameRenderer {
         queue.submit(std::iter::once(sync_encoder.finish()));
         let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
 
-        // PathEntry is 5 × u32 = 20 bytes per pixel
-        let bytes_per_entry = 5 * std::mem::size_of::<u32>() as u32;
+        // PathEntry is 7 × u32 = 28 bytes per pixel (5 u32 + 2 f32)
+        let bytes_per_entry = 7 * std::mem::size_of::<u32>() as u32;
         let buffer_size = (self.width * self.height * bytes_per_entry) as u64;
 
         // Create staging buffer for readback
@@ -1157,6 +1162,8 @@ impl FlameRenderer {
                 let path2 = u32::from_le_bytes([data[idx + 8], data[idx + 9], data[idx + 10], data[idx + 11]]);
                 let path3 = u32::from_le_bytes([data[idx + 12], data[idx + 13], data[idx + 14], data[idx + 15]]);
                 let iteration_count = u32::from_le_bytes([data[idx + 16], data[idx + 17], data[idx + 18], data[idx + 19]]);
+                let initial_x = f32::from_le_bytes([data[idx + 20], data[idx + 21], data[idx + 22], data[idx + 23]]);
+                let initial_y = f32::from_le_bytes([data[idx + 24], data[idx + 25], data[idx + 26], data[idx + 27]]);
 
                 row.push(PathEntry {
                     path0,
@@ -1164,6 +1171,8 @@ impl FlameRenderer {
                     path2,
                     path3,
                     iteration_count,
+                    initial_x,
+                    initial_y,
                 });
             }
             result.push(row);
