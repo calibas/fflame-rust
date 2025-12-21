@@ -654,6 +654,40 @@ impl<'a> PanelViewer<'a> {
                                 } else {
                                     ui.label(egui::RichText::new("  (empty)").color(egui::Color32::GRAY));
                                 }
+
+                                ui.add_space(6.0);
+
+                                // Hash debug info (shows Prefix Distinct calculation)
+                                use crate::renderer::PathEntry;
+                                let prefix = click_info.path_entry.get_prefix();
+                                let iter_count = click_info.path_entry.iteration_count;
+                                // Mix iteration_count into value before hashing (matches GPU)
+                                let mixed = prefix ^ (iter_count.wrapping_mul(0x9E3779B9));
+                                let hash = PathEntry::scramble_hash(mixed);
+                                let hue = click_info.path_entry.compute_prefix_distinct_hue();
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Debug (Prefix Distinct):").strong().color(egui::Color32::LIGHT_GRAY));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("  path0: 0x{:08X}", prefix))
+                                        .small()
+                                        .color(egui::Color32::YELLOW));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("  mixed: 0x{:08X} (path0 ^ iter*φ)", mixed))
+                                        .small()
+                                        .color(egui::Color32::YELLOW));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("  hash:  0x{:08X}", hash))
+                                        .small()
+                                        .color(egui::Color32::YELLOW));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("  hue:   {:.6}", hue))
+                                        .small()
+                                        .color(egui::Color32::YELLOW));
+                                });
                             });
 
                             ui.add_space(12.0);

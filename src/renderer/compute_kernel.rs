@@ -51,6 +51,62 @@ impl PathEntry {
             .filter_map(|i| self.get_transform(i))
             .collect()
     }
+
+    /// Get prefix data: first 8 iterations (path0 only)
+    /// Matches GPU get_prefix() function
+    pub fn get_prefix(&self) -> u32 {
+        self.path0
+    }
+
+    /// Get suffix data: last 8 valid iterations based on iteration_count
+    /// Matches GPU get_suffix() function
+    pub fn get_suffix(&self) -> u32 {
+        let count = self.iteration_count;
+        if count <= 8 {
+            self.path0
+        } else if count <= 16 {
+            self.path1
+        } else if count <= 24 {
+            self.path2
+        } else {
+            self.path3
+        }
+    }
+
+    /// Scramble hash for maximum color separation
+    /// Matches GPU scramble_hash() function (MurmurHash3 finalizer)
+    pub fn scramble_hash(x: u32) -> u32 {
+        let mut h = x;
+        h ^= h >> 16;
+        h = h.wrapping_mul(0x85ebca6b);
+        h ^= h >> 13;
+        h = h.wrapping_mul(0xc2b2ae35);
+        h ^= h >> 16;
+        h
+    }
+
+    /// Compute hue value for Prefix Distinct coloring mode (style 2)
+    /// Matches GPU path_to_color_prefix_distinct() function
+    /// Incorporates iteration_count to distinguish paths of different lengths
+    pub fn compute_prefix_distinct_hue(&self) -> f32 {
+        let value = self.get_prefix();
+        // Mix iteration_count into the value before hashing (same as GPU)
+        let mixed = value ^ (self.iteration_count.wrapping_mul(0x9E3779B9));
+        let scrambled = Self::scramble_hash(mixed);
+        let golden_ratio: f64 = 0.618033988749895;
+        let hue = (scrambled as f64 * golden_ratio / u32::MAX as f64).fract();
+        hue as f32
+    }
+
+    /// Compute hue value for Suffix Distinct coloring mode (style 3)
+    /// Matches GPU path_to_color_distinct() function
+    pub fn compute_suffix_distinct_hue(&self) -> f32 {
+        let value = self.get_suffix();
+        let scrambled = Self::scramble_hash(value);
+        let golden_ratio: f64 = 0.618033988749895;
+        let hue = (scrambled as f64 * golden_ratio / u32::MAX as f64).fract();
+        hue as f32
+    }
 }
 
 /// Manages fractal flame rendering via GPU compute shaders
