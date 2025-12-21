@@ -581,6 +581,8 @@ impl FlameRenderer {
             height: self.height,
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
+            num_transforms: self.num_transforms,
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -776,6 +778,8 @@ impl FlameRenderer {
             height: self.height,
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
+            num_transforms: self.num_transforms,
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -840,6 +844,8 @@ impl FlameRenderer {
             height: self.height,
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
+            num_transforms: self.num_transforms,
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -939,6 +945,8 @@ impl FlameRenderer {
             height: self.height,
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
+            num_transforms: self.num_transforms,
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
