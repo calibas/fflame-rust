@@ -121,9 +121,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     // Capture mode determines when to write:
                     // 0 = FirstHit: only write if no path stored yet
                     // 1 = FirstAfterBurnIn: same as FirstHit (we're already past burn-in here)
-                    // 2 = LastHit: always overwrite
-                    let should_write = (params.path_capture_mode == 2u) ||
-                                       (path_buffer[pixel_idx].iteration_count == 0u);
+                    // 2 = DeepestHit: overwrite only if new path has more iterations
+                    let existing_count = path_buffer[pixel_idx].iteration_count;
+                    let should_write = (params.path_capture_mode == 2u && path_iteration > existing_count) ||
+                                       (params.path_capture_mode != 2u && existing_count == 0u);
 
                     if (should_write) {
                         path_buffer[pixel_idx].path0 = path[0];
