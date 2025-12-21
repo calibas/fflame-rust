@@ -193,6 +193,8 @@ pub struct TonemapParams {
     pub height: u32,  // Texture height for path buffer indexing
     pub path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct, 4=Depth, 5=OriginRadial, 6=OriginHorizontal, 7=OriginVertical
     pub burn_in: u32,  // Burn-in iterations (for Depth gradient: start depth)
+    pub num_transforms: u32,  // Number of transforms (for path coloring entropy)
+    pub _pad_end: [u32; 3],  // Padding to align struct to 16-byte boundary (128 bytes total)
 }
 
 impl Default for TonemapParams {
@@ -225,6 +227,8 @@ impl Default for TonemapParams {
             height: 600,  // Default height (will be updated per frame)
             path_map_style: 0,  // Prefix mode by default
             burn_in: 20,  // Default burn-in
+            num_transforms: 3,  // Default 3 transforms
+            _pad_end: [0, 0, 0],
         }
     }
 }

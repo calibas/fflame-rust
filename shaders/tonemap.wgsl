@@ -33,6 +33,10 @@ struct TonemapParams {
     height: u32,  // Texture height for path buffer indexing
     path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct, 4=Depth, 5=OriginRadial, 6=OriginHorizontal, 7=OriginVertical
     burn_in: u32,  // Burn-in iterations (for Depth gradient: start depth)
+    num_transforms: u32,  // Number of transforms (for path coloring entropy)
+    _pad0: u32,  // Padding to 16-byte boundary
+    _pad1: u32,
+    _pad2: u32,
 }
 
 // Path storage entry (matches compute shader PathEntry)
@@ -83,22 +87,8 @@ fn scramble_hash(x: u32) -> u32 {
     return h;
 }
 
-// Convert path to RGB color by hashing all 4 u32s
-// This gives a unique color for each distinct full path
-fn path_to_color(path: PathEntry) -> vec3<f32> {
-    let golden_ratio = 0.618033988749895;
-
-    // Combine all 4 path u32s into a single hash
-    // XOR them together, then apply scramble_hash for good distribution
-    var combined = path.path0;
-    combined = combined ^ (path.path1 * 0x9e3779b9u);  // Golden ratio constant
-    combined = combined ^ (path.path2 * 0x517cc1b7u);  // Another prime
-    combined = combined ^ (path.path3 * 0x85ebca6bu);  // MurmurHash constant
-    combined = scramble_hash(combined);
-
-    let hue = fract(f32(combined) * golden_ratio);
-
-    // Convert HSV to RGB (full saturation and value for vibrant colors)
+// Convert hue to RGB (full saturation and value for vibrant colors)
+fn hue_to_rgb(hue: f32) -> vec3<f32> {
     let h = hue * 6.0;
     let i = floor(h);
     let f = h - i;
@@ -124,6 +114,114 @@ fn path_to_color(path: PathEntry) -> vec3<f32> {
     }
 
     return vec3<f32>(r, g, b);
+}
+
+// Extract a single transform index from path data
+// Each transform is stored in 4 bits: path0 has iterations 0-7, path1 has 8-15, etc.
+fn get_transform_at(path: PathEntry, iteration: u32) -> u32 {
+    let word_idx = iteration / 8u;
+    let bit_offset = (iteration % 8u) * 4u;
+
+    var word: u32;
+    if (word_idx == 0u) {
+        word = path.path0;
+    } else if (word_idx == 1u) {
+        word = path.path1;
+    } else if (word_idx == 2u) {
+        word = path.path2;
+    } else {
+        word = path.path3;
+    }
+
+    return (word >> bit_offset) & 0xFu;
+}
+
+// Get prefix data: first 8 iterations (path0 only)
+fn get_prefix(path: PathEntry) -> u32 {
+    return path.path0;
+}
+
+// Get suffix data: last 8 valid iterations based on iteration_count
+fn get_suffix(path: PathEntry) -> u32 {
+    let count = path.iteration_count;
+
+    // If we have 8 or fewer iterations, use path0 (all we have)
+    if (count <= 8u) {
+        return path.path0;
+    }
+
+    // Find which word contains the end of our valid data
+    // count=9-16 -> use path1, count=17-24 -> use path2, count=25-32 -> use path3
+    if (count <= 16u) {
+        return path.path1;
+    } else if (count <= 24u) {
+        return path.path2;
+    } else {
+        return path.path3;
+    }
+}
+
+// Path coloring for style 0 (Prefix) and style 1 (Suffix)
+// Similar paths produce similar colors - smooth hue gradient based on path value
+fn path_to_color_smooth(value: u32, num_transforms: u32) -> vec3<f32> {
+    // Calculate the effective bit width based on num_transforms
+    // With N transforms, each 4-bit slot can only have values 0 to N-1
+    // We want to normalize so full range of possible paths maps to full hue range
+
+    // For 8 iterations × 4 bits = 32 bits total
+    // If num_transforms <= 16, all values fit in 4 bits per slot
+    // Max possible value depends on num_transforms
+
+    // Calculate max possible value for this number of transforms
+    // Each of 8 slots can have values 0 to (num_transforms-1)
+    // Treated as a base-N number: max = N^8 - 1
+    // But we have it packed as 4-bit slots, so we need to interpret differently
+
+    // Simpler approach: treat the 32-bit value as a direct hue mapping
+    // Use golden ratio for good distribution without full scrambling
+    let golden_ratio = 0.618033988749895;
+
+    // For smooth coloring, we want similar values to produce similar hues
+    // Just normalize the value to 0-1 range and use as hue
+    // This gives gradual color transitions for similar paths
+    let hue = fract(f32(value) * golden_ratio / f32(0xFFFFFFFFu));
+
+    return hue_to_rgb(hue);
+}
+
+// Path coloring for style 2 (PrefixDistinct) and style 3 (SuffixDistinct)
+// Maximum color separation - similar paths get very different colors
+fn path_to_color_distinct(value: u32) -> vec3<f32> {
+    let golden_ratio = 0.618033988749895;
+
+    // Apply scramble hash for maximum color separation
+    let scrambled = scramble_hash(value);
+    let hue = fract(f32(scrambled) * golden_ratio / f32(0xFFFFFFFFu));
+
+    return hue_to_rgb(hue);
+}
+
+// Main path-to-color function that handles all 4 hash-based styles
+// style 0 = Prefix (smooth), 1 = Suffix (smooth), 2 = PrefixDistinct, 3 = SuffixDistinct
+fn path_to_color(path: PathEntry, style: u32, num_transforms: u32) -> vec3<f32> {
+    // Get the relevant path data based on prefix/suffix
+    var value: u32;
+    if (style == 0u || style == 2u) {
+        // Prefix styles: use first 8 iterations
+        value = get_prefix(path);
+    } else {
+        // Suffix styles: use last 8 valid iterations
+        value = get_suffix(path);
+    }
+
+    // Apply smooth or distinct coloring
+    if (style <= 1u) {
+        // Smooth: similar paths → similar colors
+        return path_to_color_smooth(value, num_transforms);
+    } else {
+        // Distinct: scramble for maximum color separation
+        return path_to_color_distinct(value);
+    }
 }
 
 // Helper function: Calculate brightness scaling factor from logarithmic curve
@@ -373,8 +471,8 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             let style = tonemap_params.path_map_style;
 
             if (style <= 3u) {
-                // Hash-based coloring (existing styles)
-                fractal_color = path_to_color(path);
+                // Hash-based coloring: Prefix, Suffix, PrefixDistinct, SuffixDistinct
+                fractal_color = path_to_color(path, style, tonemap_params.num_transforms);
             } else {
                 // Gradient-based coloring using palette
                 var t: f32 = 0.0;
