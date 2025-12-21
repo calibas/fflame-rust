@@ -112,6 +112,17 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Path filter buffer (storage, read-only for blocking transform sequences)
+                BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -387,6 +398,10 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 7,
                     resource: buffers.path_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 8,
+                    resource: buffers.path_filter_buffer.as_entire_binding(),
                 },
             ],
         })

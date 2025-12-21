@@ -56,9 +56,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             // Speed mode: blend with speed-based color
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
-        } else {
-            // Path map mode: store iterations losslessly
-            // Each u32 holds 8 iterations at 4 bits each
+        }
+
+        // Path tracking: needed for path map mode OR when filters are active
+        let needs_path_tracking = (params.color_mode == 2u) || (params.num_path_filters > 0u);
+        if (needs_path_tracking) {
             // For FirstAfterBurnIn mode (1), only track path after burn-in
             let should_track = (params.path_capture_mode != 1u) || (i >= params.burn_in);
             if (should_track) {
@@ -80,6 +82,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
                 // Always increment - this is the actual iteration count (not capped at 32)
                 path_iteration = path_iteration + 1u;
+
+                // Check path filters - terminate thread if path matches blocklist
+                if (check_path_filters(path, path_iteration)) {
+                    break;
+                }
             }
         }
 

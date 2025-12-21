@@ -147,6 +147,8 @@ pub struct FlameRenderer {
     overwrite_mode: bool, // When true, replace accumulation buffer instead of blending (for live preview)
     num_transforms: u32, // Number of regular transforms (not including final transform)
     has_final_transform: bool, // Whether final transform is present
+    path_filters: Vec<crate::gpu::buffers::GpuPathFilter>, // Active path filters
+    min_suffix_filter_length: u32, // Minimum length among depth=0 filters (optimization)
 }
 
 impl FlameRenderer {
@@ -227,6 +229,8 @@ impl FlameRenderer {
             overwrite_mode: false, // Default to normal blending (progressive refinement)
             num_transforms: flame.transforms.len() as u32,
             has_final_transform: flame.final_transform.is_some(),
+            path_filters: Vec::new(), // No filters by default
+            min_suffix_filter_length: 0,
         }
     }
 
@@ -329,8 +333,19 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
             path_tracking_mode: self.path_tracking_mode as u32,
+            num_path_filters: self.path_filters.len() as u32,
+            min_suffix_filter_length: self.min_suffix_filter_length,
         };
         self.buffers.update_params(queue, &params);
+
+        // Update path filter buffer if filters are active
+        if !self.path_filters.is_empty() {
+            queue.write_buffer(
+                &self.buffers.path_filter_buffer,
+                0,
+                bytemuck::cast_slice(&self.path_filters),
+            );
+        }
 
         // Track total iterations: workgroups * threads_per_workgroup * iterations_per_thread
         // Each workgroup has 64 threads (8x8)
@@ -536,6 +551,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
             path_tracking_mode: self.path_tracking_mode as u32,
+            num_path_filters: self.path_filters.len() as u32,
+            min_suffix_filter_length: self.min_suffix_filter_length,
         };
         self.buffers.update_params(queue, &params);
 
@@ -603,6 +620,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
             path_tracking_mode: self.path_tracking_mode as u32,
+            num_path_filters: self.path_filters.len() as u32,
+            min_suffix_filter_length: self.min_suffix_filter_length,
         };
 
         self.buffers.update_params(queue, &params);
@@ -804,6 +823,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
             path_tracking_mode: self.path_tracking_mode as u32,
+            num_path_filters: self.path_filters.len() as u32,
+            min_suffix_filter_length: self.min_suffix_filter_length,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -1060,6 +1081,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
             path_tracking_mode: self.path_tracking_mode as u32,
+            num_path_filters: self.path_filters.len() as u32,
+            min_suffix_filter_length: self.min_suffix_filter_length,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -1100,6 +1123,43 @@ impl FlameRenderer {
     /// Get current path tracking mode
     pub fn path_tracking_mode(&self) -> PathTrackingMode {
         self.path_tracking_mode
+    }
+
+    /// Set path filters for blocking specific transform sequences
+    ///
+    /// # Arguments
+    /// * `filters` - Vector of GpuPathFilter structs defining patterns to block
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Block all paths ending with transform [0,0,0,0,1] (suffix filter)
+    /// renderer.set_path_filters(vec![GpuPathFilter::suffix(&[0, 0, 0, 0, 1])]);
+    ///
+    /// // Block paths matching [0,1] at iteration depth 2 (exact depth filter)
+    /// renderer.set_path_filters(vec![GpuPathFilter::at_depth(&[0, 1], 2)]);
+    /// ```
+    pub fn set_path_filters(&mut self, filters: Vec<crate::gpu::buffers::GpuPathFilter>) {
+        // Calculate min_suffix_filter_length for optimization
+        self.min_suffix_filter_length = filters
+            .iter()
+            .filter(|f| f.depth == 0) // Only suffix filters
+            .map(|f| f.length)
+            .min()
+            .unwrap_or(0);
+
+        self.path_filters = filters;
+        // Note: GPU buffer will be updated on next compute pass
+    }
+
+    /// Clear all path filters
+    pub fn clear_path_filters(&mut self) {
+        self.path_filters.clear();
+        self.min_suffix_filter_length = 0;
+    }
+
+    /// Get current path filters
+    pub fn path_filters(&self) -> &[crate::gpu::buffers::GpuPathFilter] {
+        &self.path_filters
     }
 
     /// Read pixels from the fractal_texture (after tonemap_pass has rendered to it)

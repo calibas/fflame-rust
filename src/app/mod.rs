@@ -100,7 +100,7 @@ impl App {
 
         let flame = initial_config.flame.clone();
 
-        let flame_renderer = FlameRenderer::new(
+        let mut flame_renderer = FlameRenderer::new(
             &gpu.device,
             &gpu.queue,
             gpu.config.format,
@@ -108,6 +108,15 @@ impl App {
             gpu.size.height,
             &flame,
         );
+
+        // TEMPORARY TEST: Add hardcoded path filter to block paths ending with [0, 1]
+        // This is for testing the path filter feature - remove after verification
+        use crate::gpu::buffers::GpuPathFilter;
+        flame_renderer.set_path_filters(vec![
+            // Suffix filter: block any path ending with [0, 1] at any depth
+            GpuPathFilter::suffix(&[0, 1]),
+        ]);
+        log::info!("Path filter test: blocking paths ending with [0, 1]");
 
         // ConfigManager loads SystemSettings automatically
         let config_manager = ConfigManager::new(initial_config.clone());
