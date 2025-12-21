@@ -20,7 +20,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 
 use crate::config::FractalConfig;
-use crate::scene::palette::{Palette, ColorMode, PathMapStyle, PathCaptureMode};
+use crate::scene::palette::{Palette, ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::transforms::{Flame, RenderMode, Transform};
 use crate::variations::global_registry;
@@ -267,6 +267,7 @@ fn parse_flame_element(
         color_mode,  // Detected based on palette presence
         path_map_style: PathMapStyle::default(),
         path_capture_mode: PathCaptureMode::default(),
+        path_tracking_mode: PathTrackingMode::default(),
         palette_index: 0,
         palette,
         palette_rotation: 0.0,  // Default, could parse from XML if present

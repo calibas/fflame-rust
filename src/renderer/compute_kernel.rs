@@ -1,7 +1,7 @@
 use egui_wgpu::wgpu::*;
 use crate::gpu::{buffers::*, pipelines::FlamePipelines};
 use crate::scene::transforms::Flame;
-use crate::scene::palette::{Palette, ColorMode, PathMapStyle, PathCaptureMode};
+use crate::scene::palette::{Palette, ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode};
 use crate::config::FractalConfig;
 
 /// Path entry storing first 32 iterations of transform sequence
@@ -74,6 +74,7 @@ pub struct FlameRenderer {
     color_mode: ColorMode,
     path_map_style: PathMapStyle,
     path_capture_mode: PathCaptureMode,
+    path_tracking_mode: PathTrackingMode,
     density_scale: f32,
     background_color: [f32; 3],
     current_render_mode: crate::scene::transforms::RenderMode,
@@ -153,6 +154,7 @@ impl FlameRenderer {
             color_mode: ColorMode::Palette,
             path_map_style: PathMapStyle::default(),
             path_capture_mode: PathCaptureMode::default(),
+            path_tracking_mode: PathTrackingMode::default(),
             density_scale: 1.0,
             background_color: [0.0, 0.0, 0.0],
             current_render_mode: flame.render_mode,
@@ -270,6 +272,7 @@ impl FlameRenderer {
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
+            path_tracking_mode: self.path_tracking_mode as u32,
         };
         self.buffers.update_params(queue, &params);
 
@@ -424,6 +427,7 @@ impl FlameRenderer {
         self.color_mode = config.color_mode;
         self.path_map_style = config.path_map_style;
         self.path_capture_mode = config.path_capture_mode;
+        self.path_tracking_mode = config.path_tracking_mode;
 
         // 3. Update density and background
         self.density_scale = config.density_scale;
@@ -475,6 +479,7 @@ impl FlameRenderer {
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
+            path_tracking_mode: self.path_tracking_mode as u32,
         };
         self.buffers.update_params(queue, &params);
 
@@ -541,6 +546,7 @@ impl FlameRenderer {
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
+            path_tracking_mode: self.path_tracking_mode as u32,
         };
 
         self.buffers.update_params(queue, &params);
@@ -741,6 +747,7 @@ impl FlameRenderer {
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
+            path_tracking_mode: self.path_tracking_mode as u32,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -996,6 +1003,7 @@ impl FlameRenderer {
             bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
             path_map_style: self.path_map_style as u32,
             path_capture_mode: self.path_capture_mode as u32,
+            path_tracking_mode: self.path_tracking_mode as u32,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -1025,6 +1033,17 @@ impl FlameRenderer {
     /// Get current path capture mode
     pub fn path_capture_mode(&self) -> PathCaptureMode {
         self.path_capture_mode
+    }
+
+    /// Set path tracking mode (First = first 32 iterations, Recent = rolling window of 32 most recent)
+    pub fn set_path_tracking_mode(&mut self, path_tracking_mode: PathTrackingMode) {
+        self.path_tracking_mode = path_tracking_mode;
+        // Note: GPU params will be updated on next render
+    }
+
+    /// Get current path tracking mode
+    pub fn path_tracking_mode(&self) -> PathTrackingMode {
+        self.path_tracking_mode
     }
 
     /// Read pixels from the fractal_texture (after tonemap_pass has rendered to it)

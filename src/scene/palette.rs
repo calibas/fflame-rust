@@ -29,6 +29,16 @@ pub enum PathCaptureMode {
     LastHit,
 }
 
+/// PathMap tracking mode - which iterations to store in the path
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PathTrackingMode {
+    /// Store the first 32 iterations, then stop tracking
+    #[default]
+    First,
+    /// Store the 32 most recent iterations (rolling window)
+    Recent,
+}
+
 /// PathMap coloring style - how path hash maps to colors
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PathMapStyle {
