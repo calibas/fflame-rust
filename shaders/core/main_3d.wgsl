@@ -67,12 +67,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let should_track = (params.path_capture_mode != 1u) || (i >= params.burn_in);
             if (should_track) {
                 if (params.path_tracking_mode == 0u) {
-                    // First mode: store first 32 iterations, then stop
+                    // First mode: store first 32 iterations, then stop writing to path array
                     if (path_iteration < 32u) {
                         let slot = path_iteration / 8u;  // Which u32 (0-3)
                         let pos = (path_iteration % 8u) * 4u;  // Bit position within u32 (0,4,8,12,16,20,24,28)
                         path[slot] = path[slot] | ((xform_idx & 0xFu) << pos);
-                        path_iteration = path_iteration + 1u;
                     }
                 } else {
                     // Recent mode: rolling window of 32 most recent iterations
@@ -82,8 +81,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     path[2] = (path[2] << 4u) | (path[1] >> 28u);
                     path[1] = (path[1] << 4u) | (path[0] >> 28u);
                     path[0] = (path[0] << 4u) | (xform_idx & 0xFu);
-                    path_iteration = min(path_iteration + 1u, 32u);
                 }
+                // Always increment - this is the actual iteration count (not capped at 32)
+                path_iteration = path_iteration + 1u;
             }
         }
 
