@@ -189,13 +189,28 @@ fn path_to_color_smooth(value: u32, num_transforms: u32) -> vec3<f32> {
     return hue_to_rgb(hue);
 }
 
-// Path coloring for style 2 (PrefixDistinct) and style 3 (SuffixDistinct)
+// Path coloring for style 3 (SuffixDistinct)
 // Maximum color separation - similar paths get very different colors
 fn path_to_color_distinct(value: u32) -> vec3<f32> {
     let golden_ratio = 0.618033988749895;
 
     // Apply scramble hash for maximum color separation
     let scrambled = scramble_hash(value);
+    let hue = fract(f32(scrambled) * golden_ratio / f32(0xFFFFFFFFu));
+
+    return hue_to_rgb(hue);
+}
+
+// Path coloring for style 2 (PrefixDistinct)
+// Incorporates iteration_count to distinguish paths of different lengths
+// e.g., [0] vs [0,0] vs [0,0,0] all have path0=0 but different iteration counts
+fn path_to_color_prefix_distinct(value: u32, iteration_count: u32) -> vec3<f32> {
+    let golden_ratio = 0.618033988749895;
+
+    // Mix iteration_count into the value before hashing
+    // This ensures paths with same prefix but different lengths get different colors
+    let mixed = value ^ (iteration_count * 0x9E3779B9u);
+    let scrambled = scramble_hash(mixed);
     let hue = fract(f32(scrambled) * golden_ratio / f32(0xFFFFFFFFu));
 
     return hue_to_rgb(hue);
@@ -218,8 +233,11 @@ fn path_to_color(path: PathEntry, style: u32, num_transforms: u32) -> vec3<f32> 
     if (style <= 1u) {
         // Smooth: similar paths → similar colors
         return path_to_color_smooth(value, num_transforms);
+    } else if (style == 2u) {
+        // Prefix Distinct: include iteration_count to distinguish same-prefix paths
+        return path_to_color_prefix_distinct(value, path.iteration_count);
     } else {
-        // Distinct: scramble for maximum color separation
+        // Suffix Distinct: scramble for maximum color separation
         return path_to_color_distinct(value);
     }
 }
