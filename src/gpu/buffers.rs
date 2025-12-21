@@ -160,8 +160,74 @@ pub struct GpuParams {
     pub final_transform_index: u32, // Index in transform buffer (always last slot)
     pub bits_per_transform: u32, // Bits needed per transform index (1-4 based on num_transforms)
     pub path_map_style: u32, // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct
-    pub path_capture_mode: u32, // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
+    pub path_capture_mode: u32, // 0=FirstHit, 1=FirstAfterBurnIn, 2=DeepestHit
     pub path_tracking_mode: u32, // 0=First (first 32 iterations), 1=Recent (rolling window of 32)
+    pub num_path_filters: u32, // Number of active path filters (0 = disabled)
+    pub min_suffix_filter_length: u32, // Minimum length among depth=0 filters (for optimization)
+}
+
+/// Maximum number of path filters supported
+pub const MAX_PATH_FILTERS: usize = 64;
+
+/// GPU representation of a path filter (must match WGSL PathFilter struct)
+/// Used to block specific transform sequences during iteration
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuPathFilter {
+    /// Packed pattern (up to 8 iterations at 4 bits each, LSB = first)
+    pub pattern: u32,
+    /// Number of iterations in pattern (1-8)
+    pub length: u32,
+    /// 0 = suffix match (any depth), >0 = match at this exact depth
+    pub depth: u32,
+    /// Padding for 16-byte alignment
+    pub _padding: u32,
+}
+
+impl GpuPathFilter {
+    /// Create an empty (unused) filter
+    pub fn empty() -> Self {
+        Self {
+            pattern: 0,
+            length: 0,
+            depth: 0,
+            _padding: 0,
+        }
+    }
+
+    /// Create a suffix filter (matches at any depth)
+    /// pattern: array of transform indices (0-15), up to 8 elements
+    pub fn suffix(pattern: &[u32]) -> Self {
+        assert!(pattern.len() <= 8, "Pattern can have at most 8 elements");
+        let mut packed = 0u32;
+        for (i, &idx) in pattern.iter().enumerate() {
+            packed |= (idx & 0xF) << (i * 4);
+        }
+        Self {
+            pattern: packed,
+            length: pattern.len() as u32,
+            depth: 0, // 0 = suffix match
+            _padding: 0,
+        }
+    }
+
+    /// Create an exact depth filter (only matches at specific iteration depth)
+    /// pattern: array of transform indices (0-15), up to 8 elements
+    /// depth: the iteration count at which this pattern should match
+    pub fn at_depth(pattern: &[u32], depth: u32) -> Self {
+        assert!(pattern.len() <= 8, "Pattern can have at most 8 elements");
+        assert!(depth >= pattern.len() as u32, "Depth must be >= pattern length");
+        let mut packed = 0u32;
+        for (i, &idx) in pattern.iter().enumerate() {
+            packed |= (idx & 0xF) << (i * 4);
+        }
+        Self {
+            pattern: packed,
+            length: pattern.len() as u32,
+            depth, // >0 = exact depth match
+            _padding: 0,
+        }
+    }
 }
 
 /// Tonemap parameters
@@ -285,6 +351,10 @@ pub struct FlameBuffers {
     // Last-write-wins semantics (not accumulated)
     pub path_buffer: Buffer,
 
+    // Path filter buffer for blocking specific transform sequences
+    // Layout: MAX_PATH_FILTERS × GpuPathFilter (16 bytes each)
+    pub path_filter_buffer: Buffer,
+
     // Per-pixel scale buffer for adaptive histogram scaling
     // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
 
@@ -368,6 +438,8 @@ impl FlameBuffers {
             path_map_style: 0,
             path_capture_mode: 0, // FirstHit by default
             path_tracking_mode: 0, // First (first 32 iterations) by default
+            num_path_filters: 0, // No filters by default
+            min_suffix_filter_length: 0, // No filters by default
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
@@ -485,6 +557,19 @@ impl FlameBuffers {
         });
 
         // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
+
+        // Create path filter buffer for blocking specific transform sequences
+        // Pre-allocated for MAX_PATH_FILTERS entries (16 bytes each)
+        let path_filter_buffer_size = (MAX_PATH_FILTERS * std::mem::size_of::<GpuPathFilter>()) as u64;
+        let path_filter_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Path Filter Buffer"),
+            size: path_filter_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Initialize with empty filters (all zeros)
+        let empty_filters = vec![GpuPathFilter::empty(); MAX_PATH_FILTERS];
+        queue.write_buffer(&path_filter_buffer, 0, bytemuck::cast_slice(&empty_filters));
 
         // Create palette texture (1D, 256 samples)
         // Use Rgba8Unorm for efficient, standard color storage
@@ -616,6 +701,7 @@ impl FlameBuffers {
             histogram_buffer,
             iteration_count_buffer,
             path_buffer,
+            path_filter_buffer,
             // scale_buffer removed - using params.histogram_color_scale instead
             palette_texture,
             palette_view,

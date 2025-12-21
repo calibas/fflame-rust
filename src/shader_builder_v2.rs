@@ -73,7 +73,11 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
         shader.push('\n');
 
-        // 8. Main
+        // 8. Path filter utilities
+        shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
+        shader.push('\n');
+
+        // 9. Main
         shader.push_str(include_str!("../shaders/core/main_2d.wgsl"));
 
         shader
@@ -131,7 +135,11 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
         shader.push('\n');
 
-        // 7. Main
+        // 7. Path filter utilities
+        shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
+        shader.push('\n');
+
+        // 8. Main
         shader.push_str(include_str!("../shaders/core/main_3d.wgsl"));
 
         shader

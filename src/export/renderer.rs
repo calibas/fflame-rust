@@ -834,6 +834,8 @@ impl TiledRenderer {
                 path_map_style: config.path_map_style as u32,
                 path_capture_mode: config.path_capture_mode as u32,
                 path_tracking_mode: config.path_tracking_mode as u32,
+                num_path_filters: 0, // Path filters not supported in export mode
+                min_suffix_filter_length: 0,
             };
             self.queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
 

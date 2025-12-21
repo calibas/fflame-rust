@@ -54,6 +54,8 @@ struct Params {
     path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=Prefix (Distinct), 3=Suffix (Distinct)
     path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
     path_tracking_mode: u32,  // 0=First (first 32 iterations), 1=Recent (rolling window of 32 most recent)
+    num_path_filters: u32,  // Number of active path filters (0 = disabled)
+    min_suffix_filter_length: u32,  // Minimum length among depth=0 filters (for optimization)
 }
 
 // Variation parameters for one transform
@@ -75,6 +77,16 @@ struct PathEntry {
     initial_y: f32,  // Initial random Y coordinate [-1, 1]
 }
 
+// Path filter for blocking specific transform sequences
+// depth=0: suffix match (block paths ending with pattern at any depth)
+// depth>0: exact depth match (block paths matching pattern at specific iteration)
+struct PathFilter {
+    pattern: u32,  // Packed pattern (up to 8 iterations at 4 bits each, LSB = first)
+    length: u32,   // Number of iterations in pattern (1-8)
+    depth: u32,    // 0 = suffix match, >0 = match at this exact depth
+    _padding: u32, // Padding for 16-byte alignment
+}
+
 // Bindings
 @group(0) @binding(0) var<storage, read> transforms: array<Transform>;
 @group(0) @binding(1) var<uniform> params: Params;
@@ -84,3 +96,4 @@ struct PathEntry {
 @group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;
 @group(0) @binding(6) var<storage, read_write> iteration_counts: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;
+@group(0) @binding(8) var<storage, read> path_filters: array<PathFilter>;
