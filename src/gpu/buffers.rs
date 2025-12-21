@@ -686,13 +686,17 @@ impl FlameBuffers {
         drop(render_pass); // End the render pass immediately
     }
 
-    /// Clear histogram buffer only (before each compute pass)
+    /// Clear histogram buffer only (before each batch for proper accumulation math)
     pub fn clear_histogram(&self, encoder: &mut CommandEncoder) {
-        // Clear histogram buffer to zero for new frame
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
     }
 
-    /// Clear histogram and path buffers (when starting fresh accumulation)
+    /// Clear path buffer only (on full reset: view change, flame change, etc.)
+    pub fn clear_paths(&self, encoder: &mut CommandEncoder) {
+        encoder.clear_buffer(&self.path_buffer, 0, None);
+    }
+
+    /// Clear histogram and path buffers (convenience method for full reset)
     pub fn clear_histogram_and_paths(&self, encoder: &mut CommandEncoder) {
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
         encoder.clear_buffer(&self.path_buffer, 0, None);

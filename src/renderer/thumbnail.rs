@@ -76,6 +76,8 @@ pub fn render_thumbnail(
         });
 
         let clear_histogram = batch_frame_count == 0;
+        // Clear paths only on first frame of the entire render
+        let clear_paths = total_rendered == 0 && clear_histogram;
 
         renderer.compute_pass(
             &mut encoder,
@@ -92,6 +94,7 @@ pub fn render_thumbnail(
             config.camera_z,
             config.speed_factor,
             clear_histogram,
+            clear_paths,
         );
 
         let samples_this_frame =

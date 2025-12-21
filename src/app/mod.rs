@@ -63,6 +63,7 @@ pub struct App {
     pub(super) use_overwrite_next_frame: bool,  // Persist overwrite mode for brief period after changes
     pub(super) last_param_change_time: Option<web_time::Instant>,  // Track when params last changed
     pub(super) rendering_complete: bool,  // True when rendering has finished (max_iterations reached)
+    pub(super) clear_paths_next_frame: bool,  // Clear path buffer on next compute pass (full reset)
     pub(super) ui_needs_repaint: bool,  // Track if UI is requesting repaints (for frame rate boost)
     pub(super) pending_redraws: u32,  // Counter for queued redraws (for UI animations after input)
 
@@ -140,6 +141,7 @@ impl App {
             use_overwrite_next_frame: false,
             last_param_change_time: None,
             rendering_complete: false,
+            clear_paths_next_frame: true,  // Clear paths on first frame
             ui_needs_repaint: false,
             pending_redraws: 0,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
@@ -1120,6 +1122,8 @@ impl App {
                         });
 
                         let clear_histogram = batch_frame_count == 0;
+                        // Clear paths only on very first batch of the entire export
+                        let clear_paths = total_rendered == 0 && clear_histogram;
 
                         temp_renderer.compute_pass(
                             &mut encoder,
@@ -1136,6 +1140,7 @@ impl App {
                             export_config.camera_z,
                             export_config.speed_factor,
                             clear_histogram,
+                            clear_paths,
                         );
 
                         let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
@@ -1500,12 +1505,14 @@ impl App {
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                     self.frames_since_accumulation = 0;
                     self.rendering_complete = false;  // Reset completion flag
+                    self.clear_paths_next_frame = true;  // Clear path buffer on full reset
                 } else if has_view_or_color_change && renderer.total_iterations() >= update_config.max_iterations {
                     // View/color changes when fractal has stopped iterating:
                     // Reset counter to restart iteration (smooth transition via overwrite mode)
                     renderer.reset_iteration_counter();
                     self.frames_since_accumulation = 0;
                     self.rendering_complete = false;  // Reset completion flag
+                    self.clear_paths_next_frame = true;  // Clear path buffer when restarting
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
@@ -1538,6 +1545,7 @@ impl App {
                     if let Some(ref mut renderer) = self.flame_renderer {
                         renderer.reset_iteration_counter();
                         self.rendering_complete = false;  // Reset completion flag
+                        self.clear_paths_next_frame = true;  // Clear path buffer for clean rebuild
                         log::debug!("Overwrite window expired → reset iteration counter for clean rebuild");
                     }
                 }
@@ -1694,11 +1702,16 @@ impl App {
                 // 1. Compute new samples with fresh random seed
                 // Clear histogram only when starting a new batch (frame 1 of batch)
                 let clear_histogram = self.frames_since_accumulation == 1;
+                // Clear paths only on full reset (not every batch)
+                let clear_paths = self.clear_paths_next_frame;
+                if clear_paths {
+                    self.clear_paths_next_frame = false;  // Reset flag after use
+                }
 
                 let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, NUM_WORKGROUPS,
                     self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                     final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
-                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram);
+                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
 

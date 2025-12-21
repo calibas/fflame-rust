@@ -167,6 +167,8 @@ impl App {
 
             // Clear histogram only on first frame of batch (match viewport behavior)
             let clear_histogram = batch_frame_count == 0;
+            // Clear paths only on very first batch of the entire export
+            let clear_paths = total_rendered == 0 && clear_histogram;
 
             // Use FULL iterations_per_thread like viewport does (not divided by speed_multiplier)
             temp_renderer.compute_pass(
@@ -184,6 +186,7 @@ impl App {
                 config.camera_z,
                 config.speed_factor,
                 clear_histogram, // CHANGED: Conditional clear like viewport
+                clear_paths,
             );
 
             let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * self.config_manager.system_settings().iterations_per_thread as u64;
