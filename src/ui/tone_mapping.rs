@@ -517,7 +517,7 @@ pub fn render_colors_content(
                 let capture_text = match current_capture {
                     PathCaptureMode::FirstHit => "First Hit",
                     PathCaptureMode::FirstAfterBurnIn => "First After Burn-in",
-                    PathCaptureMode::LastHit => "Last Hit",
+                    PathCaptureMode::LastHit => "Deepest Hit",
                 };
 
                 let mut temp_capture = current_capture;
@@ -540,8 +540,8 @@ pub fn render_colors_content(
                                 max_update = max_update.max(update);
                             }
                         }
-                        if ui.selectable_value(&mut temp_capture, PathCaptureMode::LastHit, "Last Hit")
-                            .on_hover_text("Always overwrite - shows most recent path to each pixel")
+                        if ui.selectable_value(&mut temp_capture, PathCaptureMode::LastHit, "Deepest Hit")
+                            .on_hover_text("Keep path with most iterations - shows deepest path to each pixel")
                             .changed()
                         {
                             if let Ok(update) = config_manager.update_param(ConfigPath::PathCaptureMode, temp_capture.into()) {
