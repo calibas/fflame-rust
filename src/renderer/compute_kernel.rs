@@ -234,7 +234,9 @@ impl FlameRenderer {
 
     /// Run compute pass to generate flame samples
     /// Returns the number of samples generated this frame
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool) -> u64 {
+    /// - `clear_histogram`: Clear histogram buffer (needed each batch for proper accumulation math)
+    /// - `clear_paths`: Clear path buffer (only needed on full reset, not each batch)
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool, clear_paths: bool) -> u64 {
         // Update seed for new random samples each frame
         // projection_type removed - shader now uses perspective_strength directly
         // 0.0 = orthographic (flat), higher values = increasing perspective
@@ -277,10 +279,14 @@ impl FlameRenderer {
         let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
         self.total_iterations += samples_this_frame;
 
-        // Clear histogram and path buffers before rendering new samples (optional for batched accumulation)
-        // Path buffer must also be cleared when starting fresh to avoid stale data from previous view
+        // Clear histogram buffer before each batch (needed for proper accumulation math)
         if clear_histogram {
-            self.buffers.clear_histogram_and_paths(encoder);
+            self.buffers.clear_histogram(encoder);
+        }
+        // Clear path buffer only on full reset (view change, flame change, etc.)
+        // Path buffer persists across batches to accumulate path data for all pixels
+        if clear_paths {
+            self.buffers.clear_paths(encoder);
         }
 
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {

@@ -1009,6 +1009,8 @@ async fn render_frame_to_completion(
         });
 
         let clear_histogram = batch_frame_count == 0;
+        // Clear paths only on very first batch of the entire export
+        let clear_paths = total_rendered == 0 && clear_histogram;
 
         renderer.compute_pass(
             &mut encoder,
@@ -1025,6 +1027,7 @@ async fn render_frame_to_completion(
             config.camera_z,
             config.speed_factor,
             clear_histogram,
+            clear_paths,
         );
 
         let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
