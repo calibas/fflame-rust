@@ -161,6 +161,7 @@ pub struct GpuParams {
     pub bits_per_transform: u32, // Bits needed per transform index (1-4 based on num_transforms)
     pub path_map_style: u32, // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct
     pub path_capture_mode: u32, // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
+    pub path_tracking_mode: u32, // 0=First (first 32 iterations), 1=Recent (rolling window of 32)
 }
 
 /// Tonemap parameters
@@ -366,6 +367,7 @@ impl FlameBuffers {
             bits_per_transform: bits_per_transform(flame.transforms.len() as u32),
             path_map_style: 0,
             path_capture_mode: 0, // FirstHit by default
+            path_tracking_mode: 0, // First (first 32 iterations) by default
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {

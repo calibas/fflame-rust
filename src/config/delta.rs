@@ -7,7 +7,7 @@
 /// - ConfigChange: Batch of deltas (single undo point)
 /// - UpdateType: What kind of update is needed for a change
 
-use crate::scene::palette::{Palette, ColorMode, PathCaptureMode, PathMapStyle};
+use crate::scene::palette::{Palette, ColorMode, PathCaptureMode, PathMapStyle, PathTrackingMode};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
 use crate::scene::transforms::RenderMode;
 use std::fmt::{self, Display, Formatter};
@@ -46,6 +46,7 @@ pub enum ConfigPath {
     ColorMode,
     PathMapStyle,  // Prefix or Suffix coloring for PathMap mode
     PathCaptureMode,  // FirstHit, FirstAfterBurnIn, or LastHit
+    PathTrackingMode,  // First (first 32 iterations) or Recent (rolling window of 32 most recent)
     PaletteIndex,
     Palette, // Embedded palette data (custom palettes)
     PaletteRotation,
@@ -169,6 +170,7 @@ impl Display for ConfigPath {
             ConfigPath::ColorMode => write!(f, "Color Mode"),
             ConfigPath::PathMapStyle => write!(f, "PathMap Style"),
             ConfigPath::PathCaptureMode => write!(f, "PathMap Capture Mode"),
+            ConfigPath::PathTrackingMode => write!(f, "PathMap Tracking Mode"),
             ConfigPath::PaletteIndex => write!(f, "Palette"),
             ConfigPath::Palette => write!(f, "Palette Data"),
             ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
@@ -283,6 +285,7 @@ pub enum ConfigValue {
     ColorMode(ColorMode),
     PathMapStyle(PathMapStyle),
     PathCaptureMode(PathCaptureMode),
+    PathTrackingMode(PathTrackingMode),
     RenderMode(RenderMode),
     ToneCurve(ToneCurve),
     Palette(Palette),
@@ -333,6 +336,7 @@ impl Display for ConfigValue {
             ConfigValue::ColorMode(m) => write!(f, "{:?}", m),
             ConfigValue::PathMapStyle(m) => write!(f, "{:?}", m),
             ConfigValue::PathCaptureMode(m) => write!(f, "{:?}", m),
+            ConfigValue::PathTrackingMode(m) => write!(f, "{:?}", m),
             ConfigValue::RenderMode(m) => write!(f, "{:?}", m),
             ConfigValue::ToneCurve(curve) => {
                 write!(f, "[Tone Curve: {} pts: {:?}]",
@@ -420,6 +424,12 @@ impl From<PathMapStyle> for ConfigValue {
 impl From<PathCaptureMode> for ConfigValue {
     fn from(v: PathCaptureMode) -> Self {
         ConfigValue::PathCaptureMode(v)
+    }
+}
+
+impl From<PathTrackingMode> for ConfigValue {
+    fn from(v: PathTrackingMode) -> Self {
+        ConfigValue::PathTrackingMode(v)
     }
 }
 
@@ -714,6 +724,9 @@ impl ConfigPath {
             // PathCaptureMode affects path buffer capture logic in compute shader
             ConfigPath::PathCaptureMode => UpdateType::IterationReset,
 
+            // PathTrackingMode affects path tracking logic in compute shader
+            ConfigPath::PathTrackingMode => UpdateType::IterationReset,
+
             // Rendering settings - affect iteration behavior
             ConfigPath::HistogramColorScale
             | ConfigPath::LowDensitySmoothing
@@ -795,6 +808,7 @@ impl ConfigPath {
             ConfigPath::ColorMode => "ColorMode".to_string(),
             ConfigPath::PathMapStyle => "PathMapStyle".to_string(),
             ConfigPath::PathCaptureMode => "PathCaptureMode".to_string(),
+            ConfigPath::PathTrackingMode => "PathTrackingMode".to_string(),
             ConfigPath::PaletteIndex => "PaletteIndex".to_string(),
             ConfigPath::Palette => "Palette".to_string(),
             ConfigPath::PaletteRotation => "PaletteRotation".to_string(),
@@ -1216,6 +1230,18 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
                     "FirstHit" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::FirstHit)),
                     "FirstAfterBurnIn" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::FirstAfterBurnIn)),
                     "LastHit" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::LastHit)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
+        ConfigPath::PathTrackingMode => {
+            if let Some(s) = json.as_str() {
+                match s {
+                    "First" => Some(ConfigValue::PathTrackingMode(PathTrackingMode::First)),
+                    "Recent" => Some(ConfigValue::PathTrackingMode(PathTrackingMode::Recent)),
                     _ => None,
                 }
             } else {

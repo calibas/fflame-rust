@@ -1,5 +1,5 @@
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-use crate::scene::palette::{ColorMode, PathMapStyle, PathCaptureMode, PaletteLibrary};
+use crate::scene::palette::{ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode, PaletteLibrary};
 use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
 
 /// Render curve editor UI with ConfigManager integration
@@ -545,6 +545,35 @@ pub fn render_colors_content(
                             .changed()
                         {
                             if let Ok(update) = config_manager.update_param(ConfigPath::PathCaptureMode, temp_capture.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                    });
+
+                // Path Tracking Mode dropdown
+                let current_tracking = config_manager.active_config().path_tracking_mode;
+                let tracking_text = match current_tracking {
+                    PathTrackingMode::First => "First 32",
+                    PathTrackingMode::Recent => "Recent 32",
+                };
+
+                let mut temp_tracking = current_tracking;
+                egui::ComboBox::from_label("Tracking Mode")
+                    .selected_text(tracking_text)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut temp_tracking, PathTrackingMode::First, "First 32")
+                            .on_hover_text("Store the first 32 iterations, then stop tracking")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathTrackingMode, temp_tracking.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_tracking, PathTrackingMode::Recent, "Recent 32")
+                            .on_hover_text("Rolling window of the 32 most recent iterations")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathTrackingMode, temp_tracking.into()) {
                                 max_update = max_update.max(update);
                             }
                         }
