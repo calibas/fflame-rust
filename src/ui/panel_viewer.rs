@@ -85,6 +85,10 @@ pub struct PanelContext<'a> {
     pub hovered_pixel: &'a mut Option<(u32, u32)>,
     pub path_click_info: &'a Option<super::PathClickInfo>,
     pub close_path_overlay: &'a mut bool,
+
+    // Path editor state
+    pub path_editor_state: &'a mut super::path_editor::PathEditorState,
+    pub path_filters_changed: &'a mut Option<Vec<crate::gpu::buffers::GpuPathFilter>>,
 }
 
 /// Viewer for rendering each panel type
@@ -145,6 +149,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::FileBrowser => {
                 self.render_file_browser_panel(ui);
+            }
+            PanelType::PathEditor => {
+                self.render_path_editor_panel(ui);
             }
         }
     }
@@ -830,6 +837,21 @@ impl<'a> PanelViewer<'a> {
             if let Some(config) = response.selected {
                 *self.context.selected_preset_config = Some(config);
             }
+        }
+    }
+
+    /// Render Path Editor panel (manage path filters)
+    fn render_path_editor_panel(&mut self, ui: &mut egui::Ui) {
+        let num_transforms = self.context.flame.transforms.len();
+        let response = super::path_editor::render_path_editor_content(
+            ui,
+            self.context.path_editor_state,
+            num_transforms,
+        );
+
+        // Handle filter changes
+        if let Some(filters) = response.filters_changed {
+            *self.context.path_filters_changed = Some(filters);
         }
     }
 }

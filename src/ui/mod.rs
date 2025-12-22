@@ -10,6 +10,7 @@ mod menu_context;
 mod palette_editor;
 mod palette_library;
 mod panel_viewer;
+mod path_editor;
 mod performance;
 pub mod preset_library;
 mod response;
@@ -88,6 +89,9 @@ pub struct EguiLayer {
     clicked_pixel: Option<(u32, u32)>,
     path_click_info: Option<PathClickInfo>,
     close_path_overlay: bool,
+
+    // Path editor state
+    path_editor_state: path_editor::PathEditorState,
 }
 
 impl EguiLayer {
@@ -129,6 +133,7 @@ impl EguiLayer {
             clicked_pixel: None,
             path_click_info: None,
             close_path_overlay: false,
+            path_editor_state: path_editor::PathEditorState::new(),
         }
     }
 
@@ -302,6 +307,9 @@ impl EguiLayer {
         let mut animation_export_requested: Option<animation_panel::AnimationExportSettings> = None;
         let mut animation_seek_changed = false;
 
+        // Path filters
+        let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
+
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
         let menu_state = MenuState {
@@ -414,6 +422,10 @@ impl EguiLayer {
                         hovered_pixel: &mut self.clicked_pixel,
                         path_click_info: &self.path_click_info,
                         close_path_overlay: &mut self.close_path_overlay,
+
+                        // Path editor state
+                        path_editor_state: &mut self.path_editor_state,
+                        path_filters_changed: &mut path_filters_changed,
                     },
                 });
 
@@ -580,6 +592,7 @@ impl EguiLayer {
             file_browser_open_requested,
             animation_export_requested,
             animation_seek_changed,
+            path_filters_changed,
         }
     }
 

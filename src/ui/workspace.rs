@@ -39,6 +39,8 @@ pub enum PanelType {
     Help,
     /// Config import/export dialog
     ConfigDialog,
+    /// Path filter editor (block specific transform sequences)
+    PathEditor,
 }
 
 impl std::fmt::Display for PanelType {
@@ -59,6 +61,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Performance => write!(f, "Performance"),
             PanelType::Help => write!(f, "Help"),
             PanelType::ConfigDialog => write!(f, "Config Import/Export"),
+            PanelType::PathEditor => write!(f, "Path Editor"),
         }
     }
 }
