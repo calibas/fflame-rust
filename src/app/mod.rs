@@ -420,6 +420,9 @@ impl App {
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
                     renderer.set_path_map_style(resize_config.path_map_style);
 
+                    // Update path buffer allocation based on color_mode and filters (after resize recreates buffers)
+                    renderer.update_path_features(&self.gpu.device, &self.gpu.queue);
+
                     // Restore tonemap parameters after buffer recreation (not in live preview mode)
                     renderer.update_tonemap(&self.gpu.queue, resize_config.tonemap_mode, resize_config.use_curve, resize_config.exposure, resize_config.gamma,
                         resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.saturation, resize_config.hue_shift, resize_config.value_scale,
@@ -1432,6 +1435,8 @@ impl App {
             if let Some(ref mut renderer) = self.flame_renderer {
                 log::info!("Path filters updated: {} filters", filters.len());
                 renderer.set_path_filters(filters);
+                // Update path buffer allocation (creates buffers if needed)
+                renderer.update_path_features(&self.gpu.device, &self.gpu.queue);
                 // Request reset accumulation to see effect of new filters
                 self.config_manager.request_reset();
             }
@@ -1491,6 +1496,9 @@ impl App {
                         update_config.zoom, update_config.pan_x,
                         update_config.pan_y, update_config.rotation, update_config.camera_rotation_x,
                         update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
+
+                    // Update path buffer allocation based on color_mode (PathMap needs buffers)
+                    renderer.update_path_features(&self.gpu.device, &self.gpu.queue);
                 }
 
                 // Update tone curve LUT if changed

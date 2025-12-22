@@ -395,13 +395,14 @@ impl FlamePipelines {
                     binding: 6,
                     resource: buffers.iteration_count_buffer.as_entire_binding(),
                 },
+                // Use helper methods that return real or dummy buffers
                 BindGroupEntry {
                     binding: 7,
-                    resource: buffers.path_buffer.as_entire_binding(),
+                    resource: buffers.get_path_buffer_for_binding().as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 8,
-                    resource: buffers.path_filter_buffer.as_entire_binding(),
+                    resource: buffers.get_filter_buffer_for_binding().as_entire_binding(),
                 },
             ],
         })
@@ -473,9 +474,10 @@ impl FlamePipelines {
                     binding: 4,
                     resource: BindingResource::Sampler(&buffers.curve_lut_sampler),
                 },
+                // Use helper method that returns real or dummy buffer
                 BindGroupEntry {
                     binding: 5,
-                    resource: buffers.path_buffer.as_entire_binding(),
+                    resource: buffers.get_path_buffer_for_binding().as_entire_binding(),
                 },
                 BindGroupEntry {
                     binding: 6,

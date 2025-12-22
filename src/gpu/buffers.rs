@@ -345,15 +345,22 @@ pub struct FlameBuffers {
     // Used to stop accumulating pixels after target iteration count
     pub iteration_count_buffer: Buffer,
 
-    // Per-pixel path buffer for PathMap color mode
-    // Layout: 2× u32 per pixel (stores u64 path as vec2<u32>)
+    // Per-pixel path buffer for PathMap color mode (OPTIONAL)
+    // Layout: 7× u32 per pixel (PathEntry struct)
     // Path is packed MSB-first: transform indices stored from high bits down
     // Last-write-wins semantics (not accumulated)
-    pub path_buffer: Buffer,
+    // None when path features are disabled to save ~58MB at 1920×1080
+    pub path_buffer: Option<Buffer>,
 
-    // Path filter buffer for blocking specific transform sequences
+    // Path filter buffer for blocking specific transform sequences (OPTIONAL)
     // Layout: MAX_PATH_FILTERS × GpuPathFilter (16 bytes each)
-    pub path_filter_buffer: Buffer,
+    // None when path features are disabled
+    pub path_filter_buffer: Option<Buffer>,
+
+    // Dummy buffers for binding when path features are disabled
+    // WebGPU requires all bindings to be present, so we bind minimal buffers when disabled
+    pub dummy_path_buffer: Buffer,
+    pub dummy_filter_buffer: Buffer,
 
     // Per-pixel scale buffer for adaptive histogram scaling
     // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
@@ -371,6 +378,10 @@ pub struct FlameBuffers {
 
     // Track which texture is current for display
     pub current_is_a: bool,
+
+    // Track current dimensions for path buffer recreation
+    width: u32,
+    height: u32,
 }
 
 impl FlameBuffers {
@@ -541,35 +552,30 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Create path buffer (2× u32 per pixel for u64 path storage)
-        // Used for PathMap color mode to track transform sequence leading to each pixel
-        // Stores first 32 iterations losslessly (4 bits per transform, up to 16 transforms)
-        // Also stores initial random X/Y coordinates for complete path reconstruction
-        // PathEntry: 7 × u32 (path[4] + iteration_count + initial_x + initial_y)
-        // Size: width × height × 7 × sizeof(u32)
-        // Memory: ~13.4MB @ 800×600, ~58.1MB @ 1920×1080
-        let path_buffer_size = (width * height * 7 * std::mem::size_of::<u32>() as u32) as u64;
-        let path_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Path Buffer"),
-            size: path_buffer_size,
+        // Path buffers are optional - only created when path features are enabled
+        // See create_path_buffers() and drop_path_buffers() methods
+        // Initially None to save memory (~58MB at 1920×1080)
+        let path_buffer: Option<Buffer> = None;
+        let path_filter_buffer: Option<Buffer> = None;
+
+        // Create minimal dummy buffers for binding when path features are disabled
+        // WebGPU requires all declared bindings to be bound, even if unused
+        // Path buffer: 28 bytes minimum (PathEntry = 7 × u32)
+        // Filter buffer: 16 bytes minimum (GpuPathFilter = 4 × u32)
+        let dummy_path_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Dummy Path Buffer"),
+            size: 28,  // PathEntry size: 7 × sizeof(u32) = 28 bytes
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let dummy_filter_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Dummy Filter Buffer"),
+            size: 16,  // GpuPathFilter size: 4 × sizeof(u32) = 16 bytes
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
-
-        // Create path filter buffer for blocking specific transform sequences
-        // Pre-allocated for MAX_PATH_FILTERS entries (16 bytes each)
-        let path_filter_buffer_size = (MAX_PATH_FILTERS * std::mem::size_of::<GpuPathFilter>()) as u64;
-        let path_filter_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Path Filter Buffer"),
-            size: path_filter_buffer_size,
-            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        // Initialize with empty filters (all zeros)
-        let empty_filters = vec![GpuPathFilter::empty(); MAX_PATH_FILTERS];
-        queue.write_buffer(&path_filter_buffer, 0, bytemuck::cast_slice(&empty_filters));
 
         // Create palette texture (1D, 256 samples)
         // Use Rgba8Unorm for efficient, standard color storage
@@ -702,6 +708,8 @@ impl FlameBuffers {
             iteration_count_buffer,
             path_buffer,
             path_filter_buffer,
+            dummy_path_buffer,
+            dummy_filter_buffer,
             // scale_buffer removed - using params.histogram_color_scale instead
             palette_texture,
             palette_view,
@@ -710,6 +718,8 @@ impl FlameBuffers {
             sampler,
             curve_lut_sampler,
             current_is_a: true,
+            width,
+            height,
         }
     }
 
@@ -746,8 +756,10 @@ impl FlameBuffers {
         // Clear iteration count buffer (zero out all iteration counts)
         encoder.clear_buffer(&self.iteration_count_buffer, 0, None);
 
-        // Clear path buffer (zero out all paths)
-        encoder.clear_buffer(&self.path_buffer, 0, None);
+        // Clear path buffer (zero out all paths) - only if enabled
+        if let Some(ref path_buffer) = self.path_buffer {
+            encoder.clear_buffer(path_buffer, 0, None);
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -785,13 +797,17 @@ impl FlameBuffers {
 
     /// Clear path buffer only (on full reset: view change, flame change, etc.)
     pub fn clear_paths(&self, encoder: &mut CommandEncoder) {
-        encoder.clear_buffer(&self.path_buffer, 0, None);
+        if let Some(ref path_buffer) = self.path_buffer {
+            encoder.clear_buffer(path_buffer, 0, None);
+        }
     }
 
     /// Clear histogram and path buffers (convenience method for full reset)
     pub fn clear_histogram_and_paths(&self, encoder: &mut CommandEncoder) {
         encoder.clear_buffer(&self.histogram_buffer, 0, None);
-        encoder.clear_buffer(&self.path_buffer, 0, None);
+        if let Some(ref path_buffer) = self.path_buffer {
+            encoder.clear_buffer(path_buffer, 0, None);
+        }
     }
 
     // Note: reset_scale_buffer() removed - scale is now a uniform constant
@@ -989,5 +1005,100 @@ impl FlameBuffers {
                 depth_or_array_layers: 1,
             },
         );
+    }
+
+    // ============================================================
+    // Path buffer management (optional buffers for memory savings)
+    // ============================================================
+
+    /// Check if path features are currently enabled (buffers allocated)
+    pub fn path_features_enabled(&self) -> bool {
+        self.path_buffer.is_some()
+    }
+
+    /// Create path buffers if not already created
+    /// Call when PathMap color mode is enabled or path filters are added
+    /// Returns true if buffers were created (bind groups need rebuilding)
+    pub fn create_path_buffers(&mut self, device: &Device, queue: &Queue) -> bool {
+        if self.path_buffer.is_some() {
+            return false;  // Already created
+        }
+
+        log::info!(
+            "Creating path buffers: {}×{} ({:.1}MB)",
+            self.width,
+            self.height,
+            (self.width as f64 * self.height as f64 * 7.0 * 4.0) / (1024.0 * 1024.0)
+        );
+
+        // Create path buffer (7 × u32 per pixel for PathEntry struct)
+        let path_buffer_size = (self.width * self.height * 7 * std::mem::size_of::<u32>() as u32) as u64;
+        self.path_buffer = Some(device.create_buffer(&BufferDescriptor {
+            label: Some("Path Buffer"),
+            size: path_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST | BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+
+        // Create path filter buffer (MAX_PATH_FILTERS × 16 bytes each)
+        let path_filter_buffer_size = (MAX_PATH_FILTERS * std::mem::size_of::<GpuPathFilter>()) as u64;
+        self.path_filter_buffer = Some(device.create_buffer(&BufferDescriptor {
+            label: Some("Path Filter Buffer"),
+            size: path_filter_buffer_size,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+
+        // Initialize filter buffer with empty filters
+        let empty_filters = vec![GpuPathFilter::empty(); MAX_PATH_FILTERS];
+        queue.write_buffer(
+            self.path_filter_buffer.as_ref().unwrap(),
+            0,
+            bytemuck::cast_slice(&empty_filters),
+        );
+
+        true  // Bind groups need rebuilding
+    }
+
+    /// Drop path buffers to free memory
+    /// Call when PathMap color mode is disabled AND no path filters are active
+    /// Returns true if buffers were dropped (bind groups need rebuilding)
+    pub fn drop_path_buffers(&mut self) -> bool {
+        if self.path_buffer.is_none() {
+            return false;  // Already dropped
+        }
+
+        log::info!(
+            "Dropping path buffers: {:.1}MB freed",
+            (self.width as f64 * self.height as f64 * 7.0 * 4.0) / (1024.0 * 1024.0)
+        );
+
+        self.path_buffer = None;
+        self.path_filter_buffer = None;
+
+        true  // Bind groups need rebuilding
+    }
+
+    /// Get the path buffer for binding (real or dummy)
+    /// Use this when creating bind groups
+    pub fn get_path_buffer_for_binding(&self) -> &Buffer {
+        self.path_buffer.as_ref().unwrap_or(&self.dummy_path_buffer)
+    }
+
+    /// Get the path filter buffer for binding (real or dummy)
+    /// Use this when creating bind groups
+    pub fn get_filter_buffer_for_binding(&self) -> &Buffer {
+        self.path_filter_buffer.as_ref().unwrap_or(&self.dummy_filter_buffer)
+    }
+
+    /// Write path filters to the GPU buffer
+    /// Only writes if path buffers are enabled
+    pub fn write_path_filters(&self, queue: &Queue, filters: &[GpuPathFilter]) {
+        if let Some(ref filter_buffer) = self.path_filter_buffer {
+            // Pad with empty filters if needed
+            let mut padded_filters = filters.to_vec();
+            padded_filters.resize(MAX_PATH_FILTERS, GpuPathFilter::empty());
+            queue.write_buffer(filter_buffer, 0, bytemuck::cast_slice(&padded_filters));
+        }
     }
 }

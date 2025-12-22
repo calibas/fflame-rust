@@ -338,13 +338,9 @@ impl FlameRenderer {
         };
         self.buffers.update_params(queue, &params);
 
-        // Update path filter buffer if filters are active
+        // Update path filter buffer if filters are active and buffers exist
         if !self.path_filters.is_empty() {
-            queue.write_buffer(
-                &self.buffers.path_filter_buffer,
-                0,
-                bytemuck::cast_slice(&self.path_filters),
-            );
+            self.buffers.write_path_filters(queue, &self.path_filters);
         }
 
         // Track total iterations: workgroups * threads_per_workgroup * iterations_per_thread
@@ -1162,6 +1158,44 @@ impl FlameRenderer {
         &self.path_filters
     }
 
+    /// Check if path features (PathMap color mode or path filters) require buffers
+    /// Returns true if path buffers should be enabled
+    pub fn needs_path_features(&self) -> bool {
+        self.color_mode == crate::scene::palette::ColorMode::PathMap || !self.path_filters.is_empty()
+    }
+
+    /// Check if path buffers are currently allocated
+    pub fn path_features_enabled(&self) -> bool {
+        self.buffers.path_features_enabled()
+    }
+
+    /// Enable or disable path features based on current state
+    /// Call this when color_mode or path_filters change
+    /// Returns true if bind groups were rebuilt
+    pub fn update_path_features(&mut self, device: &Device, queue: &Queue) -> bool {
+        let needs_path = self.needs_path_features();
+        let has_path = self.buffers.path_features_enabled();
+
+        if needs_path && !has_path {
+            // Need to create path buffers
+            if self.buffers.create_path_buffers(device, queue) {
+                // Rebuild bind groups with new buffers
+                self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
+                return true;
+            }
+        } else if !needs_path && has_path {
+            // Can drop path buffers to save memory
+            if self.buffers.drop_path_buffers() {
+                // Rebuild bind groups with dummy buffers
+                self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
+                return true;
+            }
+        }
+        false
+    }
+
     /// Read pixels from the fractal_texture (after tonemap_pass has rendered to it)
     /// This is the unified method that reads what was actually displayed on screen.
     ///
@@ -1274,11 +1308,21 @@ impl FlameRenderer {
 
     /// Read path buffer from GPU for CPU-side path queries
     /// Returns a 2D array of PathEntry indexed by [y][x]
+    /// Returns empty grid if path buffers are not enabled
     pub async fn read_path_buffer(
         &self,
         device: &Device,
         queue: &Queue,
     ) -> Result<Vec<Vec<PathEntry>>, String> {
+        // Check if path buffer exists
+        let path_buffer = match &self.buffers.path_buffer {
+            Some(buf) => buf,
+            None => {
+                // Return empty PathEntry grid if path features are disabled
+                return Ok(vec![vec![PathEntry::default(); self.width as usize]; self.height as usize]);
+            }
+        };
+
         // Wait for any pending rendering to complete
         let sync_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Pre-Read Path Sync"),
@@ -1303,7 +1347,7 @@ impl FlameRenderer {
             label: Some("Path Buffer Read Encoder"),
         });
         encoder.copy_buffer_to_buffer(
-            &self.buffers.path_buffer,
+            path_buffer,
             0,
             &staging_buffer,
             0,
