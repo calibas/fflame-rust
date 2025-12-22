@@ -109,15 +109,6 @@ impl App {
             &flame,
         );
 
-        // TEMPORARY TEST: Add hardcoded path filter to block paths ending with [0, 1]
-        // This is for testing the path filter feature - remove after verification
-        use crate::gpu::buffers::GpuPathFilter;
-        flame_renderer.set_path_filters(vec![
-            // Suffix filter: block any path ending with [0, 1] at any depth
-            GpuPathFilter::suffix(&[0, 1]),
-        ]);
-        log::info!("Path filter test: blocking paths ending with [0, 1]");
-
         // ConfigManager loads SystemSettings automatically
         let config_manager = ConfigManager::new(initial_config.clone());
 
@@ -1434,6 +1425,16 @@ impl App {
 
             // Force a GPU update to show the scrubbed frame
             self.use_overwrite_next_frame = true;
+        }
+
+        // Handle path filter changes from Path Editor panel
+        if let Some(filters) = ui_response.path_filters_changed {
+            if let Some(ref mut renderer) = self.flame_renderer {
+                log::info!("Path filters updated: {} filters", filters.len());
+                renderer.set_path_filters(filters);
+                // Request reset accumulation to see effect of new filters
+                self.config_manager.request_reset();
+            }
         }
 
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)

@@ -269,6 +269,12 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::Animation);
                 }
 
+                // Path Editor panel
+                let path_editor_open = workspace.panel_exists(super::workspace::PanelType::PathEditor);
+                if ui.selectable_label(path_editor_open, "🛤 Path Editor").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::PathEditor);
+                }
+
                 ui.separator();
                 ui.menu_button("📐 Workspace Layout", |ui| {
                     let current = workspace.current_layout;
