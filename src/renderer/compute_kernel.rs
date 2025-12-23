@@ -1171,18 +1171,21 @@ impl FlameRenderer {
 
     /// Enable or disable path features based on current state
     /// Call this when color_mode or path_filters change
-    /// Returns true if bind groups were rebuilt
-    pub fn update_path_features(&mut self, device: &Device, queue: &Queue) -> bool {
+    /// Returns true if bind groups or shaders were rebuilt
+    pub fn update_path_features(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
         let needs_path = self.needs_path_features();
         let has_path = self.buffers.path_features_enabled();
+        let shader_has_path = self.pipelines.path_features_enabled();
+        let mut changed = false;
 
+        // Update buffers if needed
         if needs_path && !has_path {
             // Need to create path buffers
             if self.buffers.create_path_buffers(device, queue) {
                 // Rebuild bind groups with new buffers
                 self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
                 self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
-                return true;
+                changed = true;
             }
         } else if !needs_path && has_path {
             // Can drop path buffers to save memory
@@ -1190,10 +1193,18 @@ impl FlameRenderer {
                 // Rebuild bind groups with dummy buffers
                 self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
                 self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
-                return true;
+                changed = true;
             }
         }
-        false
+
+        // Update shaders if path feature state changed
+        if needs_path != shader_has_path {
+            if self.pipelines.ensure_shaders_current_with_path_features(device, flame, needs_path) {
+                changed = true;
+            }
+        }
+
+        changed
     }
 
     /// Read pixels from the fractal_texture (after tonemap_pass has rendered to it)

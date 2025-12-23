@@ -439,7 +439,7 @@ class AnalyzerGUI:
         # FFT magnitude
         fft_container = ttk.LabelFrame(img_frame, text="FFT Magnitude (log)")
         fft_container.pack(side="left", fill="both", expand=True, padx=2)
-        self.fft_canvas = tk.Canvas(fft_container, width=300, height=300, bg='#1a1a1a')
+        self.fft_canvas = tk.Canvas(fft_container, width=900, height=900, bg='#1a1a1a')
         self.fft_canvas.pack(fill="both", expand=True)
         
         # Power spectrum plot
@@ -529,7 +529,7 @@ class AnalyzerGUI:
         
         img = Image.fromarray(log_mag, mode='L')
         
-        canvas_size = 300
+        canvas_size = 900
         img.thumbnail((canvas_size, canvas_size), Image.Resampling.LANCZOS)
         
         photo = ImageTk.PhotoImage(img)

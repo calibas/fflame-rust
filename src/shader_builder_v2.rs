@@ -12,7 +12,8 @@ impl ShaderBuilder {
     }
 
     /// Build 2D trajectory shader with active variations
-    pub fn build_trajectory_2d(&self, active_variations: &HashMap<String, f32>) -> String {
+    /// When path_features_enabled is false, uses simplified shader without path tracking code
+    pub fn build_trajectory_2d(&self, active_variations: &HashMap<String, f32>, path_features_enabled: bool) -> String {
         // Filter to only 2D variations (exclude 3D-only variations)
         use crate::variations::VariationCategory;
         use std::collections::HashMap;
@@ -73,18 +74,25 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
         shader.push('\n');
 
-        // 8. Path filter utilities
-        shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
-        shader.push('\n');
+        // 8. Path filter utilities (only needed when path features enabled)
+        if path_features_enabled {
+            shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
+            shader.push('\n');
+        }
 
-        // 9. Main
-        shader.push_str(include_str!("../shaders/core/main_2d.wgsl"));
+        // 9. Main (select variant based on path features)
+        if path_features_enabled {
+            shader.push_str(include_str!("../shaders/core/main_2d.wgsl"));
+        } else {
+            shader.push_str(include_str!("../shaders/core/main_2d_simple.wgsl"));
+        }
 
         shader
     }
 
     /// Build 3D trajectory shader with active variations
-    pub fn build_trajectory_3d(&self, active_variations: &HashMap<String, f32>) -> String {
+    /// When path_features_enabled is false, uses simplified shader without path tracking code
+    pub fn build_trajectory_3d(&self, active_variations: &HashMap<String, f32>, path_features_enabled: bool) -> String {
         use std::collections::HashMap;
 
         // Build a map of variation name -> registry index (0-23)
@@ -135,12 +143,18 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
         shader.push('\n');
 
-        // 7. Path filter utilities
-        shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
-        shader.push('\n');
+        // 7. Path filter utilities (only needed when path features enabled)
+        if path_features_enabled {
+            shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
+            shader.push('\n');
+        }
 
-        // 8. Main
-        shader.push_str(include_str!("../shaders/core/main_3d.wgsl"));
+        // 8. Main (select variant based on path features)
+        if path_features_enabled {
+            shader.push_str(include_str!("../shaders/core/main_3d.wgsl"));
+        } else {
+            shader.push_str(include_str!("../shaders/core/main_3d_simple.wgsl"));
+        }
 
         shader
     }
