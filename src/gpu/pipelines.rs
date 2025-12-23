@@ -349,6 +349,27 @@ impl FlamePipelines {
         self.shader_cache.ensure_current(device, &self.compute_bind_group_layout, flame)
     }
 
+    /// Ensure shaders are up-to-date with current flame configuration and path features state
+    /// Returns true if shaders were recompiled
+    pub fn ensure_shaders_current_with_path_features(
+        &mut self,
+        device: &Device,
+        flame: &Flame,
+        path_features_enabled: bool,
+    ) -> bool {
+        self.shader_cache.ensure_current_with_path_features(
+            device,
+            &self.compute_bind_group_layout,
+            flame,
+            path_features_enabled,
+        )
+    }
+
+    /// Get current path_features_enabled state from shader cache
+    pub fn path_features_enabled(&self) -> bool {
+        self.shader_cache.path_features_enabled()
+    }
+
     /// Get the appropriate compute pipeline for the current render mode
     pub fn get_trajectory_pipeline(&self, render_mode: crate::scene::transforms::RenderMode) -> &ComputePipeline {
         match render_mode {
