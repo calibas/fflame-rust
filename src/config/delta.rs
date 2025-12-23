@@ -7,9 +7,8 @@
 /// - ConfigChange: Batch of deltas (single undo point)
 /// - UpdateType: What kind of update is needed for a change
 
-use crate::scene::palette::Palette;
+use crate::scene::palette::{Palette, ColorMode, PathCaptureMode, PathMapStyle, PathTrackingMode};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-use crate::scene::palette::ColorMode;
 use crate::scene::transforms::RenderMode;
 use std::fmt::{self, Display, Formatter};
 use web_time::Instant;
@@ -45,6 +44,9 @@ pub enum ConfigPath {
 
     // ===== Color (no iteration reset, just color buffer update) =====
     ColorMode,
+    PathMapStyle,  // Prefix or Suffix coloring for PathMap mode
+    PathCaptureMode,  // FirstHit, FirstAfterBurnIn, or LastHit
+    PathTrackingMode,  // First (first 32 iterations) or Recent (rolling window of 32 most recent)
     PaletteIndex,
     Palette, // Embedded palette data (custom palettes)
     PaletteRotation,
@@ -115,6 +117,7 @@ pub enum ConfigPath {
 
     // ===== System Settings (device-specific, not tracked for undo) =====
     SystemIterationsPerThread,
+    SystemBurnIn,
     SystemVsyncEnabled,
     SystemTargetFps,
     SystemExportWidth,
@@ -165,6 +168,9 @@ impl Display for ConfigPath {
 
             // Color
             ConfigPath::ColorMode => write!(f, "Color Mode"),
+            ConfigPath::PathMapStyle => write!(f, "PathMap Style"),
+            ConfigPath::PathCaptureMode => write!(f, "PathMap Capture Mode"),
+            ConfigPath::PathTrackingMode => write!(f, "PathMap Tracking Mode"),
             ConfigPath::PaletteIndex => write!(f, "Palette"),
             ConfigPath::Palette => write!(f, "Palette Data"),
             ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
@@ -254,6 +260,7 @@ impl Display for ConfigPath {
 
             // System Settings
             ConfigPath::SystemIterationsPerThread => write!(f, "System: Iterations Per Thread"),
+            ConfigPath::SystemBurnIn => write!(f, "System: Burn-in Iterations"),
             ConfigPath::SystemVsyncEnabled => write!(f, "System: VSync Enabled"),
             ConfigPath::SystemTargetFps => write!(f, "System: Target FPS"),
             ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
@@ -276,6 +283,9 @@ pub enum ConfigValue {
     ColorRgb([f32; 3]),
     ToneMapMode(ToneMapMode),
     ColorMode(ColorMode),
+    PathMapStyle(PathMapStyle),
+    PathCaptureMode(PathCaptureMode),
+    PathTrackingMode(PathTrackingMode),
     RenderMode(RenderMode),
     ToneCurve(ToneCurve),
     Palette(Palette),
@@ -324,6 +334,9 @@ impl Display for ConfigValue {
             }
             ConfigValue::ToneMapMode(m) => write!(f, "{:?}", m),
             ConfigValue::ColorMode(m) => write!(f, "{:?}", m),
+            ConfigValue::PathMapStyle(m) => write!(f, "{:?}", m),
+            ConfigValue::PathCaptureMode(m) => write!(f, "{:?}", m),
+            ConfigValue::PathTrackingMode(m) => write!(f, "{:?}", m),
             ConfigValue::RenderMode(m) => write!(f, "{:?}", m),
             ConfigValue::ToneCurve(curve) => {
                 write!(f, "[Tone Curve: {} pts: {:?}]",
@@ -399,6 +412,24 @@ impl From<ToneMapMode> for ConfigValue {
 impl From<ColorMode> for ConfigValue {
     fn from(v: ColorMode) -> Self {
         ConfigValue::ColorMode(v)
+    }
+}
+
+impl From<PathMapStyle> for ConfigValue {
+    fn from(v: PathMapStyle) -> Self {
+        ConfigValue::PathMapStyle(v)
+    }
+}
+
+impl From<PathCaptureMode> for ConfigValue {
+    fn from(v: PathCaptureMode) -> Self {
+        ConfigValue::PathCaptureMode(v)
+    }
+}
+
+impl From<PathTrackingMode> for ConfigValue {
+    fn from(v: PathTrackingMode) -> Self {
+        ConfigValue::PathTrackingMode(v)
     }
 }
 
@@ -686,7 +717,15 @@ impl ConfigPath {
             | ConfigPath::PaletteIndex
             | ConfigPath::Palette
             | ConfigPath::PaletteRotation
-            | ConfigPath::SpeedFactor => UpdateType::ColorOnly,
+            | ConfigPath::SpeedFactor
+            // PathMapStyle affects color computation in compute shader, needs accumulation reset
+            | ConfigPath::PathMapStyle => UpdateType::ColorOnly,
+
+            // PathCaptureMode affects path buffer capture logic in compute shader
+            ConfigPath::PathCaptureMode => UpdateType::IterationReset,
+
+            // PathTrackingMode affects path tracking logic in compute shader
+            ConfigPath::PathTrackingMode => UpdateType::IterationReset,
 
             // Rendering settings - affect iteration behavior
             ConfigPath::HistogramColorScale
@@ -725,7 +764,7 @@ impl ConfigPath {
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
 
             // System Settings
-            ConfigPath::SystemIterationsPerThread => UpdateType::IterationReset,
+            ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
             ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps => UpdateType::ViewOnly,
             ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage => UpdateType::None,
         }
@@ -767,6 +806,9 @@ impl ConfigPath {
 
             // Color
             ConfigPath::ColorMode => "ColorMode".to_string(),
+            ConfigPath::PathMapStyle => "PathMapStyle".to_string(),
+            ConfigPath::PathCaptureMode => "PathCaptureMode".to_string(),
+            ConfigPath::PathTrackingMode => "PathTrackingMode".to_string(),
             ConfigPath::PaletteIndex => "PaletteIndex".to_string(),
             ConfigPath::Palette => "Palette".to_string(),
             ConfigPath::PaletteRotation => "PaletteRotation".to_string(),
@@ -830,6 +872,7 @@ impl ConfigPath {
 
             // System Settings (not typically animated, but included for completeness)
             ConfigPath::SystemIterationsPerThread => "System.IterationsPerThread".to_string(),
+            ConfigPath::SystemBurnIn => "System.BurnIn".to_string(),
             ConfigPath::SystemVsyncEnabled => "System.VsyncEnabled".to_string(),
             ConfigPath::SystemTargetFps => "System.TargetFps".to_string(),
             ConfigPath::SystemExportWidth => "System.ExportWidth".to_string(),
@@ -969,6 +1012,7 @@ impl ConfigPath {
         if parts.len() == 2 && parts[0] == "System" {
             match parts[1] {
                 "IterationsPerThread" => return Some(ConfigPath::SystemIterationsPerThread),
+                "BurnIn" => return Some(ConfigPath::SystemBurnIn),
                 "VsyncEnabled" => return Some(ConfigPath::SystemVsyncEnabled),
                 "TargetFps" => return Some(ConfigPath::SystemTargetFps),
                 "ExportWidth" => return Some(ConfigPath::SystemExportWidth),
@@ -1119,6 +1163,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TargetIterationsPerPixel
         | ConfigPath::TransformCount
         | ConfigPath::SystemIterationsPerThread
+        | ConfigPath::SystemBurnIn
         | ConfigPath::SystemExportWidth
         | ConfigPath::SystemExportHeight => {
             json.as_u64().map(|u| ConfigValue::UInt(u as u32))
@@ -1152,6 +1197,51 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
                 match s {
                     "Palette" => Some(ConfigValue::ColorMode(ColorMode::Palette)),
                     "Speed" => Some(ConfigValue::ColorMode(ColorMode::Speed)),
+                    "PathMap" => Some(ConfigValue::ColorMode(ColorMode::PathMap)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
+        ConfigPath::PathMapStyle => {
+            if let Some(s) = json.as_str() {
+                match s {
+                    "Prefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Prefix)),
+                    "Suffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::Suffix)),
+                    "PrefixDistinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::PrefixDistinct)),
+                    "SuffixDistinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::SuffixDistinct)),
+                    // Backward compatibility with old config files
+                    "Similar" => Some(ConfigValue::PathMapStyle(PathMapStyle::Prefix)),
+                    "Distinct" => Some(ConfigValue::PathMapStyle(PathMapStyle::PrefixDistinct)),
+                    "ScrambledPrefix" => Some(ConfigValue::PathMapStyle(PathMapStyle::PrefixDistinct)),
+                    "ScrambledSuffix" => Some(ConfigValue::PathMapStyle(PathMapStyle::SuffixDistinct)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
+        ConfigPath::PathCaptureMode => {
+            if let Some(s) = json.as_str() {
+                match s {
+                    "FirstHit" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::FirstHit)),
+                    "FirstAfterBurnIn" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::FirstAfterBurnIn)),
+                    "LastHit" => Some(ConfigValue::PathCaptureMode(PathCaptureMode::LastHit)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+
+        ConfigPath::PathTrackingMode => {
+            if let Some(s) = json.as_str() {
+                match s {
+                    "First" => Some(ConfigValue::PathTrackingMode(PathTrackingMode::First)),
+                    "Recent" => Some(ConfigValue::PathTrackingMode(PathTrackingMode::Recent)),
                     _ => None,
                 }
             } else {

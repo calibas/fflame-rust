@@ -5,9 +5,14 @@ use crate::scene::transforms::Flame;
 
 /// Manages shader compilation and pipeline caching
 /// Only recompiles shaders when the set of active variations changes
+/// or when path_features_enabled state changes
 pub struct ShaderCache {
     /// Currently active variation names and weights
     active_variations: HashMap<String, f32>,
+
+    /// Whether path features (PathMap mode or path filters) are enabled
+    /// When false, uses simplified shaders without path tracking code
+    path_features_enabled: bool,
 
     /// Compiled shader source (for debugging/inspection)
     pub shader_source_2d: String,
@@ -20,15 +25,21 @@ pub struct ShaderCache {
 
 impl ShaderCache {
     /// Create a new shader cache with initial flame configuration
+    /// Initially uses simplified shaders (path_features_enabled = false)
     pub fn new(device: &Device, flame: &Flame, bind_group_layout: &BindGroupLayout) -> Self {
         let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
         let active_variations = flame.extract_active_variations();
+        let path_features_enabled = false;  // Start with simplified shaders
 
-        log::info!("Initial shader compilation with {} active variations", active_variations.len());
+        log::info!(
+            "Initial shader compilation with {} active variations, path_features={}",
+            active_variations.len(),
+            path_features_enabled
+        );
 
-        // Build initial shaders
-        let shader_source_2d = builder.build_trajectory_2d(&active_variations);
-        let shader_source_3d = builder.build_trajectory_3d(&active_variations);
+        // Build initial shaders (simplified - no path tracking)
+        let shader_source_2d = builder.build_trajectory_2d(&active_variations, path_features_enabled);
+        let shader_source_3d = builder.build_trajectory_3d(&active_variations, path_features_enabled);
 
         // Create pipelines
         let compute_pipeline_2d = Self::create_compute_pipeline(
@@ -47,6 +58,7 @@ impl ShaderCache {
 
         Self {
             active_variations,
+            path_features_enabled,
             shader_source_2d,
             shader_source_3d,
             compute_pipeline_2d,
@@ -57,44 +69,75 @@ impl ShaderCache {
     /// Check if shaders need recompilation and rebuild if necessary
     /// Returns true if shaders were recompiled
     pub fn ensure_current(&mut self, device: &Device, bind_group_layout: &BindGroupLayout, flame: &Flame) -> bool {
+        self.ensure_current_with_path_features(device, bind_group_layout, flame, self.path_features_enabled)
+    }
+
+    /// Check if shaders need recompilation, with explicit path_features_enabled state
+    /// Returns true if shaders were recompiled
+    pub fn ensure_current_with_path_features(
+        &mut self,
+        device: &Device,
+        bind_group_layout: &BindGroupLayout,
+        flame: &Flame,
+        path_features_enabled: bool,
+    ) -> bool {
         let needed = flame.extract_active_variations();
 
-        // Only compare which variations are active (keys), not their weights
-        // Weights don't affect shader compilation, only which variations are included
-        if needed.keys().collect::<std::collections::HashSet<_>>()
-            == self.active_variations.keys().collect::<std::collections::HashSet<_>>() {
+        // Check if variations changed (only keys matter, not weights)
+        let variations_changed = needed.keys().collect::<std::collections::HashSet<_>>()
+            != self.active_variations.keys().collect::<std::collections::HashSet<_>>();
+
+        // Check if path features state changed
+        let path_features_changed = path_features_enabled != self.path_features_enabled;
+
+        if !variations_changed && !path_features_changed {
             return false; // No rebuild needed
         }
 
-        log::info!(
-            "Recompiling shaders: variations changed from {} to {} active",
-            self.active_variations.len(),
-            needed.len()
-        );
+        if variations_changed {
+            log::info!(
+                "Recompiling shaders: variations changed from {} to {} active",
+                self.active_variations.len(),
+                needed.len()
+            );
+        }
+        if path_features_changed {
+            log::info!(
+                "Recompiling shaders: path_features changed from {} to {}",
+                self.path_features_enabled,
+                path_features_enabled
+            );
+        }
 
-        // Rebuild shaders
+        // Rebuild shaders with current path_features state
         let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
-        self.shader_source_2d = builder.build_trajectory_2d(&needed);
-        self.shader_source_3d = builder.build_trajectory_3d(&needed);
+        self.shader_source_2d = builder.build_trajectory_2d(&needed, path_features_enabled);
+        self.shader_source_3d = builder.build_trajectory_3d(&needed, path_features_enabled);
 
         // Recreate pipelines
         self.compute_pipeline_2d = Self::create_compute_pipeline(
             device,
             bind_group_layout,
             &self.shader_source_2d,
-            "Trajectory 2D (Recompiled)"
+            if path_features_enabled { "Trajectory 2D (Path)" } else { "Trajectory 2D (Simple)" }
         );
 
         self.compute_pipeline_3d = Self::create_compute_pipeline(
             device,
             bind_group_layout,
             &self.shader_source_3d,
-            "Trajectory 3D (Recompiled)"
+            if path_features_enabled { "Trajectory 3D (Path)" } else { "Trajectory 3D (Simple)" }
         );
 
         self.active_variations = needed;
+        self.path_features_enabled = path_features_enabled;
 
         true // Rebuilt
+    }
+
+    /// Get current path_features_enabled state
+    pub fn path_features_enabled(&self) -> bool {
+        self.path_features_enabled
     }
 
     /// Create a compute pipeline from shader source

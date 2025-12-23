@@ -28,7 +28,28 @@ struct TonemapParams {
     alpha_blend_low: f32,  // Start blending toward linear alpha at this value
     alpha_blend_high: f32,  // Full linear alpha above this value
     transparent_mode: u32,  // 0 = normal (blend with background), 1 = transparent export
-    _pad_alpha: f32,  // Padding to align to 16 bytes
+    color_mode: u32,  // 0 = palette, 1 = speed, 2 = path_map
+    width: u32,  // Texture width for path buffer indexing
+    height: u32,  // Texture height for path buffer indexing
+    path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct, 4=Depth, 5=OriginRadial, 6=OriginHorizontal, 7=OriginVertical
+    burn_in: u32,  // Burn-in iterations (for Depth gradient: start depth)
+    num_transforms: u32,  // Number of transforms (for path coloring entropy)
+    _pad0: u32,  // Padding to 16-byte boundary
+    _pad1: u32,
+    _pad2: u32,
+}
+
+// Path storage entry (matches compute shader PathEntry)
+// Stores first 32 iterations losslessly (4 bits per transform, up to 16 transforms)
+// Also stores initial random X/Y coordinates for gradient-based coloring
+struct PathEntry {
+    path0: u32,  // Iterations 0-7 (4 bits each, LSB = iteration 0)
+    path1: u32,  // Iterations 8-15
+    path2: u32,  // Iterations 16-23
+    path3: u32,  // Iterations 24-31
+    iteration_count: u32,  // Number of valid iterations stored (0-32)
+    initial_x: f32,  // Initial random X coordinate [-1, 1]
+    initial_y: f32,  // Initial random Y coordinate [-1, 1]
 }
 
 @group(0) @binding(0) var accumulation_texture: texture_2d<f32>;
@@ -36,6 +57,9 @@ struct TonemapParams {
 @group(0) @binding(2) var<uniform> tonemap_params: TonemapParams;
 @group(0) @binding(3) var curve_lut_texture: texture_2d<f32>;
 @group(0) @binding(4) var curve_lut_sampler: sampler;
+@group(0) @binding(5) var<storage, read> path_buffer: array<PathEntry>;
+@group(0) @binding(6) var palette_texture: texture_2d<f32>;
+@group(0) @binding(7) var palette_sampler: sampler;
 
 // Vertex shader for fullscreen quad
 @vertex
@@ -50,6 +74,172 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     output.uv = vec2<f32>(x * 0.5, y * 0.5);
 
     return output;
+}
+
+// Hash function for scrambling - spreads similar values across color space
+fn scramble_hash(x: u32) -> u32 {
+    var h = x;
+    h = h ^ (h >> 16u);
+    h = h * 0x85ebca6bu;
+    h = h ^ (h >> 13u);
+    h = h * 0xc2b2ae35u;
+    h = h ^ (h >> 16u);
+    return h;
+}
+
+// Convert hue to RGB (full saturation and value for vibrant colors)
+fn hue_to_rgb(hue: f32) -> vec3<f32> {
+    let h = hue * 6.0;
+    let i = floor(h);
+    let f = h - i;
+    let q = 1.0 - f;
+
+    var r: f32;
+    var g: f32;
+    var b: f32;
+
+    let sector = i32(i) % 6;
+    if (sector == 0) {
+        r = 1.0; g = f; b = 0.0;
+    } else if (sector == 1) {
+        r = q; g = 1.0; b = 0.0;
+    } else if (sector == 2) {
+        r = 0.0; g = 1.0; b = f;
+    } else if (sector == 3) {
+        r = 0.0; g = q; b = 1.0;
+    } else if (sector == 4) {
+        r = f; g = 0.0; b = 1.0;
+    } else {
+        r = 1.0; g = 0.0; b = q;
+    }
+
+    return vec3<f32>(r, g, b);
+}
+
+// Extract a single transform index from path data
+// Each transform is stored in 4 bits: path0 has iterations 0-7, path1 has 8-15, etc.
+fn get_transform_at(path: PathEntry, iteration: u32) -> u32 {
+    let word_idx = iteration / 8u;
+    let bit_offset = (iteration % 8u) * 4u;
+
+    var word: u32;
+    if (word_idx == 0u) {
+        word = path.path0;
+    } else if (word_idx == 1u) {
+        word = path.path1;
+    } else if (word_idx == 2u) {
+        word = path.path2;
+    } else {
+        word = path.path3;
+    }
+
+    return (word >> bit_offset) & 0xFu;
+}
+
+// Get prefix data: first 8 iterations (path0 only)
+fn get_prefix(path: PathEntry) -> u32 {
+    return path.path0;
+}
+
+// Get suffix data: last 8 valid iterations based on iteration_count
+fn get_suffix(path: PathEntry) -> u32 {
+    let count = path.iteration_count;
+
+    // If we have 8 or fewer iterations, use path0 (all we have)
+    if (count <= 8u) {
+        return path.path0;
+    }
+
+    // Find which word contains the end of our valid data
+    // count=9-16 -> use path1, count=17-24 -> use path2, count=25-32 -> use path3
+    if (count <= 16u) {
+        return path.path1;
+    } else if (count <= 24u) {
+        return path.path2;
+    } else {
+        return path.path3;
+    }
+}
+
+// Path coloring for style 0 (Prefix) and style 1 (Suffix)
+// Similar paths produce similar colors - smooth hue gradient based on path value
+fn path_to_color_smooth(value: u32, num_transforms: u32) -> vec3<f32> {
+    // Calculate the effective bit width based on num_transforms
+    // With N transforms, each 4-bit slot can only have values 0 to N-1
+    // We want to normalize so full range of possible paths maps to full hue range
+
+    // For 8 iterations × 4 bits = 32 bits total
+    // If num_transforms <= 16, all values fit in 4 bits per slot
+    // Max possible value depends on num_transforms
+
+    // Calculate max possible value for this number of transforms
+    // Each of 8 slots can have values 0 to (num_transforms-1)
+    // Treated as a base-N number: max = N^8 - 1
+    // But we have it packed as 4-bit slots, so we need to interpret differently
+
+    // Simpler approach: treat the 32-bit value as a direct hue mapping
+    // Use golden ratio for good distribution without full scrambling
+    let golden_ratio = 0.618033988749895;
+
+    // For smooth coloring, we want similar values to produce similar hues
+    // Just normalize the value to 0-1 range and use as hue
+    // This gives gradual color transitions for similar paths
+    let hue = fract(f32(value) * golden_ratio / f32(0xFFFFFFFFu));
+
+    return hue_to_rgb(hue);
+}
+
+// Path coloring for style 3 (SuffixDistinct)
+// Maximum color separation - similar paths get very different colors
+fn path_to_color_distinct(value: u32) -> vec3<f32> {
+    let golden_ratio = 0.618033988749895;
+
+    // Apply scramble hash for maximum color separation
+    let scrambled = scramble_hash(value);
+    let hue = fract(f32(scrambled) * golden_ratio / f32(0xFFFFFFFFu));
+
+    return hue_to_rgb(hue);
+}
+
+// Path coloring for style 2 (PrefixDistinct)
+// Incorporates iteration_count to distinguish paths of different lengths
+// e.g., [0] vs [0,0] vs [0,0,0] all have path0=0 but different iteration counts
+fn path_to_color_prefix_distinct(value: u32, iteration_count: u32) -> vec3<f32> {
+    let golden_ratio = 0.618033988749895;
+
+    // Mix iteration_count into the value before hashing
+    // This ensures paths with same prefix but different lengths get different colors
+    let mixed = value ^ (iteration_count * 0x9E3779B9u);
+    let scrambled = scramble_hash(mixed);
+    let hue = fract(f32(scrambled) * golden_ratio / f32(0xFFFFFFFFu));
+
+    return hue_to_rgb(hue);
+}
+
+// Main path-to-color function that handles all 4 hash-based styles
+// style 0 = Prefix (smooth), 1 = Suffix (smooth), 2 = PrefixDistinct, 3 = SuffixDistinct
+fn path_to_color(path: PathEntry, style: u32, num_transforms: u32) -> vec3<f32> {
+    // Get the relevant path data based on prefix/suffix
+    var value: u32;
+    if (style == 0u || style == 2u) {
+        // Prefix styles: use first 8 iterations
+        value = get_prefix(path);
+    } else {
+        // Suffix styles: use last 8 valid iterations
+        value = get_suffix(path);
+    }
+
+    // Apply smooth or distinct coloring
+    if (style <= 1u) {
+        // Smooth: similar paths → similar colors
+        return path_to_color_smooth(value, num_transforms);
+    } else if (style == 2u) {
+        // Prefix Distinct: include iteration_count to distinguish same-prefix paths
+        return path_to_color_prefix_distinct(value, path.iteration_count);
+    } else {
+        // Suffix Distinct: scramble for maximum color separation
+        return path_to_color_distinct(value);
+    }
 }
 
 // Helper function: Calculate brightness scaling factor from logarithmic curve
@@ -278,6 +468,61 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Only apply curve where there's significant fractal density
     let should_apply_curve = tonemap_params.use_curve != 0u && bucket_count > 0.001;
     var fractal_color = select(color, vec3<f32>(curve_r, curve_g, curve_b), should_apply_curve);
+
+    // ===== PathMap Mode: Override Color from Path Buffer =====
+    // In PathMap mode, the accumulation buffer stores white (density only)
+    // The actual color is derived from the path stored in path_buffer
+    //
+    // Styles 0-3: Hash-based coloring (Prefix, Suffix, PrefixDistinct, SuffixDistinct)
+    // Styles 4-7: Gradient-based coloring using palette (Depth, OriginRadial, OriginHorizontal, OriginVertical)
+    if (tonemap_params.color_mode == 2u) {
+        // Calculate pixel coordinates from UV
+        let pixel_x = u32(input.uv.x * f32(tonemap_params.width));
+        let pixel_y = u32(input.uv.y * f32(tonemap_params.height));
+        let pixel_idx = pixel_y * tonemap_params.width + pixel_x;
+
+        // Read path from buffer
+        let path = path_buffer[pixel_idx];
+
+        // Only color pixels with actual path data (iteration_count > 0)
+        if (path.iteration_count > 0u) {
+            let style = tonemap_params.path_map_style;
+
+            if (style <= 3u) {
+                // Hash-based coloring: Prefix, Suffix, PrefixDistinct, SuffixDistinct
+                fractal_color = path_to_color(path, style, tonemap_params.num_transforms);
+            } else {
+                // Gradient-based coloring using palette
+                var t: f32 = 0.0;
+
+                if (style == 4u) {
+                    // Depth: Color by iteration count
+                    // Map from burn_in to 32 onto 0.0 to 1.0
+                    let min_depth = f32(tonemap_params.burn_in);
+                    let max_depth = 32.0;
+                    let depth = f32(path.iteration_count);
+                    t = clamp((depth - min_depth) / (max_depth - min_depth), 0.0, 1.0);
+                } else if (style == 5u) {
+                    // OriginRadial: Color by distance from origin
+                    // Map from 0 to sqrt(2) ≈ 1.4142 onto 0.0 to 1.0
+                    let dist = sqrt(path.initial_x * path.initial_x + path.initial_y * path.initial_y);
+                    t = clamp(dist / 1.4142135, 0.0, 1.0);
+                } else if (style == 6u) {
+                    // OriginHorizontal: Color by X position
+                    // Map from -1 to 1 onto 0.0 to 1.0
+                    t = clamp((path.initial_x + 1.0) * 0.5, 0.0, 1.0);
+                } else {
+                    // OriginVertical (style == 7u): Color by Y position
+                    // Map from -1 to 1 onto 0.0 to 1.0
+                    t = clamp((path.initial_y + 1.0) * 0.5, 0.0, 1.0);
+                }
+
+                // Sample palette texture at position t
+                // Palette is 256x1 texture, sample at (t, 0.5)
+                fractal_color = textureSample(palette_texture, palette_sampler, vec2<f32>(t, 0.5)).rgb;
+            }
+        }
+    }
 
     // ===== STAGE 3F: Background Blending =====
     // We need an alpha curve that:

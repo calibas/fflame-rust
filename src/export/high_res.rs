@@ -706,8 +706,12 @@ impl HighResExporter {
                 histogram_color_scale: config.histogram_color_scale,
                 has_final_transform: 0,
                 final_transform_index: 0,
-                _pad3: 0.0,
-                _pad4: 0.0,
+                bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
+                path_map_style: config.path_map_style as u32,
+                path_capture_mode: config.path_capture_mode as u32,
+                path_tracking_mode: config.path_tracking_mode as u32,
+                num_path_filters: 0, // Path filters not supported in export mode
+                min_suffix_filter_length: 0,
             };
             self.queue
                 .write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
@@ -988,7 +992,13 @@ impl HighResExporter {
             alpha_blend_low: config.alpha_blend_low,
             alpha_blend_high: config.alpha_blend_high,
             transparent_mode: 0, // Normal display mode (blend with background)
-            _pad_alpha: 0.0,
+            color_mode: config.color_mode as u32,
+            width: self.width,
+            height: self.height,
+            path_map_style: config.path_map_style as u32,
+            burn_in: 20, // Default burn-in for export
+            num_transforms: config.flame.transforms.len() as u32,
+            _pad_end: [0, 0, 0],
         };
 
         self.queue.write_buffer(

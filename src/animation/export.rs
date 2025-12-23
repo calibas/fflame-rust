@@ -915,7 +915,7 @@ pub async fn export_animation(
             .or_else(|| palette_library.get(frame_config.palette_index))
             .ok_or_else(|| AnimationExportError::InvalidConfig("No palette found".to_string()))?;
 
-        renderer.load_config(&device, &mut encoder, &queue, &frame_config, palette, export_config.iterations_per_thread);
+        renderer.load_config(&device, &mut encoder, &queue, &frame_config, palette, export_config.iterations_per_thread, 20); // burn_in default
         queue.submit(std::iter::once(encoder.finish()));
 
         // Render until max_iterations
@@ -1009,12 +1009,15 @@ async fn render_frame_to_completion(
         });
 
         let clear_histogram = batch_frame_count == 0;
+        // Clear paths only on very first batch of the entire export
+        let clear_paths = total_rendered == 0 && clear_histogram;
 
         renderer.compute_pass(
             &mut encoder,
             queue,
             NUM_WORKGROUPS,
             iterations_per_thread,
+            20, // burn_in default
             config.zoom,
             config.pan_x,
             config.pan_y,
@@ -1024,6 +1027,7 @@ async fn render_frame_to_completion(
             config.camera_z,
             config.speed_factor,
             clear_histogram,
+            clear_paths,
         );
 
         let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
@@ -1280,6 +1284,7 @@ pub async fn export_animation_fast(
             &frame_config,
             current_palette,
             export_config.iterations_per_thread,
+            20, // burn_in default
         );
         queue.submit(std::iter::once(setup_encoder.finish()));
 

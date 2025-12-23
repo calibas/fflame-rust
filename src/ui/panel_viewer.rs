@@ -80,6 +80,15 @@ pub struct PanelContext<'a> {
 
     // Animation seek changed flag (timeline was scrubbed)
     pub animation_seek_changed: &'a mut bool,
+
+    // PathMap mode: hovered pixel coordinates and cached path info
+    pub hovered_pixel: &'a mut Option<(u32, u32)>,
+    pub path_click_info: &'a Option<super::PathClickInfo>,
+    pub close_path_overlay: &'a mut bool,
+
+    // Path editor state
+    pub path_editor_state: &'a mut super::path_editor::PathEditorState,
+    pub path_filters_changed: &'a mut Option<Vec<crate::gpu::buffers::GpuPathFilter>>,
 }
 
 /// Viewer for rendering each panel type
@@ -140,6 +149,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::FileBrowser => {
                 self.render_file_browser_panel(ui);
+            }
+            PanelType::PathEditor => {
+                self.render_path_editor_panel(ui);
             }
         }
     }
@@ -393,6 +405,29 @@ impl<'a> PanelViewer<'a> {
                     self.handle_fractal_scroll(scroll_delta, response.hover_pos(), response.rect, available_size);
                 }
             }
+
+            // Handle right-click (or drag with right button held) to query path at pixel (PathMap mode)
+            // Use down() to detect when button is held, allowing continuous updates while dragging
+            let secondary_held = ui.input(|i| i.pointer.secondary_down());
+            if secondary_held && response.hovered() {
+                if let Some(pointer_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                    // Convert from panel coordinates to texture coordinates
+                    let local_x = pointer_pos.x - response.rect.min.x;
+                    let local_y = pointer_pos.y - response.rect.min.y;
+                    let pixel_x = (local_x / available_size.x * width as f32) as u32;
+                    let pixel_y = (local_y / available_size.y * height as f32) as u32;
+                    *self.context.hovered_pixel = Some((pixel_x.min(width - 1), pixel_y.min(height - 1)));
+                }
+            }
+
+            // Display path info overlay when available (PathMap mode only)
+            let is_path_map_mode = self.context.config_manager.active_config().color_mode
+                == crate::scene::palette::ColorMode::PathMap;
+            if is_path_map_mode {
+                if let Some(click_info) = self.context.path_click_info {
+                    self.render_path_overlay(ui, &response, click_info);
+                }
+            }
         } else {
             // Fallback if texture not available yet
             ui.centered_and_justified(|ui| {
@@ -511,6 +546,259 @@ impl<'a> PanelViewer<'a> {
         }
     }
 
+    /// Render path overlay showing pixel info, coordinates, path, and color preview
+    fn render_path_overlay(
+        &mut self,
+        ui: &mut egui::Ui,
+        _image_response: &egui::Response,
+        click_info: &super::PathClickInfo,
+    ) {
+        // Get transform names for display
+        let flame = &self.context.config_manager.active_config().flame;
+        let transform_count = flame.transforms.len();
+
+        // Build path string
+        let path_vec = click_info.path_entry.to_vec();
+
+        // Format path: show transform indices and names
+        let path_str: Vec<String> = path_vec.iter().map(|&idx| {
+            let idx = idx as usize;
+            if idx < transform_count {
+                format!("T{}", idx)
+            } else {
+                format!("?{}", idx)
+            }
+        }).collect();
+
+        // Create overlay window anchored to top-left of viewport
+        egui::Area::new(egui::Id::new("path_overlay"))
+            .fixed_pos(ui.min_rect().min + egui::vec2(10.0, 10.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 220))
+                    .inner_margin(egui::Margin::same(10))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .show(ui, |ui| {
+                        ui.set_max_width(420.0);
+
+                        // Header row with close button
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Path Info").strong().color(egui::Color32::WHITE));
+
+                            // Push close button to the right
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("X").clicked() {
+                                    *self.context.close_path_overlay = true;
+                                }
+                            });
+                        });
+
+                        ui.add_space(6.0);
+
+                        // Two-column layout: info on left, color preview on right
+                        ui.horizontal(|ui| {
+                            // Left column: coordinates and path info
+                            ui.vertical(|ui| {
+                                ui.set_min_width(280.0);
+
+                                // Pixel coordinates section
+                                ui.label(egui::RichText::new("Coordinates").strong().color(egui::Color32::LIGHT_GRAY));
+                                ui.add_space(2.0);
+
+                                // View space (pixel) coordinates
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("  Pixel:").color(egui::Color32::GRAY));
+                                    ui.label(egui::RichText::new(format!("({}, {})",
+                                        click_info.found_pixel.0, click_info.found_pixel.1))
+                                        .color(egui::Color32::WHITE));
+                                    if click_info.search_distance > 0.0 {
+                                        ui.label(egui::RichText::new(format!("(+{:.1}px)", click_info.search_distance))
+                                            .small()
+                                            .color(egui::Color32::YELLOW));
+                                    }
+                                });
+
+                                // Fractal space coordinates
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("  Fractal:").color(egui::Color32::GRAY));
+                                    ui.label(egui::RichText::new(format!("({:.6}, {:.6})",
+                                        click_info.fractal_coords.0, click_info.fractal_coords.1))
+                                        .color(egui::Color32::LIGHT_GREEN));
+                                });
+
+                                // IFS starting point
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("  IFS Start:").color(egui::Color32::GRAY));
+                                    ui.label(egui::RichText::new(format!("({:.4}, {:.4})",
+                                        click_info.path_entry.initial_x, click_info.path_entry.initial_y))
+                                        .color(egui::Color32::LIGHT_BLUE));
+                                });
+
+                                ui.add_space(6.0);
+
+                                // Path section
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Path").strong().color(egui::Color32::LIGHT_GRAY));
+                                    ui.label(egui::RichText::new(format!("({} iterations)",
+                                        click_info.path_entry.iteration_count))
+                                        .small()
+                                        .color(egui::Color32::GRAY));
+                                });
+                                ui.add_space(2.0);
+
+                                // Wrap path in a scrollable area if it's long
+                                if !path_str.is_empty() {
+                                    egui::ScrollArea::horizontal().max_width(260.0).show(ui, |ui| {
+                                        ui.horizontal_wrapped(|ui| {
+                                            for (i, name) in path_str.iter().enumerate() {
+                                                if i > 0 {
+                                                    ui.label(egui::RichText::new(">").color(egui::Color32::DARK_GRAY));
+                                                }
+                                                ui.label(egui::RichText::new(name).color(egui::Color32::from_rgb(100, 180, 255)));
+                                            }
+                                        });
+                                    });
+                                } else {
+                                    ui.label(egui::RichText::new("  (empty)").color(egui::Color32::GRAY));
+                                }
+
+                                ui.add_space(6.0);
+
+                                // Hash debug info (shows Prefix Distinct calculation)
+                                use crate::renderer::PathEntry;
+                                let prefix = click_info.path_entry.get_prefix();
+                                let iter_count = click_info.path_entry.iteration_count;
+                                // Mix iteration_count into value before hashing (matches GPU)
+                                let mixed = prefix ^ (iter_count.wrapping_mul(0x9E3779B9));
+                                let hash = PathEntry::scramble_hash(mixed);
+                                let hue = click_info.path_entry.compute_prefix_distinct_hue();
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Debug (Prefix Distinct):").strong().color(egui::Color32::LIGHT_GRAY));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("  path0: 0x{:08X}", prefix))
+                                        .small()
+                                        .color(egui::Color32::YELLOW));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("  mixed: 0x{:08X} (path0 ^ iter*φ)", mixed))
+                                        .small()
+                                        .color(egui::Color32::YELLOW));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("  hash:  0x{:08X}", hash))
+                                        .small()
+                                        .color(egui::Color32::YELLOW));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new(format!("  hue:   {:.6}", hue))
+                                        .small()
+                                        .color(egui::Color32::YELLOW));
+                                });
+                            });
+
+                            ui.add_space(12.0);
+
+                            // Right column: 9x9 color preview (clickable)
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new("Preview (click to select)").strong().color(egui::Color32::LIGHT_GRAY));
+                                ui.add_space(4.0);
+
+                                // Render color grid
+                                let (preview_w, preview_h) = click_info.preview_size;
+                                let pixel_size = 12.0;
+                                let total_size = egui::vec2(
+                                    preview_w as f32 * pixel_size,
+                                    preview_h as f32 * pixel_size,
+                                );
+
+                                // Make clickable to allow selecting other pixels
+                                let (rect, response) = ui.allocate_exact_size(total_size, egui::Sense::click());
+                                let painter = ui.painter();
+
+                                // Handle click on preview to select a different pixel
+                                if response.clicked() {
+                                    if let Some(click_pos) = response.interact_pointer_pos() {
+                                        // Calculate which cell was clicked
+                                        let local_x = click_pos.x - rect.min.x;
+                                        let local_y = click_pos.y - rect.min.y;
+                                        let cell_x = (local_x / pixel_size) as i32;
+                                        let cell_y = (local_y / pixel_size) as i32;
+
+                                        // Calculate offset from center
+                                        let center_x = preview_w as i32 / 2;
+                                        let center_y = preview_h as i32 / 2;
+                                        let offset_x = cell_x - center_x;
+                                        let offset_y = cell_y - center_y;
+
+                                        // Calculate new target pixel
+                                        let (found_x, found_y) = click_info.found_pixel;
+                                        let new_x = (found_x as i32 + offset_x).max(0) as u32;
+                                        let new_y = (found_y as i32 + offset_y).max(0) as u32;
+
+                                        // Update hovered_pixel to trigger re-query
+                                        *self.context.hovered_pixel = Some((new_x, new_y));
+                                    }
+                                }
+
+                                // Draw border around preview
+                                painter.add(egui::epaint::RectShape::stroke(
+                                    rect.expand(1.0),
+                                    egui::CornerRadius::same(2),
+                                    egui::Stroke::new(1.0, egui::Color32::GRAY),
+                                    egui::epaint::StrokeKind::Outside,
+                                ));
+
+                                // Draw each pixel
+                                for py in 0..preview_h {
+                                    for px in 0..preview_w {
+                                        let idx = (py * preview_w + px) as usize;
+                                        if idx < click_info.color_preview.len() {
+                                            let rgba = click_info.color_preview[idx];
+                                            let color = egui::Color32::from_rgba_unmultiplied(
+                                                rgba[0], rgba[1], rgba[2], rgba[3]
+                                            );
+
+                                            let pixel_rect = egui::Rect::from_min_size(
+                                                rect.min + egui::vec2(px as f32 * pixel_size, py as f32 * pixel_size),
+                                                egui::vec2(pixel_size, pixel_size),
+                                            );
+
+                                            painter.rect_filled(pixel_rect, 0.0, color);
+
+                                            // Highlight center pixel with black and white outline (not filled)
+                                            let center_x = preview_w / 2;
+                                            let center_y = preview_h / 2;
+                                            if px == center_x && py == center_y {
+                                                // Outer black stroke
+                                                painter.add(egui::epaint::RectShape::stroke(
+                                                    pixel_rect.shrink(0.5),
+                                                    egui::CornerRadius::ZERO,
+                                                    egui::Stroke::new(2.0, egui::Color32::BLACK),
+                                                    egui::epaint::StrokeKind::Inside,
+                                                ));
+                                                // Inner white stroke
+                                                painter.add(egui::epaint::RectShape::stroke(
+                                                    pixel_rect.shrink(2.5),
+                                                    egui::CornerRadius::ZERO,
+                                                    egui::Stroke::new(1.0, egui::Color32::WHITE),
+                                                    egui::epaint::StrokeKind::Inside,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        });
+
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new("Right-click elsewhere to close")
+                            .small()
+                            .color(egui::Color32::DARK_GRAY));
+                    });
+            });
+    }
+
     /// Render Preset Library panel (browse and select presets with thumbnails)
     fn render_preset_library_panel(&mut self, ui: &mut egui::Ui) {
         // Initialize panel if not already created
@@ -549,6 +837,21 @@ impl<'a> PanelViewer<'a> {
             if let Some(config) = response.selected {
                 *self.context.selected_preset_config = Some(config);
             }
+        }
+    }
+
+    /// Render Path Editor panel (manage path filters)
+    fn render_path_editor_panel(&mut self, ui: &mut egui::Ui) {
+        let num_transforms = self.context.flame.transforms.len();
+        let response = super::path_editor::render_path_editor_content(
+            ui,
+            self.context.path_editor_state,
+            num_transforms,
+        );
+
+        // Handle filter changes
+        if let Some(filters) = response.filters_changed {
+            *self.context.path_filters_changed = Some(filters);
         }
     }
 }

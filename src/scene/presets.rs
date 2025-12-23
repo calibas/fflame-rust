@@ -1,5 +1,5 @@
 use super::transforms::{Flame, Transform};
-use super::palette::{ColorMode, PaletteLibrary, Palette};
+use super::palette::{ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode, PaletteLibrary, Palette};
 use super::tonemap::{ToneMapMode, ToneCurve};
 use crate::config::FractalConfig;
 
@@ -381,6 +381,9 @@ impl PresetLibrary {
                     speed_factor: 1.0,
                     max_iterations: 1_000_000_000,
                     color_mode: ColorMode::Palette,
+                    path_map_style: PathMapStyle::default(),
+                    path_capture_mode: PathCaptureMode::default(),
+                    path_tracking_mode: PathTrackingMode::default(),
                     palette_index: 1,
                     palette: Some(palette),
                     palette_rotation: 0.0,
@@ -431,6 +434,9 @@ impl PresetLibrary {
                     speed_factor: 0.5,
                     max_iterations: 1_000_000_000,
                     color_mode: ColorMode::Palette,
+                    path_map_style: PathMapStyle::default(),
+                    path_capture_mode: PathCaptureMode::default(),
+                    path_tracking_mode: PathTrackingMode::default(),
                     palette_index: 1,
                     palette,
                     palette_rotation: 0.0,
@@ -497,6 +503,9 @@ impl PresetLibrary {
             speed_factor: 0.5,
             max_iterations: 1_000_000_000,
             color_mode: ColorMode::Palette,
+            path_map_style: PathMapStyle::default(),
+            path_capture_mode: PathCaptureMode::default(),
+            path_tracking_mode: PathTrackingMode::default(),
             palette_index: 1,
             palette,
             palette_rotation: 0.0,

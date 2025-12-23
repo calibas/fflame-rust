@@ -35,7 +35,7 @@ struct Params {
     width: u32,       // Full output width
     height: u32,      // Full output height
     seed: u32,
-    color_mode: u32,  // 0 = transform colors, 1 = palette, 2 = speed
+    color_mode: u32,  // 0 = palette, 1 = speed, 2 = path_map
     render_mode: u32, // 0 = 2D, 1 = 3D
     splat_size: f32,
     zoom: f32,
@@ -50,8 +50,8 @@ struct Params {
     histogram_color_scale: f32,  // Not used for export, but kept for struct compatibility
     has_final_transform: u32,
     final_transform_index: u32,
-    _pad3: f32,
-    _pad4: f32,
+    bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
+    path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=ScrambledPrefix, 3=ScrambledSuffix
 }
 
 // Variation parameters for one transform

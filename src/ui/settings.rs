@@ -118,7 +118,7 @@ pub fn render_settings_content(
 
             // Render settings - Iterations per thread
             let mut temp_iterations = config_manager.system_settings().iterations_per_thread;
-            let response = ui.add(egui::Slider::new(&mut temp_iterations, 64..=4096)
+            let response = ui.add(egui::Slider::new(&mut temp_iterations, 1..=4096)
                 .text("Iterations per Thread"))
                 .on_hover_text(
                     "GPU workgroup performance tuning.\n\
@@ -130,6 +130,24 @@ pub fn render_settings_content(
                 let _ = config_manager.update_system_setting(
                     crate::config::ConfigPath::SystemIterationsPerThread,
                     temp_iterations.into()
+                );
+            }
+
+            // Burn-in iterations
+            let mut temp_burn_in = config_manager.system_settings().burn_in;
+            let response = ui.add(egui::Slider::new(&mut temp_burn_in, 0..=4096)
+                .text("Burn-in Iterations"))
+                .on_hover_text(
+                    "Skip first N iterations before plotting.\n\
+                    Allows points to 'settle' onto the attractor before contributing to the image.\n\
+                    Higher values = cleaner results but slower convergence.\n\
+                    0 = no burn-in (may show artifacts from random starting points)"
+                );
+
+            if response.changed() {
+                let _ = config_manager.update_system_setting(
+                    crate::config::ConfigPath::SystemBurnIn,
+                    temp_burn_in.into()
                 );
             }
 

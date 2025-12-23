@@ -35,7 +35,7 @@ struct Params {
     width: u32,
     height: u32,
     seed: u32,
-    color_mode: u32,  // 0 = transform colors, 1 = palette, 2 = speed
+    color_mode: u32,  // 0 = palette, 1 = speed, 2 = path_map
     render_mode: u32,  // 0 = 2D, 1 = 3D
     splat_size: f32,
     zoom: f32,
@@ -50,14 +50,41 @@ struct Params {
     histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
     has_final_transform: u32,  // 0 = disabled, 1 = enabled
     final_transform_index: u32,  // Index in transform buffer (after regular transforms)
-    _pad3: f32,
-    _pad4: f32,
+    bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
+    path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=Prefix (Distinct), 3=Suffix (Distinct)
+    path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=LastHit
+    path_tracking_mode: u32,  // 0=First (first 32 iterations), 1=Recent (rolling window of 32 most recent)
+    num_path_filters: u32,  // Number of active path filters (0 = disabled)
+    min_suffix_filter_length: u32,  // Minimum length among depth=0 filters (for optimization)
 }
 
 // Variation parameters for one transform
 // Indexed as: params[variation_id * 12 + param_slot]
 struct VariationParams {
     params: array<f32, 1200>,  // 100 variations × 12 params
+}
+
+// Path storage for PathMap color mode
+// Stores up to 32 iterations losslessly (4 bits per transform, up to 16 transforms)
+// Also stores initial random X/Y coordinates for complete path reconstruction
+struct PathEntry {
+    path0: u32,  // Iterations 0-7 (4 bits each, LSB = iteration 0)
+    path1: u32,  // Iterations 8-15
+    path2: u32,  // Iterations 16-23
+    path3: u32,  // Iterations 24-31
+    iteration_count: u32,  // Actual iteration when pixel was hit (not capped at 32)
+    initial_x: f32,  // Initial random X coordinate [-1, 1]
+    initial_y: f32,  // Initial random Y coordinate [-1, 1]
+}
+
+// Path filter for blocking specific transform sequences
+// depth=0: suffix match (block paths ending with pattern at any depth)
+// depth>0: exact depth match (block paths matching pattern at specific iteration)
+struct PathFilter {
+    pattern: u32,  // Packed pattern (up to 8 iterations at 4 bits each, LSB = first)
+    length: u32,   // Number of iterations in pattern (1-8)
+    depth: u32,    // 0 = suffix match, >0 = match at this exact depth
+    _padding: u32, // Padding for 16-byte alignment
 }
 
 // Bindings
@@ -68,3 +95,5 @@ struct VariationParams {
 @group(0) @binding(4) var palette_sampler: sampler;
 @group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;
 @group(0) @binding(6) var<storage, read_write> iteration_counts: array<atomic<u32>>;
+@group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;
+@group(0) @binding(8) var<storage, read> path_filters: array<PathFilter>;

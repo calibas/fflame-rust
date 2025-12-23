@@ -172,7 +172,7 @@ pub fn render_menu_bar(
 
                 // Iterations per Thread submenu
                 ui.menu_button("Iterations per Thread ▶", |ui| {
-                    for &ipt in &[64u32, 128, 256, 512, 1024] {
+                    for &ipt in &[32u32, 64, 128, 256, 512, 1024] {
                         if ui.button(format!("{}", ipt)).clicked() {
                             menu_actions.rendering.set_iterations_per_thread = Some(ipt);
 
@@ -267,6 +267,12 @@ pub fn render_menu_bar(
                 let animation_open = workspace.panel_exists(super::workspace::PanelType::Animation);
                 if ui.selectable_label(animation_open, "🎬 Animation").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Animation);
+                }
+
+                // Path Editor panel
+                let path_editor_open = workspace.panel_exists(super::workspace::PanelType::PathEditor);
+                if ui.selectable_label(path_editor_open, "🛤 Path Editor").clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::PathEditor);
                 }
 
                 ui.separator();
