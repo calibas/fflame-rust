@@ -1,8 +1,113 @@
 use egui_wgpu::wgpu::*;
 use crate::gpu::{buffers::*, pipelines::FlamePipelines};
 use crate::scene::transforms::Flame;
-use crate::scene::palette::{Palette, ColorMode};
+use crate::scene::palette::{Palette, ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode};
 use crate::config::FractalConfig;
+
+/// Path entry storing first 32 iterations of transform sequence
+/// Also stores initial random X/Y coordinates for complete path reconstruction
+/// Matches GPU PathEntry struct layout (7 × u32 = 5 u32 + 2 f32)
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
+pub struct PathEntry {
+    /// Iterations 0-7 (4 bits each, LSB = iteration 0)
+    pub path0: u32,
+    /// Iterations 8-15
+    pub path1: u32,
+    /// Iterations 16-23
+    pub path2: u32,
+    /// Iterations 24-31
+    pub path3: u32,
+    /// Number of valid iterations stored (0-32)
+    pub iteration_count: u32,
+    /// Initial random X coordinate [-1, 1]
+    pub initial_x: f32,
+    /// Initial random Y coordinate [-1, 1]
+    pub initial_y: f32,
+}
+
+impl PathEntry {
+    /// Extract transform index at given iteration (0-31)
+    /// Returns None if iteration >= iteration_count
+    pub fn get_transform(&self, iteration: u32) -> Option<u32> {
+        if iteration >= self.iteration_count {
+            return None;
+        }
+        let slot = iteration / 8;
+        let pos = (iteration % 8) * 4;
+        let path = match slot {
+            0 => self.path0,
+            1 => self.path1,
+            2 => self.path2,
+            3 => self.path3,
+            _ => return None,
+        };
+        Some((path >> pos) & 0xF)
+    }
+
+    /// Get full path as Vec of transform indices
+    pub fn to_vec(&self) -> Vec<u32> {
+        (0..self.iteration_count)
+            .filter_map(|i| self.get_transform(i))
+            .collect()
+    }
+
+    /// Get prefix data: first 8 iterations (path0 only)
+    /// Matches GPU get_prefix() function
+    pub fn get_prefix(&self) -> u32 {
+        self.path0
+    }
+
+    /// Get suffix data: last 8 valid iterations based on iteration_count
+    /// Matches GPU get_suffix() function
+    pub fn get_suffix(&self) -> u32 {
+        let count = self.iteration_count;
+        if count <= 8 {
+            self.path0
+        } else if count <= 16 {
+            self.path1
+        } else if count <= 24 {
+            self.path2
+        } else {
+            self.path3
+        }
+    }
+
+    /// Scramble hash for maximum color separation
+    /// Matches GPU scramble_hash() function (MurmurHash3 finalizer)
+    pub fn scramble_hash(x: u32) -> u32 {
+        let mut h = x;
+        h ^= h >> 16;
+        h = h.wrapping_mul(0x85ebca6b);
+        h ^= h >> 13;
+        h = h.wrapping_mul(0xc2b2ae35);
+        h ^= h >> 16;
+        h
+    }
+
+    /// Compute hue value for Prefix Distinct coloring mode (style 2)
+    /// Matches GPU path_to_color_prefix_distinct() function
+    /// Incorporates iteration_count to distinguish paths of different lengths
+    pub fn compute_prefix_distinct_hue(&self) -> f32 {
+        let value = self.get_prefix();
+        // Mix iteration_count into the value before hashing (same as GPU)
+        let mixed = value ^ (self.iteration_count.wrapping_mul(0x9E3779B9));
+        let scrambled = Self::scramble_hash(mixed);
+        let golden_ratio: f64 = 0.618033988749895;
+        let hue = (scrambled as f64 * golden_ratio / u32::MAX as f64).fract();
+        hue as f32
+    }
+
+    /// Compute hue value for Suffix Distinct coloring mode (style 3)
+    /// Matches GPU path_to_color_distinct() function
+    pub fn compute_suffix_distinct_hue(&self) -> f32 {
+        let value = self.get_suffix();
+        let scrambled = Self::scramble_hash(value);
+        let golden_ratio: f64 = 0.618033988749895;
+        let hue = (scrambled as f64 * golden_ratio / u32::MAX as f64).fract();
+        hue as f32
+    }
+}
 
 /// Manages fractal flame rendering via GPU compute shaders
 pub struct FlameRenderer {
@@ -23,6 +128,9 @@ pub struct FlameRenderer {
     total_iterations: u64,
     effective_iterations: u64, // For brightness calculation - doesn't reset during overwrite mode
     color_mode: ColorMode,
+    path_map_style: PathMapStyle,
+    path_capture_mode: PathCaptureMode,
+    path_tracking_mode: PathTrackingMode,
     density_scale: f32,
     background_color: [f32; 3],
     current_render_mode: crate::scene::transforms::RenderMode,
@@ -32,12 +140,15 @@ pub struct FlameRenderer {
     histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
     low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
     density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression (default: 0.0)
+    burn_in: u32, // Burn-in iterations (for Depth gradient in PathMap mode)
     blend_factor: f32, // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
     target_iterations_per_pixel: u32, // Per-pixel convergence: stop updating pixel after N iterations (0 = disabled)
     overwrite_mode: bool, // When true, replace accumulation buffer instead of blending (for live preview)
     num_transforms: u32, // Number of regular transforms (not including final transform)
     has_final_transform: bool, // Whether final transform is present
+    path_filters: Vec<crate::gpu::buffers::GpuPathFilter>, // Active path filters
+    min_suffix_filter_length: u32, // Minimum length among depth=0 filters (optimization)
 }
 
 impl FlameRenderer {
@@ -99,6 +210,9 @@ impl FlameRenderer {
             total_iterations: 0,
             effective_iterations: 0,
             color_mode: ColorMode::Palette,
+            path_map_style: PathMapStyle::default(),
+            path_capture_mode: PathCaptureMode::default(),
+            path_tracking_mode: PathTrackingMode::default(),
             density_scale: 1.0,
             background_color: [0.0, 0.0, 0.0],
             current_render_mode: flame.render_mode,
@@ -108,12 +222,15 @@ impl FlameRenderer {
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             low_density_smoothing: 0.5, // Moderate smoothing default
             density_compression_strength: 0.0, // Linear accumulation default (no compression)
+            burn_in: 20, // Default burn-in iterations
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
             use_dynamic_blend: true, // Default to clamped exponential (0.8 → 0.01)
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
             overwrite_mode: false, // Default to normal blending (progressive refinement)
             num_transforms: flame.transforms.len() as u32,
             has_final_transform: flame.final_transform.is_some(),
+            path_filters: Vec::new(), // No filters by default
+            min_suffix_filter_length: 0,
         }
     }
 
@@ -179,7 +296,9 @@ impl FlameRenderer {
 
     /// Run compute pass to generate flame samples
     /// Returns the number of samples generated this frame
-    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool) -> u64 {
+    /// - `clear_histogram`: Clear histogram buffer (needed each batch for proper accumulation math)
+    /// - `clear_paths`: Clear path buffer (only needed on full reset, not each batch)
+    pub fn compute_pass(&mut self, encoder: &mut CommandEncoder, queue: &Queue, num_workgroups: u32, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, clear_histogram: bool, clear_paths: bool) -> u64 {
         // Update seed for new random samples each frame
         // projection_type removed - shader now uses perspective_strength directly
         // 0.0 = orthographic (flat), higher values = increasing perspective
@@ -188,7 +307,7 @@ impl FlameRenderer {
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
-            burn_in: 20,
+            burn_in,
             width: self.width,
             height: self.height,
             seed,
@@ -210,10 +329,19 @@ impl FlameRenderer {
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms, // Final transform is appended after regular transforms
-            _pad3: 0.0,
-            _pad4: 0.0,
+            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
+            path_map_style: self.path_map_style as u32,
+            path_capture_mode: self.path_capture_mode as u32,
+            path_tracking_mode: self.path_tracking_mode as u32,
+            num_path_filters: self.path_filters.len() as u32,
+            min_suffix_filter_length: self.min_suffix_filter_length,
         };
         self.buffers.update_params(queue, &params);
+
+        // Update path filter buffer if filters are active and buffers exist
+        if !self.path_filters.is_empty() {
+            self.buffers.write_path_filters(queue, &self.path_filters);
+        }
 
         // Track total iterations: workgroups * threads_per_workgroup * iterations_per_thread
         // Each workgroup has 64 threads (8x8)
@@ -221,9 +349,14 @@ impl FlameRenderer {
         let samples_this_frame = num_workgroups as u64 * threads_per_workgroup * iterations_per_thread as u64;
         self.total_iterations += samples_this_frame;
 
-        // Clear histogram buffer before rendering new samples (optional for batched accumulation)
+        // Clear histogram buffer before each batch (needed for proper accumulation math)
         if clear_histogram {
             self.buffers.clear_histogram(encoder);
+        }
+        // Clear path buffer only on full reset (view change, flame change, etc.)
+        // Path buffer persists across batches to accumulate path data for all pixels
+        if clear_paths {
+            self.buffers.clear_paths(encoder);
         }
 
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
@@ -345,7 +478,7 @@ impl FlameRenderer {
 
     /// Load a complete FractalConfig (preset or imported config)
     /// This ensures all GPU state is properly synchronized
-    pub fn load_config(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32) {
+    pub fn load_config(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32, burn_in: u32) {
         // 0. Check if shaders need to be recompiled (variations changed)
         let shaders_changed = self.pipelines.ensure_shaders_current(device, &config.flame);
         if shaders_changed {
@@ -357,8 +490,11 @@ impl FlameRenderer {
         // 1. Update transforms in GPU buffer
         self.buffers.update_transforms(queue, &config.flame);
 
-        // 2. Update color mode
+        // 2. Update color mode, path map style, and capture mode
         self.color_mode = config.color_mode;
+        self.path_map_style = config.path_map_style;
+        self.path_capture_mode = config.path_capture_mode;
+        self.path_tracking_mode = config.path_tracking_mode;
 
         // 3. Update density and background
         self.density_scale = config.density_scale;
@@ -369,6 +505,7 @@ impl FlameRenderer {
         self.perspective_strength = config.flame.perspective_strength;
         self.histogram_color_scale = config.histogram_color_scale;
         self.low_density_smoothing = config.low_density_smoothing;
+        self.burn_in = burn_in;
 
         // 5. Update palette with hue rotation
         self.buffers.update_palette(queue, palette, config.palette_rotation);
@@ -384,7 +521,7 @@ impl FlameRenderer {
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
-            burn_in: 20,
+            burn_in,
             width: self.width,
             height: self.height,
             seed: self.get_rng_seed(),
@@ -406,8 +543,12 @@ impl FlameRenderer {
             histogram_color_scale: config.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
-            _pad3: 0.0,
-            _pad4: 0.0,
+            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
+            path_map_style: self.path_map_style as u32,
+            path_capture_mode: self.path_capture_mode as u32,
+            path_tracking_mode: self.path_tracking_mode as u32,
+            num_path_filters: self.path_filters.len() as u32,
+            min_suffix_filter_length: self.min_suffix_filter_length,
         };
         self.buffers.update_params(queue, &params);
 
@@ -426,7 +567,7 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         // Check if shaders need to be recompiled (variations changed)
         let shaders_changed = self.pipelines.ensure_shaders_current(device, flame);
         if shaders_changed {
@@ -449,7 +590,7 @@ impl FlameRenderer {
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
-            burn_in: 20,
+            burn_in,
             width: self.width,
             height: self.height,
             seed: self.get_rng_seed(),
@@ -471,8 +612,12 @@ impl FlameRenderer {
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
-            _pad3: 0.0,
-            _pad4: 0.0,
+            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
+            path_map_style: self.path_map_style as u32,
+            path_capture_mode: self.path_capture_mode as u32,
+            path_tracking_mode: self.path_tracking_mode as u32,
+            num_path_filters: self.path_filters.len() as u32,
+            min_suffix_filter_length: self.min_suffix_filter_length,
         };
 
         self.buffers.update_params(queue, &params);
@@ -508,7 +653,13 @@ impl FlameRenderer {
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
             transparent_mode: 0,
-            _pad_alpha: 0.0,
+            color_mode: self.color_mode as u32,
+            width: self.width,
+            height: self.height,
+            path_map_style: self.path_map_style as u32,
+            burn_in: self.burn_in,
+            num_transforms: self.num_transforms,
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -595,10 +746,10 @@ impl FlameRenderer {
         self.deterministic_rng = deterministic;
     }
 
-    pub fn set_histogram_color_scale(&mut self, queue: &Queue, scale: f32, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
+    pub fn set_histogram_color_scale(&mut self, queue: &Queue, scale: f32, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         self.histogram_color_scale = scale;
         // Update GPU params immediately so new scale takes effect
-        self.update_iterations(queue, iterations_per_thread, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
+        self.update_iterations(queue, iterations_per_thread, burn_in, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
     }
 
     pub fn set_low_density_smoothing(&mut self, smoothing: f32) {
@@ -636,12 +787,13 @@ impl FlameRenderer {
     }
 
     /// Update iterations per thread
-    pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
+    pub fn update_iterations(&mut self, queue: &Queue, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
+        self.burn_in = burn_in;
 
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
-            burn_in: 20,
+            burn_in,
             width: self.width,
             height: self.height,
             seed: self.get_rng_seed(),
@@ -663,8 +815,12 @@ impl FlameRenderer {
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
-            _pad3: 0.0,
-            _pad4: 0.0,
+            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
+            path_map_style: self.path_map_style as u32,
+            path_capture_mode: self.path_capture_mode as u32,
+            path_tracking_mode: self.path_tracking_mode as u32,
+            num_path_filters: self.path_filters.len() as u32,
+            min_suffix_filter_length: self.min_suffix_filter_length,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -697,7 +853,13 @@ impl FlameRenderer {
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
             transparent_mode: 0,
-            _pad_alpha: 0.0,
+            color_mode: self.color_mode as u32,
+            width: self.width,
+            height: self.height,
+            path_map_style: self.path_map_style as u32,
+            burn_in: self.burn_in,
+            num_transforms: self.num_transforms,
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -757,7 +919,13 @@ impl FlameRenderer {
             alpha_blend_low: config.alpha_blend_low,
             alpha_blend_high: config.alpha_blend_high,
             transparent_mode: if transparent { 1 } else { 0 },
-            _pad_alpha: 0.0,
+            color_mode: self.color_mode as u32,
+            width: self.width,
+            height: self.height,
+            path_map_style: self.path_map_style as u32,
+            burn_in: self.burn_in,
+            num_transforms: self.num_transforms,
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -852,7 +1020,13 @@ impl FlameRenderer {
             alpha_blend_low,
             alpha_blend_high,
             transparent_mode: 0,
-            _pad_alpha: 0.0,
+            color_mode: self.color_mode as u32,
+            width: self.width,
+            height: self.height,
+            path_map_style: self.path_map_style as u32,
+            burn_in: self.burn_in,
+            num_transforms: self.num_transforms,
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -870,14 +1044,14 @@ impl FlameRenderer {
     }
 
     /// Set color mode
-    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
+    pub fn set_color_mode(&mut self, queue: &Queue, color_mode: ColorMode, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         self.color_mode = color_mode;
 
         // Update params to reflect new color mode
         let params = GpuParams {
             num_transforms: self.num_transforms,
             iterations_per_thread,
-            burn_in: 20,
+            burn_in,
             width: self.width,
             height: self.height,
             seed: self.get_rng_seed(),
@@ -899,8 +1073,12 @@ impl FlameRenderer {
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
-            _pad3: 0.0,
-            _pad4: 0.0,
+            bits_per_transform: crate::gpu::buffers::bits_per_transform(self.num_transforms),
+            path_map_style: self.path_map_style as u32,
+            path_capture_mode: self.path_capture_mode as u32,
+            path_tracking_mode: self.path_tracking_mode as u32,
+            num_path_filters: self.path_filters.len() as u32,
+            min_suffix_filter_length: self.min_suffix_filter_length,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -908,6 +1086,125 @@ impl FlameRenderer {
     /// Get current color mode
     pub fn color_mode(&self) -> ColorMode {
         self.color_mode
+    }
+
+    /// Set path map style (Prefix = color by path start, Suffix = color by path end)
+    pub fn set_path_map_style(&mut self, path_map_style: PathMapStyle) {
+        self.path_map_style = path_map_style;
+        // Note: tonemap params will be updated on next render via update_tonemap
+    }
+
+    /// Get current path map style
+    pub fn path_map_style(&self) -> PathMapStyle {
+        self.path_map_style
+    }
+
+    /// Set path capture mode (FirstHit, FirstAfterBurnIn, or LastHit)
+    pub fn set_path_capture_mode(&mut self, path_capture_mode: PathCaptureMode) {
+        self.path_capture_mode = path_capture_mode;
+        // Note: GPU params will be updated on next render
+    }
+
+    /// Get current path capture mode
+    pub fn path_capture_mode(&self) -> PathCaptureMode {
+        self.path_capture_mode
+    }
+
+    /// Set path tracking mode (First = first 32 iterations, Recent = rolling window of 32 most recent)
+    pub fn set_path_tracking_mode(&mut self, path_tracking_mode: PathTrackingMode) {
+        self.path_tracking_mode = path_tracking_mode;
+        // Note: GPU params will be updated on next render
+    }
+
+    /// Get current path tracking mode
+    pub fn path_tracking_mode(&self) -> PathTrackingMode {
+        self.path_tracking_mode
+    }
+
+    /// Set path filters for blocking specific transform sequences
+    ///
+    /// # Arguments
+    /// * `filters` - Vector of GpuPathFilter structs defining patterns to block
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Block all paths ending with transform [0,0,0,0,1] (suffix filter)
+    /// renderer.set_path_filters(vec![GpuPathFilter::suffix(&[0, 0, 0, 0, 1])]);
+    ///
+    /// // Block paths matching [0,1] at iteration depth 2 (exact depth filter)
+    /// renderer.set_path_filters(vec![GpuPathFilter::at_depth(&[0, 1], 2)]);
+    /// ```
+    pub fn set_path_filters(&mut self, filters: Vec<crate::gpu::buffers::GpuPathFilter>) {
+        // Calculate min_suffix_filter_length for optimization
+        self.min_suffix_filter_length = filters
+            .iter()
+            .filter(|f| f.depth == 0) // Only suffix filters
+            .map(|f| f.length)
+            .min()
+            .unwrap_or(0);
+
+        self.path_filters = filters;
+        // Note: GPU buffer will be updated on next compute pass
+    }
+
+    /// Clear all path filters
+    pub fn clear_path_filters(&mut self) {
+        self.path_filters.clear();
+        self.min_suffix_filter_length = 0;
+    }
+
+    /// Get current path filters
+    pub fn path_filters(&self) -> &[crate::gpu::buffers::GpuPathFilter] {
+        &self.path_filters
+    }
+
+    /// Check if path features (PathMap color mode or path filters) require buffers
+    /// Returns true if path buffers should be enabled
+    pub fn needs_path_features(&self) -> bool {
+        self.color_mode == crate::scene::palette::ColorMode::PathMap || !self.path_filters.is_empty()
+    }
+
+    /// Check if path buffers are currently allocated
+    pub fn path_features_enabled(&self) -> bool {
+        self.buffers.path_features_enabled()
+    }
+
+    /// Enable or disable path features based on current state
+    /// Call this when color_mode or path_filters change
+    /// Returns true if bind groups or shaders were rebuilt
+    pub fn update_path_features(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
+        let needs_path = self.needs_path_features();
+        let has_path = self.buffers.path_features_enabled();
+        let shader_has_path = self.pipelines.path_features_enabled();
+        let mut changed = false;
+
+        // Update buffers if needed
+        if needs_path && !has_path {
+            // Need to create path buffers
+            if self.buffers.create_path_buffers(device, queue) {
+                // Rebuild bind groups with new buffers
+                self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
+                changed = true;
+            }
+        } else if !needs_path && has_path {
+            // Can drop path buffers to save memory
+            if self.buffers.drop_path_buffers() {
+                // Rebuild bind groups with dummy buffers
+                self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
+                changed = true;
+            }
+        }
+
+        // Update shaders if path feature state changed
+        if needs_path != shader_has_path {
+            if self.pipelines.ensure_shaders_current_with_path_features(device, flame, needs_path) {
+                changed = true;
+            }
+        }
+
+        changed
     }
 
     /// Read pixels from the fractal_texture (after tonemap_pass has rendered to it)
@@ -1018,6 +1315,219 @@ impl FlameRenderer {
         }
 
         Ok((self.width, self.height, rgba_data))
+    }
+
+    /// Read path buffer from GPU for CPU-side path queries
+    /// Returns a 2D array of PathEntry indexed by [y][x]
+    /// Returns empty grid if path buffers are not enabled
+    pub async fn read_path_buffer(
+        &self,
+        device: &Device,
+        queue: &Queue,
+    ) -> Result<Vec<Vec<PathEntry>>, String> {
+        // Check if path buffer exists
+        let path_buffer = match &self.buffers.path_buffer {
+            Some(buf) => buf,
+            None => {
+                // Return empty PathEntry grid if path features are disabled
+                return Ok(vec![vec![PathEntry::default(); self.width as usize]; self.height as usize]);
+            }
+        };
+
+        // Wait for any pending rendering to complete
+        let sync_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Pre-Read Path Sync"),
+        });
+        queue.submit(std::iter::once(sync_encoder.finish()));
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+        // PathEntry is 7 × u32 = 28 bytes per pixel (5 u32 + 2 f32)
+        let bytes_per_entry = 7 * std::mem::size_of::<u32>() as u32;
+        let buffer_size = (self.width * self.height * bytes_per_entry) as u64;
+
+        // Create staging buffer for readback
+        let staging_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Path Buffer Staging"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Copy path buffer to staging buffer
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Path Buffer Read Encoder"),
+        });
+        encoder.copy_buffer_to_buffer(
+            path_buffer,
+            0,
+            &staging_buffer,
+            0,
+            buffer_size,
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map and read
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "Failed to map path buffer".to_string())?
+            .map_err(|e| format!("Path buffer map error: {:?}", e))?;
+
+        let data = buffer_slice.get_mapped_range();
+
+        // Convert raw bytes to PathEntry grid
+        let mut result = Vec::with_capacity(self.height as usize);
+        for y in 0..self.height {
+            let mut row = Vec::with_capacity(self.width as usize);
+            for x in 0..self.width {
+                let idx = ((y * self.width + x) * bytes_per_entry) as usize;
+                let path0 = u32::from_le_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
+                let path1 = u32::from_le_bytes([data[idx + 4], data[idx + 5], data[idx + 6], data[idx + 7]]);
+                let path2 = u32::from_le_bytes([data[idx + 8], data[idx + 9], data[idx + 10], data[idx + 11]]);
+                let path3 = u32::from_le_bytes([data[idx + 12], data[idx + 13], data[idx + 14], data[idx + 15]]);
+                let iteration_count = u32::from_le_bytes([data[idx + 16], data[idx + 17], data[idx + 18], data[idx + 19]]);
+                let initial_x = f32::from_le_bytes([data[idx + 20], data[idx + 21], data[idx + 22], data[idx + 23]]);
+                let initial_y = f32::from_le_bytes([data[idx + 24], data[idx + 25], data[idx + 26], data[idx + 27]]);
+
+                row.push(PathEntry {
+                    path0,
+                    path1,
+                    path2,
+                    path3,
+                    iteration_count,
+                    initial_x,
+                    initial_y,
+                });
+            }
+            result.push(row);
+        }
+
+        drop(data);
+        staging_buffer.unmap();
+
+        Ok(result)
+    }
+
+    /// Get path at a specific pixel coordinate
+    /// This is a convenience method that reads the entire buffer
+    /// For frequent queries, cache the result of read_path_buffer()
+    pub async fn get_path_at(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        x: u32,
+        y: u32,
+    ) -> Result<Option<PathEntry>, String> {
+        if x >= self.width || y >= self.height {
+            return Ok(None);
+        }
+        let paths = self.read_path_buffer(device, queue).await?;
+        Ok(Some(paths[y as usize][x as usize]))
+    }
+
+    /// Read a region of pixels from the fractal texture centered at (center_x, center_y)
+    /// Returns a Vec of [R, G, B, A] values in row-major order
+    /// Region is clamped to texture boundaries
+    pub async fn read_pixel_region(
+        &self,
+        device: &Device,
+        queue: &Queue,
+        center_x: u32,
+        center_y: u32,
+        region_width: u32,
+        region_height: u32,
+    ) -> Result<Vec<[u8; 4]>, String> {
+        // Calculate region bounds, clamped to texture size
+        let half_w = region_width / 2;
+        let half_h = region_height / 2;
+
+        let start_x = center_x.saturating_sub(half_w);
+        let start_y = center_y.saturating_sub(half_h);
+        let end_x = (center_x + half_w + 1).min(self.width);
+        let end_y = (center_y + half_h + 1).min(self.height);
+
+        let actual_width = end_x - start_x;
+        let actual_height = end_y - start_y;
+
+        if actual_width == 0 || actual_height == 0 {
+            return Ok(vec![]);
+        }
+
+        // Create staging buffer for readback
+        let bytes_per_pixel = 4u32; // RGBA8
+        let bytes_per_row = actual_width * bytes_per_pixel;
+        // wgpu requires rows to be aligned
+        let align = 256u32;
+        let padded_bytes_per_row = ((bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * actual_height) as u64;
+
+        let staging_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Pixel Region Staging"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Copy from fractal texture to staging buffer
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Pixel Region Read Encoder"),
+        });
+
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: &self.fractal_texture,
+                mip_level: 0,
+                origin: Origin3d { x: start_x, y: start_y, z: 0 },
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &staging_buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(actual_height),
+                },
+            },
+            Extent3d {
+                width: actual_width,
+                height: actual_height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map and read
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+        rx.await
+            .map_err(|_| "Failed to map pixel region buffer".to_string())?
+            .map_err(|e| format!("Pixel region map error: {:?}", e))?;
+
+        let data = buffer_slice.get_mapped_range();
+
+        // Extract pixels (accounting for row padding)
+        let mut pixels = Vec::with_capacity((actual_width * actual_height) as usize);
+        for y in 0..actual_height {
+            let row_start = (y * padded_bytes_per_row) as usize;
+            for x in 0..actual_width {
+                let idx = row_start + (x * bytes_per_pixel) as usize;
+                pixels.push([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
+            }
+        }
+
+        drop(data);
+        staging_buffer.unmap();
+
+        Ok(pixels)
     }
 
     #[allow(dead_code)]

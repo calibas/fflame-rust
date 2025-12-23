@@ -7,12 +7,58 @@ pub enum ColorMode {
     Palette,
     /// Use speed-based coloring (distance traveled per iteration)
     Speed,
+    /// Use transform path history as color (IFS tree visualization)
+    PathMap,
 }
 
 impl Default for ColorMode {
     fn default() -> Self {
         Self::Palette
     }
+}
+
+/// PathMap capture mode - when to capture the path for each pixel
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PathCaptureMode {
+    /// Capture on first hit to the pixel (original behavior)
+    #[default]
+    FirstHit,
+    /// Capture first hit after burn-in iterations complete
+    FirstAfterBurnIn,
+    /// Always overwrite - shows most recent path to hit pixel
+    LastHit,
+}
+
+/// PathMap tracking mode - which iterations to store in the path
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PathTrackingMode {
+    /// Store the first 32 iterations, then stop tracking
+    #[default]
+    First,
+    /// Store the 32 most recent iterations (rolling window)
+    Recent,
+}
+
+/// PathMap coloring style - how path hash maps to colors
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PathMapStyle {
+    /// Color by path beginning (first ~8 transforms), similar paths = similar colors
+    #[default]
+    Prefix,
+    /// Color by path end (recent transforms), similar paths = similar colors
+    Suffix,
+    /// Color by path beginning with hash scrambling for distinct colors
+    PrefixDistinct,
+    /// Color by path end with hash scrambling for distinct colors
+    SuffixDistinct,
+    /// Color by iteration depth (burn_in to 32), uses palette gradient
+    Depth,
+    /// Color by distance from origin (0 to sqrt(2)), uses palette gradient
+    OriginRadial,
+    /// Color by horizontal position (-1 to 1), uses palette gradient
+    OriginHorizontal,
+    /// Color by vertical position (-1 to 1), uses palette gradient
+    OriginVertical,
 }
 
 /// A single color stop in a gradient palette

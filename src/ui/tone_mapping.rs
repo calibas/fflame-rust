@@ -1,5 +1,5 @@
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
-use crate::scene::palette::{ColorMode, PaletteLibrary};
+use crate::scene::palette::{ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode, PaletteLibrary};
 use crate::config::{ConfigManager, ConfigPath, LazyUndoUi, UpdateType};
 
 /// Render curve editor UI with ConfigManager integration
@@ -305,6 +305,7 @@ pub fn render_colors_content(
             let selected_text = match current_mode {
                 ColorMode::Palette => "Palette",
                 ColorMode::Speed => "Speed",
+                ColorMode::PathMap => "Path Map",
             };
 
             let mut temp_color_mode = current_mode;
@@ -317,6 +318,14 @@ pub fn render_colors_content(
                         }
                     }
                     if ui.selectable_value(&mut temp_color_mode, ColorMode::Speed, "Speed").changed() {
+                        if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                    if ui.selectable_value(&mut temp_color_mode, ColorMode::PathMap, "Path Map")
+                        .on_hover_text("Color based on transform path history (IFS tree visualization)")
+                        .changed()
+                    {
                         if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
                             max_update = max_update.max(update);
                         }
@@ -413,6 +422,162 @@ pub fn render_colors_content(
                 if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::SpeedFactor, 0.0..=1.0, "Speed Blend Factor") {
                     max_update = max_update.max(result.update_type);
                 }
+            }
+
+            if matches!(current_color_mode, ColorMode::PathMap) {
+                let current_style = config_manager.active_config().path_map_style;
+                let style_text = match current_style {
+                    PathMapStyle::Prefix => "Prefix",
+                    PathMapStyle::Suffix => "Suffix",
+                    PathMapStyle::PrefixDistinct => "Prefix (Distinct)",
+                    PathMapStyle::SuffixDistinct => "Suffix (Distinct)",
+                    PathMapStyle::Depth => "Depth",
+                    PathMapStyle::OriginRadial => "Origin (Radial)",
+                    PathMapStyle::OriginHorizontal => "Origin (Horizontal)",
+                    PathMapStyle::OriginVertical => "Origin (Vertical)",
+                };
+
+                let mut temp_style = current_style;
+                egui::ComboBox::from_label("Path Style")
+                    .selected_text(style_text)
+                    .show_ui(ui, |ui| {
+                        // Hash-based styles
+                        ui.label("Hash-based:");
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::Prefix, "Prefix")
+                            .on_hover_text("Color by path beginning (first ~8 transforms)")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::Suffix, "Suffix")
+                            .on_hover_text("Color by path end (recent transforms)")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::PrefixDistinct, "Prefix (Distinct)")
+                            .on_hover_text("Path beginning with hash scrambling for distinct colors")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::SuffixDistinct, "Suffix (Distinct)")
+                            .on_hover_text("Path end with hash scrambling for distinct colors")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+
+                        ui.separator();
+                        ui.label("Palette gradient:");
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::Depth, "Depth")
+                            .on_hover_text("Color by iteration depth (burn_in to 32), uses current palette")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::OriginRadial, "Origin (Radial)")
+                            .on_hover_text("Color by distance from origin (0 to √2), uses current palette")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::OriginHorizontal, "Origin (Horizontal)")
+                            .on_hover_text("Color by initial X position (-1 to 1), uses current palette")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_style, PathMapStyle::OriginVertical, "Origin (Vertical)")
+                            .on_hover_text("Color by initial Y position (-1 to 1), uses current palette")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathMapStyle, temp_style.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                    });
+
+                // Path Capture Mode dropdown
+                let current_capture = config_manager.active_config().path_capture_mode;
+                let capture_text = match current_capture {
+                    PathCaptureMode::FirstHit => "First Hit",
+                    PathCaptureMode::FirstAfterBurnIn => "First After Burn-in",
+                    PathCaptureMode::LastHit => "Deepest Hit",
+                };
+
+                let mut temp_capture = current_capture;
+                egui::ComboBox::from_label("Capture Mode")
+                    .selected_text(capture_text)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut temp_capture, PathCaptureMode::FirstHit, "First Hit")
+                            .on_hover_text("Capture path on first pixel hit (includes burn-in transforms)")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathCaptureMode, temp_capture.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_capture, PathCaptureMode::FirstAfterBurnIn, "First After Burn-in")
+                            .on_hover_text("Capture path on first hit, but only track transforms after burn-in")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathCaptureMode, temp_capture.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_capture, PathCaptureMode::LastHit, "Deepest Hit")
+                            .on_hover_text("Keep path with most iterations - shows deepest path to each pixel")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathCaptureMode, temp_capture.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                    });
+
+                // Path Tracking Mode dropdown
+                let current_tracking = config_manager.active_config().path_tracking_mode;
+                let tracking_text = match current_tracking {
+                    PathTrackingMode::First => "First 32",
+                    PathTrackingMode::Recent => "Recent 32",
+                };
+
+                let mut temp_tracking = current_tracking;
+                egui::ComboBox::from_label("Tracking Mode")
+                    .selected_text(tracking_text)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_value(&mut temp_tracking, PathTrackingMode::First, "First 32")
+                            .on_hover_text("Store the first 32 iterations, then stop tracking")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathTrackingMode, temp_tracking.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.selectable_value(&mut temp_tracking, PathTrackingMode::Recent, "Recent 32")
+                            .on_hover_text("Rolling window of the 32 most recent iterations")
+                            .changed()
+                        {
+                            if let Ok(update) = config_manager.update_param(ConfigPath::PathTrackingMode, temp_tracking.into()) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                    });
             }
 
             ui.separator();

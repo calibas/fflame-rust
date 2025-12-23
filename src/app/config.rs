@@ -50,7 +50,7 @@ impl App {
             });
 
             if let Some(palette) = config.palette.as_ref().or_else(|| self.palette_library.get(config.palette_index)) {
-                renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, self.config_manager.system_settings().iterations_per_thread);
+                renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in);
             }
 
             self.gpu.queue.submit(std::iter::once(encoder.finish()));
@@ -145,7 +145,7 @@ impl App {
             .or_else(|| self.palette_library.get(config.palette_index))
             .expect("No palette found");
 
-        temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, self.config_manager.system_settings().iterations_per_thread);
+        temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in);
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
         // Render frames until we reach max_iterations
@@ -167,6 +167,8 @@ impl App {
 
             // Clear histogram only on first frame of batch (match viewport behavior)
             let clear_histogram = batch_frame_count == 0;
+            // Clear paths only on very first batch of the entire export
+            let clear_paths = total_rendered == 0 && clear_histogram;
 
             // Use FULL iterations_per_thread like viewport does (not divided by speed_multiplier)
             temp_renderer.compute_pass(
@@ -174,6 +176,7 @@ impl App {
                 &self.gpu.queue,
                 NUM_WORKGROUPS,
                 self.config_manager.system_settings().iterations_per_thread, // CHANGED: Use full value like viewport
+                self.config_manager.system_settings().burn_in,
                 config.zoom,
                 config.pan_x,
                 config.pan_y,
@@ -183,6 +186,7 @@ impl App {
                 config.camera_z,
                 config.speed_factor,
                 clear_histogram, // CHANGED: Conditional clear like viewport
+                clear_paths,
             );
 
             let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * self.config_manager.system_settings().iterations_per_thread as u64;

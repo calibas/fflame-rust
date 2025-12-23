@@ -10,6 +10,7 @@ mod menu_context;
 mod palette_editor;
 mod palette_library;
 mod panel_viewer;
+mod path_editor;
 mod performance;
 pub mod preset_library;
 mod response;
@@ -31,6 +32,27 @@ pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
 pub use workspace::Workspace;
+
+/// Information about a clicked pixel in PathMap mode
+/// Includes pixel coordinates, fractal space coordinates, path data, and a 5x5 color preview
+#[derive(Clone, Debug)]
+pub struct PathClickInfo {
+    /// View space pixel coordinates (where user clicked)
+    pub click_pixel: (u32, u32),
+    /// Actual pixel with valid path data (may differ if click was empty)
+    pub found_pixel: (u32, u32),
+    /// Fractal space coordinates of the found pixel
+    pub fractal_coords: (f32, f32),
+    /// Distance from click to found pixel (0 if exact match)
+    pub search_distance: f32,
+    /// Path data at the found pixel
+    pub path_entry: crate::renderer::PathEntry,
+    /// 5x5 color preview centered on found pixel (RGBA, row-major)
+    /// May be smaller if near edges
+    pub color_preview: Vec<[u8; 4]>,
+    /// Dimensions of the color preview (width, height) - usually 5x5
+    pub preview_size: (u32, u32),
+}
 
 use egui_wgpu::wgpu::*;
 use egui_wgpu::{Renderer as EguiRenderer, RendererOptions};
@@ -62,6 +84,14 @@ pub struct EguiLayer {
 
     // Track editor state
     track_editor_state: track_editor::TrackEditorState,
+
+    // PathMap mode: clicked pixel info (includes path, coordinates, color preview)
+    clicked_pixel: Option<(u32, u32)>,
+    path_click_info: Option<PathClickInfo>,
+    close_path_overlay: bool,
+
+    // Path editor state
+    path_editor_state: path_editor::PathEditorState,
 }
 
 impl EguiLayer {
@@ -100,6 +130,10 @@ impl EguiLayer {
             file_browser_panel: None,
             animation_export_settings: animation_panel::AnimationExportSettings::default(),
             track_editor_state: track_editor::TrackEditorState::default(),
+            clicked_pixel: None,
+            path_click_info: None,
+            close_path_overlay: false,
+            path_editor_state: path_editor::PathEditorState::new(),
         }
     }
 
@@ -133,6 +167,29 @@ impl EguiLayer {
 
     pub fn update_palette_editor(&mut self, palette: crate::scene::palette::Palette) {
         self.palette_editor.current_palette = palette;
+    }
+
+    /// Get the clicked pixel coordinates (for PathMap mode)
+    /// Returns Some((x, y)) if user clicked on the fractal viewport
+    pub fn take_clicked_pixel(&mut self) -> Option<(u32, u32)> {
+        self.clicked_pixel.take()
+    }
+
+    /// Update the cached path click info for display
+    pub fn set_path_click_info(&mut self, info: Option<PathClickInfo>) {
+        self.path_click_info = info;
+    }
+
+    /// Get reference to current path click info
+    pub fn path_click_info(&self) -> Option<&PathClickInfo> {
+        self.path_click_info.as_ref()
+    }
+
+    /// Check if the path overlay should be closed and reset the flag
+    pub fn take_close_path_overlay(&mut self) -> bool {
+        let close = self.close_path_overlay;
+        self.close_path_overlay = false;
+        close
     }
 
     /// Register the renderer's fractal texture with egui for display
@@ -250,6 +307,9 @@ impl EguiLayer {
         let mut animation_export_requested: Option<animation_panel::AnimationExportSettings> = None;
         let mut animation_seek_changed = false;
 
+        // Path filters
+        let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
+
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
         let menu_state = MenuState {
@@ -357,6 +417,15 @@ impl EguiLayer {
 
                         // Animation seek changed flag
                         animation_seek_changed: &mut animation_seek_changed,
+
+                        // PathMap mode: clicked pixel and path info
+                        hovered_pixel: &mut self.clicked_pixel,
+                        path_click_info: &self.path_click_info,
+                        close_path_overlay: &mut self.close_path_overlay,
+
+                        // Path editor state
+                        path_editor_state: &mut self.path_editor_state,
+                        path_filters_changed: &mut path_filters_changed,
                     },
                 });
 
@@ -523,6 +592,7 @@ impl EguiLayer {
             file_browser_open_requested,
             animation_export_requested,
             animation_seek_changed,
+            path_filters_changed,
         }
     }
 

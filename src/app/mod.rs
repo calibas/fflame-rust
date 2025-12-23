@@ -63,6 +63,7 @@ pub struct App {
     pub(super) use_overwrite_next_frame: bool,  // Persist overwrite mode for brief period after changes
     pub(super) last_param_change_time: Option<web_time::Instant>,  // Track when params last changed
     pub(super) rendering_complete: bool,  // True when rendering has finished (max_iterations reached)
+    pub(super) clear_paths_next_frame: bool,  // Clear path buffer on next compute pass (full reset)
     pub(super) ui_needs_repaint: bool,  // Track if UI is requesting repaints (for frame rate boost)
     pub(super) pending_redraws: u32,  // Counter for queued redraws (for UI animations after input)
 
@@ -99,7 +100,7 @@ impl App {
 
         let flame = initial_config.flame.clone();
 
-        let flame_renderer = FlameRenderer::new(
+        let mut flame_renderer = FlameRenderer::new(
             &gpu.device,
             &gpu.queue,
             gpu.config.format,
@@ -140,6 +141,7 @@ impl App {
             use_overwrite_next_frame: false,
             last_param_change_time: None,
             rendering_complete: false,
+            clear_paths_next_frame: true,  // Clear paths on first frame
             ui_needs_repaint: false,
             pending_redraws: 0,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
@@ -413,9 +415,13 @@ impl App {
                     if let Some(palette) = palette {
                         renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, resize_config.palette_rotation);
                     }
-                    renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.config_manager.system_settings().iterations_per_thread,
+                    renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                         resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
+                    renderer.set_path_map_style(resize_config.path_map_style);
+
+                    // Update path buffer allocation based on color_mode and filters (after resize recreates buffers)
+                    renderer.update_path_features(&self.gpu.device, &self.gpu.queue, &resize_config.flame);
 
                     // Restore tonemap parameters after buffer recreation (not in live preview mode)
                     renderer.update_tonemap(&self.gpu.queue, resize_config.tonemap_mode, resize_config.use_curve, resize_config.exposure, resize_config.gamma,
@@ -1100,7 +1106,7 @@ impl App {
                         .cloned()
                         .unwrap_or_default();
 
-                    temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &export_config, &palette, iterations_per_thread);
+                    temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &export_config, &palette, iterations_per_thread, 20); // burn_in - use default for WASM export
                     self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
                     // Render frames until we reach max_iterations
@@ -1119,12 +1125,15 @@ impl App {
                         });
 
                         let clear_histogram = batch_frame_count == 0;
+                        // Clear paths only on very first batch of the entire export
+                        let clear_paths = total_rendered == 0 && clear_histogram;
 
                         temp_renderer.compute_pass(
                             &mut encoder,
                             &self.gpu.queue,
                             NUM_WORKGROUPS,
                             iterations_per_thread,
+                            20, // burn_in - use default for WASM export
                             export_config.zoom,
                             export_config.pan_x,
                             export_config.pan_y,
@@ -1134,6 +1143,7 @@ impl App {
                             export_config.camera_z,
                             export_config.speed_factor,
                             clear_histogram,
+                            clear_paths,
                         );
 
                         let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
@@ -1420,6 +1430,18 @@ impl App {
             self.use_overwrite_next_frame = true;
         }
 
+        // Handle path filter changes from Path Editor panel
+        if let Some(filters) = ui_response.path_filters_changed {
+            if let Some(ref mut renderer) = self.flame_renderer {
+                log::info!("Path filters updated: {} filters", filters.len());
+                renderer.set_path_filters(filters);
+                // Update path buffer allocation and shaders (creates buffers if needed)
+                renderer.update_path_features(&self.gpu.device, &self.gpu.queue, &self.config_manager.active_config().flame);
+                // Request reset accumulation to see effect of new filters
+                self.config_manager.request_reset();
+            }
+        }
+
         // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
         // Get pending actions from ConfigManager (replaces individual boolean flags)
         let actions = self.config_manager.get_pending_actions();
@@ -1445,14 +1467,15 @@ impl App {
                 // Update flame if UpdateAction indicates (includes preview mode live updates)
                 if actions.update_flame {
                     renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame,
-                        self.config_manager.system_settings().iterations_per_thread, update_config.zoom, update_config.pan_x, update_config.pan_y,
+                        self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
+                        update_config.zoom, update_config.pan_x, update_config.pan_y,
                         update_config.rotation, update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                 }
 
                 // Update view parameters (includes view changes and iteration changes)
                 if actions.update_view || view_changed_by_keyboard {
                     renderer.set_deterministic_rng(update_config.deterministic_rng);
-                    renderer.update_iterations(&self.gpu.queue, self.config_manager.system_settings().iterations_per_thread,
+                    renderer.update_iterations(&self.gpu.queue, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                         update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                 }
@@ -1469,9 +1492,13 @@ impl App {
 
                     // Update color mode in GPU params (ColorMode changes trigger update_palette)
                     renderer.set_color_mode(&self.gpu.queue, update_config.color_mode,
-                        self.config_manager.system_settings().iterations_per_thread, update_config.zoom, update_config.pan_x,
+                        self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
+                        update_config.zoom, update_config.pan_x,
                         update_config.pan_y, update_config.rotation, update_config.camera_rotation_x,
                         update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
+
+                    // Update path buffer allocation and shaders based on color_mode (PathMap needs buffers)
+                    renderer.update_path_features(&self.gpu.device, &self.gpu.queue, &update_config.flame);
                 }
 
                 // Update tone curve LUT if changed
@@ -1496,12 +1523,14 @@ impl App {
                         update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
                     self.frames_since_accumulation = 0;
                     self.rendering_complete = false;  // Reset completion flag
+                    self.clear_paths_next_frame = true;  // Clear path buffer on full reset
                 } else if has_view_or_color_change && renderer.total_iterations() >= update_config.max_iterations {
                     // View/color changes when fractal has stopped iterating:
                     // Reset counter to restart iteration (smooth transition via overwrite mode)
                     renderer.reset_iteration_counter();
                     self.frames_since_accumulation = 0;
                     self.rendering_complete = false;  // Reset completion flag
+                    self.clear_paths_next_frame = true;  // Clear path buffer when restarting
                 }
 
                 self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
@@ -1534,6 +1563,7 @@ impl App {
                     if let Some(ref mut renderer) = self.flame_renderer {
                         renderer.reset_iteration_counter();
                         self.rendering_complete = false;  // Reset completion flag
+                        self.clear_paths_next_frame = true;  // Clear path buffer for clean rebuild
                         log::debug!("Overwrite window expired → reset iteration counter for clean rebuild");
                     }
                 }
@@ -1659,8 +1689,12 @@ impl App {
 
             // Check if we should continue iterating
             // During animation playback, always iterate (ignore max_iterations limit)
+            // Skip GPU work during video export to avoid GPU contention (separate device in background thread)
+            let is_video_exporting = self.animation_export_progress.lock()
+                .map(|p| p.is_exporting)
+                .unwrap_or(false);
             let max_iterations = Some(final_config.max_iterations);
-            let should_iterate = !self.paused && (
+            let should_iterate = !self.paused && !is_video_exporting && (
                 is_controller_playing ||
                 max_iterations.map_or(true, |max| renderer.total_iterations() < max)
             );
@@ -1686,10 +1720,16 @@ impl App {
                 // 1. Compute new samples with fresh random seed
                 // Clear histogram only when starting a new batch (frame 1 of batch)
                 let clear_histogram = self.frames_since_accumulation == 1;
+                // Clear paths only on full reset (not every batch)
+                let clear_paths = self.clear_paths_next_frame;
+                if clear_paths {
+                    self.clear_paths_next_frame = false;  // Reset flag after use
+                }
 
                 let samples_this_frame = renderer.compute_pass(&mut render_encoder, &self.gpu.queue, NUM_WORKGROUPS,
-                    self.config_manager.system_settings().iterations_per_thread, final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
-                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram);
+                    self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
+                    final_config.zoom, final_config.pan_x, final_config.pan_y, final_config.rotation,
+                    final_config.camera_rotation_x, final_config.camera_rotation_y, final_config.camera_z, final_config.speed_factor, clear_histogram, clear_paths);
 
                 self.metrics.record_compute_time(t_compute.elapsed().as_secs_f64() * 1000.0);
 
@@ -1724,6 +1764,7 @@ impl App {
             // 4. Update tonemap parameters and render to fractal texture
             renderer.update_density_scale(&self.gpu.queue, final_config.density_scale);
             renderer.update_background_color(&self.gpu.queue, final_config.background_color);
+            renderer.set_path_map_style(final_config.path_map_style);
             // Calculate batch_size for tonemap (same logic as accumulation)
             let batch_size_for_tonemap = if use_overwrite { 1 } else { self.accumulation_batch_size };
             // is_live_preview: Only during active editing, not when rendering stops
@@ -1773,6 +1814,65 @@ impl App {
             window.request_redraw();
         }
 
+        // Handle PathMap mode: query path at clicked pixel or close overlay
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Check if close was requested
+            if self.egui_layer.take_close_path_overlay() {
+                self.egui_layer.set_path_click_info(None);
+            }
+
+            // Handle new path query
+            if let Some((click_x, click_y)) = self.egui_layer.take_clicked_pixel() {
+                if let Some(ref renderer) = self.flame_renderer {
+                    let config = self.config_manager.active_config();
+                    let width = renderer.width;
+                    let height = renderer.height;
+
+                    // Clamp to valid pixel coordinates
+                    let pixel_x = click_x.min(width - 1);
+                    let pixel_y = click_y.min(height - 1);
+
+                    // Read path entry for this specific pixel
+                    let path_entry = match pollster::block_on(renderer.read_path_buffer(&self.gpu.device, &self.gpu.queue)) {
+                        Ok(path_buffer) => path_buffer[pixel_y as usize][pixel_x as usize],
+                        Err(e) => {
+                            log::error!("Failed to read path buffer: {}", e);
+                            crate::renderer::PathEntry::default()
+                        }
+                    };
+
+                    // Calculate fractal space coordinates
+                    let fractal_coords = Self::pixel_to_fractal(pixel_x, pixel_y, width, height, config);
+
+                    // Read 9x9 color preview from fractal texture
+                    let color_preview = match pollster::block_on(
+                        renderer.read_pixel_region(&self.gpu.device, &self.gpu.queue, pixel_x, pixel_y, 9, 9)
+                    ) {
+                        Ok(pixels) => pixels,
+                        Err(_) => vec![[0, 0, 0, 255]; 81], // Fallback to black
+                    };
+
+                    let click_info = crate::ui::PathClickInfo {
+                        click_pixel: (click_x, click_y),
+                        found_pixel: (pixel_x, pixel_y),
+                        fractal_coords,
+                        search_distance: 0.0, // No search, exact pixel
+                        path_entry,
+                        color_preview,
+                        preview_size: (9, 9),
+                    };
+
+                    if path_entry.iteration_count > 0 {
+                        log::info!("Path at ({}, {}): {:?}", pixel_x, pixel_y, path_entry.to_vec());
+                    } else {
+                        log::debug!("No path data at ({}, {})", pixel_x, pixel_y);
+                    }
+                    self.egui_layer.set_path_click_info(Some(click_info));
+                }
+            }
+        }
+
         let t5 = Instant::now();
 
         frame.present();
@@ -1794,5 +1894,36 @@ impl App {
 
         log::info!("Graceful shutdown initiated");
         event_loop.exit();
+    }
+
+    /// Convert pixel coordinates to fractal space coordinates
+    /// Takes into account zoom, pan, and rotation
+    fn pixel_to_fractal(
+        pixel_x: u32,
+        pixel_y: u32,
+        width: u32,
+        height: u32,
+        config: &crate::config::FractalConfig,
+    ) -> (f32, f32) {
+        // Convert pixel to normalized device coordinates (-1 to 1)
+        let ndc_x = (pixel_x as f32 / width as f32) * 2.0 - 1.0;
+        let ndc_y = (pixel_y as f32 / height as f32) * 2.0 - 1.0;
+
+        // Account for aspect ratio
+        let aspect = width as f32 / height as f32;
+        let scaled_x = ndc_x * aspect;
+        let scaled_y = ndc_y;
+
+        // Apply inverse rotation
+        let cos_r = (-config.rotation).cos();
+        let sin_r = (-config.rotation).sin();
+        let rotated_x = scaled_x * cos_r - scaled_y * sin_r;
+        let rotated_y = scaled_x * sin_r + scaled_y * cos_r;
+
+        // Apply inverse zoom and add pan
+        let fractal_x = rotated_x / config.zoom + config.pan_x;
+        let fractal_y = rotated_y / config.zoom + config.pan_y;
+
+        (fractal_x, fractal_y)
     }
 }

@@ -73,7 +73,7 @@ pub async fn export_headless_wasm(
         .or_else(|| palette_library.get(config.palette_index))
         .ok_or("No palette found")?;
 
-    renderer.load_config(&device, &mut encoder, &queue, config, palette, iterations_per_thread);
+    renderer.load_config(&device, &mut encoder, &queue, config, palette, iterations_per_thread, 20); // burn_in default
 
     queue.submit(std::iter::once(encoder.finish()));
 
@@ -96,12 +96,15 @@ pub async fn export_headless_wasm(
         });
 
         let clear_histogram = batch_frame_count == 0;
+        // Clear paths only on very first batch of the entire export
+        let clear_paths = total_rendered == 0 && clear_histogram;
 
         renderer.compute_pass(
             &mut encoder,
             &queue,
             NUM_WORKGROUPS,
             iterations_per_thread,
+            20, // burn_in default
             config.zoom,
             config.pan_x,
             config.pan_y,
@@ -111,6 +114,7 @@ pub async fn export_headless_wasm(
             config.camera_z,
             config.speed_factor,
             clear_histogram,
+            clear_paths,
         );
 
         let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
@@ -269,7 +273,7 @@ async fn export_headless_gpu(
         .or_else(|| palette_library.get(config.palette_index))
         .ok_or("No palette found")?;
 
-    renderer.load_config(&device, &mut encoder, &queue, config, palette, iterations_per_thread);
+    renderer.load_config(&device, &mut encoder, &queue, config, palette, iterations_per_thread, 20); // burn_in default
 
     queue.submit(std::iter::once(encoder.finish()));
 
@@ -290,6 +294,8 @@ async fn export_headless_gpu(
 
         // Clear histogram only on first frame of batch (match viewport behavior)
         let clear_histogram = batch_frame_count == 0;
+        // Clear paths only on very first batch of the entire export
+        let clear_paths = total_rendered == 0 && clear_histogram;
 
         // Use FULL iterations_per_thread like viewport does (not divided by speed_multiplier)
         renderer.compute_pass(
@@ -297,6 +303,7 @@ async fn export_headless_gpu(
             &queue,
             NUM_WORKGROUPS,
             iterations_per_thread, // CHANGED: Use full value like viewport
+            20, // burn_in default
             config.zoom,
             config.pan_x,
             config.pan_y,
@@ -306,6 +313,7 @@ async fn export_headless_gpu(
             config.camera_z,
             config.speed_factor,
             clear_histogram, // CHANGED: Conditional clear like viewport
+            clear_paths,
         );
 
         let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * iterations_per_thread as u64;
