@@ -18,7 +18,7 @@ export class WasmApi {
    * ```js
    * const api = new WasmApi();
    * api.load_preset("Bubble");
-   * const pngBytes = await api.export_png(800, 600, 256);
+   * const pngBytes = await api.export_png(800, 600, 256, false);
    *
    * // Download
    * const blob = new Blob([pngBytes], { type: 'image/png' });
@@ -131,12 +131,12 @@ export interface InitOutput {
   readonly __wbindgen_free: (a: number, b: number, c: number) => void;
   readonly __wbindgen_export_6: WebAssembly.Table;
   readonly __externref_table_dealloc: (a: number) => void;
-  readonly closure1803_externref_shim: (a: number, b: number, c: any) => void;
-  readonly closure1890_externref_shim: (a: number, b: number, c: any) => void;
   readonly wasm_bindgen__convert__closures_____invoke__h896ba810511a8433: (a: number, b: number) => void;
-  readonly closure1810_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly closure1859_externref_shim: (a: number, b: number, c: any) => void;
   readonly wasm_bindgen__convert__closures_____invoke__h4583a70ca8243b02: (a: number, b: number) => void;
-  readonly closure1903_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly closure1866_externref_shim: (a: number, b: number, c: any, d: any) => void;
+  readonly closure1946_externref_shim: (a: number, b: number, c: any) => void;
+  readonly closure1959_externref_shim: (a: number, b: number, c: any, d: any) => void;
   readonly __wbindgen_start: () => void;
 }
 

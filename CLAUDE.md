@@ -396,21 +396,24 @@ println!("Rendered {} iterations in {:.2}ms",
 The WASM build exposes a JavaScript API for headless PNG export in browsers:
 
 ```javascript
-import init, { export_headless_wasm } from './pkg/fractal_flame_wgpu.js';
+import init, { WasmApi } from './pkg/fractal_flame_wgpu.js';
 
 // Initialize WASM module
 await init();
 
+// Create API instance
+const api = new WasmApi();
+
 // Load config JSON
 const config = await fetch('config.fflame').then(r => r.json());
+api.load_config_json(JSON.stringify(config));
 
 // Export to PNG (returns Uint8Array)
-const pngData = await export_headless_wasm(
-    config,
+const pngData = await api.export_png(
     800,    // width
     600,    // height
     256,    // iterations_per_thread
-    4       // speed_multiplier
+    false   // transparent (true for transparent PNG, false for opaque with background)
 );
 
 // Download PNG

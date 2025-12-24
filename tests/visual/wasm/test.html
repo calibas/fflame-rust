@@ -126,7 +126,8 @@
 
                 // Export PNG using headless renderer
                 // This blocks until render completes
-                const pngBytes = await wasmApi.export_png(800, 600, 256);
+                // Pass false for transparent mode (opaque PNG with background color)
+                const pngBytes = await wasmApi.export_png(800, 600, 256, false);
 
                 // Store PNG data for test runner to capture
                 window.pngData = pngBytes;

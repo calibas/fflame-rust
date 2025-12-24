@@ -211,7 +211,7 @@ impl WasmApi {
     /// ```js
     /// const api = new WasmApi();
     /// api.load_preset("Bubble");
-    /// const pngBytes = await api.export_png(800, 600, 256);
+    /// const pngBytes = await api.export_png(800, 600, 256, false);
     ///
     /// // Download
     /// const blob = new Blob([pngBytes], { type: 'image/png' });
