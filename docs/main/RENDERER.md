@@ -10,6 +10,7 @@
 
 **Code locations:**
 - [src/renderer/compute_kernel.rs](../../src/renderer/compute_kernel.rs) - FlameRenderer implementation
+- [src/renderer/render.rs](../../src/renderer/render.rs) - Unified render API for headless export
 - [src/gpu/pipelines.rs](../../src/gpu/pipelines.rs) - Pipeline creation
 - [src/gpu/buffers.rs](../../src/gpu/buffers.rs) - Buffer management
 
@@ -398,6 +399,54 @@ pub fn load_config(&mut self, config: &FractalConfig) {
 
 ---
 
+## Unified Render API
+
+**Added:** 2025-12-24
+
+For headless rendering (CLI export, WASM export, thumbnails), use the unified `render()` API:
+
+**Location:** [src/renderer/render.rs](../../src/renderer/render.rs)
+
+```rust
+use crate::renderer::{render, RenderJob, RenderProgress, NoProgress};
+
+// Configure render job
+let job = RenderJob::new(&config, width, height)
+    .with_iterations_per_thread(256)
+    .with_transparent(false);
+
+// Execute render
+let result = render(&device, &queue, job, &mut NoProgress).await?;
+
+// Result contains:
+// - result.rgba_data: Vec<u8> (RGBA8 pixel data)
+// - result.width, result.height: dimensions
+// - result.total_iterations: u64
+// - result.render_time_ms: f64
+```
+
+**RenderJob builder methods:**
+- `with_iterations(target)` - Override max_iterations from config
+- `with_iterations_per_thread(n)` - GPU iterations per dispatch
+- `with_burn_in(n)` - Skip first N iterations (default: 20)
+- `with_transparent(bool)` - Transparent or opaque PNG
+
+**RenderProgress trait:**
+```rust
+pub trait RenderProgress {
+    fn on_progress(&mut self, completed: u64, total: u64);
+    fn is_cancelled(&self) -> bool { false }
+}
+```
+
+**Used by:**
+- CLI headless export (`app/export.rs`)
+- WASM headless export (`app/export.rs`)
+- Thumbnail generation (`renderer/thumbnail.rs`)
+- Animation frame rendering (`animation/export.rs`)
+
+---
+
 ## PNG Export
 
 The renderer supports two PNG export modes:
@@ -599,7 +648,7 @@ pub fn resize(&mut self, width: u32, height: u32) {
 
 ---
 
-**Last Updated:** 2025-10-28
+**Last Updated:** 2025-12-24
 **Related Documentation:**
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design
 - [BUFFERS.md](BUFFERS.md) - GPU buffer details

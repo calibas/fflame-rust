@@ -121,8 +121,10 @@ class BenchmarkRun:
 
 
 class UnifiedBenchmarkRunner:
-    def __init__(self, quick_mode: bool = False):
+    def __init__(self, quick_mode: bool = False, wasm_only: bool = False, no_save: bool = False):
         self.quick_mode = quick_mode
+        self.wasm_only = wasm_only
+        self.no_save = no_save
         self.root = Path.cwd()
         self.results_dir = self.root / "benchmark_results"
         self.results_dir.mkdir(exist_ok=True)
@@ -150,7 +152,14 @@ class UnifiedBenchmarkRunner:
         print(f"{'='*70}{Colors.ENDC}")
         print()
         print(f"Platform: {platform.system()}")
-        print(f"Quick Mode: {'Yes (skip WASM, fast Criterion)' if self.quick_mode else 'No'}")
+        if self.wasm_only:
+            print(f"Mode: WASM only")
+        elif self.quick_mode:
+            print(f"Mode: Quick (skip WASM, fast Criterion)")
+        else:
+            print(f"Mode: Full suite")
+        if self.no_save:
+            print(f"Save results: No (--no-save)")
         print()
 
         # Load baseline for comparison
@@ -162,21 +171,26 @@ class UnifiedBenchmarkRunner:
         # Run benchmarks
         success = True
 
-        print(f"{Colors.BOLD}[1/3] Running CPU Microbenchmarks (Criterion)...{Colors.ENDC}")
-        print("-" * 70)
-        if not self.run_criterion_benchmarks():
-            print(f"{Colors.FAIL}❌ CPU benchmarks failed{Colors.ENDC}")
-            success = False
-        print()
+        if not self.wasm_only:
+            print(f"{Colors.BOLD}[1/3] Running CPU Microbenchmarks (Criterion)...{Colors.ENDC}")
+            print("-" * 70)
+            if not self.run_criterion_benchmarks():
+                print(f"{Colors.FAIL}❌ CPU benchmarks failed{Colors.ENDC}")
+                success = False
+            print()
 
-        print(f"{Colors.BOLD}[2/3] Running GPU Rendering Tests (Desktop CLI)...{Colors.ENDC}")
-        print("-" * 70)
-        if not self.run_desktop_rendering():
-            print(f"{Colors.FAIL}❌ Desktop rendering tests failed{Colors.ENDC}")
-            success = False
-        print()
+            print(f"{Colors.BOLD}[2/3] Running GPU Rendering Tests (Desktop CLI)...{Colors.ENDC}")
+            print("-" * 70)
+            if not self.run_desktop_rendering():
+                print(f"{Colors.FAIL}❌ Desktop rendering tests failed{Colors.ENDC}")
+                success = False
+            print()
+        else:
+            print(f"{Colors.OKCYAN}[1/3] Skipping CPU benchmarks (--wasm-only){Colors.ENDC}")
+            print(f"{Colors.OKCYAN}[2/3] Skipping Desktop tests (--wasm-only){Colors.ENDC}")
+            print()
 
-        if not self.quick_mode:
+        if not self.quick_mode or self.wasm_only:
             print(f"{Colors.BOLD}[3/3] Running GPU Rendering Tests (WASM Browser)...{Colors.ENDC}")
             print("-" * 70)
             if not self.run_wasm_rendering():
@@ -189,9 +203,12 @@ class UnifiedBenchmarkRunner:
         # Generate report
         self.generate_report()
 
-        # Save results
-        self.save_to_csv()
-        self.save_baseline()
+        # Save results (unless --no-save)
+        if not self.no_save:
+            self.save_to_csv()
+            self.save_baseline()
+        else:
+            print(f"{Colors.OKCYAN}Skipping save (--no-save){Colors.ENDC}")
 
         return success
 
@@ -789,7 +806,7 @@ class UnifiedBenchmarkRunner:
         delta1_str = "—"
         delta2_str = "—"
 
-        if prev1_ops_sec:
+        if prev1_ops_sec and current_ops_sec > 0:
             delta1 = ((prev1_ops_sec - current_ops_sec) / current_ops_sec) * 100.0
             color = Colors.ENDC
             if delta1 > 10.0:
@@ -800,7 +817,7 @@ class UnifiedBenchmarkRunner:
                 color = Colors.OKGREEN
             delta1_str = f"{color}{delta1:+.1f}%{Colors.ENDC}"
 
-        if prev2_ops_sec:
+        if prev2_ops_sec and current_ops_sec > 0:
             delta2 = ((prev2_ops_sec - current_ops_sec) / current_ops_sec) * 100.0
             color = Colors.ENDC
             if delta2 > 10.0:
@@ -1060,12 +1077,24 @@ def main():
 Examples:
   python scripts/run_benchmarks.py              # Full benchmark suite
   python scripts/run_benchmarks.py --quick      # Skip WASM, fast Criterion
+  python scripts/run_benchmarks.py --wasm-only  # Only run WASM tests
+  python scripts/run_benchmarks.py --no-save    # Don't save results to CSV/baseline
         """
     )
     parser.add_argument(
         '--quick',
         action='store_true',
         help='Quick mode: Skip WASM tests, use faster Criterion settings'
+    )
+    parser.add_argument(
+        '--wasm-only',
+        action='store_true',
+        help='Only run WASM tests (skip CPU and desktop benchmarks)'
+    )
+    parser.add_argument(
+        '--no-save',
+        action='store_true',
+        help="Don't save results to CSV or baseline files"
     )
 
     args = parser.parse_args()
@@ -1078,7 +1107,11 @@ Examples:
         except ImportError:
             Colors.disable()
 
-    runner = UnifiedBenchmarkRunner(quick_mode=args.quick)
+    runner = UnifiedBenchmarkRunner(
+        quick_mode=args.quick,
+        wasm_only=args.wasm_only,
+        no_save=args.no_save
+    )
     success = runner.run_all()
 
     sys.exit(0 if success else 1)

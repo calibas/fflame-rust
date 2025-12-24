@@ -189,20 +189,22 @@ mod tests {
 
     #[test]
     fn test_tile_grid_large() {
-        // 8000×8000 should need 8×8 tiles (tile_size = 1000)
+        // 8000×8000 should need multiple tiles (tile_size ~2000 for 4M pixel limit)
         let (tiles_x, tiles_y, tile_size) = calculate_tile_grid(8000, 8000);
-        assert!(tiles_x >= 8);
-        assert!(tiles_y >= 8);
-        assert!(tile_size <= 1000);
+        assert!(tiles_x >= 4);  // 8000/2000 = 4 tiles
+        assert!(tiles_y >= 4);
+        assert!(tile_size <= 2000);
     }
 
     #[test]
     fn test_needs_tiling() {
-        assert!(!needs_tiling(800, 600));      // 480K pixels < 1M limit
-        assert!(!needs_tiling(1000, 1000));    // 1M pixels = 1M limit (edge case)
-        assert!(needs_tiling(1920, 1080));     // 2M pixels > 1M limit
-        assert!(needs_tiling(4000, 4000));
-        assert!(needs_tiling(8000, 8000));
+        // MAX_TILE_PIXELS = 4_000_000 (4M pixels)
+        assert!(!needs_tiling(800, 600));      // 480K pixels < 4M limit
+        assert!(!needs_tiling(1920, 1080));    // 2M pixels < 4M limit
+        assert!(!needs_tiling(2000, 2000));    // 4M pixels = 4M limit (edge case, not >)
+        assert!(needs_tiling(2001, 2000));     // Just over 4M pixels
+        assert!(needs_tiling(4000, 4000));     // 16M pixels > 4M limit
+        assert!(needs_tiling(8000, 8000));     // 64M pixels > 4M limit
     }
 
     #[test]
