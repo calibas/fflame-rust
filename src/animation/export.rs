@@ -709,8 +709,6 @@ pub async fn export_animation(
     export_config: AnimationExportConfig,
     progress: &mut dyn ExportProgressCallback,
 ) -> Result<AnimationExportResult, AnimationExportError> {
-    use crate::renderer::compute_kernel::FlameRenderer;
-    use crate::scene::palette::PaletteLibrary;
     use std::io::Write;
     use std::process::{Command, Stdio};
     use std::time::Instant;
@@ -759,9 +757,6 @@ pub async fn export_animation(
     // Create animation controller for evaluation
     let mut controller = AnimationController::new();
     controller.load(export_config.animation.clone());
-
-    // Get palette library
-    let palette_library = PaletteLibrary::new();
 
     // Build FFmpeg command for piped raw video input
     let mut ffmpeg = Command::new("ffmpeg");
@@ -898,45 +893,15 @@ pub async fn export_animation(
         let mut frame_config = export_config.config.clone();
         apply_animation_values(&mut frame_config, &values);
 
-        // Create fresh renderer for this frame
-        let surface_format = egui_wgpu::wgpu::TextureFormat::Rgba8Unorm;
-        let mut renderer = FlameRenderer::new(
-            &device, &queue, surface_format,
-            export_config.width, export_config.height,
-            &frame_config.flame,
-        );
+        // Use unified render API
+        let job = crate::renderer::RenderJob::new(&frame_config, export_config.width, export_config.height)
+            .with_iterations_per_thread(export_config.iterations_per_thread);
 
-        // Load config
-        let mut encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-            label: Some("Frame Setup Encoder"),
-        });
-
-        let palette = frame_config.palette.as_ref()
-            .or_else(|| palette_library.get(frame_config.palette_index))
-            .ok_or_else(|| AnimationExportError::InvalidConfig("No palette found".to_string()))?;
-
-        renderer.load_config(&device, &mut encoder, &queue, &frame_config, palette, export_config.iterations_per_thread, 20); // burn_in default
-        queue.submit(std::iter::once(encoder.finish()));
-
-        // Render until max_iterations
-        render_frame_to_completion(
-            &device, &queue, &mut renderer,
-            &frame_config,
-            export_config.iterations_per_thread,
-        ).await;
-
-        // Tonemap pass
-        let mut final_encoder = device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-            label: Some("Final Tonemap"),
-        });
-        renderer.tonemap_pass(&mut final_encoder);
-        queue.submit(std::iter::once(final_encoder.finish()));
-
-        // Read raw RGBA pixels (no PNG encoding!)
-        let (_width, _height, rgba_data) = renderer
-            .read_fractal_pixels(&device, &queue, false, frame_config.background_color)
+        let output = crate::renderer::render(&device, &queue, job, &mut crate::renderer::NoProgress)
             .await
-            .map_err(|e| AnimationExportError::GpuError(format!("Failed to read pixels: {}", e)))?;
+            .map_err(|e| AnimationExportError::GpuError(format!("Failed to render frame: {}", e)))?;
+
+        let rgba_data = output.rgba_data;
 
         // Write raw RGBA data directly to FFmpeg stdin
         if let Err(e) = stdin.write_all(&rgba_data) {
