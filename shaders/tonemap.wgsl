@@ -517,9 +517,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                     t = clamp((path.initial_y + 1.0) * 0.5, 0.0, 1.0);
                 }
 
-                // Sample palette texture at position t
-                // Palette is 256x1 texture, sample at (t, 0.5)
-                fractal_color = textureSample(palette_texture, palette_sampler, vec2<f32>(t, 0.5)).rgb;
+                // Load palette texture at position t
+                // Palette is 256x1 texture - use textureLoad to avoid uniform control flow requirement
+                let palette_idx = u32(clamp(t * 255.0, 0.0, 255.0));
+                fractal_color = textureLoad(palette_texture, vec2<i32>(i32(palette_idx), 0), 0).rgb;
             }
         }
     }

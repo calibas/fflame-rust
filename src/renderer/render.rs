@@ -282,8 +282,6 @@ pub async fn render(
     renderer.tonemap_pass(&mut final_encoder);
     queue.submit(std::iter::once(final_encoder.finish()));
 
-    log::info!("Render: Tonemap complete, reading pixels...");
-
     // Read pixels
     let (width, height, rgba_data) = renderer
         .read_fractal_pixels(device, queue, job.transparent, job.config.background_color)
