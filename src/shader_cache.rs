@@ -42,14 +42,16 @@ impl ShaderCache {
             path_features_enabled
         );
 
-        // Build initial shaders (simplified - no path tracking)
-        let shader_source_2d = builder.build_trajectory_2d_with_constants(
+        // Build initial shaders from unified template (simplified - no path tracking)
+        let shader_source_2d = builder.build_from_template(
             &active_variations,
+            false,  // render_3d = false for 2D
             path_features_enabled,
             &constants,
         );
-        let shader_source_3d = builder.build_trajectory_3d_with_constants(
+        let shader_source_3d = builder.build_from_template(
             &active_variations,
+            true,   // render_3d = true for 3D
             path_features_enabled,
             &constants,
         );
@@ -158,10 +160,10 @@ impl ShaderCache {
             );
         }
 
-        // Rebuild shaders with current state
+        // Rebuild shaders from unified template
         let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
-        self.shader_source_2d = builder.build_trajectory_2d_with_constants(&needed, path_features_enabled, &constants);
-        self.shader_source_3d = builder.build_trajectory_3d_with_constants(&needed, path_features_enabled, &constants);
+        self.shader_source_2d = builder.build_from_template(&needed, false, path_features_enabled, &constants);
+        self.shader_source_3d = builder.build_from_template(&needed, true, path_features_enabled, &constants);
 
         // Recreate pipelines
         self.compute_pipeline_2d = Self::create_compute_pipeline(

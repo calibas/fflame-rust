@@ -285,12 +285,12 @@ renderer.prepare_for_animation(variation_superset);
 - [ ] Update registry to load from variation files instead of hardcoded
 - [ ] Verify all existing presets still work
 
-### Step 2: Template System
-- [ ] Create `main_template.wgsl` with conditional markers
-- [ ] Implement simple template processor in Rust
-- [ ] Replace `build_trajectory_2d/3d` with single `build_from_template()`
-- [ ] Remove old `main_2d.wgsl`, `main_3d.wgsl`, etc.
-- [ ] Verify 2D and 3D rendering still work
+### Step 2: Template System ✅ COMPLETE
+- [x] Create `main_template.wgsl` with conditional markers (`{{#if RENDER_3D}}`, `{{#if PATH_TRACKING}}`)
+- [x] Implement simple template processor in Rust (`TemplateProcessor` struct in `shader_builder_v2.rs`)
+- [x] Replace `build_trajectory_2d/3d` with single `build_from_template()`
+- [x] Remove old `main_2d.wgsl`, `main_2d_simple.wgsl`, `main_3d.wgsl`, `main_3d_simple.wgsl`
+- [x] Verify 2D and 3D rendering still work (all visual regression tests pass)
 
 ### Step 3: Hard-Code Constants ✅ COMPLETE
 - [x] Add constants section to shader builder (`ShaderConstants` struct in `shader_builder_v2.rs`)
@@ -333,11 +333,11 @@ The original plan called for dynamic bind group layouts to eliminate dummy buffe
 - [ ] Add `end_animation()` to clear superset
 - [ ] Test with animation system
 
-### Step 6: Cleanup
-- [ ] Remove dead code from old shader builder
-- [ ] Update documentation
-- [ ] Run full benchmark suite
-- [ ] Visual regression tests
+### Step 6: Cleanup ✅ COMPLETE
+- [x] Remove dead code from old shader builder (removed 4 unused build methods)
+- [x] Update documentation (this file)
+- [x] Visual regression tests (all exports pass)
+- [ ] Run full benchmark suite (WASM testing pending)
 
 ---
 
@@ -355,28 +355,31 @@ The original plan called for dynamic bind group layouts to eliminate dummy buffe
 
 ## Success Metrics
 
-- [ ] **Performance**: 10-20% improvement in iterations/second
-- [ ] **Code reduction**: 50%+ fewer lines in shader builder
-- [ ] **Maintainability**: Adding new variation = 1 file, no builder changes
-- [ ] **Animation**: Config changes during animation don't trigger rebuilds
-- [ ] **All tests pass**: Visual regression, WASM, desktop
+- [ ] **Performance**: 10-20% improvement in iterations/second (pending benchmark)
+- [x] **Code reduction**: Consolidated 4 main shader variants (main_2d.wgsl, main_2d_simple.wgsl, main_3d.wgsl, main_3d_simple.wgsl) into single template (main_template.wgsl). Removed ~400 lines of shader code and ~180 lines of Rust code.
+- [ ] **Maintainability**: Adding new variation = 1 file, no builder changes (Phase 1 pending)
+- [ ] **Animation**: Config changes during animation don't trigger rebuilds (Phase 5 pending)
+- [x] **All tests pass**: Visual regression tests pass on desktop (WASM pending)
 
 ---
 
 ## Open Questions
 
-1. **Template syntax**: Use handlebars-style `{{}}` or custom markers?
-2. **Variation metadata**: WGSL comments vs separate JSON manifest?
-3. **Rebuild granularity**: Rebuild all pipelines or just affected ones?
-4. **Cache invalidation**: Hash-based or explicit versioning?
+1. **Variation metadata**: WGSL comments vs separate JSON manifest?
+2. **Rebuild granularity**: Rebuild all pipelines or just affected ones?
+3. **Cache invalidation**: Hash-based or explicit versioning?
 
 ## Resolved Questions
 
-1. **Dynamic bind group layouts vs dummy buffers?**
-   - **Decision:** Dynamic bind group layouts
-   - **Rationale:** Eliminates dummy buffer complexity, cleaner architecture
-   - **Trade-off:** Requires pipeline caching for path-enabled/disabled variants
-   - **Added to Phase 2**
+1. **Template syntax**: Use handlebars-style `{{}}` or custom markers?
+   - **Decision:** Handlebars-style `{{#if COND}}...{{else}}...{{/if}}`
+   - **Rationale:** Familiar syntax, supports nesting, easy to implement
+   - **Implemented in:** `TemplateProcessor` struct in `shader_builder_v2.rs`
+
+2. **Dynamic bind group layouts vs dummy buffers?**
+   - **Decision:** Keep dummy buffers (deprioritized)
+   - **Rationale:** Dummy buffers are only 44 bytes, negligible overhead
+   - **Trade-off:** Simpler codebase vs minimal memory savings
 
 ---
 

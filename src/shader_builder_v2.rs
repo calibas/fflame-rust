@@ -1,6 +1,187 @@
 use std::collections::HashMap;
 use crate::variations::VariationRegistry;
 
+/// Simple template processor for shader conditional compilation
+///
+/// Supports:
+/// - `{{#if CONDITION}}...{{/if}}` - Include block if condition is true
+/// - `{{#if CONDITION}}...{{else}}...{{/if}}` - If/else blocks
+/// - Nested conditionals supported
+pub struct TemplateProcessor {
+    conditions: HashMap<String, bool>,
+}
+
+impl TemplateProcessor {
+    pub fn new() -> Self {
+        Self {
+            conditions: HashMap::new(),
+        }
+    }
+
+    /// Set a condition value
+    pub fn set(&mut self, name: &str, value: bool) -> &mut Self {
+        self.conditions.insert(name.to_string(), value);
+        self
+    }
+
+    /// Process template and return expanded source
+    pub fn process(&self, template: &str) -> String {
+        self.process_conditionals(template)
+    }
+
+    /// Process all conditional blocks in the template
+    fn process_conditionals(&self, input: &str) -> String {
+        let mut result = input.to_string();
+
+        // Process conditionals from innermost to outermost
+        // Keep processing until no more changes (handles nesting)
+        loop {
+            let new_result = self.process_single_pass(&result);
+            if new_result == result {
+                break;
+            }
+            result = new_result;
+        }
+
+        result
+    }
+
+    /// Process one level of conditionals
+    fn process_single_pass(&self, input: &str) -> String {
+        let mut result = String::new();
+        let mut chars = input.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '{' && chars.peek() == Some(&'{') {
+                chars.next(); // consume second '{'
+
+                // Check for #if
+                let mut tag = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c == '}' {
+                        break;
+                    }
+                    tag.push(chars.next().unwrap());
+                }
+
+                // Consume '}}'
+                if chars.next() == Some('}') && chars.next() == Some('}') {
+                    // Successfully consumed tag
+                } else {
+                    // Malformed tag, output as-is
+                    result.push_str("{{");
+                    result.push_str(&tag);
+                    continue;
+                }
+
+                if tag.starts_with("#if ") {
+                    let condition_name = tag[4..].trim();
+                    let condition_value = self.conditions.get(condition_name).copied().unwrap_or(false);
+
+                    // Find matching {{else}} and {{/if}}
+                    let (if_block, else_block, remaining) = self.extract_if_else_blocks(&mut chars);
+
+                    if condition_value {
+                        result.push_str(&if_block);
+                    } else if let Some(else_content) = else_block {
+                        result.push_str(&else_content);
+                    }
+
+                    // The remaining content after {{/if}} is already consumed
+                    result.push_str(&remaining);
+                    return result + &chars.collect::<String>();
+                } else {
+                    // Unknown tag, output as-is
+                    result.push_str("{{");
+                    result.push_str(&tag);
+                    result.push_str("}}");
+                }
+            } else {
+                result.push(c);
+            }
+        }
+
+        result
+    }
+
+    /// Extract if/else/endif blocks, handling nesting
+    fn extract_if_else_blocks(&self, chars: &mut std::iter::Peekable<std::str::Chars>) -> (String, Option<String>, String) {
+        let mut if_block = String::new();
+        let mut else_block: Option<String> = None;
+        let mut in_else = false;
+        let mut depth = 1;
+
+        while let Some(c) = chars.next() {
+            if c == '{' && chars.peek() == Some(&'{') {
+                chars.next();
+
+                let mut tag = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c == '}' {
+                        break;
+                    }
+                    tag.push(chars.next().unwrap());
+                }
+
+                // Consume '}}'
+                if chars.next() == Some('}') {
+                    chars.next();
+                }
+
+                if tag.starts_with("#if ") {
+                    depth += 1;
+                    // Include nested #if in current block
+                    if in_else {
+                        else_block.as_mut().unwrap().push_str("{{");
+                        else_block.as_mut().unwrap().push_str(&tag);
+                        else_block.as_mut().unwrap().push_str("}}");
+                    } else {
+                        if_block.push_str("{{");
+                        if_block.push_str(&tag);
+                        if_block.push_str("}}");
+                    }
+                } else if tag == "/if" {
+                    depth -= 1;
+                    if depth == 0 {
+                        // Found matching {{/if}}
+                        return (if_block, else_block, String::new());
+                    } else {
+                        // Nested {{/if}}
+                        if in_else {
+                            else_block.as_mut().unwrap().push_str("{{/if}}");
+                        } else {
+                            if_block.push_str("{{/if}}");
+                        }
+                    }
+                } else if tag == "else" && depth == 1 {
+                    in_else = true;
+                    else_block = Some(String::new());
+                } else {
+                    // Other tag, include as-is
+                    if in_else {
+                        else_block.as_mut().unwrap().push_str("{{");
+                        else_block.as_mut().unwrap().push_str(&tag);
+                        else_block.as_mut().unwrap().push_str("}}");
+                    } else {
+                        if_block.push_str("{{");
+                        if_block.push_str(&tag);
+                        if_block.push_str("}}");
+                    }
+                }
+            } else {
+                if in_else {
+                    else_block.as_mut().unwrap().push(c);
+                } else {
+                    if_block.push(c);
+                }
+            }
+        }
+
+        // If we get here, template was malformed (unclosed #if)
+        (if_block, else_block, String::new())
+    }
+}
+
 /// Constants that get hard-coded into shaders
 ///
 /// These values are compiled directly into the shader as `const` declarations,
@@ -62,41 +243,43 @@ impl ShaderBuilder {
         Self { registry }
     }
 
-    /// Build 2D trajectory shader with active variations
-    /// When path_features_enabled is false, uses simplified shader without path tracking code
-    pub fn build_trajectory_2d(
+    /// Build trajectory shader from unified template
+    ///
+    /// This method uses the main_template.wgsl with conditional compilation
+    /// to generate 2D/3D and simple/full variants from a single source file.
+    ///
+    /// Parameters:
+    /// - `active_variations`: Map of active variation names to weights
+    /// - `render_3d`: true for 3D mode (vec3), false for 2D mode (vec2)
+    /// - `path_features_enabled`: true to include path tracking code
+    /// - `constants`: Hard-coded shader constants
+    pub fn build_from_template(
         &self,
         active_variations: &HashMap<String, f32>,
-        path_features_enabled: bool,
-    ) -> String {
-        // Use default constants for backward compatibility
-        self.build_trajectory_2d_with_constants(active_variations, path_features_enabled, &ShaderConstants::default())
-    }
-
-    /// Build 2D trajectory shader with active variations and hard-coded constants
-    pub fn build_trajectory_2d_with_constants(
-        &self,
-        active_variations: &HashMap<String, f32>,
+        render_3d: bool,
         path_features_enabled: bool,
         constants: &ShaderConstants,
     ) -> String {
-        // Filter to only 2D variations (exclude 3D-only variations)
         use crate::variations::VariationCategory;
-        use std::collections::HashMap;
 
-        // Build a map of variation name -> registry index (0-23)
+        // Build a map of variation name -> registry index
         let mut index_map: HashMap<String, u32> = HashMap::new();
         for (i, name) in self.registry.names().iter().enumerate() {
-            // Only include 2D variations
-            if let Some(info) = self.registry.get(name) {
-                if matches!(info.category, VariationCategory::Basic2D | VariationCategory::Advanced2D) {
-                    index_map.insert(name.clone(), i as u32);
+            if render_3d {
+                // 3D mode: include ALL variations
+                index_map.insert(name.clone(), i as u32);
+            } else {
+                // 2D mode: only include 2D variations
+                if let Some(info) = self.registry.get(name) {
+                    if matches!(info.category, VariationCategory::Basic2D | VariationCategory::Advanced2D) {
+                        index_map.insert(name.clone(), i as u32);
+                    }
                 }
             }
         }
 
-        // Only include active 2D variations
-        let active_2d: Vec<(String, u32)> = index_map
+        // Filter to only active variations
+        let active: Vec<(String, u32)> = index_map
             .iter()
             .filter(|(name, _)| active_variations.contains_key(*name))
             .map(|(name, idx)| (name.clone(), *idx))
@@ -111,20 +294,26 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/header.wgsl"));
         shader.push('\n');
 
-        // 2. RNG
+        // 3. RNG
         shader.push_str(include_str!("../shaders/core/rng.wgsl"));
         shader.push('\n');
 
-        // 3. Affine
-        shader.push_str(include_str!("../shaders/core/affine.wgsl"));
+        // 4. Affine (needed for 2D mode)
+        if !render_3d {
+            shader.push_str(include_str!("../shaders/core/affine.wgsl"));
+            shader.push('\n');
+        }
+
+        // 5. Core variations
+        if render_3d {
+            shader.push_str(include_str!("../shaders/core/variations_3d.wgsl"));
+        } else {
+            shader.push_str(include_str!("../shaders/core/variations_2d.wgsl"));
+        }
         shader.push('\n');
 
-        // 4. Core variations (2D)
-        shader.push_str(include_str!("../shaders/core/variations_2d.wgsl"));
-        shader.push('\n');
-
-        // 5. Plugin variations (2D only)
-        for (name, _) in &active_2d {
+        // 6. Plugin variations
+        for (name, _) in &active {
             if let Some(info) = self.registry.get(name) {
                 if !info.is_core {
                     if let Some(source) = &info.wgsl_source {
@@ -135,113 +324,30 @@ impl ShaderBuilder {
             }
         }
 
-        // 6. Generate apply_variations with fixed registry indices
-        shader.push_str(&self.build_apply_variations_2d(&active_2d));
+        // 7. Generate apply_variations with fixed registry indices
+        if render_3d {
+            shader.push_str(&self.build_apply_variations_3d(&active));
+        } else {
+            shader.push_str(&self.build_apply_variations_2d(&active));
+        }
         shader.push('\n');
 
-        // 7. Utilities
+        // 8. Utilities
         shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
         shader.push('\n');
 
-        // 8. Path filter utilities (only needed when path features enabled)
+        // 9. Path filter utilities (only needed when path features enabled)
         if path_features_enabled {
             shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
             shader.push('\n');
         }
 
-        // 9. Main (select variant based on path features)
-        if path_features_enabled {
-            shader.push_str(include_str!("../shaders/core/main_2d.wgsl"));
-        } else {
-            shader.push_str(include_str!("../shaders/core/main_2d_simple.wgsl"));
-        }
-
-        shader
-    }
-
-    /// Build 3D trajectory shader with active variations
-    /// When path_features_enabled is false, uses simplified shader without path tracking code
-    pub fn build_trajectory_3d(
-        &self,
-        active_variations: &HashMap<String, f32>,
-        path_features_enabled: bool,
-    ) -> String {
-        // Use default constants for backward compatibility
-        self.build_trajectory_3d_with_constants(active_variations, path_features_enabled, &ShaderConstants::default())
-    }
-
-    /// Build 3D trajectory shader with active variations and hard-coded constants
-    pub fn build_trajectory_3d_with_constants(
-        &self,
-        active_variations: &HashMap<String, f32>,
-        path_features_enabled: bool,
-        constants: &ShaderConstants,
-    ) -> String {
-        use std::collections::HashMap;
-
-        // Build a map of variation name -> registry index (0-23)
-        // For 3D, include ALL variations (2D and 3D)
-        let mut index_map: HashMap<String, u32> = HashMap::new();
-        for (i, name) in self.registry.names().iter().enumerate() {
-            index_map.insert(name.clone(), i as u32);
-        }
-
-        // Only include active variations
-        let active_3d: Vec<(String, u32)> = index_map
-            .iter()
-            .filter(|(name, _)| active_variations.contains_key(*name))
-            .map(|(name, idx)| (name.clone(), *idx))
-            .collect();
-
-        let mut shader = String::new();
-
-        // 1. Hard-coded constants (must come first for use in later code)
-        shader.push_str(&constants.to_wgsl());
-
-        // 2. Header
-        shader.push_str(include_str!("../shaders/core/header.wgsl"));
-        shader.push('\n');
-
-        // 2. RNG
-        shader.push_str(include_str!("../shaders/core/rng.wgsl"));
-        shader.push('\n');
-
-        // 3. Core variations (3D)
-        shader.push_str(include_str!("../shaders/core/variations_3d.wgsl"));
-        shader.push('\n');
-
-        // 4. Plugin variations
-        for (name, _) in &active_3d {
-            if let Some(info) = self.registry.get(name) {
-                if !info.is_core {
-                    if let Some(source) = &info.wgsl_source {
-                        shader.push_str(source);
-                        shader.push('\n');
-                    }
-                }
-            }
-        }
-
-        // 5. Generate apply_variations with fixed registry indices
-        shader.push_str(&self.build_apply_variations_3d(&active_3d));
-        shader.push('\n');
-
-        // 6. Utilities
-        shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
-        shader.push('\n');
-
-        // 7. Path filter utilities (only needed when path features enabled)
-        if path_features_enabled {
-            shader.push_str(include_str!("../shaders/core/path_filter.wgsl"));
-            shader.push('\n');
-        }
-
-        // 8. Main (select variant based on path features)
-        if path_features_enabled {
-            shader.push_str(include_str!("../shaders/core/main_3d.wgsl"));
-        } else {
-            shader.push_str(include_str!("../shaders/core/main_3d_simple.wgsl"));
-        }
+        // 10. Main shader from template
+        let template = include_str!("../shaders/core/main_template.wgsl");
+        let mut processor = TemplateProcessor::new();
+        processor.set("RENDER_3D", render_3d);
+        processor.set("PATH_TRACKING", path_features_enabled);
+        shader.push_str(&processor.process(template));
 
         shader
     }
