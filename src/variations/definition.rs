@@ -1,0 +1,241 @@
+//! Variation definition types
+//!
+//! This module provides the `VariationDef` struct for defining variations
+//! with their metadata and WGSL shader code in a single declaration.
+
+use super::{ParamType, VariationCategory, VariationParameter, VariationPhase};
+
+/// Static definition of a variation
+///
+/// Each variation is defined as a const with all its metadata and WGSL code.
+/// The 2D and 3D implementations are in the same definition.
+///
+/// # Example
+/// ```ignore
+/// pub const SPHERICAL: VariationDef = VariationDef {
+///     name: "spherical",
+///     display_name: "Spherical",
+///     category: VariationCategory::Basic2D,
+///     phase: VariationPhase::Normal,
+///     needs_rng: false,
+///     parameters: &[],
+///     wgsl_2d: r#"
+/// fn variation_spherical(p: vec2<f32>) -> vec2<f32> {
+///     let r2 = dot(p, p) + 1e-6;
+///     return p / r2;
+/// }
+/// "#,
+///     wgsl_3d: Some(r#"
+/// fn variation_spherical(p: vec3<f32>) -> vec3<f32> {
+///     let r2 = dot(p.xy, p.xy) + 1e-6;
+///     return vec3(p.xy / r2, p.z);
+/// }
+/// "#),
+/// };
+/// ```
+pub struct VariationDef {
+    /// Unique identifier (lowercase, snake_case)
+    pub name: &'static str,
+
+    /// Display name for UI
+    pub display_name: &'static str,
+
+    /// Category for organization
+    pub category: VariationCategory,
+
+    /// Execution phase (pre/normal/post)
+    pub phase: VariationPhase,
+
+    /// Whether this variation requires RNG
+    pub needs_rng: bool,
+
+    /// Parameters for this variation
+    pub parameters: &'static [VariationParamDef],
+
+    /// 2D WGSL implementation
+    /// Function signature should match one of:
+    /// - `fn variation_NAME(p: vec2<f32>) -> vec2<f32>`
+    /// - `fn variation_NAME(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32>` (if needs_rng)
+    /// - `fn variation_NAME(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>` (if has params)
+    /// - Full signature with both rng and params
+    pub wgsl_2d: &'static str,
+
+    /// 3D WGSL implementation (optional - uses 2D with Z pass-through if None)
+    /// For 2D variations, this should typically be:
+    /// `return vec3(variation_NAME_2d(p.xy), p.z);`
+    /// or a full 3D implementation for variations that modify Z
+    pub wgsl_3d: Option<&'static str>,
+}
+
+/// Static parameter definition for variations
+pub struct VariationParamDef {
+    /// Parameter name (lowercase)
+    pub name: &'static str,
+
+    /// Display name for UI
+    pub display_name: &'static str,
+
+    /// Parameter type
+    pub param_type: ParamType,
+
+    /// Default value
+    pub default_value: f32,
+
+    /// Minimum value (None = no limit for slider, typing still allowed)
+    pub min_value: Option<f32>,
+
+    /// Maximum value (None = no limit for slider, typing still allowed)
+    pub max_value: Option<f32>,
+}
+
+impl VariationParamDef {
+    /// Convert to runtime VariationParameter
+    pub fn to_runtime(&self) -> VariationParameter {
+        VariationParameter {
+            name: self.name.to_string(),
+            display_name: self.display_name.to_string(),
+            param_type: self.param_type.clone(),
+            default_value: self.default_value,
+            min_value: self.min_value,
+            max_value: self.max_value,
+        }
+    }
+}
+
+impl VariationDef {
+    /// Get the WGSL function name
+    pub fn wgsl_function_name(&self) -> String {
+        if self.name == "julia" {
+            // Julia is special - no "variation_" prefix
+            self.name.to_string()
+        } else {
+            format!("variation_{}", self.name)
+        }
+    }
+
+    /// Convert parameters to runtime format
+    pub fn parameters_to_runtime(&self) -> Vec<VariationParameter> {
+        self.parameters.iter().map(|p| p.to_runtime()).collect()
+    }
+
+    /// Get the complete 2D WGSL source
+    pub fn wgsl_source_2d(&self) -> &'static str {
+        self.wgsl_2d
+    }
+
+    /// Get the 3D WGSL source (or 2D with Z pass-through wrapper)
+    pub fn wgsl_source_3d(&self) -> String {
+        if let Some(wgsl_3d) = self.wgsl_3d {
+            wgsl_3d.to_string()
+        } else {
+            // Generate a wrapper that passes Z through unchanged
+            // This is for pure 2D variations
+            self.generate_3d_wrapper()
+        }
+    }
+
+    /// Generate a 3D wrapper for a 2D-only variation
+    fn generate_3d_wrapper(&self) -> String {
+        let func_name = self.wgsl_function_name();
+
+        // Determine the function signature based on needs_rng and parameters
+        let (params, call_args) = if self.needs_rng && !self.parameters.is_empty() {
+            (
+                "p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>",
+                "p.xy, xform_id, variation_id, rng",
+            )
+        } else if self.needs_rng {
+            ("p: vec3<f32>, rng: ptr<function, RngState>", "p.xy, rng")
+        } else if !self.parameters.is_empty() {
+            (
+                "p: vec3<f32>, xform_id: u32, variation_id: u32",
+                "p.xy, xform_id, variation_id",
+            )
+        } else {
+            ("p: vec3<f32>", "p.xy")
+        };
+
+        format!(
+            r#"
+fn {func_name}({params}) -> vec3<f32> {{
+    let result_2d = {func_name}_2d({call_args});
+    return vec3(result_2d, p.z);
+}}
+"#,
+            func_name = func_name,
+            params = params,
+            call_args = call_args
+        )
+    }
+}
+
+/// Macro to simplify variation parameter definition
+#[macro_export]
+macro_rules! param {
+    // Float with full range
+    ($name:expr, $display:expr, float, $default:expr, $min:expr, $max:expr) => {
+        VariationParamDef {
+            name: $name,
+            display_name: $display,
+            param_type: ParamType::Float,
+            default_value: $default,
+            min_value: Some($min),
+            max_value: Some($max),
+        }
+    };
+    // UnlimitedFloat
+    ($name:expr, $display:expr, unlimited_float, $default:expr, $min:expr, $max:expr) => {
+        VariationParamDef {
+            name: $name,
+            display_name: $display,
+            param_type: ParamType::UnlimitedFloat,
+            default_value: $default,
+            min_value: Some($min),
+            max_value: Some($max),
+        }
+    };
+    // Integer
+    ($name:expr, $display:expr, int, $default:expr, $min:expr, $max:expr) => {
+        VariationParamDef {
+            name: $name,
+            display_name: $display,
+            param_type: ParamType::Integer,
+            default_value: $default,
+            min_value: Some($min),
+            max_value: Some($max),
+        }
+    };
+    // UnlimitedInteger
+    ($name:expr, $display:expr, unlimited_int, $default:expr, $min:expr, $max:expr) => {
+        VariationParamDef {
+            name: $name,
+            display_name: $display,
+            param_type: ParamType::UnlimitedInteger,
+            default_value: $default,
+            min_value: Some($min),
+            max_value: Some($max),
+        }
+    };
+    // Angle
+    ($name:expr, $display:expr, angle, $default:expr) => {
+        VariationParamDef {
+            name: $name,
+            display_name: $display,
+            param_type: ParamType::Angle,
+            default_value: $default,
+            min_value: Some(-360.0),
+            max_value: Some(360.0),
+        }
+    };
+    // Boolean
+    ($name:expr, $display:expr, bool, $default:expr) => {
+        VariationParamDef {
+            name: $name,
+            display_name: $display,
+            param_type: ParamType::Boolean,
+            default_value: if $default { 1.0 } else { 0.0 },
+            min_value: None,
+            max_value: None,
+        }
+    };
+}
