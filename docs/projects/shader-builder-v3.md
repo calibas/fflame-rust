@@ -298,20 +298,33 @@ renderer.prepare_for_animation(variation_superset);
 - [x] Update shader main files to use constants (`NUM_TRANSFORMS`, `COLOR_MODE`, `HAS_FINAL_TRANSFORM`, `FINAL_TRANSFORM_INDEX`)
 - [x] Add `select_transform_const()` function using hard-coded `NUM_TRANSFORMS` for loop unrolling
 - [x] Update `ShaderCache::ensure_current_full()` to track and rebuild when constants change
+- [x] Integrate constants into FlameRenderer (`ensure_shaders_current_with_config()`, `ensure_shaders_current_with_constants()`)
 - [ ] Remove corresponding fields from `GpuParams` struct (deferred - still needed for compatibility)
 - [ ] Benchmark performance improvement (deferred to after full integration)
 
-### Step 4: Feature Exclusion
-- [ ] Add conditional blocks for path tracking in shader template
-- [ ] Add conditional blocks for color modes in shader template
+### Step 4: Feature Exclusion ⚠️ PARTIALLY COMPLETE / DEPRIORITIZED
+
+**What's Done:**
+- [x] Path tracking code excluded via `main_2d_simple.wgsl` / `main_3d_simple.wgsl` variants
+- [x] Path filter utilities excluded when path features disabled
+- [x] Shader selection based on `path_features_enabled` flag
+
+**Deprioritized (Dynamic Bind Group Layouts):**
+The original plan called for dynamic bind group layouts to eliminate dummy buffers. After analysis:
+- Dummy buffers are only 44 bytes total (28 + 16) - negligible overhead
+- The 58MB path buffer is already optional (created/destroyed dynamically)
+- Dynamic layouts would require maintaining two bind group layout variants
+- Would require separate pipeline caches and complex bind group management
+- The major performance win (path tracking code exclusion) is already done
+
+**Remaining items moved to "Nice to Have":**
 - [ ] Create dynamic bind group layout generation in `pipelines.rs`
 - [ ] Remove dummy buffer creation from `buffers.rs`
 - [ ] Remove `get_path_buffer_for_binding()` helper methods
-- [ ] Update `FlameRenderer` to track active pipeline variant
-- [ ] Cache both pipeline variants (path-enabled and path-disabled)
-- [ ] Verify path mode still works when enabled
-- [ ] Verify switching between path/non-path modes works
-- [ ] Benchmark performance improvement
+
+**What was NOT deprioritized (still valuable):**
+- Color mode exclusion could still provide value (exclude unused color mode code paths)
+- This is better addressed by Phase 4 (Template System) with conditional blocks
 
 ### Step 5: Animation Superset
 - [ ] Add `prepare_for_animation()` API
