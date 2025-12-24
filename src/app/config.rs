@@ -1,5 +1,5 @@
-use crate::app::App;
 use crate::app::render_mode::TransitionResult;
+use crate::app::App;
 use crate::config::FractalConfig;
 
 impl App {
@@ -101,21 +101,12 @@ impl App {
         }
     }
 
-    /// Export PNG at custom dimensions (creates temporary renderer)
+    /// Export PNG at custom dimensions using unified render API
     #[cfg(not(target_arch = "wasm32"))]
     pub fn export_custom_size(&self, transparent: bool, config: FractalConfig, _render_time_ms: f64) {
-        use crate::renderer::compute_kernel::FlameRenderer;
-        use std::time::Instant;
+        use crate::renderer::{render, NoProgress, RenderJob};
 
         println!("Exporting at custom size: {}×{}", self.export_width, self.export_height);
-        println!("  iterations_per_thread: {}", self.config_manager.system_settings().iterations_per_thread);
-        println!("  max_iterations: {}", config.max_iterations);
-        println!("  density_scale: {}", config.density_scale);
-        println!("  histogram_color_scale: {}", config.histogram_color_scale);
-        println!("  brightness: {}", config.brightness);
-        println!("  exposure: {}", config.exposure);
-        println!("  use_dynamic_blend: {}", config.use_dynamic_blend);
-        println!("  blend_factor: {}", config.blend_factor);
 
         // Check if we need CPU-based high-res export (for large resolutions)
         if crate::export::needs_cpu_export(self.export_width, self.export_height) {
@@ -124,139 +115,36 @@ impl App {
             return;
         }
 
-        // Create temporary renderer at export dimensions
-        let surface_format = egui_wgpu::wgpu::TextureFormat::Rgba8Unorm;
-        let mut temp_renderer = FlameRenderer::new(
-            &self.gpu.device,
-            &self.gpu.queue,
-            surface_format,
-            self.export_width,
-            self.export_height,
-            &config.flame,
-        );
+        // Use unified render API
+        let job = RenderJob::new(&config, self.export_width, self.export_height)
+            .with_iterations_per_thread(self.config_manager.system_settings().iterations_per_thread)
+            .with_burn_in(self.config_manager.system_settings().burn_in)
+            .with_transparent(transparent);
 
-        // Load config into temp renderer
-        let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-            label: Some("Custom Export Encoder"),
+        let result = pollster::block_on(async {
+            render(&self.gpu.device, &self.gpu.queue, job, &mut NoProgress).await
         });
 
-        // Get palette
-        let palette = config.palette.as_ref()
-            .or_else(|| self.palette_library.get(config.palette_index))
-            .expect("No palette found");
-
-        temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in);
-        self.gpu.queue.submit(std::iter::once(encoder.finish()));
-
-        // Render frames until we reach max_iterations
-        let render_start = Instant::now();
-        let mut total_rendered = 0u64;
-        let target = config.max_iterations;
-
-        const NUM_WORKGROUPS: u32 = 128;
-        const THREADS_PER_WORKGROUP: u64 = 64;
-        const BATCH_SIZE: u32 = 4; // Match viewport's accumulation_batch_size
-
-        let mut accumulation_count = 0;
-        let mut batch_frame_count = 0;
-
-        while total_rendered < target {
-            let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                label: Some("Export Render Frame"),
-            });
-
-            // Clear histogram only on first frame of batch (match viewport behavior)
-            let clear_histogram = batch_frame_count == 0;
-            // Clear paths only on very first batch of the entire export
-            let clear_paths = total_rendered == 0 && clear_histogram;
-
-            // Use FULL iterations_per_thread like viewport does (not divided by speed_multiplier)
-            temp_renderer.compute_pass(
-                &mut encoder,
-                &self.gpu.queue,
-                NUM_WORKGROUPS,
-                self.config_manager.system_settings().iterations_per_thread, // CHANGED: Use full value like viewport
-                self.config_manager.system_settings().burn_in,
-                config.zoom,
-                config.pan_x,
-                config.pan_y,
-                config.rotation,
-                config.camera_rotation_x,
-                config.camera_rotation_y,
-                config.camera_z,
-                config.speed_factor,
-                clear_histogram, // CHANGED: Conditional clear like viewport
-                clear_paths,
-            );
-
-            let samples_this_frame = NUM_WORKGROUPS as u64 * THREADS_PER_WORKGROUP * self.config_manager.system_settings().iterations_per_thread as u64;
-            total_rendered += samples_this_frame;
-            batch_frame_count += 1;
-
-            // Accumulate only when batch is complete (match viewport behavior)
-            let should_accumulate = batch_frame_count >= BATCH_SIZE;
-            if should_accumulate {
-                accumulation_count += 1;
-
-                // Pass total samples in batch like viewport does (multiply by batch size)
-                let total_samples_in_batch = samples_this_frame * BATCH_SIZE as u64;
-                temp_renderer.accumulate_pass(&mut encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
-
-                batch_frame_count = 0; // Reset batch counter
-            }
-
-            self.gpu.queue.submit(std::iter::once(encoder.finish()));
-
-            if total_rendered >= target {
-                // Final accumulation if we have partial batch
-                if batch_frame_count > 0 {
-                    let mut final_accum_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                        label: Some("Export Final Batch Accumulation"),
-                    });
-                    let total_samples_in_batch = samples_this_frame * batch_frame_count as u64;
-                    temp_renderer.accumulate_pass(&mut final_accum_encoder, &self.gpu.queue, &self.gpu.device, total_samples_in_batch);
-                    self.gpu.queue.submit(std::iter::once(final_accum_encoder.finish()));
-                    accumulation_count += 1;
-                }
-                break;
-            }
-        }
-
-        let export_render_time = render_start.elapsed().as_secs_f64() * 1000.0;
-
-        println!("Export stats: {} accumulation passes, {} total iterations",
-            accumulation_count, total_rendered);
-
-        // Set transparent mode if requested (before tonemap pass)
-        if transparent {
-            temp_renderer.set_transparent_mode(&self.gpu.queue, true, &config, self.config_manager.system_settings().iterations_per_thread);
-        }
-
-        // Final tonemap pass
-        let mut final_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-            label: Some("Export Final Tonemap"),
-        });
-        temp_renderer.tonemap_pass(&mut final_encoder);
-        self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
-
-        // Read pixels
-        let pixels_future = temp_renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, config.background_color);
-
-        match pollster::block_on(pixels_future) {
-            Ok((width, height, rgba_data)) => {
+        match result {
+            Ok(output) => {
                 // Build metadata
                 let metadata = crate::png_metadata::PngMetadata::from_app_state(
-                    width,
-                    height,
-                    total_rendered,
-                    export_render_time,
+                    output.width,
+                    output.height,
+                    output.total_iterations,
+                    output.render_time_ms,
                     self.config_manager.system_settings().iterations_per_thread,
                     config.speed_factor,
                     &config,
                 );
 
                 // Encode PNG
-                match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
+                match crate::renderer::compute_kernel::encode_png_from_rgba(
+                    output.width,
+                    output.height,
+                    output.rgba_data,
+                    Some(metadata),
+                ) {
                     Ok(png_data) => {
                         // Open file dialog
                         if let Some(path) = rfd::FileDialog::new()
@@ -267,15 +155,20 @@ impl App {
                             if let Err(e) = std::fs::write(&path, png_data) {
                                 eprintln!("Failed to save PNG: {}", e);
                             } else {
-                                println!("PNG exported to: {} ({}×{}, {:.2}s)",
-                                    path.display(), width, height, export_render_time / 1000.0);
+                                println!(
+                                    "PNG exported to: {} ({}×{}, {:.2}s)",
+                                    path.display(),
+                                    output.width,
+                                    output.height,
+                                    output.render_time_ms / 1000.0
+                                );
                             }
                         }
                     }
                     Err(e) => eprintln!("Failed to encode PNG: {}", e),
                 }
             }
-            Err(e) => eprintln!("Failed to capture pixels: {}", e),
+            Err(e) => eprintln!("Failed to render: {}", e),
         }
     }
 
