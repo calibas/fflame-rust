@@ -102,6 +102,9 @@ class WasmTestRunner:
         # Disable GPU blocklist to allow WebGPU even if GPU is "unsupported"
         options.add_argument('--ignore-gpu-blocklist')
 
+        # Enable logging to capture console output
+        options.set_capability('goog:loggingPrefs', {'browser': 'ALL'})
+
         try:
             self.driver = webdriver.Chrome(options=options)
             self.driver.set_page_load_timeout(30)  # 30 second page load timeout
@@ -185,6 +188,9 @@ class WasmTestRunner:
                 raise Exception(f'Render failed: {result.get("error")}')
 
             print(f'    Render complete')
+
+            # Print browser console logs for debugging
+            self.print_browser_logs()
 
             # Get PNG data from WASM (returned as Uint8Array)
             png_data_js = self.driver.execute_script('''
@@ -293,6 +299,22 @@ class WasmTestRunner:
                 'width': 0,
                 'height': 0,
             }
+
+    def print_browser_logs(self):
+        """Print browser console logs for debugging"""
+        try:
+            logs = self.driver.get_log('browser')
+            if logs:
+                print('    --- Browser Console Logs ---')
+                for entry in logs:
+                    level = entry.get('level', 'INFO')
+                    message = entry.get('message', '')
+                    # Filter to show only WASM/Render related logs
+                    if 'Render' in message or 'tonemap' in message or 'read_fractal' in message or 'FlameRenderer' in message or 'WASM' in message:
+                        print(f'    [{level}] {message}')
+                print('    --- End Browser Logs ---')
+        except Exception as e:
+            print(f'    Warning: Could not get browser logs: {e}')
 
     def run_all_tests(self) -> bool:
         """Run all tests"""
