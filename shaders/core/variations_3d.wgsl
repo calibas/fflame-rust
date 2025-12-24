@@ -199,6 +199,24 @@ fn variation_hemisphere(p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(p.x * t, p.y * t, t);
 }
 
+// Z-Cone - adds distance from origin to Z
+fn variation_zcone(p: vec3<f32>) -> vec3<f32> {
+    // Z-only variation: result.z += weight * length(p.xy)
+    return vec3<f32>(0.0, 0.0, length(p.xy));
+}
+
+// Flatten - flattens Z toward zero
+fn variation_flatten(p: vec3<f32>) -> vec3<f32> {
+    // Z-only variation: result.z -= weight * p.z (subtracts to cancel out Z)
+    return vec3<f32>(0.0, 0.0, -p.z);
+}
+
+// Z-Scale - scales Z by weight
+fn variation_zscale(p: vec3<f32>) -> vec3<f32> {
+    // Z-only variation: result.z += weight * p.z
+    return vec3<f32>(0.0, 0.0, p.z);
+}
+
 fn variation_eyefish(p: vec3<f32>) -> vec3<f32> {
     // Apophysis: r = 2 / (sqrt(x² + y²) + 1)
     // result = (r×x, r×y, z)
