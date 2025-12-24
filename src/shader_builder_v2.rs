@@ -1,6 +1,57 @@
 use std::collections::HashMap;
 use crate::variations::VariationRegistry;
 
+/// Constants that get hard-coded into shaders
+///
+/// These values are compiled directly into the shader as `const` declarations,
+/// eliminating uniform buffer reads and enabling the shader compiler to
+/// optimize based on known values (dead code elimination, constant folding).
+///
+/// When any of these values change, shaders must be recompiled.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShaderConstants {
+    /// Number of transforms (allows loop unrolling in select_transform)
+    pub num_transforms: u32,
+
+    /// Color mode: 0=Palette, 1=Speed, 2=PathMap
+    /// Enables dead code elimination for unused color mode branches
+    pub color_mode: u32,
+
+    /// Whether final transform is enabled (eliminates branch if false)
+    pub has_final_transform: bool,
+
+    /// Index of final transform (only used if has_final_transform is true)
+    pub final_transform_index: u32,
+}
+
+impl Default for ShaderConstants {
+    fn default() -> Self {
+        Self {
+            num_transforms: 1,
+            color_mode: 0,
+            has_final_transform: false,
+            final_transform_index: 0,
+        }
+    }
+}
+
+impl ShaderConstants {
+    /// Generate WGSL const declarations
+    pub fn to_wgsl(&self) -> String {
+        format!(
+            "// Hard-coded shader constants (compiled at shader build time)\n\
+             const NUM_TRANSFORMS: u32 = {}u;\n\
+             const COLOR_MODE: u32 = {}u;\n\
+             const HAS_FINAL_TRANSFORM: bool = {};\n\
+             const FINAL_TRANSFORM_INDEX: u32 = {}u;\n\n",
+            self.num_transforms,
+            self.color_mode,
+            self.has_final_transform,
+            self.final_transform_index,
+        )
+    }
+}
+
 /// Builds WGSL shaders dynamically using named variations
 pub struct ShaderBuilder {
     registry: VariationRegistry,
@@ -13,7 +64,22 @@ impl ShaderBuilder {
 
     /// Build 2D trajectory shader with active variations
     /// When path_features_enabled is false, uses simplified shader without path tracking code
-    pub fn build_trajectory_2d(&self, active_variations: &HashMap<String, f32>, path_features_enabled: bool) -> String {
+    pub fn build_trajectory_2d(
+        &self,
+        active_variations: &HashMap<String, f32>,
+        path_features_enabled: bool,
+    ) -> String {
+        // Use default constants for backward compatibility
+        self.build_trajectory_2d_with_constants(active_variations, path_features_enabled, &ShaderConstants::default())
+    }
+
+    /// Build 2D trajectory shader with active variations and hard-coded constants
+    pub fn build_trajectory_2d_with_constants(
+        &self,
+        active_variations: &HashMap<String, f32>,
+        path_features_enabled: bool,
+        constants: &ShaderConstants,
+    ) -> String {
         // Filter to only 2D variations (exclude 3D-only variations)
         use crate::variations::VariationCategory;
         use std::collections::HashMap;
@@ -38,7 +104,10 @@ impl ShaderBuilder {
 
         let mut shader = String::new();
 
-        // 1. Header
+        // 1. Hard-coded constants (must come first for use in later code)
+        shader.push_str(&constants.to_wgsl());
+
+        // 2. Header
         shader.push_str(include_str!("../shaders/core/header.wgsl"));
         shader.push('\n');
 
@@ -92,7 +161,22 @@ impl ShaderBuilder {
 
     /// Build 3D trajectory shader with active variations
     /// When path_features_enabled is false, uses simplified shader without path tracking code
-    pub fn build_trajectory_3d(&self, active_variations: &HashMap<String, f32>, path_features_enabled: bool) -> String {
+    pub fn build_trajectory_3d(
+        &self,
+        active_variations: &HashMap<String, f32>,
+        path_features_enabled: bool,
+    ) -> String {
+        // Use default constants for backward compatibility
+        self.build_trajectory_3d_with_constants(active_variations, path_features_enabled, &ShaderConstants::default())
+    }
+
+    /// Build 3D trajectory shader with active variations and hard-coded constants
+    pub fn build_trajectory_3d_with_constants(
+        &self,
+        active_variations: &HashMap<String, f32>,
+        path_features_enabled: bool,
+        constants: &ShaderConstants,
+    ) -> String {
         use std::collections::HashMap;
 
         // Build a map of variation name -> registry index (0-23)
@@ -111,7 +195,10 @@ impl ShaderBuilder {
 
         let mut shader = String::new();
 
-        // 1. Header
+        // 1. Hard-coded constants (must come first for use in later code)
+        shader.push_str(&constants.to_wgsl());
+
+        // 2. Header
         shader.push_str(include_str!("../shaders/core/header.wgsl"));
         shader.push('\n');
 

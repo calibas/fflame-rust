@@ -1,6 +1,10 @@
 // Main compute shader entry point for 2D mode (simplified - no path tracking)
 // This variant is used when PathMap color mode and path filters are both disabled.
 // Saves ~5 registers per thread and removes per-iteration branch overhead.
+//
+// Uses hard-coded constants (compiled at shader build time):
+//   NUM_TRANSFORMS, COLOR_MODE, HAS_FINAL_TRANSFORM, FINAL_TRANSFORM_INDEX
+// These enable dead code elimination and loop unrolling optimizations.
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let thread_id = global_id.x;
@@ -22,9 +26,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Save old position for speed calculation
         let old_pos = current;
 
-        // Select random transform
+        // Select random transform (uses hard-coded NUM_TRANSFORMS)
         let rand_val = rng_nextf(&rng);
-        let xform_idx = select_transform(rand_val);
+        let xform_idx = select_transform_const(rand_val);
         let xform = transforms[xform_idx];
 
         // Opacity check (stochastic transparency)
@@ -39,28 +43,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Calculate speed (distance traveled)
         let speed = length(current - old_pos);
 
-        // Update color based on color mode
-        if (params.color_mode == 0u) {
+        // Update color based on color mode (hard-coded COLOR_MODE enables dead code elimination)
+        if (COLOR_MODE == 0u) {
             // Palette mode: Apophysis color coordinate evolution
             let symmetry = xform.color_speed;
             let colorC1 = (1.0 + symmetry) / 2.0;
             let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
             color_index = color_index * colorC1 + colorC2;
-        } else if (params.color_mode == 1u) {
+        } else if (COLOR_MODE == 1u) {
             // Speed mode: blend with speed-based color
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         }
-        // Note: color_mode == 2 (PathMap) uses the full shader with path tracking
+        // Note: COLOR_MODE == 2 (PathMap) uses the full shader with path tracking
 
         // Skip burn-in iterations
         if (i >= params.burn_in) {
-            // Apply final transform if present
+            // Apply final transform if present (hard-coded HAS_FINAL_TRANSFORM eliminates branch)
             var final_pos = current;
-            if (params.has_final_transform != 0u) {
-                let final_xform = transforms[params.final_transform_index];
+            if (HAS_FINAL_TRANSFORM) {
+                let final_xform = transforms[FINAL_TRANSFORM_INDEX];
                 let affine_p = apply_affine(final_xform, current);
-                final_pos = apply_variations(final_xform, params.final_transform_index, affine_p, &rng);
+                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng);
             }
 
             // Convert to pixel coordinates
@@ -72,9 +76,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
 
-                // Determine final color based on mode
+                // Determine final color based on mode (hard-coded COLOR_MODE)
                 var final_color: vec3<f32>;
-                if (params.color_mode == 0u) {
+                if (COLOR_MODE == 0u) {
                     // Palette mode: sample from palette texture using color_index
                     final_color = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
                 } else {
