@@ -58,6 +58,7 @@
     - Persists VSync, target FPS, iterations per thread, export defaults
     - Desktop: User data directory, WASM: browser localStorage
   - `src/renderer/compute_kernel.rs` - GPU rendering orchestration
+  - `src/renderer/render.rs` - **Unified render API** (Added 2025-12-24) - Single entry point for all headless rendering
   - `src/renderer/thumbnail.rs` - **Thumbnail rendering** (Added 2025-11-24)
   - `src/export/` - **High-resolution export system** (Added 2025-12-18)
     - `high_res.rs` - CPU histogram + GPU tonemap for any resolution
@@ -252,6 +253,7 @@
 - **Undo/redo** system with 50-state history
 - **Full WASM support** for web builds (100% complete including PNG export)
 - GPU buffers use **std430 layout** (storage buffers) and **std140 layout** (uniform buffers) for cross-platform compatibility
+- **WASM shader compatibility:** Use `textureLoad()` instead of `textureSample()` inside non-uniform control flow (browser WebGPU strictly enforces WGSL spec, desktop drivers are lenient)
 
 ### Current Limitations
 - No transform clone/duplicate button
@@ -448,6 +450,10 @@ a.click();
 - Use `@group(0) @binding(N)` for bind groups
 - Follow std140/std430 layout rules for buffers
 - Use `texture_storage_2d<rgba32float, write>` for output textures
+- **WASM Compatibility**: Use `textureLoad()` instead of `textureSample()` inside conditionals
+  - Browser WebGPU strictly enforces WGSL uniform control flow requirements
+  - `textureSample()` must only be called from uniform control flow
+  - Desktop GPU drivers are lenient but WASM will fail silently with black output
 - **IMPORTANT**: Trust the shader compiler for optimization
   - Modern GPU compilers (SPIR-V, DXC, Metal) perform aggressive CSE (Common Subexpression Elimination)
   - Write clear, straightforward code - compiler will optimize redundant calculations
