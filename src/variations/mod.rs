@@ -1,6 +1,11 @@
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
+pub mod definition;
+pub mod defs;
+
+use definition::VariationDef;
+
 /// Parameter type for variation parameters
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum ParamType {
@@ -98,8 +103,11 @@ pub struct VariationInfo {
     /// Whether this is a core (built-in) or plugin variation
     pub is_core: bool,
 
-    /// Optional: WGSL source code (for plugins loaded at runtime)
+    /// Optional: WGSL source code for 2D (for plugins loaded at runtime)
     pub wgsl_source: Option<String>,
+
+    /// Optional: WGSL source code for 3D
+    pub wgsl_source_3d: Option<String>,
 
     /// Parameters for this variation
     pub parameters: Vec<VariationParameter>,
@@ -117,6 +125,22 @@ impl VariationInfo {
     /// Get parameter definition by name
     pub fn get_param(&self, param_name: &str) -> Option<&VariationParameter> {
         self.parameters.iter().find(|p| p.name == param_name)
+    }
+
+    /// Create from a static VariationDef
+    pub fn from_def(def: &VariationDef) -> Self {
+        Self {
+            name: def.name.to_string(),
+            display_name: def.display_name.to_string(),
+            category: def.category.clone(),
+            phase: def.phase.clone(),
+            wgsl_function: def.wgsl_function_name(),
+            needs_rng: def.needs_rng,
+            is_core: true, // All VariationDef are core variations
+            wgsl_source: Some(def.wgsl_2d.to_string()),
+            wgsl_source_3d: def.wgsl_3d.map(|s| s.to_string()),
+            parameters: def.parameters_to_runtime(),
+        }
     }
 }
 
@@ -153,6 +177,9 @@ pub struct VariationRegistry {
 
 impl VariationRegistry {
     /// Create a new registry with core variations
+    ///
+    /// Loads variations from static VariationDef definitions in defs module.
+    /// All variations with embedded WGSL code are loaded from there.
     pub fn new() -> Self {
         let mut registry = Self {
             variations: HashMap::new(),
@@ -161,197 +188,58 @@ impl VariationRegistry {
 
         log::info!("=== VARIATION REGISTRY INITIALIZATION ===");
 
-        // Register core 2D variations (Basic) - Indices 0-4
-        registry.register_core("linear", "Linear", VariationCategory::Basic2D, VariationPhase::Normal, false);          // 0
-        registry.register_core("sinusoidal", "Sinusoidal", VariationCategory::Basic2D, VariationPhase::Normal, false);  // 1
-        registry.register_core("spherical", "Spherical", VariationCategory::Basic2D, VariationPhase::Normal, false);    // 2
-        registry.register_core("swirl", "Swirl", VariationCategory::Basic2D, VariationPhase::Normal, false);            // 3
-        registry.register_core("horseshoe", "Horseshoe", VariationCategory::Basic2D, VariationPhase::Normal, false);    // 4
+        // Load all variations from static definitions
+        // The order in ALL_VARIATIONS determines the variation indices
+        for def in defs::ALL_VARIATIONS.iter() {
+            registry.register_from_def(def);
+        }
 
-        // Register core 2D variations (Advanced) - Indices 5-15
-        registry.register_core("polar", "Polar", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 5
-        registry.register_core("handkerchief", "Handkerchief", VariationCategory::Advanced2D, VariationPhase::Normal, false); // 6
-        registry.register_core("heart", "Heart", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 7
-        registry.register_core("disc", "Disc", VariationCategory::Advanced2D, VariationPhase::Normal, false);            // 8
-        registry.register_core("spiral", "Spiral", VariationCategory::Advanced2D, VariationPhase::Normal, false);        // 9
-        registry.register_core("hyperbolic", "Hyperbolic", VariationCategory::Advanced2D, VariationPhase::Normal, false); // 10
-        registry.register_core("diamond", "Diamond", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 11
-        registry.register_core("ex", "Ex", VariationCategory::Advanced2D, VariationPhase::Normal, false);                // 12
-        registry.register_core("julia", "Julia", VariationCategory::Advanced2D, VariationPhase::Normal, true);           // 13 (Needs RNG)
-        registry.register_core("bent", "Bent", VariationCategory::Advanced2D, VariationPhase::Normal, false);            // 14
-        registry.register_core("waves", "Waves", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 15
+        // Legacy variations not yet converted to VariationDef
+        // These will be migrated incrementally to static definitions
+        // TODO: Convert remaining variations to VariationDef format with embedded WGSL
 
-        // Register 3D depth variations - Indices 16-17, 23
-        registry.register_core("zcone", "Z-Cone", VariationCategory::Depth3D, VariationPhase::Normal, false);            // 16 - Adds to Z based on XY distance
-        registry.register_core("flatten", "Flatten", VariationCategory::Depth3D, VariationPhase::Post, false);           // 17 - POST! Compresses Z toward zero
-        registry.register_core("hemisphere", "Hemisphere", VariationCategory::Full3D, VariationPhase::Normal, false);    // 18 - Full 3D projection
+        // 3D blur variations
+        registry.register_core("zblur", "Z-Blur", VariationCategory::Depth3D, VariationPhase::Normal, true);
+        registry.register_core("blur3d", "Blur 3D", VariationCategory::Full3D, VariationPhase::Normal, true);
 
-        // Register 3D rotation variations - Indices 19-22
-        registry.register_core("pre_rotate_x", "Pre-Rotate X", VariationCategory::Rotation3D, VariationPhase::Pre, false);   // 19 - PRE!
-        registry.register_core("pre_rotate_y", "Pre-Rotate Y", VariationCategory::Rotation3D, VariationPhase::Pre, false);   // 20 - PRE!
-        registry.register_core("post_rotate_x", "Post-Rotate X", VariationCategory::Rotation3D, VariationPhase::Post, false); // 21 - POST!
-        registry.register_core("post_rotate_y", "Post-Rotate Y", VariationCategory::Rotation3D, VariationPhase::Post, false); // 22 - POST!
-        registry.register_core("zscale", "Z-Scale", VariationCategory::Depth3D, VariationPhase::Normal, false);         // 23 - Scales Z depth
+        // Pre-phase variations
+        registry.register_core("pre_blur", "Pre-Blur", VariationCategory::Advanced2D, VariationPhase::Pre, true);
+        registry.register_core("pre_zscale", "Pre-ZScale", VariationCategory::Depth3D, VariationPhase::Pre, false);
+        registry.register_core("pre_ztranslate", "Pre-ZTranslate", VariationCategory::Depth3D, VariationPhase::Pre, false);
+        registry.register_core("pre_spherical", "Pre-Spherical", VariationCategory::Advanced2D, VariationPhase::Pre, false);
+        registry.register_core("pre_sinusoidal", "Pre-Sinusoidal", VariationCategory::Advanced2D, VariationPhase::Pre, false);
+        registry.register_core("pre_disc", "Pre-Disc", VariationCategory::Advanced2D, VariationPhase::Pre, false);
+        registry.register_core("pre_bwraps", "Pre Bwraps", VariationCategory::Advanced2D, VariationPhase::Pre, false);
+        registry.register_core("pre_crop", "Pre Crop", VariationCategory::Advanced2D, VariationPhase::Pre, true);
+        registry.register_core("pre_falloff2", "Pre Falloff2", VariationCategory::Advanced2D, VariationPhase::Pre, true);
 
-        // NEW VARIATIONS (added after original 24) - Indices 24-33
-        // IMPORTANT: Always add new variations at the end to preserve index compatibility
-        registry.register_core("julian", "JuliaN", VariationCategory::Advanced2D, VariationPhase::Normal, true);        // 24 (Needs RNG)
-        registry.register_core("blob", "Blob", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 25
-        registry.register_core("eyefish", "Eyefish", VariationCategory::Advanced2D, VariationPhase::Normal, false);     // 26 - Apophysis core
-        registry.register_core("bubble", "Bubble", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 27 - Apophysis core
-        registry.register_core("cylinder", "Cylinder", VariationCategory::Advanced2D, VariationPhase::Normal, false);   // 28 - Apophysis core
-        registry.register_core("noise", "Noise", VariationCategory::Advanced2D, VariationPhase::Normal, true);          // 29 - Apophysis core (Needs RNG)
-        registry.register_core("blur", "Blur", VariationCategory::Advanced2D, VariationPhase::Normal, true);            // 30 - Apophysis core (Needs RNG)
-        registry.register_core("gaussian_blur", "Gaussian Blur", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 31 - Apophysis core (Needs RNG)
-        registry.register_core("zblur", "Z-Blur", VariationCategory::Depth3D, VariationPhase::Normal, true);            // 32 - Apophysis core (Needs RNG)
-        registry.register_core("blur3d", "Blur 3D", VariationCategory::Full3D, VariationPhase::Normal, true);           // 33 - Apophysis core (Needs RNG)
-        registry.register_core("pre_blur", "Pre-Blur", VariationCategory::Advanced2D, VariationPhase::Pre, true);       // 34 - Apophysis core (Needs RNG, Pre-phase)
-        registry.register_core("pre_zscale", "Pre-ZScale", VariationCategory::Depth3D, VariationPhase::Pre, false);     // 35 - Apophysis core (Pre-phase)
-        registry.register_core("pre_ztranslate", "Pre-ZTranslate", VariationCategory::Depth3D, VariationPhase::Pre, false); // 36 - Apophysis core (Pre-phase)
-        registry.register_core("ztranslate", "ZTranslate", VariationCategory::Depth3D, VariationPhase::Normal, false); // 37 - Apophysis core
-        registry.register_core("waves2", "Waves2", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 38 - Apophysis core (6 parameters)
-        registry.register_core("julia3d", "Julia3D", VariationCategory::Full3D, VariationPhase::Normal, true);          // 39 - Apophysis core (Needs RNG, 1 parameter)
-        registry.register_core("log", "Log", VariationCategory::Advanced2D, VariationPhase::Normal, false);             // 40 - Apophysis 7X extended (1 parameter)
-        registry.register_core("polar2", "Polar2", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 41 - Apophysis 7X extended (no parameters)
-        registry.register_core("cross", "Cross", VariationCategory::Advanced2D, VariationPhase::Normal, false);         // 42 - Apophysis 7X extended (no parameters)
-        registry.register_core("loonie", "Loonie", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 43 - Apophysis 7X extended (no parameters)
-        registry.register_core("escher", "Escher", VariationCategory::Advanced2D, VariationPhase::Normal, false);       // 44 - Apophysis 7X extended (1 parameter)
-        registry.register_core("scry", "Scry", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 45 - Apophysis 7X extended (no parameters)
-        registry.register_core("foci", "Foci", VariationCategory::Advanced2D, VariationPhase::Normal, false);           // 46 - Apophysis 7X extended (no parameters)
-        registry.register_core("bipolar", "Bipolar", VariationCategory::Advanced2D, VariationPhase::Normal, false);     // 47 - Apophysis 7X extended (1 parameter)
-        registry.register_core("elliptic", "Elliptic", VariationCategory::Advanced2D, VariationPhase::Normal, false);   // 48 - Apophysis 7X extended (no parameters)
-        registry.register_core("lazysusan", "LazySusan", VariationCategory::Advanced2D, VariationPhase::Normal, false); // 49 - Apophysis 7X extended (5 parameters)
-        registry.register_core("falloff2", "Falloff2", VariationCategory::Advanced2D, VariationPhase::Normal, true);    // 50 - Apophysis 7X extended (11 parameters, needs RNG)
-        registry.register_core("pre_spherical", "Pre-Spherical", VariationCategory::Advanced2D, VariationPhase::Pre, false); // 51 - Apophysis 7X extended (Pre-phase)
-        registry.register_core("pre_sinusoidal", "Pre-Sinusoidal", VariationCategory::Advanced2D, VariationPhase::Pre, false); // 52 - Apophysis 7X extended (Pre-phase)
-        registry.register_core("pre_disc", "Pre-Disc", VariationCategory::Advanced2D, VariationPhase::Pre, false);     // 53 - Apophysis 7X extended (Pre-phase)
-        registry.register_core("rings2", "Rings2", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 54 - Apophysis 7X extended (1 parameter)
-        registry.register_core("fan2", "Fan2", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 55 - Apophysis 7X extended (2 parameters)
-        registry.register_core("wedge", "Wedge", VariationCategory::Advanced2D, VariationPhase::Normal, false);        // 56 - Apophysis 7X extended (4 parameters)
-        registry.register_core("epispiral", "Epispiral", VariationCategory::Advanced2D, VariationPhase::Normal, true);  // 57 - Apophysis 7X extended (3 parameters, needs RNG)
-        registry.register_core("bwraps", "BWraps", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 58 - Apophysis 7X extended (5 parameters)
-        registry.register_core("pdj", "PDJ", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 59 - Apophysis 7X extended (4 parameters)
-        registry.register_core("juliascope", "JuliaScope", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 60 - Apophysis 7X extended (2 parameters, needs RNG)
-        registry.register_core("julia3dz", "Julia3Dz", VariationCategory::Full3D, VariationPhase::Normal, true);  // 61 - Apophysis 7X extended (1 parameter: power, needs RNG)
-        registry.register_core("curl", "Curl", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 62 - Apophysis 7X extended (2 parameters: c1, c2)
-        registry.register_core("curl3d", "Curl3D", VariationCategory::Full3D, VariationPhase::Normal, false);      // 63 - Apophysis 7X extended (3 parameters: cx, cy, cz)
-        registry.register_core("radial_blur", "Radial Blur", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 64 - Apophysis 7X extended (1 parameter: angle, needs RNG)
-        registry.register_core("blur_circle", "Blur Circle", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 65 - Apophysis 7X extended (no parameters, needs RNG)
-        registry.register_core("blur_zoom", "Blur Zoom", VariationCategory::Advanced2D, VariationPhase::Normal, true);     // 66 - Apophysis 7X extended (3 parameters: length, x, y, needs RNG)
-        registry.register_core("blur_pixelize", "Blur Pixelize", VariationCategory::Advanced2D, VariationPhase::Normal, true); // 67 - Apophysis 7X extended (2 parameters: size, scale, needs RNG)
-        registry.register_core("rectangles", "Rectangles", VariationCategory::Advanced2D, VariationPhase::Normal, false);  // 68 - Apophysis 7X extended (2 parameters: x, y)
-        registry.register_core("splits", "Splits", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 69 - Apophysis 7X extended (2 parameters: x, y)
-        registry.register_core("separation", "Separation", VariationCategory::Advanced2D, VariationPhase::Normal, false);  // 70 - Apophysis 7X extended (4 parameters: x, y, xinside, yinside)
-        registry.register_core("ngon", "Ngon", VariationCategory::Advanced2D, VariationPhase::Normal, false);          // 71 - Apophysis 7X extended (4 parameters: sides, power, circle, corners)
-        registry.register_core("mobius", "Mobius", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 72 - Apophysis 7X extended (8 parameters: complex Möbius transformation)
-        registry.register_core("crop", "Crop", VariationCategory::Advanced2D, VariationPhase::Normal, true);        // 73 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
-        registry.register_core("auger", "Auger", VariationCategory::Advanced2D, VariationPhase::Normal, false);      // 74 - Apophysis 7X extended (4 parameters: freq, weight, scale, sym)
-        registry.register_core("pre_bwraps", "Pre Bwraps", VariationCategory::Advanced2D, VariationPhase::Pre, false);  // 75 - Apophysis 7X extended (5 parameters: cellsize, space, gain, inner_twist, outer_twist)
-        registry.register_core("post_bwraps", "Post Bwraps", VariationCategory::Advanced2D, VariationPhase::Post, false); // 76 - Apophysis 7X extended (5 parameters: cellsize, space, gain, inner_twist, outer_twist)
-        registry.register_core("pre_crop", "Pre Crop", VariationCategory::Advanced2D, VariationPhase::Pre, true);      // 77 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
-        registry.register_core("post_crop", "Post Crop", VariationCategory::Advanced2D, VariationPhase::Post, true);   // 78 - Apophysis 7X extended (6 parameters: left, top, right, bottom, scatter_area, zero - needs RNG)
-        registry.register_core("pre_falloff2", "Pre Falloff2", VariationCategory::Advanced2D, VariationPhase::Pre, true);  // 79 - Apophysis 7X extended (11 parameters: scatter, mindist, mul_x, mul_y, mul_z, mul_c, x0, y0, z0, invert, blurtype - needs RNG)
-        registry.register_core("post_falloff2", "Post Falloff2", VariationCategory::Advanced2D, VariationPhase::Post, true); // 80 - Apophysis 7X extended (11 parameters: scatter, mindist, mul_x, mul_y, mul_z, mul_c, x0, y0, z0, invert, blurtype - needs RNG)
-        registry.register_core("post_curl", "Post Curl", VariationCategory::Advanced2D, VariationPhase::Post, false);  // 81 - Apophysis 7X extended (2 parameters: c1, c2)
-        registry.register_core("post_curl3d", "Post Curl 3D", VariationCategory::Full3D, VariationPhase::Post, false); // 82 - Apophysis 7X extended (3 parameters: cx, cy, cz)
+        // Normal-phase variations
+        registry.register_core("ztranslate", "ZTranslate", VariationCategory::Depth3D, VariationPhase::Normal, false);
+        registry.register_core("julia3d", "Julia3D", VariationCategory::Full3D, VariationPhase::Normal, true);
+        registry.register_core("falloff2", "Falloff2", VariationCategory::Advanced2D, VariationPhase::Normal, true);
+        registry.register_core("wedge", "Wedge", VariationCategory::Advanced2D, VariationPhase::Normal, false);
+        registry.register_core("epispiral", "Epispiral", VariationCategory::Advanced2D, VariationPhase::Normal, true);
+        registry.register_core("bwraps", "BWraps", VariationCategory::Advanced2D, VariationPhase::Normal, false);
+        registry.register_core("juliascope", "JuliaScope", VariationCategory::Advanced2D, VariationPhase::Normal, true);
+        registry.register_core("julia3dz", "Julia3Dz", VariationCategory::Full3D, VariationPhase::Normal, true);
+        registry.register_core("curl3d", "Curl3D", VariationCategory::Full3D, VariationPhase::Normal, false);
+        registry.register_core("radial_blur", "Radial Blur", VariationCategory::Advanced2D, VariationPhase::Normal, true);
+        registry.register_core("blur_circle", "Blur Circle", VariationCategory::Advanced2D, VariationPhase::Normal, true);
+        registry.register_core("blur_zoom", "Blur Zoom", VariationCategory::Advanced2D, VariationPhase::Normal, true);
+        registry.register_core("blur_pixelize", "Blur Pixelize", VariationCategory::Advanced2D, VariationPhase::Normal, true);
+        registry.register_core("separation", "Separation", VariationCategory::Advanced2D, VariationPhase::Normal, false);
+        registry.register_core("mobius", "Mobius", VariationCategory::Advanced2D, VariationPhase::Normal, false);
+        registry.register_core("crop", "Crop", VariationCategory::Advanced2D, VariationPhase::Normal, true);
 
-        // Add parameters to variations that need them
-        registry.add_parameters("julian", vec![
-            VariationParameter {
-                name: "power".to_string(),
-                display_name: "Power".to_string(),
-                param_type: ParamType::UnlimitedInteger,
-                default_value: 2.0,
-                min_value: Some(-10.0),
-                max_value: Some(10.0),
-            },
-            VariationParameter {
-                name: "dist".to_string(),
-                display_name: "Distance".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 1.0,
-                min_value: Some(-100.0),
-                max_value: Some(100.0),
-            },
-        ]);
+        // Post-phase variations
+        registry.register_core("post_bwraps", "Post Bwraps", VariationCategory::Advanced2D, VariationPhase::Post, false);
+        registry.register_core("post_crop", "Post Crop", VariationCategory::Advanced2D, VariationPhase::Post, true);
+        registry.register_core("post_falloff2", "Post Falloff2", VariationCategory::Advanced2D, VariationPhase::Post, true);
+        registry.register_core("post_curl", "Post Curl", VariationCategory::Advanced2D, VariationPhase::Post, false);
+        registry.register_core("post_curl3d", "Post Curl 3D", VariationCategory::Full3D, VariationPhase::Post, false);
 
-        registry.add_parameters("blob", vec![
-            VariationParameter {
-                name: "high".to_string(),
-                display_name: "High".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 1.0,
-                min_value: Some(-3.0),
-                max_value: Some(3.0),
-            },
-            VariationParameter {
-                name: "low".to_string(),
-                display_name: "Low".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 1.0,
-                min_value: Some(-3.0),
-                max_value: Some(3.0),
-            },
-            VariationParameter {
-                name: "waves".to_string(),
-                display_name: "Waves".to_string(),
-                param_type: ParamType::UnlimitedInteger,
-                default_value: 6.0,
-                min_value: Some(1.0),
-                max_value: Some(20.0),
-            },
-        ]);
-
-        registry.add_parameters("waves2", vec![
-            VariationParameter {
-                name: "freqx".to_string(),
-                display_name: "Freq X".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 2.0,
-                min_value: Some(0.0),
-                max_value: Some(10.0),
-            },
-            VariationParameter {
-                name: "scalex".to_string(),
-                display_name: "Scale X".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 1.0,
-                min_value: Some(-2.0),
-                max_value: Some(2.0),
-            },
-            VariationParameter {
-                name: "freqy".to_string(),
-                display_name: "Freq Y".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 2.0,
-                min_value: Some(0.0),
-                max_value: Some(10.0),
-            },
-            VariationParameter {
-                name: "scaley".to_string(),
-                display_name: "Scale Y".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 1.0,
-                min_value: Some(-2.0),
-                max_value: Some(2.0),
-            },
-            VariationParameter {
-                name: "freqz".to_string(),
-                display_name: "Freq Z".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(0.0),
-                max_value: Some(10.0),
-            },
-            VariationParameter {
-                name: "scalez".to_string(),
-                display_name: "Scale Z".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-2.0),
-                max_value: Some(2.0),
-            },
-        ]);
+        // Add parameters to legacy variations that need them
+        // (Variations from ALL_VARIATIONS already have parameters defined in their VariationDef)
 
         registry.add_parameters("julia3d", vec![
             VariationParameter {
@@ -359,82 +247,6 @@ impl VariationRegistry {
                 display_name: "Power".to_string(),
                 param_type: ParamType::UnlimitedInteger,
                 default_value: 2.0,
-                min_value: Some(-10.0),
-                max_value: Some(10.0),
-            },
-        ]);
-
-        registry.add_parameters("escher", vec![
-            VariationParameter {
-                name: "beta".to_string(),
-                display_name: "Beta".to_string(),
-                param_type: ParamType::Angle,
-                default_value: 0.0,
-                min_value: Some(-360.0),
-                max_value: Some(360.0),
-            },
-        ]);
-
-        registry.add_parameters("log", vec![
-            VariationParameter {
-                name: "base".to_string(),
-                display_name: "Base".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 2.71828182845905, // e (Euler's number)
-                min_value: Some(0.000001), // 1E-6 minimum from Apophysis
-                max_value: Some(100.0),
-            },
-        ]);
-
-        registry.add_parameters("bipolar", vec![
-            VariationParameter {
-                name: "shift".to_string(),
-                display_name: "Shift".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0,
-                min_value: Some(-1.0),
-                max_value: Some(1.0),
-            },
-        ]);
-
-        registry.add_parameters("lazysusan", vec![
-            VariationParameter {
-                name: "spin".to_string(),
-                display_name: "Spin".to_string(),
-                param_type: ParamType::Angle,
-                default_value: 0.0, // PI radians = 180 degrees
-                min_value: Some(-360.0),
-                max_value: Some(360.0),
-            },
-            VariationParameter {
-                name: "space".to_string(),
-                display_name: "Space".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-100.0),
-                max_value: Some(100.0),
-            },
-            VariationParameter {
-                name: "twist".to_string(),
-                display_name: "Twist".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-10.0),
-                max_value: Some(10.0),
-            },
-            VariationParameter {
-                name: "x".to_string(),
-                display_name: "X Offset".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-10.0),
-                max_value: Some(10.0),
-            },
-            VariationParameter {
-                name: "y".to_string(),
-                display_name: "Y Offset".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
                 min_value: Some(-10.0),
                 max_value: Some(10.0),
             },
@@ -528,36 +340,6 @@ impl VariationRegistry {
                 default_value: 0.0,
                 min_value: None,
                 max_value: None,
-            },
-        ]);
-
-        registry.add_parameters("rings2", vec![
-            VariationParameter {
-                name: "val".to_string(),
-                display_name: "Value".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 1.0,
-                min_value: Some(-2.0),
-                max_value: Some(2.0),
-            },
-        ]);
-
-        registry.add_parameters("fan2", vec![
-            VariationParameter {
-                name: "x".to_string(),
-                display_name: "X".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-5.0),
-                max_value: Some(5.0),
-            },
-            VariationParameter {
-                name: "y".to_string(),
-                display_name: "Y".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-5.0),
-                max_value: Some(5.0),
             },
         ]);
 
@@ -666,41 +448,6 @@ impl VariationRegistry {
             },
         ]);
 
-        registry.add_parameters("pdj", vec![
-            VariationParameter {
-                name: "a".to_string(),
-                display_name: "A".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,  // Apophysis uses 6*Random-3, we'll use 0 as default
-                min_value: Some(-20.0),
-                max_value: Some(20.0),
-            },
-            VariationParameter {
-                name: "b".to_string(),
-                display_name: "B".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-20.0),
-                max_value: Some(20.0),
-            },
-            VariationParameter {
-                name: "c".to_string(),
-                display_name: "C".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-20.0),
-                max_value: Some(20.0),
-            },
-            VariationParameter {
-                name: "d".to_string(),
-                display_name: "D".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-20.0),
-                max_value: Some(20.0),
-            },
-        ]);
-
         registry.add_parameters("juliascope", vec![
             VariationParameter {
                 name: "power".to_string(),
@@ -728,25 +475,6 @@ impl VariationRegistry {
                 default_value: 2.0,
                 min_value: Some(-20.0),
                 max_value: Some(20.0),
-            },
-        ]);
-
-        registry.add_parameters("curl", vec![
-            VariationParameter {
-                name: "c1".to_string(),
-                display_name: "C1".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-5.0),
-                max_value: Some(5.0),
-            },
-            VariationParameter {
-                name: "c2".to_string(),
-                display_name: "C2".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-5.0),
-                max_value: Some(5.0),
             },
         ]);
 
@@ -834,44 +562,6 @@ impl VariationRegistry {
             },
         ]);
 
-        registry.add_parameters("rectangles", vec![
-            VariationParameter {
-                name: "x".to_string(),
-                display_name: "X".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 1.0,
-                min_value: Some(-20.0),
-                max_value: Some(20.0),
-            },
-            VariationParameter {
-                name: "y".to_string(),
-                display_name: "Y".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 1.0,
-                min_value: Some(-20.0),
-                max_value: Some(20.0),
-            },
-        ]);
-
-        registry.add_parameters("splits", vec![
-            VariationParameter {
-                name: "x".to_string(),
-                display_name: "X".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-20.0),
-                max_value: Some(20.0),
-            },
-            VariationParameter {
-                name: "y".to_string(),
-                display_name: "Y".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-20.0),
-                max_value: Some(20.0),
-            },
-        ]);
-
         registry.add_parameters("separation", vec![
             VariationParameter {
                 name: "x".to_string(),
@@ -902,41 +592,6 @@ impl VariationRegistry {
                 display_name: "Y Inside".to_string(),
                 param_type: ParamType::UnlimitedFloat,
                 default_value: 0.0,
-                min_value: Some(-20.0),
-                max_value: Some(20.0),
-            },
-        ]);
-
-        registry.add_parameters("ngon", vec![
-            VariationParameter {
-                name: "sides".to_string(),
-                display_name: "Sides".to_string(),
-                param_type: ParamType::UnlimitedInteger,
-                default_value: 5.0,
-                min_value: Some(-10.0),
-                max_value: Some(10.0),
-            },
-            VariationParameter {
-                name: "power".to_string(),
-                display_name: "Power".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 3.0,
-                min_value: Some(-2.0),
-                max_value: Some(20.0),
-            },
-            VariationParameter {
-                name: "circle".to_string(),
-                display_name: "Circle".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 1.0,
-                min_value: Some(-20.0),
-                max_value: Some(20.0),
-            },
-            VariationParameter {
-                name: "corners".to_string(),
-                display_name: "Corners".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 2.0,
                 min_value: Some(-20.0),
                 max_value: Some(20.0),
             },
@@ -1057,41 +712,6 @@ impl VariationRegistry {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
-            },
-        ]);
-
-        registry.add_parameters("auger", vec![
-            VariationParameter {
-                name: "freq".to_string(),
-                display_name: "Frequency".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 5.0,
-                min_value: Some(-30.0),
-                max_value: Some(30.0),
-            },
-            VariationParameter {
-                name: "weight".to_string(),
-                display_name: "Weight".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.5,
-                min_value: Some(-10.0),
-                max_value: Some(10.0),
-            },
-            VariationParameter {
-                name: "scale".to_string(),
-                display_name: "Scale".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.1,
-                min_value: Some(-10.0),
-                max_value: Some(10.0),
-            },
-            VariationParameter {
-                name: "sym".to_string(),
-                display_name: "Symmetry".to_string(),
-                param_type: ParamType::UnlimitedFloat,
-                default_value: 0.0,
-                min_value: Some(-2.0),
-                max_value: Some(2.0),
             },
         ]);
 
@@ -1521,7 +1141,14 @@ impl VariationRegistry {
         registry
     }
 
-    /// Register a core (built-in) variation
+    /// Register a core (built-in) variation from a static definition
+    fn register_from_def(&mut self, def: &VariationDef) {
+        let info = VariationInfo::from_def(def);
+        self.ordered_names.push(info.name.clone());
+        self.variations.insert(info.name.clone(), info);
+    }
+
+    /// Register a core (built-in) variation (legacy method for backward compatibility)
     fn register_core(&mut self, name: &str, display_name: &str, category: VariationCategory, phase: VariationPhase, needs_rng: bool) {
         let wgsl_function = if name == "julia" {
             // Julia is special - doesn't have "variation_" prefix in shader
@@ -1539,6 +1166,7 @@ impl VariationRegistry {
             needs_rng,
             is_core: true,
             wgsl_source: None,
+            wgsl_source_3d: None,
             parameters: Vec::new(),  // No parameters by default
         };
 
@@ -1559,6 +1187,7 @@ impl VariationRegistry {
             needs_rng,
             is_core: false,
             wgsl_source: Some(wgsl_source),
+            wgsl_source_3d: None, // Plugin 3D source can be added separately
             parameters: Vec::new(),  // Parameters can be added later
         };
 
