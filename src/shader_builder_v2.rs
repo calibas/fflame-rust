@@ -243,6 +243,40 @@ impl ShaderBuilder {
         Self { registry }
     }
 
+    /// Generate variation function code for ALL variations in registry from embedded WGSL
+    ///
+    /// All variations now have embedded WGSL in their VariationDef, so this generates
+    /// the complete variations code without needing static .wgsl files.
+    fn generate_all_variation_code(&self, render_3d: bool) -> String {
+        let mut code = String::new();
+
+        // Generate code for ALL variations in the registry (not just active ones)
+        // This ensures all variation functions are available even if not currently active
+        for name in self.registry.names() {
+            if let Some(info) = self.registry.get(name) {
+                if render_3d {
+                    // For 3D mode, prefer wgsl_source_3d, fall back to wgsl_source
+                    if let Some(source_3d) = &info.wgsl_source_3d {
+                        code.push_str(source_3d);
+                        code.push('\n');
+                    } else if let Some(source) = &info.wgsl_source {
+                        // 2D source as fallback
+                        code.push_str(source);
+                        code.push('\n');
+                    }
+                } else {
+                    // For 2D mode, use wgsl_source only
+                    if let Some(source) = &info.wgsl_source {
+                        code.push_str(source);
+                        code.push('\n');
+                    }
+                }
+            }
+        }
+
+        code
+    }
+
     /// Build trajectory shader from unified template
     ///
     /// This method uses the main_template.wgsl with conditional compilation
@@ -298,31 +332,18 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/rng.wgsl"));
         shader.push('\n');
 
-        // 4. Affine (needed for 2D mode)
-        if !render_3d {
-            shader.push_str(include_str!("../shaders/core/affine.wgsl"));
-            shader.push('\n');
-        }
-
-        // 5. Core variations
+        // 4. Affine transformations
         if render_3d {
-            shader.push_str(include_str!("../shaders/core/variations_3d.wgsl"));
+            shader.push_str(include_str!("../shaders/core/affine_3d.wgsl"));
         } else {
-            shader.push_str(include_str!("../shaders/core/variations_2d.wgsl"));
+            shader.push_str(include_str!("../shaders/core/affine.wgsl"));
         }
         shader.push('\n');
 
-        // 6. Plugin variations
-        for (name, _) in &active {
-            if let Some(info) = self.registry.get(name) {
-                if !info.is_core {
-                    if let Some(source) = &info.wgsl_source {
-                        shader.push_str(source);
-                        shader.push('\n');
-                    }
-                }
-            }
-        }
+        // 5. Core variations from embedded VariationDef WGSL
+        // All variations now have embedded WGSL in their VariationDef, generated from Rust code
+        shader.push_str(&self.generate_all_variation_code(render_3d));
+        shader.push('\n');
 
         // 7. Generate apply_variations with fixed registry indices
         if render_3d {
@@ -755,23 +776,11 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/affine.wgsl"));
         shader.push('\n');
 
-        // 4. Core variations (2D)
-        shader.push_str(include_str!("../shaders/core/variations_2d.wgsl"));
+        // 4. Core variations (2D) from embedded VariationDef WGSL
+        shader.push_str(&self.generate_all_variation_code(false));
         shader.push('\n');
 
-        // 5. Plugin variations (2D only)
-        for (name, _) in &active_2d {
-            if let Some(info) = self.registry.get(name) {
-                if !info.is_core {
-                    if let Some(source) = &info.wgsl_source {
-                        shader.push_str(source);
-                        shader.push('\n');
-                    }
-                }
-            }
-        }
-
-        // 6. Generate apply_variations
+        // 5. Generate apply_variations
         shader.push_str(&self.build_apply_variations_2d(&active_2d));
         shader.push('\n');
 
@@ -810,21 +819,13 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/rng.wgsl"));
         shader.push('\n');
 
-        // 3. Core variations (3D)
-        shader.push_str(include_str!("../shaders/core/variations_3d.wgsl"));
+        // 3. Affine (3D)
+        shader.push_str(include_str!("../shaders/core/affine_3d.wgsl"));
         shader.push('\n');
 
-        // 4. Plugin variations
-        for (name, _) in &active_3d {
-            if let Some(info) = self.registry.get(name) {
-                if !info.is_core {
-                    if let Some(source) = &info.wgsl_source {
-                        shader.push_str(source);
-                        shader.push('\n');
-                    }
-                }
-            }
-        }
+        // 4. Core variations (3D) from embedded VariationDef WGSL
+        shader.push_str(&self.generate_all_variation_code(true));
+        shader.push('\n');
 
         // 5. Generate apply_variations
         shader.push_str(&self.build_apply_variations_3d(&active_3d));
@@ -878,21 +879,13 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
         shader.push('\n');
 
-        // 4. Core variations (3D)
-        shader.push_str(include_str!("../shaders/core/variations_3d.wgsl"));
+        // 4. Affine (3D)
+        shader.push_str(include_str!("../shaders/core/affine_3d.wgsl"));
         shader.push('\n');
 
-        // 5. Plugin variations
-        for (name, _) in &active_3d {
-            if let Some(info) = self.registry.get(name) {
-                if !info.is_core {
-                    if let Some(source) = &info.wgsl_source {
-                        shader.push_str(source);
-                        shader.push('\n');
-                    }
-                }
-            }
-        }
+        // 5. Core variations (3D) from embedded VariationDef WGSL
+        shader.push_str(&self.generate_all_variation_code(true));
+        shader.push('\n');
 
         // 6. Generate apply_variations
         shader.push_str(&self.build_apply_variations_3d(&active_3d));
