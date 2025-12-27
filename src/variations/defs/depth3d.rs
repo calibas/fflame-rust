@@ -34,7 +34,8 @@ pub static FLATTEN: VariationDef = VariationDef {
     name: "flatten",
     display_name: "Flatten",
     category: VariationCategory::Depth3D,
-    phase: VariationPhase::Normal,
+    // NOTE: Flatten is treated as POST despite being index 1 (Apophysis XForm.pas)
+    phase: VariationPhase::Post,
     needs_rng: false,
     parameters: &[],
     wgsl_2d: r#"

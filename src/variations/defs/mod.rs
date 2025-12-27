@@ -8,12 +8,20 @@ mod advanced;
 mod depth3d;
 mod rotation3d;
 mod full3d;
+mod blur;
+mod pre_phase;
+mod post_phase;
+mod extended;
 
 pub use basic::*;
 pub use advanced::*;
 pub use depth3d::*;
 pub use rotation3d::*;
 pub use full3d::*;
+pub use blur::*;
+pub use pre_phase::*;
+pub use post_phase::*;
+pub use extended::*;
 
 use super::definition::VariationDef;
 
@@ -80,4 +88,40 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SPLITS,
     &NGON,
     &AUGER,
+    // Blur variations (83+)
+    &ZBLUR,
+    &BLUR3D,
+    &PRE_BLUR,
+    // Pre-phase variations (86+)
+    &PRE_ZSCALE,
+    &PRE_ZTRANSLATE,
+    &PRE_SPHERICAL,
+    &PRE_SINUSOIDAL,
+    &PRE_DISC,
+    &PRE_BWRAPS,
+    &PRE_CROP,
+    &PRE_FALLOFF2,
+    // Normal-phase extended (94+)
+    &ZTRANSLATE,
+    &JULIA3D,
+    &FALLOFF2,
+    &WEDGE,
+    &EPISPIRAL,
+    &BWRAPS,
+    &JULIASCOPE,
+    &JULIA3DZ,
+    &CURL3D,
+    &RADIAL_BLUR,
+    &BLUR_CIRCLE,
+    &BLUR_ZOOM,
+    &BLUR_PIXELIZE,
+    &SEPARATION,
+    &MOBIUS,
+    &CROP,
+    // Post-phase variations (110+)
+    &POST_BWRAPS,
+    &POST_CROP,
+    &POST_FALLOFF2,
+    &POST_CURL,
+    &POST_CURL3D,
 ];
