@@ -8,7 +8,7 @@ fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {
     return variation_params[xform_id].params[idx];
 }
 
-// Select transform based on cumulative weights
+// Select transform based on cumulative weights (uses params.num_transforms)
 fn select_transform(rand_val: f32) -> u32 {
     var cumulative = 0.0;
     var total_weight = 0.0;
@@ -28,6 +28,29 @@ fn select_transform(rand_val: f32) -> u32 {
     }
 
     return params.num_transforms - 1u;
+}
+
+// Select transform using hard-coded NUM_TRANSFORMS constant
+// Enables loop unrolling optimization by compiler
+fn select_transform_const(rand_val: f32) -> u32 {
+    var cumulative = 0.0;
+    var total_weight = 0.0;
+
+    // Calculate total weight (loop can be unrolled with known NUM_TRANSFORMS)
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        total_weight += transforms[i].weight;
+    }
+
+    let ttarget = rand_val * total_weight;
+
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        cumulative += transforms[i].weight;
+        if (ttarget <= cumulative) {
+            return i;
+        }
+    }
+
+    return NUM_TRANSFORMS - 1u;
 }
 
 // Convert speed to color using palette lookup

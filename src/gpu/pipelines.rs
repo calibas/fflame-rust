@@ -365,6 +365,44 @@ impl FlamePipelines {
         )
     }
 
+    /// Ensure shaders are up-to-date with full FractalConfig (variations, path features, and constants)
+    /// This is the preferred method for loading configs as it properly updates all shader constants.
+    /// Returns true if shaders were recompiled
+    pub fn ensure_shaders_current_with_config(
+        &mut self,
+        device: &Device,
+        config: &crate::config::FractalConfig,
+        path_features_enabled: bool,
+    ) -> bool {
+        let constants = crate::shader_cache::ShaderCache::constants_from_config(config);
+        self.shader_cache.ensure_current_full(
+            device,
+            &self.compute_bind_group_layout,
+            &config.flame,
+            path_features_enabled,
+            constants,
+        )
+    }
+
+    /// Ensure shaders are up-to-date with explicit constants
+    /// Used for incremental updates where full FractalConfig isn't available
+    /// Returns true if shaders were recompiled
+    pub fn ensure_shaders_current_with_constants(
+        &mut self,
+        device: &Device,
+        flame: &Flame,
+        path_features_enabled: bool,
+        constants: crate::shader_builder_v2::ShaderConstants,
+    ) -> bool {
+        self.shader_cache.ensure_current_full(
+            device,
+            &self.compute_bind_group_layout,
+            flame,
+            path_features_enabled,
+            constants,
+        )
+    }
+
     /// Get current path_features_enabled state from shader cache
     pub fn path_features_enabled(&self) -> bool {
         self.shader_cache.path_features_enabled()

@@ -1,4 +1,16 @@
-// Main compute shader entry point for 3D mode
+// Main compute shader template
+// This template generates 4 variants via conditional compilation:
+//   - 2D mode (vec2 points) vs 3D mode (vec3 points)
+//   - Simple (no path tracking) vs Full (with path tracking)
+//
+// Conditional markers:
+//   {{#if RENDER_3D}} ... {{else}} ... {{/if}}
+//   {{#if PATH_TRACKING}} ... {{/if}}
+//
+// Uses hard-coded constants (compiled at shader build time):
+//   NUM_TRANSFORMS, COLOR_MODE, HAS_FINAL_TRANSFORM, FINAL_TRANSFORM_INDEX
+// These enable dead code elimination and loop unrolling optimizations.
+
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let thread_id = global_id.x;
@@ -6,33 +18,55 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Initialize RNG
     var rng = rng_init(thread_id, params.seed);
 
-    // Starting point (random in [-1, 1], including Z for 3D)
+    // Starting point (random in [-1, 1])
+{{#if PATH_TRACKING}}
+    // Store initial coordinates for path reconstruction
     let initial_x = rng_nextf(&rng) * 2.0 - 1.0;
     let initial_y = rng_nextf(&rng) * 2.0 - 1.0;
+{{#if RENDER_3D}}
     var current = vec3<f32>(
         initial_x,
         initial_y,
         rng_nextf(&rng) * 2.0 - 1.0
     );
+{{else}}
+    var current = vec2<f32>(initial_x, initial_y);
+{{/if}}
+{{else}}
+{{#if RENDER_3D}}
+    var current = vec3<f32>(
+        rng_nextf(&rng) * 2.0 - 1.0,
+        rng_nextf(&rng) * 2.0 - 1.0,
+        rng_nextf(&rng) * 2.0 - 1.0
+    );
+{{else}}
+    var current = vec2<f32>(
+        rng_nextf(&rng) * 2.0 - 1.0,
+        rng_nextf(&rng) * 2.0 - 1.0
+    );
+{{/if}}
+{{/if}}
 
     var color = vec3<f32>(1.0, 1.0, 1.0);
     var color_index = 0.0;  // For palette mode
 
+{{#if PATH_TRACKING}}
     // Path tracking for PathMap mode
     // Stores first 32 iterations losslessly (4 bits per transform, supports up to 16 transforms)
     // path[0] = iterations 0-7, path[1] = 8-15, path[2] = 16-23, path[3] = 24-31
     // Also stores initial_x, initial_y for complete path reconstruction
     var path = array<u32, 4>(0u, 0u, 0u, 0u);
     var path_iteration = 0u;  // Count of iterations stored in path
+{{/if}}
 
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
         // Save old position for speed calculation
         let old_pos = current;
 
-        // Select random transform
+        // Select random transform (uses hard-coded NUM_TRANSFORMS)
         let rand_val = rng_nextf(&rng);
-        let xform_idx = select_transform(rand_val);
+        let xform_idx = select_transform_const(rand_val);
         let xform = transforms[xform_idx];
 
         // Opacity check (stochastic transparency)
@@ -47,8 +81,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Calculate speed (distance traveled)
         let speed = length(current - old_pos);
 
-        // Update color based on color mode
-        if (params.color_mode == 0u) {
+        // Update color based on color mode (hard-coded COLOR_MODE)
+        if (COLOR_MODE == 0u) {
             // Palette mode: Apophysis color coordinate evolution
             // Formula: new_c = old_c * (1 + symmetry)/2 + transform_color * (1 - symmetry)/2
             // where symmetry = color_speed (-1 to 1)
@@ -56,14 +90,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let colorC1 = (1.0 + symmetry) / 2.0;
             let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
             color_index = color_index * colorC1 + colorC2;
-        } else if (params.color_mode == 1u) {
+        } else if (COLOR_MODE == 1u) {
             // Speed mode: blend with speed-based color
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         }
+{{#if PATH_TRACKING}}
+        // Note: COLOR_MODE == 2 (PathMap) handled below with path buffer writes
+{{else}}
+        // Note: COLOR_MODE == 2 (PathMap) uses the full shader with path tracking
+{{/if}}
 
+{{#if PATH_TRACKING}}
         // Path tracking: needed for path map mode OR when filters are active
-        let needs_path_tracking = (params.color_mode == 2u) || (params.num_path_filters > 0u);
+        let needs_path_tracking = (COLOR_MODE == 2u) || (params.num_path_filters > 0u);
         if (needs_path_tracking) {
             // For FirstAfterBurnIn mode (1), only track path after burn-in
             let should_track = (params.path_capture_mode != 1u) || (i >= params.burn_in);
@@ -93,19 +133,29 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
             }
         }
+{{/if}}
 
         // Skip burn-in iterations
         if (i >= params.burn_in) {
-            // Apply final transform if present
+            // Apply final transform if present (hard-coded HAS_FINAL_TRANSFORM)
             var final_pos = current;
-            if (params.has_final_transform != 0u) {
-                let final_xform = transforms[params.final_transform_index];
+            if (HAS_FINAL_TRANSFORM) {
+                let final_xform = transforms[FINAL_TRANSFORM_INDEX];
+{{#if RENDER_3D}}
                 let affine_p = apply_affine(final_xform, final_pos);
-                final_pos = apply_variations(final_xform, params.final_transform_index, affine_p, &rng);
+                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng);
+{{else}}
+                let affine_p = apply_affine(final_xform, current);
+                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng);
+{{/if}}
             }
 
-            // Convert to pixel coordinates (3D version with camera rotation)
+            // Convert to pixel coordinates
+{{#if RENDER_3D}}
             let pixel = world_to_pixel_3d(final_pos);
+{{else}}
+            let pixel = world_to_pixel(final_pos);
+{{/if}}
 
             // Check bounds
             if (pixel.x >= 0 && pixel.x < i32(params.width) &&
@@ -113,14 +163,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
 
-                // Determine final color based on mode
+                // Determine final color based on mode (hard-coded COLOR_MODE)
                 var final_color: vec3<f32>;
-                if (params.color_mode == 0u) {
+                if (COLOR_MODE == 0u) {
                     // Palette mode: sample from palette texture using color_index
                     final_color = textureSampleLevel(palette_texture, palette_sampler, vec2<f32>(color_index, 0.5), 0.0).rgb;
-                } else if (params.color_mode == 1u) {
+                } else if (COLOR_MODE == 1u) {
                     // Speed mode: uses accumulated RGB color
                     final_color = color;
+{{#if PATH_TRACKING}}
                 } else {
                     // Path map mode: store path to buffer
                     // Color will be computed in tonemap pass from path buffer
@@ -145,6 +196,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
                     // Use white for histogram (actual color computed in tonemap from path buffer)
                     final_color = vec3<f32>(1.0, 1.0, 1.0);
+{{/if}}
                 }
 
                 // Atomic accumulation to histogram buffer

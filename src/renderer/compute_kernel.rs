@@ -3,6 +3,7 @@ use crate::gpu::{buffers::*, pipelines::FlamePipelines};
 use crate::scene::transforms::Flame;
 use crate::scene::palette::{Palette, ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode};
 use crate::config::FractalConfig;
+use crate::shader_builder_v2::ShaderConstants;
 
 /// Path entry storing first 32 iterations of transform sequence
 /// Also stores initial random X/Y coordinates for complete path reconstruction
@@ -280,6 +281,21 @@ impl FlameRenderer {
         self.frame_counter = 0; // Reset frame counter for deterministic seed progression
     }
 
+    /// Build shader constants from current renderer state
+    /// Used for incremental updates where FractalConfig isn't available
+    /// Note: This creates non-inlined constants (legacy mode) for compatibility
+    fn build_shader_constants(&self, flame: &Flame) -> ShaderConstants {
+        ShaderConstants {
+            num_transforms: flame.transforms.len() as u32,
+            color_mode: self.color_mode as u32,
+            has_final_transform: flame.final_transform.is_some(),
+            final_transform_index: flame.transforms.len() as u32,
+            // No inlining for incremental updates (would trigger too many shader rebuilds)
+            inlined_transforms: None,
+            cumulative_weights: None,
+        }
+    }
+
     /// Reset accumulation buffer and sample count (full reset including effective iterations)
     pub fn reset(&mut self, encoder: &mut CommandEncoder, queue: &Queue, _iterations_per_thread: u32, _zoom: f32, _pan_x: f32, _pan_y: f32, _rotation: f32, _camera_rotation_x: f32, _camera_rotation_y: f32, _camera_z: f32, _speed_factor: f32) {
         self.reset_iteration_counter();
@@ -479,8 +495,11 @@ impl FlameRenderer {
     /// Load a complete FractalConfig (preset or imported config)
     /// This ensures all GPU state is properly synchronized
     pub fn load_config(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, config: &FractalConfig, palette: &Palette, iterations_per_thread: u32, burn_in: u32) {
-        // 0. Check if shaders need to be recompiled (variations changed)
-        let shaders_changed = self.pipelines.ensure_shaders_current(device, &config.flame);
+        // 0. Check if shaders need to be recompiled (variations or constants changed)
+        // Determine if path features are needed (PathMap mode or path filters active)
+        let path_features_enabled = config.color_mode == ColorMode::PathMap
+            || !self.path_filters.is_empty();
+        let shaders_changed = self.pipelines.ensure_shaders_current_with_config(device, config, path_features_enabled);
         if shaders_changed {
             log::info!("Shaders recompiled during preset load - recreating bind group");
             // Recreate compute bind group with new pipeline
@@ -568,10 +587,18 @@ impl FlameRenderer {
 
     /// Update the flame being rendered
     pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
-        // Check if shaders need to be recompiled (variations changed)
-        let shaders_changed = self.pipelines.ensure_shaders_current(device, flame);
+        // Check if shaders need to be recompiled (variations or constants changed)
+        let constants = self.build_shader_constants(flame);
+        let path_features_enabled = self.color_mode == ColorMode::PathMap
+            || !self.path_filters.is_empty();
+        let shaders_changed = self.pipelines.ensure_shaders_current_with_constants(
+            device,
+            flame,
+            path_features_enabled,
+            constants,
+        );
         if shaders_changed {
-            log::info!("Shaders recompiled due to variation changes - recreating bind group");
+            log::info!("Shaders recompiled due to variation/constant changes - recreating bind group");
             // Recreate compute bind group with new pipeline
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         }
@@ -1199,7 +1226,8 @@ impl FlameRenderer {
 
         // Update shaders if path feature state changed
         if needs_path != shader_has_path {
-            if self.pipelines.ensure_shaders_current_with_path_features(device, flame, needs_path) {
+            let constants = self.build_shader_constants(flame);
+            if self.pipelines.ensure_shaders_current_with_constants(device, flame, needs_path, constants) {
                 changed = true;
             }
         }
