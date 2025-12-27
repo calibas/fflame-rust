@@ -283,12 +283,16 @@ impl FlameRenderer {
 
     /// Build shader constants from current renderer state
     /// Used for incremental updates where FractalConfig isn't available
+    /// Note: This creates non-inlined constants (legacy mode) for compatibility
     fn build_shader_constants(&self, flame: &Flame) -> ShaderConstants {
         ShaderConstants {
             num_transforms: flame.transforms.len() as u32,
             color_mode: self.color_mode as u32,
             has_final_transform: flame.final_transform.is_some(),
             final_transform_index: flame.transforms.len() as u32,
+            // No inlining for incremental updates (would trigger too many shader rebuilds)
+            inlined_transforms: None,
+            cumulative_weights: None,
         }
     }
 

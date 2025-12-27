@@ -5,14 +5,33 @@ use crate::variations::VariationRegistry;
 /// Global flag to enable shader dumping (set via CLI --dump-shader flag)
 static DUMP_SHADER_ENABLED: AtomicBool = AtomicBool::new(false);
 
+/// Global flag to enable inlined constants for maximum performance
+/// When enabled, the shader builder generates specialized shaders with
+/// transform data compiled as constants instead of read from buffers.
+/// This triggers shader recompilation on every flame parameter change,
+/// so it should only be used for batch/CLI rendering (not interactive mode).
+static INLINED_CONSTANTS_ENABLED: AtomicBool = AtomicBool::new(false);
+
 /// Enable shader dumping (writes generated shaders to debug_shader_*.wgsl files)
 pub fn enable_shader_dump() {
     DUMP_SHADER_ENABLED.store(true, Ordering::Relaxed);
 }
 
+/// Enable inlined constants mode for maximum shader performance.
+/// WARNING: This triggers shader recompilation on every flame parameter change!
+/// Only use for CLI/batch rendering, not interactive mode.
+pub fn enable_inlined_constants() {
+    INLINED_CONSTANTS_ENABLED.store(true, Ordering::Relaxed);
+}
+
 /// Check if shader dumping is enabled
 fn should_dump_shader() -> bool {
     DUMP_SHADER_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Check if inlined constants are enabled
+pub fn should_use_inlined_constants() -> bool {
+    INLINED_CONSTANTS_ENABLED.load(Ordering::Relaxed)
 }
 
 /// Simple template processor for shader conditional compilation
@@ -196,6 +215,37 @@ impl TemplateProcessor {
     }
 }
 
+/// Inlined transform data for shader compilation
+///
+/// Contains all per-transform data that will be compiled as shader constants
+/// instead of being read from buffers at runtime.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InlinedTransform {
+    /// Affine coefficients: x' = ax + by + e, y' = cx + dy + f
+    pub a: f32,
+    pub b: f32,
+    pub c: f32,
+    pub d: f32,
+    pub e: f32,
+    pub f: f32,
+    /// Z offset for 3D mode
+    pub g: f32,
+    /// Transform selection weight
+    pub weight: f32,
+    /// Color palette position (0-1)
+    pub color: f32,
+    /// Color speed / symmetry (-1 to 1)
+    pub color_speed: f32,
+    /// Opacity / visibility (0-1)
+    pub opacity: f32,
+    /// Variation weights by registry index (sparse - only non-zero)
+    /// Key = variation registry index, Value = weight
+    pub variation_weights: Vec<(u32, f32)>,
+    /// Variation parameters by registry index and param slot
+    /// Key = (variation_index, param_slot), Value = param value
+    pub variation_params: Vec<((u32, u32), f32)>,
+}
+
 /// Constants that get hard-coded into shaders
 ///
 /// These values are compiled directly into the shader as `const` declarations,
@@ -217,6 +267,15 @@ pub struct ShaderConstants {
 
     /// Index of final transform (only used if has_final_transform is true)
     pub final_transform_index: u32,
+
+    /// Inlined transform data (eliminates buffer reads)
+    /// When Some, transform data is compiled as constants
+    /// When None, transform data is read from buffers (legacy behavior)
+    pub inlined_transforms: Option<Vec<InlinedTransform>>,
+
+    /// Precomputed cumulative weights for transform selection
+    /// Eliminates the weight accumulation loops in select_transform
+    pub cumulative_weights: Option<Vec<f32>>,
 }
 
 impl Default for ShaderConstants {
@@ -226,6 +285,155 @@ impl Default for ShaderConstants {
             color_mode: 0,
             has_final_transform: false,
             final_transform_index: 0,
+            inlined_transforms: None,
+            cumulative_weights: None,
+        }
+    }
+}
+
+impl ShaderConstants {
+    /// Create constants with inlined transform data from a Flame
+    ///
+    /// This enables full constant inlining for maximum performance.
+    /// The shader will be specialized for this exact flame configuration.
+    pub fn with_inlined_transforms(
+        flame: &crate::scene::transforms::Flame,
+        registry: &crate::variations::VariationRegistry,
+        color_mode: u32,
+    ) -> Self {
+        let num_transforms = flame.transforms.len() as u32;
+        let has_final = flame.final_transform.is_some();
+        let final_idx = num_transforms; // Final comes after regular transforms
+
+        // Build ID map for variation name -> registry index
+        let mut id_map: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        for (i, name) in registry.names().iter().enumerate() {
+            id_map.insert(name.clone(), i as u32);
+        }
+
+        // Inline all transforms
+        let mut inlined = Vec::with_capacity(flame.transforms.len());
+        let mut cumulative = Vec::with_capacity(flame.transforms.len());
+        let mut total_weight = 0.0;
+
+        for xform in &flame.transforms {
+            // Convert variation weights to indexed form
+            let mut var_weights = Vec::new();
+            for (name, &weight) in &xform.variations {
+                if weight.abs() > 1e-6 {
+                    if let Some(&idx) = id_map.get(name) {
+                        var_weights.push((idx, weight));
+                    }
+                }
+            }
+            var_weights.sort_by_key(|(idx, _)| *idx);
+
+            // Convert variation params to indexed form
+            let mut var_params = Vec::new();
+            for (key, &value) in &xform.variation_params {
+                // Key format: "variation_name.param_name"
+                if let Some(dot_pos) = key.find('.') {
+                    let var_name = &key[..dot_pos];
+                    let param_name = &key[dot_pos + 1..];
+
+                    if let Some(&var_idx) = id_map.get(var_name) {
+                        if let Some(info) = registry.get(var_name) {
+                            // Find param slot index
+                            for (slot, param) in info.parameters.iter().enumerate() {
+                                if param.name == param_name {
+                                    var_params.push(((var_idx, slot as u32), value));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            var_params.sort_by_key(|((var_idx, slot), _)| (*var_idx, *slot));
+
+            total_weight += xform.weight;
+            cumulative.push(total_weight);
+
+            inlined.push(InlinedTransform {
+                a: xform.a,
+                b: xform.b,
+                c: xform.c,
+                d: xform.d,
+                e: xform.e,
+                f: xform.f,
+                g: xform.g,
+                weight: xform.weight,
+                color: xform.color,
+                color_speed: xform.color_speed,
+                opacity: xform.opacity,
+                variation_weights: var_weights,
+                variation_params: var_params,
+            });
+        }
+
+        // Normalize cumulative weights to 0-1 range
+        if total_weight > 0.0 {
+            for w in &mut cumulative {
+                *w /= total_weight;
+            }
+        }
+
+        // Handle final transform if present
+        if let Some(final_xform) = &flame.final_transform {
+            let mut var_weights = Vec::new();
+            for (name, &weight) in &final_xform.variations {
+                if weight.abs() > 1e-6 {
+                    if let Some(&idx) = id_map.get(name) {
+                        var_weights.push((idx, weight));
+                    }
+                }
+            }
+            var_weights.sort_by_key(|(idx, _)| *idx);
+
+            let mut var_params = Vec::new();
+            for (key, &value) in &final_xform.variation_params {
+                if let Some(dot_pos) = key.find('.') {
+                    let var_name = &key[..dot_pos];
+                    let param_name = &key[dot_pos + 1..];
+
+                    if let Some(&var_idx) = id_map.get(var_name) {
+                        if let Some(info) = registry.get(var_name) {
+                            for (slot, param) in info.parameters.iter().enumerate() {
+                                if param.name == param_name {
+                                    var_params.push(((var_idx, slot as u32), value));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            var_params.sort_by_key(|((var_idx, slot), _)| (*var_idx, *slot));
+
+            inlined.push(InlinedTransform {
+                a: final_xform.a,
+                b: final_xform.b,
+                c: final_xform.c,
+                d: final_xform.d,
+                e: final_xform.e,
+                f: final_xform.f,
+                g: final_xform.g,
+                weight: 0.0, // Final transform not selected by weight
+                color: final_xform.color,
+                color_speed: final_xform.color_speed,
+                opacity: final_xform.opacity,
+                variation_weights: var_weights,
+                variation_params: var_params,
+            });
+        }
+
+        Self {
+            num_transforms,
+            color_mode,
+            has_final_transform: has_final,
+            final_transform_index: final_idx,
+            inlined_transforms: Some(inlined),
+            cumulative_weights: Some(cumulative),
         }
     }
 }
@@ -233,17 +441,124 @@ impl Default for ShaderConstants {
 impl ShaderConstants {
     /// Generate WGSL const declarations
     pub fn to_wgsl(&self) -> String {
-        format!(
+        let mut code = format!(
             "// Hard-coded shader constants (compiled at shader build time)\n\
              const NUM_TRANSFORMS: u32 = {}u;\n\
              const COLOR_MODE: u32 = {}u;\n\
              const HAS_FINAL_TRANSFORM: bool = {};\n\
-             const FINAL_TRANSFORM_INDEX: u32 = {}u;\n\n",
+             const FINAL_TRANSFORM_INDEX: u32 = {}u;\n",
             self.num_transforms,
             self.color_mode,
             self.has_final_transform,
             self.final_transform_index,
-        )
+        );
+
+        // Generate cumulative weights for fast transform selection
+        if let Some(ref cumulative) = self.cumulative_weights {
+            code.push_str("\n// Precomputed cumulative weights (normalized 0-1)\n");
+            code.push_str("const CUMULATIVE_WEIGHTS: array<f32, ");
+            code.push_str(&cumulative.len().to_string());
+            code.push_str("> = array<f32, ");
+            code.push_str(&cumulative.len().to_string());
+            code.push_str(">(");
+            for (i, w) in cumulative.iter().enumerate() {
+                if i > 0 {
+                    code.push_str(", ");
+                }
+                code.push_str(&format!("{:.8}", w));
+            }
+            code.push_str(");\n");
+            code.push_str("const USE_INLINED_WEIGHTS: bool = true;\n");
+        } else {
+            code.push_str("const USE_INLINED_WEIGHTS: bool = false;\n");
+        }
+
+        // Generate inlined transform data
+        if let Some(ref transforms) = self.inlined_transforms {
+            code.push_str("\n// Inlined transform data (eliminates buffer reads)\n");
+            code.push_str("const USE_INLINED_TRANSFORMS: bool = true;\n\n");
+
+            // Generate affine coefficients as struct array
+            code.push_str("struct InlinedAffine {\n");
+            code.push_str("    a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, g: f32,\n");
+            code.push_str("    color: f32, color_speed: f32, opacity: f32,\n");
+            code.push_str("}\n\n");
+
+            code.push_str(&format!(
+                "const INLINED_AFFINE: array<InlinedAffine, {}> = array<InlinedAffine, {}>(",
+                transforms.len(), transforms.len()
+            ));
+            for (i, xform) in transforms.iter().enumerate() {
+                if i > 0 {
+                    code.push_str(",");
+                }
+                code.push_str(&format!(
+                    "\n    InlinedAffine({:.8}, {:.8}, {:.8}, {:.8}, {:.8}, {:.8}, {:.8}, {:.8}, {:.8}, {:.8})",
+                    xform.a, xform.b, xform.c, xform.d, xform.e, xform.f, xform.g,
+                    xform.color, xform.color_speed, xform.opacity
+                ));
+            }
+            code.push_str("\n);\n\n");
+
+            // Generate variation weights lookup function
+            // This allows the compiler to inline constant weights and eliminate dead code
+            code.push_str("// Get inlined variation weight (enables dead code elimination)\n");
+            code.push_str("fn get_inlined_var_weight(xform_id: u32, var_idx: u32) -> f32 {\n");
+            code.push_str("    switch(xform_id) {\n");
+
+            for (xform_idx, xform) in transforms.iter().enumerate() {
+                code.push_str(&format!("        case {}u: {{\n", xform_idx));
+                code.push_str("            switch(var_idx) {\n");
+                for (var_idx, weight) in &xform.variation_weights {
+                    code.push_str(&format!(
+                        "                case {}u: {{ return {:.8}; }}\n",
+                        var_idx, weight
+                    ));
+                }
+                code.push_str("                default: { return 0.0; }\n");
+                code.push_str("            }\n");
+                code.push_str("        }\n");
+            }
+            code.push_str("        default: { return 0.0; }\n");
+            code.push_str("    }\n");
+            code.push_str("}\n\n");
+
+            // Generate variation param lookup function
+            code.push_str("// Get inlined variation parameter (eliminates buffer reads)\n");
+            code.push_str("fn get_inlined_var_param(xform_id: u32, var_idx: u32, param_slot: u32) -> f32 {\n");
+            code.push_str("    switch(xform_id) {\n");
+
+            for (xform_idx, xform) in transforms.iter().enumerate() {
+                if xform.variation_params.is_empty() {
+                    continue;
+                }
+                code.push_str(&format!("        case {}u: {{\n", xform_idx));
+                code.push_str("            switch(var_idx * 12u + param_slot) {\n");
+                for ((var_idx, param_slot), value) in &xform.variation_params {
+                    let combined_idx = var_idx * 12 + param_slot;
+                    code.push_str(&format!(
+                        "                case {}u: {{ return {:.8}; }}\n",
+                        combined_idx, value
+                    ));
+                }
+                code.push_str("                default: { return 0.0; }\n");
+                code.push_str("            }\n");
+                code.push_str("        }\n");
+            }
+            code.push_str("        default: { return 0.0; }\n");
+            code.push_str("    }\n");
+            code.push_str("}\n");
+        } else {
+            code.push_str("const USE_INLINED_TRANSFORMS: bool = false;\n");
+        }
+
+        code.push('\n');
+        code
+    }
+
+    /// Check if constants use inlined transforms
+    pub fn has_inlined_transforms(&self) -> bool {
+        self.inlined_transforms.is_some()
     }
 }
 
@@ -359,10 +674,11 @@ impl ShaderBuilder {
         shader.push('\n');
 
         // 7. Generate apply_variations with fixed registry indices
+        // Pass inlined transforms for dead code elimination if available
         if render_3d {
-            shader.push_str(&self.build_apply_variations_3d(&active));
+            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref()));
         } else {
-            shader.push_str(&self.build_apply_variations_2d(&active));
+            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref()));
         }
         shader.push('\n');
 
@@ -398,8 +714,18 @@ impl ShaderBuilder {
     }
 
     /// Build apply_variations function for 2D mode
-    fn build_apply_variations_2d(&self, active_variations: &[(String, u32)]) -> String {
+    ///
+    /// When `inlined_transforms` is provided, generates code with compile-time constant
+    /// variation weights, enabling dead code elimination for unused variations per-transform.
+    fn build_apply_variations_2d(
+        &self,
+        active_variations: &[(String, u32)],
+        inlined_transforms: Option<&Vec<InlinedTransform>>,
+    ) -> String {
         use crate::variations::VariationPhase;
+
+        // When inlined, we generate per-transform specialized code
+        let use_inlined = inlined_transforms.is_some();
 
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
@@ -503,13 +829,27 @@ impl ShaderBuilder {
                 }
             };
 
-            code.push_str(&format!(
-                "    // {}: {} (NORMAL)\n\
-                 \x20   if (xform.variations[{}] != 0.0) {{\n\
-                 \x20       result += xform.variations[{}] * {};\n\
-                 \x20   }}\n\n",
-                idx, info.display_name, idx, idx, call
-            ));
+            // Use inlined weights when available (enables dead code elimination)
+            if use_inlined {
+                code.push_str(&format!(
+                    "    // {}: {} (NORMAL - INLINED)\n\
+                     \x20   {{\n\
+                     \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
+                     \x20       if (w != 0.0) {{\n\
+                     \x20           result += w * {};\n\
+                     \x20       }}\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, idx, call
+                ));
+            } else {
+                code.push_str(&format!(
+                    "    // {}: {} (NORMAL)\n\
+                     \x20   if (xform.variations[{}] != 0.0) {{\n\
+                     \x20       result += xform.variations[{}] * {};\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, idx, idx, call
+                ));
+            }
         }
 
         // PHASE 4: Post-variations - directly modify output coordinates (rare in 2D)
@@ -552,8 +892,18 @@ impl ShaderBuilder {
     }
 
     /// Build apply_variations function for 3D mode
-    fn build_apply_variations_3d(&self, active_variations: &[(String, u32)]) -> String {
+    ///
+    /// When `inlined_transforms` is provided, generates code with compile-time constant
+    /// variation weights, enabling dead code elimination for unused variations per-transform.
+    fn build_apply_variations_3d(
+        &self,
+        active_variations: &[(String, u32)],
+        inlined_transforms: Option<&Vec<InlinedTransform>>,
+    ) -> String {
         use crate::variations::VariationPhase;
+
+        // When inlined, we generate per-transform specialized code
+        let use_inlined = inlined_transforms.is_some();
 
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
@@ -646,32 +996,72 @@ impl ShaderBuilder {
             // Special inline implementations for Z-only variations
             match name.as_str() {
                 "zcone" => {
-                    code.push_str(&format!(
-                        "    // {}: {} (NORMAL - Z-only)\n\
-                         \x20   if (xform.variations[{}] != 0.0) {{\n\
-                         \x20       let r = length(temp.xy);\n\
-                         \x20       result.z += xform.variations[{}] * r;\n\
-                         \x20   }}\n\n",
-                        idx, info.display_name, idx, idx
-                    ));
+                    if use_inlined {
+                        code.push_str(&format!(
+                            "    // {}: {} (NORMAL - Z-only - INLINED)\n\
+                             \x20   {{\n\
+                             \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
+                             \x20       if (w != 0.0) {{\n\
+                             \x20           let r = length(temp.xy);\n\
+                             \x20           result.z += w * r;\n\
+                             \x20       }}\n\
+                             \x20   }}\n\n",
+                            idx, info.display_name, idx
+                        ));
+                    } else {
+                        code.push_str(&format!(
+                            "    // {}: {} (NORMAL - Z-only)\n\
+                             \x20   if (xform.variations[{}] != 0.0) {{\n\
+                             \x20       let r = length(temp.xy);\n\
+                             \x20       result.z += xform.variations[{}] * r;\n\
+                             \x20   }}\n\n",
+                            idx, info.display_name, idx, idx
+                        ));
+                    }
                 }
                 "zscale" => {
-                    code.push_str(&format!(
-                        "    // {}: {} (NORMAL - Z-only)\n\
-                         \x20   if (xform.variations[{}] != 0.0) {{\n\
-                         \x20       result.z += xform.variations[{}] * temp.z;\n\
-                         \x20   }}\n\n",
-                        idx, info.display_name, idx, idx
-                    ));
+                    if use_inlined {
+                        code.push_str(&format!(
+                            "    // {}: {} (NORMAL - Z-only - INLINED)\n\
+                             \x20   {{\n\
+                             \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
+                             \x20       if (w != 0.0) {{\n\
+                             \x20           result.z += w * temp.z;\n\
+                             \x20       }}\n\
+                             \x20   }}\n\n",
+                            idx, info.display_name, idx
+                        ));
+                    } else {
+                        code.push_str(&format!(
+                            "    // {}: {} (NORMAL - Z-only)\n\
+                             \x20   if (xform.variations[{}] != 0.0) {{\n\
+                             \x20       result.z += xform.variations[{}] * temp.z;\n\
+                             \x20   }}\n\n",
+                            idx, info.display_name, idx, idx
+                        ));
+                    }
                 }
                 "ztranslate" => {
-                    code.push_str(&format!(
-                        "    // {}: {} (NORMAL - Z-only)\n\
-                         \x20   if (xform.variations[{}] != 0.0) {{\n\
-                         \x20       result.z += xform.variations[{}];\n\
-                         \x20   }}\n\n",
-                        idx, info.display_name, idx, idx
-                    ));
+                    if use_inlined {
+                        code.push_str(&format!(
+                            "    // {}: {} (NORMAL - Z-only - INLINED)\n\
+                             \x20   {{\n\
+                             \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
+                             \x20       if (w != 0.0) {{\n\
+                             \x20           result.z += w;\n\
+                             \x20       }}\n\
+                             \x20   }}\n\n",
+                            idx, info.display_name, idx
+                        ));
+                    } else {
+                        code.push_str(&format!(
+                            "    // {}: {} (NORMAL - Z-only)\n\
+                             \x20   if (xform.variations[{}] != 0.0) {{\n\
+                             \x20       result.z += xform.variations[{}];\n\
+                             \x20   }}\n\n",
+                            idx, info.display_name, idx, idx
+                        ));
+                    }
                 }
                 _ => {
                     // Standard variation with function call
@@ -689,13 +1079,27 @@ impl ShaderBuilder {
                         }
                     };
 
-                    code.push_str(&format!(
-                        "    // {}: {} (NORMAL)\n\
-                         \x20   if (xform.variations[{}] != 0.0) {{\n\
-                         \x20       result += xform.variations[{}] * {};\n\
-                         \x20   }}\n\n",
-                        idx, info.display_name, idx, idx, call
-                    ));
+                    // Use inlined weights when available
+                    if use_inlined {
+                        code.push_str(&format!(
+                            "    // {}: {} (NORMAL - INLINED)\n\
+                             \x20   {{\n\
+                             \x20       let w = get_inlined_var_weight(xform_id, {}u);\n\
+                             \x20       if (w != 0.0) {{\n\
+                             \x20           result += w * {};\n\
+                             \x20       }}\n\
+                             \x20   }}\n\n",
+                            idx, info.display_name, idx, call
+                        ));
+                    } else {
+                        code.push_str(&format!(
+                            "    // {}: {} (NORMAL)\n\
+                             \x20   if (xform.variations[{}] != 0.0) {{\n\
+                             \x20       result += xform.variations[{}] * {};\n\
+                             \x20   }}\n\n",
+                            idx, info.display_name, idx, idx, call
+                        ));
+                    }
                 }
             }
         }
@@ -804,8 +1208,8 @@ impl ShaderBuilder {
         shader.push_str(&self.generate_variation_code(&active_2d, false));
         shader.push('\n');
 
-        // 5. Generate apply_variations
-        shader.push_str(&self.build_apply_variations_2d(&active_2d));
+        // 5. Generate apply_variations (no inlining for tiled shaders)
+        shader.push_str(&self.build_apply_variations_2d(&active_2d, None));
         shader.push('\n');
 
         // 7. Tiled utilities (uses full_width/full_height)
@@ -851,8 +1255,8 @@ impl ShaderBuilder {
         shader.push_str(&self.generate_variation_code(&active_3d, true));
         shader.push('\n');
 
-        // 5. Generate apply_variations
-        shader.push_str(&self.build_apply_variations_3d(&active_3d));
+        // 5. Generate apply_variations (no inlining for tiled shaders)
+        shader.push_str(&self.build_apply_variations_3d(&active_3d, None));
         shader.push('\n');
 
         // 6. Tiled utilities
@@ -911,8 +1315,8 @@ impl ShaderBuilder {
         shader.push_str(&self.generate_variation_code(&active_3d, true));
         shader.push('\n');
 
-        // 6. Generate apply_variations
-        shader.push_str(&self.build_apply_variations_3d(&active_3d));
+        // 6. Generate apply_variations (no inlining for export shaders)
+        shader.push_str(&self.build_apply_variations_3d(&active_3d, None));
         shader.push('\n');
 
         // 7. Export main
