@@ -1,5 +1,19 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::variations::VariationRegistry;
+
+/// Global flag to enable shader dumping (set via CLI --dump-shader flag)
+static DUMP_SHADER_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Enable shader dumping (writes generated shaders to debug_shader_*.wgsl files)
+pub fn enable_shader_dump() {
+    DUMP_SHADER_ENABLED.store(true, Ordering::Relaxed);
+}
+
+/// Check if shader dumping is enabled
+fn should_dump_shader() -> bool {
+    DUMP_SHADER_ENABLED.load(Ordering::Relaxed)
+}
 
 /// Simple template processor for shader conditional compilation
 ///
@@ -368,6 +382,17 @@ impl ShaderBuilder {
         processor.set("RENDER_3D", render_3d);
         processor.set("PATH_TRACKING", path_features_enabled);
         shader.push_str(&processor.process(template));
+
+        // DEBUG: Write shader to file for analysis (enabled via --dump-shader CLI flag)
+        if should_dump_shader() {
+            let filename = if render_3d { "debug_shader_3d.wgsl" } else { "debug_shader_2d.wgsl" };
+            if let Err(e) = std::fs::write(filename, &shader) {
+                log::error!("Failed to write debug shader: {}", e);
+            } else {
+                log::info!("Wrote shader to {} ({} bytes, {} lines)",
+                    filename, shader.len(), shader.lines().count());
+            }
+        }
 
         shader
     }
