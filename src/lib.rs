@@ -62,8 +62,14 @@ pub fn desktop_main() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>) {
+pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>, dump_shader: bool) {
     env_logger::init();
+    if dump_shader {
+        shader_builder_v2::enable_shader_dump();
+    }
+    // Enable inlined constants for CLI export - compiles flame data as shader constants
+    // for maximum performance (eliminates buffer reads, enables dead code elimination)
+    shader_builder_v2::enable_inlined_constants();
     pollster::block_on(export_async(input, output, width, height, category, iterations_per_thread)).expect("Export failed");
 }
 
@@ -79,6 +85,8 @@ pub fn export_animation_mode(
     video_settings: animation::export::VideoEncodingSettings,
 ) {
     env_logger::init();
+    // Enable inlined constants for animation export - maximum shader performance
+    shader_builder_v2::enable_inlined_constants();
     pollster::block_on(export_animation_async(config_path, animation_path, output_path, width, height, fps, iterations_per_thread, video_settings)).expect("Animation export failed");
 }
 

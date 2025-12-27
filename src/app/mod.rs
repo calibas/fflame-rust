@@ -152,6 +152,9 @@ impl App {
             render_mode: RenderModeFSM::new(),
         };
 
+        // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
+        app.import_config(initial_config);
+
         #[allow(deprecated)]
         event_loop.run(move |event, elwt| {
             match event {
