@@ -243,16 +243,16 @@ impl ShaderBuilder {
         Self { registry }
     }
 
-    /// Generate variation function code for ALL variations in registry from embedded WGSL
+    /// Generate variation function code for ONLY active variations from embedded WGSL
     ///
-    /// All variations now have embedded WGSL in their VariationDef, so this generates
-    /// the complete variations code without needing static .wgsl files.
-    fn generate_all_variation_code(&self, render_3d: bool) -> String {
+    /// Only includes variation functions that are actually used in the current flame.
+    /// This reduces shader size and compilation time significantly.
+    fn generate_variation_code(&self, active_variations: &[(String, u32)], render_3d: bool) -> String {
         let mut code = String::new();
 
-        // Generate code for ALL variations in the registry (not just active ones)
-        // This ensures all variation functions are available even if not currently active
-        for name in self.registry.names() {
+        // Generate code ONLY for active variations (not all variations in registry)
+        // This is the key optimization - typical flames use 3-5 variations, not 80+
+        for (name, _idx) in active_variations {
             if let Some(info) = self.registry.get(name) {
                 if render_3d {
                     // For 3D mode, prefer wgsl_source_3d, fall back to wgsl_source
@@ -340,9 +340,8 @@ impl ShaderBuilder {
         }
         shader.push('\n');
 
-        // 5. Core variations from embedded VariationDef WGSL
-        // All variations now have embedded WGSL in their VariationDef, generated from Rust code
-        shader.push_str(&self.generate_all_variation_code(render_3d));
+        // 5. Core variations from embedded VariationDef WGSL (only active ones)
+        shader.push_str(&self.generate_variation_code(&active, render_3d));
         shader.push('\n');
 
         // 7. Generate apply_variations with fixed registry indices
@@ -776,8 +775,8 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/affine.wgsl"));
         shader.push('\n');
 
-        // 4. Core variations (2D) from embedded VariationDef WGSL
-        shader.push_str(&self.generate_all_variation_code(false));
+        // 4. Core variations (2D) from embedded VariationDef WGSL (only active ones)
+        shader.push_str(&self.generate_variation_code(&active_2d, false));
         shader.push('\n');
 
         // 5. Generate apply_variations
@@ -823,8 +822,8 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/affine_3d.wgsl"));
         shader.push('\n');
 
-        // 4. Core variations (3D) from embedded VariationDef WGSL
-        shader.push_str(&self.generate_all_variation_code(true));
+        // 4. Core variations (3D) from embedded VariationDef WGSL (only active ones)
+        shader.push_str(&self.generate_variation_code(&active_3d, true));
         shader.push('\n');
 
         // 5. Generate apply_variations
@@ -883,8 +882,8 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/affine_3d.wgsl"));
         shader.push('\n');
 
-        // 5. Core variations (3D) from embedded VariationDef WGSL
-        shader.push_str(&self.generate_all_variation_code(true));
+        // 5. Core variations (3D) from embedded VariationDef WGSL (only active ones)
+        shader.push_str(&self.generate_variation_code(&active_3d, true));
         shader.push('\n');
 
         // 6. Generate apply_variations
