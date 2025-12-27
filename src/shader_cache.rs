@@ -88,12 +88,29 @@ impl ShaderCache {
     }
 
     /// Extract shader constants from a FractalConfig
+    ///
+    /// When `shader_builder_v2::should_use_inlined_constants()` returns true,
+    /// generates fully inlined constants for maximum performance (CLI export mode).
+    /// Otherwise, generates non-inlined constants for interactive mode.
     pub fn constants_from_config(config: &FractalConfig) -> ShaderConstants {
-        ShaderConstants {
-            num_transforms: config.flame.transforms.len() as u32,
-            color_mode: config.color_mode as u32,
-            has_final_transform: config.flame.final_transform.is_some(),
-            final_transform_index: config.flame.transforms.len() as u32, // Final is after regular transforms
+        // Check if inlined constants mode is enabled (CLI export)
+        if crate::shader_builder_v2::should_use_inlined_constants() {
+            let registry = crate::variations::global_registry();
+            ShaderConstants::with_inlined_transforms(
+                &config.flame,
+                registry,
+                config.color_mode as u32,
+            )
+        } else {
+            // Interactive mode - no inlining to avoid constant shader rebuilds
+            ShaderConstants {
+                num_transforms: config.flame.transforms.len() as u32,
+                color_mode: config.color_mode as u32,
+                has_final_transform: config.flame.final_transform.is_some(),
+                final_transform_index: config.flame.transforms.len() as u32,
+                inlined_transforms: None,
+                cumulative_weights: None,
+            }
         }
     }
 
