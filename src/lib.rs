@@ -62,8 +62,11 @@ pub fn desktop_main() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>) {
+pub fn export_mode(input: &str, output: &str, width: Option<u32>, height: Option<u32>, category: Option<String>, iterations_per_thread: Option<u32>, dump_shader: bool) {
     env_logger::init();
+    if dump_shader {
+        shader_builder_v2::enable_shader_dump();
+    }
     pollster::block_on(export_async(input, output, width, height, category, iterations_per_thread)).expect("Export failed");
 }
 
