@@ -464,10 +464,13 @@ fn variation_bubble(p: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_3d: Some(r#"
 fn variation_bubble(p: vec3<f32>) -> vec3<f32> {
-    let r2 = dot(p.xy, p.xy);
-    let r = r2 / 4.0 + 1.0;
+    // Apophysis: r = (x² + y²)/4 + 1
+    // z' = 2/r - 1, scale = 1/r
+    let r2_xy = dot(p.xy, p.xy);
+    let r = r2_xy / 4.0 + 1.0;
     let scale = 1.0 / r;
-    return vec3<f32>(scale * p.x, scale * p.y, p.z);
+    let new_z = 2.0 / r - 1.0;
+    return vec3<f32>(scale * p.x, scale * p.y, new_z);
 }
 "#),
 };
@@ -486,7 +489,8 @@ fn variation_cylinder(p: vec2<f32>) -> vec2<f32> {
 "#,
     wgsl_3d: Some(r#"
 fn variation_cylinder(p: vec3<f32>) -> vec3<f32> {
-    return vec3<f32>(sin(p.x), p.y, p.z);
+    // Apophysis: result = (sin(x), y, cos(x))
+    return vec3<f32>(sin(p.x), p.y, cos(p.x));
 }
 "#),
 };
@@ -761,7 +765,7 @@ pub static WAVES2: VariationDef = VariationDef {
             name: "scalex",
             display_name: "Scale X",
             param_type: ParamType::UnlimitedFloat,
-            default_value: 0.5,
+            default_value: 1.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
         },
@@ -777,7 +781,23 @@ pub static WAVES2: VariationDef = VariationDef {
             name: "scaley",
             display_name: "Scale Y",
             param_type: ParamType::UnlimitedFloat,
-            default_value: 0.5,
+            default_value: 1.0,
+            min_value: Some(-2.0),
+            max_value: Some(2.0),
+        },
+        VariationParamDef {
+            name: "freqz",
+            display_name: "Freq Z",
+            param_type: ParamType::UnlimitedFloat,
+            default_value: 0.0,
+            min_value: Some(0.0),
+            max_value: Some(20.0),
+        },
+        VariationParamDef {
+            name: "scalez",
+            display_name: "Scale Z",
+            param_type: ParamType::UnlimitedFloat,
+            default_value: 0.0,
             min_value: Some(-2.0),
             max_value: Some(2.0),
         },
@@ -795,13 +815,18 @@ fn variation_waves2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
 "#,
     wgsl_3d: Some(r#"
 fn variation_waves2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis Waves2: Sine wave distortion with 6 parameters (3D version)
     let freqx = get_param(xform_id, variation_id, 0u);
     let scalex = get_param(xform_id, variation_id, 1u);
     let freqy = get_param(xform_id, variation_id, 2u);
     let scaley = get_param(xform_id, variation_id, 3u);
+    let freqz = get_param(xform_id, variation_id, 4u);
+    let scalez = get_param(xform_id, variation_id, 5u);
+    let r_xy = length(p.xy);
     let new_x = p.x + scalex * sin(p.y * freqx);
     let new_y = p.y + scaley * sin(p.x * freqy);
-    return vec3<f32>(new_x, new_y, p.z);
+    let new_z = p.z + scalez * sin(r_xy * freqz);
+    return vec3<f32>(new_x, new_y, new_z);
 }
 "#),
 };
@@ -855,7 +880,7 @@ pub static ESCHER: VariationDef = VariationDef {
             name: "beta",
             display_name: "Beta",
             param_type: ParamType::Angle,
-            default_value: 45.0,
+            default_value: 0.0,
             min_value: Some(-180.0),
             max_value: Some(180.0),
         },
@@ -965,7 +990,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             name: "spin",
             display_name: "Spin",
             param_type: ParamType::Angle,
-            default_value: 180.0,
+            default_value: 0.0,
             min_value: Some(-360.0),
             max_value: Some(360.0),
         },
@@ -1153,33 +1178,33 @@ pub static PDJ: VariationDef = VariationDef {
             name: "a",
             display_name: "A",
             param_type: ParamType::UnlimitedFloat,
-            default_value: 1.0,
-            min_value: Some(-5.0),
-            max_value: Some(5.0),
+            default_value: 0.0,
+            min_value: Some(-20.0),
+            max_value: Some(20.0),
         },
         VariationParamDef {
             name: "b",
             display_name: "B",
             param_type: ParamType::UnlimitedFloat,
-            default_value: 2.0,
-            min_value: Some(-5.0),
-            max_value: Some(5.0),
+            default_value: 0.0,
+            min_value: Some(-20.0),
+            max_value: Some(20.0),
         },
         VariationParamDef {
             name: "c",
             display_name: "C",
             param_type: ParamType::UnlimitedFloat,
-            default_value: 3.0,
-            min_value: Some(-5.0),
-            max_value: Some(5.0),
+            default_value: 0.0,
+            min_value: Some(-20.0),
+            max_value: Some(20.0),
         },
         VariationParamDef {
             name: "d",
             display_name: "D",
             param_type: ParamType::UnlimitedFloat,
-            default_value: 4.0,
-            min_value: Some(-5.0),
-            max_value: Some(5.0),
+            default_value: 0.0,
+            min_value: Some(-20.0),
+            max_value: Some(20.0),
         },
     ],
     wgsl_2d: r#"
@@ -1368,32 +1393,32 @@ pub static NGON: VariationDef = VariationDef {
             display_name: "Sides",
             param_type: ParamType::UnlimitedInteger,
             default_value: 5.0,
-            min_value: Some(3.0),
-            max_value: Some(20.0),
+            min_value: Some(-10.0),
+            max_value: Some(10.0),
         },
         VariationParamDef {
             name: "power",
             display_name: "Power",
             param_type: ParamType::UnlimitedFloat,
-            default_value: 2.0,
-            min_value: Some(-5.0),
-            max_value: Some(5.0),
+            default_value: 3.0,
+            min_value: Some(-2.0),
+            max_value: Some(20.0),
         },
         VariationParamDef {
             name: "circle",
             display_name: "Circle",
             param_type: ParamType::UnlimitedFloat,
             default_value: 1.0,
-            min_value: Some(-2.0),
-            max_value: Some(2.0),
+            min_value: Some(-20.0),
+            max_value: Some(20.0),
         },
         VariationParamDef {
             name: "corners",
             display_name: "Corners",
             param_type: ParamType::UnlimitedFloat,
-            default_value: 0.0,
-            min_value: Some(-2.0),
-            max_value: Some(2.0),
+            default_value: 2.0,
+            min_value: Some(-20.0),
+            max_value: Some(20.0),
         },
     ],
     wgsl_2d: r#"
