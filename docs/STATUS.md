@@ -263,24 +263,17 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 ## ❌ MISSING / TODO
 
 ### High Priority
-- [ ] **Tiled high-resolution export** - Only exports current viewport size
 - [ ] **Randomize button** - No random flame generation
-- [ ] **Async export progress** - Export blocks UI
 
 ### Medium Priority
-- [ ] **Final transform support** - Code exists but no UI
 - [ ] **Transform clone/duplicate** - No UI for this
 - [ ] **EXR/HDR export** - Only PNG supported
-- [ ] **Visual regression tests**
-- [ ] **Performance profiling/optimization**
 
 ### Low Priority (Outline suggestions)
-- [ ] **CLI interface** - clap added to deps but not used
 - [ ] **Headless export example**
 - [ ] **Design docs**
 - [ ] **Cross-platform testing**
 - [ ] **CUDA backend** (future expansion)
-- [ ] **Animation/keyframes** (future expansion)
 
 ### Known Limitations
 - No GPU feature fallbacks (assumes modern GPU)
