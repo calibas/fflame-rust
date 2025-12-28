@@ -284,6 +284,13 @@ impl<'a> PanelViewer<'a> {
             self.context.animation_controller.load(animation);
         }
 
+        // Handle animation load trigger (WASM only - uses native file picker)
+        #[cfg(target_arch = "wasm32")]
+        if response.trigger_animation_load {
+            let ctx = ui.ctx().clone();
+            crate::app::trigger_browser_file_picker(".anim,.json", ctx, "pending_animation_load_raw");
+        }
+
         // Handle animation save response
         if response.save_animation {
             #[cfg(not(target_arch = "wasm32"))]
@@ -308,6 +315,25 @@ impl<'a> PanelViewer<'a> {
                         Err(e) => {
                             log::error!("Failed to serialize animation: {}", e);
                         }
+                    }
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            if let Some(ref animation) = self.context.animation_controller.animation {
+                // Clone animation and embed current config
+                let mut animation_with_config = animation.clone();
+                animation_with_config.set_base_config(self.context.config_manager.active_config().clone());
+
+                match animation_with_config.to_json() {
+                    Ok(json) => {
+                        let filename = format!("{}.anim", animation_with_config.name.to_lowercase().replace(' ', "_"));
+                        if let Err(e) = crate::app::trigger_browser_download(json.as_bytes(), &filename, "application/json") {
+                            log::error!("Failed to trigger animation download: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to serialize animation: {}", e);
                     }
                 }
             }

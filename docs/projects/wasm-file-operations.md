@@ -9,7 +9,9 @@ WASM file operations have several UX issues due to workarounds for async file di
 1. **Config load** - Copies JSON to clipboard instead of loading (broken)
 2. **PNG export** - Shows intermediate dialog instead of direct download
 3. **Extra confirmation dialog** - rfd crate shows unnecessary dialog after file selection
-4. **Inconsistent patterns** - Some operations use egui temp storage, others use clipboard hacks
+4. **Config Save As** - Uses rfd which requires extra click
+5. **Animation Save/Load** - Not working in WASM at all
+6. **Inconsistent patterns** - Some operations use egui temp storage, others use clipboard hacks
 
 ## Changes Made
 
@@ -43,6 +45,19 @@ Added `trigger_browser_file_picker()` helper function that:
 
 Updated both config load and Apophysis import to use native file picker.
 
+### Fix 4: Config Save As ✅
+
+Changed WASM config save to use `trigger_browser_download()`:
+- Direct browser download with auto-generated filename
+- No extra confirmation dialogs
+
+### Fix 5: Animation Save/Load ✅
+
+Added WASM support for animation panel Save/Load buttons:
+- **Save**: Uses `trigger_browser_download()` for direct download
+- **Load**: Uses `trigger_browser_file_picker()` with `.anim,.json` filter
+- Render loop parses animation JSON and loads with embedded config support
+
 ### Dependencies Added
 
 In `Cargo.toml` for WASM target:
@@ -52,12 +67,22 @@ In `Cargo.toml` for WASM target:
 ## Files Modified
 
 - `src/app/mod.rs`:
-  - Added `trigger_browser_download()` helper function
-  - Added `trigger_browser_file_picker()` helper function
+  - Added `trigger_browser_download()` helper function (now public)
+  - Added `trigger_browser_file_picker()` helper function (now public)
   - Config load uses native file picker with `pending_config_load_raw`
+  - Config save uses `trigger_browser_download()` for direct download
   - Apophysis import uses native file picker with `pending_apophysis_import_raw`
+  - Animation load uses native file picker with `pending_animation_load_raw`
   - Updated both PNG export paths to use direct download
   - Render loop parses raw text from native file picker results
+
+- `src/ui/animation_panel.rs`:
+  - Added `trigger_animation_load` field to `AnimationPanelResponse`
+  - Load button triggers native file picker in WASM
+
+- `src/ui/panel_viewer.rs`:
+  - Animation save uses `trigger_browser_download()` in WASM
+  - Animation load trigger handled via native file picker
 
 - `Cargo.toml`:
   - Added `js-sys` dependency
@@ -66,8 +91,15 @@ In `Cargo.toml` for WASM target:
 ## Testing
 
 - [ ] WASM: Load .fflame config file (no extra dialog)
+- [ ] WASM: Save As triggers browser download (no extra dialog)
 - [ ] WASM: Export PNG triggers browser download (viewport size)
 - [ ] WASM: Export PNG triggers browser download (custom size)
 - [ ] WASM: Apophysis import works (no extra dialog)
+- [ ] WASM: Animation Load works (no extra dialog)
+- [ ] WASM: Animation Save triggers browser download
 - [ ] WASM: Palette load/save still works
 - [ ] Desktop: All file operations unchanged (verified - builds pass)
+
+## Remaining: Preset Library from Folder
+
+The "From Preset Library..." menu item still tries to load from a folder, which doesn't work in WASM. This needs a different approach - loading from a single JSON file with multiple configs. See separate task.
