@@ -624,6 +624,18 @@ impl EguiLayer {
         }
     }
 
+    /// WASM: Start async thumbnail generation for preset library
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_preset_library_thumbnails(
+        &mut self,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+    ) {
+        if let Some(ref mut panel) = self.preset_library_panel {
+            panel.start_async_thumbnails(device, queue);
+        }
+    }
+
     /// Check if file browser panel needs thumbnail generation
     #[cfg(not(target_arch = "wasm32"))]
     pub fn file_browser_needs_thumbnails(&self) -> bool {
@@ -649,6 +661,18 @@ impl EguiLayer {
             })
         } else {
             true // No panel, nothing to generate
+        }
+    }
+
+    /// WASM: Start async thumbnail generation for file browser
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_file_browser_thumbnails(
+        &mut self,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+    ) {
+        if let Some(ref mut panel) = self.file_browser_panel {
+            panel.start_async_thumbnails(device, queue);
         }
     }
 

@@ -32,22 +32,38 @@ impl PresetLibraryPanel {
         }
     }
 
-    /// Check if thumbnail generation is in progress
+    /// Check if thumbnail generation is in progress (desktop only)
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn is_generating(&self) -> bool {
         self.gallery.is_generating()
     }
 
-    /// Get the next config that needs thumbnail generation
+    /// Get the next config that needs thumbnail generation (desktop only)
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn next_pending_config(&self) -> Option<&FractalConfig> {
         self.gallery.next_pending_config()
     }
 
-    /// Generate one thumbnail (call once per frame during generation)
+    /// Generate one thumbnail (call once per frame during generation) (desktop only)
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn generate_one_thumbnail<F>(&mut self, ctx: &egui::Context, render_fn: F) -> bool
     where
         F: FnOnce(&FractalConfig) -> image::RgbaImage,
     {
         self.gallery.generate_one_thumbnail(ctx, render_fn)
+    }
+
+    /// WASM: Start async thumbnail generation
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_async_thumbnails(
+        &mut self,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+    ) {
+        if self.needs_generation {
+            self.gallery.start_async_thumbnail_generation(device, queue);
+            self.needs_generation = false;
+        }
     }
 
     /// Render the panel
