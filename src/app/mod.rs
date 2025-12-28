@@ -5,7 +5,7 @@ mod config;
 pub mod export;
 pub mod render_mode;
 
-pub use render_mode::{RenderModeFSM, RenderModeState, TransitionResult};
+pub use render_mode::{RenderModeFSM};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use export::export_headless;
@@ -100,7 +100,7 @@ impl App {
 
         let flame = initial_config.flame.clone();
 
-        let mut flame_renderer = FlameRenderer::new(
+        let flame_renderer = FlameRenderer::new(
             &gpu.device,
             &gpu.queue,
             gpu.config.format,
