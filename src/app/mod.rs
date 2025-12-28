@@ -13,6 +13,148 @@ pub use export::export_headless;
 #[cfg(target_arch = "wasm32")]
 pub use export::export_headless_wasm;
 
+/// Trigger a browser download of binary data (WASM only)
+#[cfg(target_arch = "wasm32")]
+pub fn trigger_browser_download(data: &[u8], filename: &str, mime_type: &str) -> Result<(), String> {
+    use wasm_bindgen::JsCast;
+    use web_sys::{Blob, BlobPropertyBag, Url, HtmlAnchorElement};
+
+    // Create Uint8Array from data
+    let array = js_sys::Uint8Array::from(data);
+    let blob_parts = js_sys::Array::new();
+    blob_parts.push(&array);
+
+    // Create Blob with correct MIME type
+    let options = BlobPropertyBag::new();
+    options.set_type(mime_type);
+
+    let blob = Blob::new_with_u8_array_sequence_and_options(&blob_parts, &options)
+        .map_err(|e| format!("Failed to create blob: {:?}", e))?;
+
+    // Create object URL
+    let url = Url::create_object_url_with_blob(&blob)
+        .map_err(|e| format!("Failed to create object URL: {:?}", e))?;
+
+    // Create and click anchor element to trigger download
+    let window = web_sys::window().ok_or("No window")?;
+    let document = window.document().ok_or("No document")?;
+    let a = document.create_element("a")
+        .map_err(|e| format!("Failed to create anchor: {:?}", e))?
+        .dyn_into::<HtmlAnchorElement>()
+        .map_err(|_| "Failed to cast to anchor")?;
+
+    a.set_href(&url);
+    a.set_download(filename);
+    a.click();
+
+    // Clean up object URL
+    let _ = Url::revoke_object_url(&url);
+
+    Ok(())
+}
+
+/// Trigger a native browser file picker and read file contents (WASM only)
+/// Uses <input type="file"> directly instead of rfd to avoid extra dialogs
+#[cfg(target_arch = "wasm32")]
+pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: &'static str) {
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::JsCast;
+    use web_sys::{HtmlInputElement, FileReader};
+
+    let window = match web_sys::window() {
+        Some(w) => w,
+        None => { log::error!("No window"); return; }
+    };
+    let document = match window.document() {
+        Some(d) => d,
+        None => { log::error!("No document"); return; }
+    };
+
+    // Create hidden file input
+    let input: HtmlInputElement = match document.create_element("input") {
+        Ok(el) => match el.dyn_into::<HtmlInputElement>() {
+            Ok(input) => input,
+            Err(_) => { log::error!("Failed to cast to input"); return; }
+        },
+        Err(_) => { log::error!("Failed to create input"); return; }
+    };
+
+    input.set_type("file");
+    input.set_accept(accept);
+    input.style().set_property("display", "none").ok();
+
+    // Append to body temporarily
+    if let Some(body) = document.body() {
+        let _ = body.append_child(&input);
+    }
+
+    // Set up change handler
+    let input_clone = input.clone();
+    let ctx_clone = ctx.clone();
+    let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+        let files = match input_clone.files() {
+            Some(f) => f,
+            None => return,
+        };
+
+        if files.length() == 0 {
+            return;
+        }
+
+        let file = match files.get(0) {
+            Some(f) => f,
+            None => return,
+        };
+
+        let reader = match FileReader::new() {
+            Ok(r) => r,
+            Err(_) => { log::error!("Failed to create FileReader"); return; }
+        };
+
+        let reader_clone = reader.clone();
+        let ctx_for_load = ctx_clone.clone();
+        let onload = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+            let result = match reader_clone.result() {
+                Ok(r) => r,
+                Err(_) => return,
+            };
+
+            let array_buffer = match result.dyn_into::<js_sys::ArrayBuffer>() {
+                Ok(ab) => ab,
+                Err(_) => return,
+            };
+
+            let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+            let mut contents = vec![0u8; uint8_array.length() as usize];
+            uint8_array.copy_to(&mut contents);
+
+            let text = String::from_utf8_lossy(&contents).to_string();
+
+            // Store in egui temp storage for pickup
+            ctx_for_load.data_mut(|data| {
+                data.insert_temp(egui::Id::new(result_id), text);
+            });
+            ctx_for_load.request_repaint();
+        }) as Box<dyn FnMut(_)>);
+
+        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+        onload.forget(); // Leak closure - it will be cleaned up when reader is done
+
+        let _ = reader.read_as_array_buffer(&file);
+
+        // Clean up input element
+        if let Some(parent) = input_clone.parent_node() {
+            let _ = parent.remove_child(&input_clone);
+        }
+    }) as Box<dyn FnMut(_)>);
+
+    input.set_onchange(Some(closure.as_ref().unchecked_ref()));
+    closure.forget(); // Leak closure - it will be called when file is selected
+
+    // Trigger file picker
+    input.click();
+}
+
 use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, window::Window};
 use egui_wgpu::wgpu::SurfaceError;
 use std::sync::{Arc, Mutex};
@@ -485,18 +627,12 @@ impl App {
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: async file dialog
+                // WASM: direct browser download (no extra dialogs)
                 if let Ok(json) = config.to_json() {
-                    wasm_bindgen_futures::spawn_local(async move {
-                        if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                            .add_filter("Fractal Flame Config", &["fflame"])
-                            .set_file_name("fractal.fflame")
-                            .save_file()
-                            .await
-                        {
-                            let _ = file_handle.write(json.as_bytes()).await;
-                        }
-                    });
+                    let filename = format!("{}.fflame", config.flame.name.to_lowercase().replace(' ', "_"));
+                    if let Err(e) = trigger_browser_download(json.as_bytes(), &filename, "application/json") {
+                        log::error!("Failed to trigger download: {}", e);
+                    }
                 }
             }
         }
@@ -637,22 +773,9 @@ impl App {
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: async file dialog - we'll spawn the dialog and handle the result
-                // Note: We can't directly import_config from async, so we'll just load to buffer
+                // WASM: native file picker - no extra dialogs
                 let ctx = self.egui_layer.ctx.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                        .add_filter("Fractal Flame", &["flame"])
-                        .pick_file()
-                        .await
-                    {
-                        let contents = file_handle.read().await;
-                        let json = String::from_utf8_lossy(&contents).to_string();
-                        // Copy to clipboard so user can paste it
-                        ctx.copy_text(json);
-                        log::info!("Config loaded to clipboard - paste to import");
-                    }
-                });
+                trigger_browser_file_picker(".fflame", ctx, "pending_config_load_raw");
             }
         }
 
@@ -715,36 +838,9 @@ impl App {
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: async file dialog
+                // WASM: native file picker - no extra dialogs
                 let ctx = self.egui_layer.ctx.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                        .add_filter("Apophysis Flame", &["flame"])
-                        .pick_file()
-                        .await
-                    {
-                        let contents = file_handle.read().await;
-                        let xml = String::from_utf8_lossy(&contents).to_string();
-                        match crate::apophysis_xml::parse_flame_xml(&xml) {
-                            Ok(configs) => {
-                                if !configs.is_empty() {
-                                    // Store the config in egui memory for pickup on next frame
-                                    ctx.data_mut(|data| {
-                                        data.insert_temp(
-                                            egui::Id::new("pending_apophysis_import"),
-                                            configs[0].clone()
-                                        );
-                                    });
-                                    log::info!("Apophysis flame imported successfully");
-                                    ctx.request_repaint();
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("Failed to parse Apophysis XML: {}", e);
-                            }
-                        }
-                    }
-                });
+                trigger_browser_file_picker(".flame", ctx, "pending_apophysis_import_raw");
             }
         }
 
@@ -763,27 +859,9 @@ impl App {
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: async file dialog - load into egui memory
+                // WASM: use native file picker (no extra dialogs)
                 let ctx = self.egui_layer.ctx.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                        .add_filter("Fractal Flame", &["fflame"])
-                        .pick_file()
-                        .await
-                    {
-                        let contents = file_handle.read().await;
-                        let json = String::from_utf8_lossy(&contents).to_string();
-
-                        // Store the JSON in egui memory for pickup on next frame
-                        ctx.data_mut(|data| {
-                            data.insert_temp(
-                                egui::Id::new("pending_file_browser_json"),
-                                json
-                            );
-                        });
-                        ctx.request_repaint();
-                    }
-                });
+                trigger_browser_file_picker(".fflame", ctx, "pending_file_browser_json_raw");
             }
         }
 
@@ -963,16 +1041,89 @@ impl App {
             self.workspace.open_floating_panel(PanelType::ConfigDialog);
         }
 
-        // Check for pending Apophysis import from WASM async file dialog
+        // Check for pending config/Apophysis imports from WASM async file dialogs
         #[cfg(target_arch = "wasm32")]
         {
-            if let Some(config) = self.egui_layer.ctx.data_mut(|data| {
-                data.remove_temp::<crate::config::FractalConfig>(egui::Id::new("pending_apophysis_import"))
+            // Check for pending config load (raw JSON text from native file picker)
+            if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<String>(egui::Id::new("pending_config_load_raw"))
             }) {
-                if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
-                    log::error!("Failed to import Apophysis flame: {}", e);
-                } else {
-                    log::info!("Apophysis flame imported successfully");
+                match serde_json::from_str::<crate::config::FractalConfig>(&json) {
+                    Ok(config) => {
+                        if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
+                            log::error!("Failed to load config: {}", e);
+                        } else {
+                            log::info!("Config loaded successfully");
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse config JSON: {}", e);
+                    }
+                }
+            }
+
+            // Check for pending Apophysis import (raw XML text from native file picker)
+            if let Some(xml) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<String>(egui::Id::new("pending_apophysis_import_raw"))
+            }) {
+                match crate::apophysis_xml::parse_flame_xml(&xml) {
+                    Ok(configs) => {
+                        if let Some(config) = configs.into_iter().next() {
+                            if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
+                                log::error!("Failed to import Apophysis flame: {}", e);
+                            } else {
+                                log::info!("Apophysis flame imported successfully");
+                            }
+                        } else {
+                            log::error!("No flames found in Apophysis file");
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse Apophysis XML: {}", e);
+                    }
+                }
+            }
+
+            // Check for pending animation load (raw JSON text from native file picker)
+            if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<String>(egui::Id::new("pending_animation_load_raw"))
+            }) {
+                match crate::animation::Animation::from_json(&json) {
+                    Ok(animation) => {
+                        // If animation has embedded config, load it first
+                        if let Some(ref config) = animation.base_config {
+                            log::info!("Animation '{}' has embedded config, loading it", animation.name);
+                            let description = format!("Load Animation: {}", animation.name);
+                            if let Err(e) = self.load_config_with_undo(config.clone(), description) {
+                                log::error!("Failed to load animation's embedded config: {}", e);
+                            }
+                        }
+                        self.animation_controller.load(animation);
+                        log::info!("Animation loaded successfully");
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse animation JSON: {}", e);
+                    }
+                }
+            }
+
+            // Check for pending file browser JSON (raw text from native file picker)
+            if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<String>(egui::Id::new("pending_file_browser_json_raw"))
+            }) {
+                // Load the JSON into the file browser panel
+                match crate::config::FractalConfig::from_json_multi(&json) {
+                    Ok(configs) => {
+                        if configs.is_empty() {
+                            log::error!("File contains no configurations");
+                        } else {
+                            log::info!("Loaded {} config(s) from file", configs.len());
+                            self.egui_layer.load_configs_into_browser(configs, "file");
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse config JSON: {}", e);
+                    }
                 }
             }
         }
@@ -1212,17 +1363,10 @@ impl App {
 
                                 match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
                                     Ok(png_data) => {
-                                        if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                                            .add_filter("PNG Image", &["png"])
-                                            .set_file_name("fractal.png")
-                                            .save_file()
-                                            .await
-                                        {
-                                            if let Err(e) = file_handle.write(&png_data).await {
-                                                log::error!("Failed to save PNG: {:?}", e);
-                                            } else {
-                                                log::info!("PNG saved: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0);
-                                            }
+                                        // Trigger direct browser download
+                                        match trigger_browser_download(&png_data, "fractal.png", "image/png") {
+                                            Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0),
+                                            Err(e) => log::error!("Failed to trigger download: {}", e),
                                         }
                                     }
                                     Err(e) => log::error!("Failed to encode PNG: {}", e),
@@ -1312,17 +1456,10 @@ impl App {
 
                                 match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
                                     Ok(png_data) => {
-                                        if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                                            .add_filter("PNG Image", &["png"])
-                                            .set_file_name("fractal.png")
-                                            .save_file()
-                                            .await
-                                        {
-                                            if let Err(e) = file_handle.write(&png_data).await {
-                                                log::error!("Failed to save PNG: {:?}", e);
-                                            } else {
-                                                log::info!("PNG saved successfully!");
-                                            }
+                                        // Trigger direct browser download
+                                        match trigger_browser_download(&png_data, "fractal.png", "image/png") {
+                                            Ok(()) => log::info!("PNG download started!"),
+                                            Err(e) => log::error!("Failed to trigger download: {}", e),
                                         }
                                     }
                                     Err(e) => log::error!("Failed to encode PNG: {}", e),
@@ -1791,9 +1928,9 @@ impl App {
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
-        // Generate one thumbnail for preset library if needed (one per frame)
-        // This is blocking but only ~1-2 seconds per thumbnail
-        // Note: Thumbnail generation uses pollster which isn't available on WASM
+        // Generate thumbnails for preset library
+        // Desktop: Blocking generation, one per frame
+        // WASM: Async generation via spawn_local
         #[cfg(not(target_arch = "wasm32"))]
         if self.egui_layer.preset_library_needs_thumbnails() {
             self.egui_layer.generate_preset_thumbnail(
@@ -1805,7 +1942,15 @@ impl App {
             window.request_redraw();
         }
 
-        // Generate one thumbnail for file browser if needed (one per frame)
+        #[cfg(target_arch = "wasm32")]
+        self.egui_layer.start_preset_library_thumbnails(
+            &self.gpu.device,
+            &self.gpu.queue,
+        );
+
+        // Generate thumbnails for file browser
+        // Desktop: Blocking generation, one per frame
+        // WASM: Async generation via spawn_local
         #[cfg(not(target_arch = "wasm32"))]
         if self.egui_layer.file_browser_needs_thumbnails() {
             self.egui_layer.generate_file_browser_thumbnail(
@@ -1816,6 +1961,12 @@ impl App {
             // Request immediate repaint to continue generation next frame
             window.request_redraw();
         }
+
+        #[cfg(target_arch = "wasm32")]
+        self.egui_layer.start_file_browser_thumbnails(
+            &self.gpu.device,
+            &self.gpu.queue,
+        );
 
         // Handle PathMap mode: query path at clicked pixel or close overlay
         #[cfg(not(target_arch = "wasm32"))]

@@ -88,6 +88,9 @@ pub struct AnimationPanelResponse {
     pub new_animation: bool,
     /// Timeline was scrubbed (slider dragged or frame stepped) - needs fractal update
     pub seek_changed: bool,
+    /// Trigger animation load file picker (WASM only - handled in app render loop)
+    #[cfg(target_arch = "wasm32")]
+    pub trigger_animation_load: bool,
 }
 
 /// Render animation panel content
@@ -375,6 +378,12 @@ fn render_file_controls(ui: &mut Ui, controller: &AnimationController, response:
                         }
                     }
                 }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // WASM: use native file picker, handled in app render loop
+                response.trigger_animation_load = true;
             }
         }
 
