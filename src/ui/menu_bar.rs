@@ -269,9 +269,9 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::Animation);
                 }
 
-                // Path Editor panel
+                // Path Editor panel (experimental feature)
                 let path_editor_open = workspace.panel_exists(super::workspace::PanelType::PathEditor);
-                if ui.selectable_label(path_editor_open, "🛤 Path Editor").clicked() {
+                if ui.selectable_label(path_editor_open, "🧪 Path Editor (Experimental)").clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::PathEditor);
                 }
 
