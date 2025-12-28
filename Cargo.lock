@@ -1400,6 +1400,7 @@ dependencies = [
  "getrandom 0.2.16",
  "half",
  "image",
+ "js-sys",
  "log",
  "once_cell",
  "png 0.17.16",

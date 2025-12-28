@@ -4,6 +4,9 @@
 //! - Preset Library panel (built-in presets)
 //! - User Library panel (saved fractals)
 //! - Backup Library panel (auto-saved backups)
+//!
+//! On desktop: Thumbnails are rendered synchronously using pollster
+//! On WASM: Thumbnails are rendered asynchronously using wasm_bindgen_futures
 
 use std::collections::VecDeque;
 
@@ -11,6 +14,13 @@ use egui::{self, Color32, CursorIcon, Sense, Vec2};
 
 use crate::config::FractalConfig;
 use crate::storage::{GalleryItem, TextureCache, ThumbnailCache};
+
+#[cfg(target_arch = "wasm32")]
+use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::collections::HashMap;
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
 
 /// View mode for the gallery
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -28,6 +38,10 @@ pub struct GalleryResponse {
     /// Request to close the panel
     pub close_requested: bool,
 }
+
+/// Shared state for async thumbnail results (WASM only)
+#[cfg(target_arch = "wasm32")]
+type AsyncThumbnailResults = Rc<RefCell<HashMap<String, image::RgbaImage>>>;
 
 /// Reusable gallery widget for browsing FractalConfigs
 pub struct FractalConfigGallery {
@@ -49,11 +63,19 @@ pub struct FractalConfigGallery {
     /// Disk cache reference
     disk_cache: ThumbnailCache,
 
-    /// Queue of items pending thumbnail generation
+    /// Queue of items pending thumbnail generation (desktop only)
     pending_generation: VecDeque<usize>,
 
     /// Total items that needed generation (for progress calculation)
     total_to_generate: usize,
+
+    /// WASM: Shared state for receiving async thumbnail results
+    #[cfg(target_arch = "wasm32")]
+    async_results: AsyncThumbnailResults,
+
+    /// WASM: Set of hashes currently being rendered (to avoid duplicate spawns)
+    #[cfg(target_arch = "wasm32")]
+    in_flight: std::collections::HashSet<String>,
 }
 
 impl FractalConfigGallery {
@@ -70,6 +92,10 @@ impl FractalConfigGallery {
             disk_cache: ThumbnailCache::new(),
             pending_generation: VecDeque::new(),
             total_to_generate: 0,
+            #[cfg(target_arch = "wasm32")]
+            async_results: Rc::new(RefCell::new(HashMap::new())),
+            #[cfg(target_arch = "wasm32")]
+            in_flight: std::collections::HashSet::new(),
         }
     }
 
@@ -95,9 +121,54 @@ impl FractalConfigGallery {
         self.items.is_empty()
     }
 
-    /// Check if thumbnail generation is in progress
+    /// Check if thumbnail generation is in progress (desktop only)
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn is_generating(&self) -> bool {
         !self.pending_generation.is_empty()
+    }
+
+    /// WASM: Start async thumbnail generation for items that need it
+    ///
+    /// This spawns async tasks to render thumbnails in the background.
+    /// Results are polled in `render()` via `poll_async_thumbnails()`.
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_async_thumbnail_generation(
+        &mut self,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+    ) {
+        use wasm_bindgen_futures::spawn_local;
+
+        for item in &self.items {
+            let hash = item.hash.clone();
+
+            // Skip if already cached or in-flight
+            if self.texture_cache.contains(&hash) {
+                continue;
+            }
+            if self.in_flight.contains(&hash) {
+                continue;
+            }
+
+            // Mark as in-flight
+            self.in_flight.insert(hash.clone());
+
+            // Clone what we need for the async task
+            let config = item.config.clone();
+            let results = Rc::clone(&self.async_results);
+
+            // We need to clone device/queue handles for the async task
+            // Note: wgpu Device and Queue are internally Arc-wrapped, so this is cheap
+            let device = device.clone();
+            let queue = queue.clone();
+
+            spawn_local(async move {
+                let image = crate::renderer::render_thumbnail_async(&device, &queue, &config).await;
+
+                // Store result for pickup on next frame
+                results.borrow_mut().insert(hash, image);
+            });
+        }
     }
 
     /// Get generation progress (completed, total)
@@ -109,10 +180,16 @@ impl FractalConfigGallery {
     /// Render the gallery UI
     /// Returns GalleryResponse with selected config if any
     pub fn render(&mut self, ui: &mut egui::Ui) -> GalleryResponse {
-        // Step 1: Queue missing thumbnails
+        // WASM: Poll for completed async thumbnails and upload them
+        #[cfg(target_arch = "wasm32")]
+        self.poll_async_thumbnails(ui.ctx());
+
+        // Desktop: Queue missing thumbnails for synchronous generation
+        #[cfg(not(target_arch = "wasm32"))]
         self.queue_missing_thumbnails();
 
-        // Step 2: If generating, show progress modal
+        // Desktop only: If generating, show progress modal and wait
+        #[cfg(not(target_arch = "wasm32"))]
         if !self.pending_generation.is_empty() {
             self.show_generation_progress(ui);
             // Note: Actual generation happens in generate_one_thumbnail()
@@ -120,12 +197,12 @@ impl FractalConfigGallery {
             return GalleryResponse::default();
         }
 
-        // Step 3: Render toolbar
+        // Render toolbar
         self.render_toolbar(ui);
 
         ui.separator();
 
-        // Step 4: Render gallery based on view mode
+        // Render gallery based on view mode
         match self.view_mode {
             GalleryViewMode::Grid => self.render_grid(ui),
             GalleryViewMode::List => self.render_list(ui),
@@ -178,6 +255,8 @@ impl FractalConfigGallery {
             .map(|&index| self.items[index].config.flame.name.as_str())
     }
 
+    /// Desktop: Queue missing thumbnails for synchronous generation
+    #[cfg(not(target_arch = "wasm32"))]
     fn queue_missing_thumbnails(&mut self) {
         // Only queue if not already generating
         if !self.pending_generation.is_empty() {
@@ -197,6 +276,22 @@ impl FractalConfigGallery {
         }
 
         self.total_to_generate = self.pending_generation.len();
+    }
+
+    /// WASM: Poll for completed async thumbnail results and upload them
+    #[cfg(target_arch = "wasm32")]
+    fn poll_async_thumbnails(&mut self, ctx: &egui::Context) {
+        // Check for completed async renders
+        let completed: Vec<(String, image::RgbaImage)> = {
+            let mut results = self.async_results.borrow_mut();
+            results.drain().collect()
+        };
+
+        // Upload completed thumbnails
+        for (hash, image) in completed {
+            self.in_flight.remove(&hash);
+            self.upload_texture(ctx, &hash, image);
+        }
     }
 
     fn show_generation_progress(&self, ui: &mut egui::Ui) {
