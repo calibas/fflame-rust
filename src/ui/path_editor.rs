@@ -182,6 +182,13 @@ pub fn render_path_editor_content(
 ) -> PathEditorResponse {
     let mut response = PathEditorResponse::default();
 
+    // Experimental feature warning
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Experimental Feature").strong().color(egui::Color32::from_rgb(255, 180, 0)));
+    });
+    ui.label(egui::RichText::new("This feature is under development and may change or be removed.").small().italics());
+    ui.add_space(8.0);
+
     ui.heading("Path Filters");
     ui.add_space(4.0);
 
