@@ -1,3 +1,6 @@
+Ongoing project to create better initial Presets:
+
+
 Grand Julian
 Source: Apophysis 7x Preset
 
