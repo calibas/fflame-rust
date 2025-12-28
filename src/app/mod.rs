@@ -13,6 +13,46 @@ pub use export::export_headless;
 #[cfg(target_arch = "wasm32")]
 pub use export::export_headless_wasm;
 
+/// Trigger a browser download of binary data (WASM only)
+#[cfg(target_arch = "wasm32")]
+fn trigger_browser_download(data: &[u8], filename: &str, mime_type: &str) -> Result<(), String> {
+    use wasm_bindgen::JsCast;
+    use web_sys::{Blob, BlobPropertyBag, Url, HtmlAnchorElement};
+
+    // Create Uint8Array from data
+    let array = js_sys::Uint8Array::from(data);
+    let blob_parts = js_sys::Array::new();
+    blob_parts.push(&array);
+
+    // Create Blob with correct MIME type
+    let mut options = BlobPropertyBag::new();
+    options.type_(mime_type);
+
+    let blob = Blob::new_with_u8_array_sequence_and_options(&blob_parts, &options)
+        .map_err(|e| format!("Failed to create blob: {:?}", e))?;
+
+    // Create object URL
+    let url = Url::create_object_url_with_blob(&blob)
+        .map_err(|e| format!("Failed to create object URL: {:?}", e))?;
+
+    // Create and click anchor element to trigger download
+    let window = web_sys::window().ok_or("No window")?;
+    let document = window.document().ok_or("No document")?;
+    let a = document.create_element("a")
+        .map_err(|e| format!("Failed to create anchor: {:?}", e))?
+        .dyn_into::<HtmlAnchorElement>()
+        .map_err(|_| "Failed to cast to anchor")?;
+
+    a.set_href(&url);
+    a.set_download(filename);
+    a.click();
+
+    // Clean up object URL
+    let _ = Url::revoke_object_url(&url);
+
+    Ok(())
+}
+
 use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, window::Window};
 use egui_wgpu::wgpu::SurfaceError;
 use std::sync::{Arc, Mutex};
@@ -637,20 +677,29 @@ impl App {
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: async file dialog - we'll spawn the dialog and handle the result
-                // Note: We can't directly import_config from async, so we'll just load to buffer
+                // WASM: async file dialog - store result in egui temp storage for pickup in render loop
                 let ctx = self.egui_layer.ctx.clone();
                 wasm_bindgen_futures::spawn_local(async move {
                     if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                        .add_filter("Fractal Flame", &["flame"])
+                        .add_filter("Fractal Flame", &["fflame"])
                         .pick_file()
                         .await
                     {
                         let contents = file_handle.read().await;
                         let json = String::from_utf8_lossy(&contents).to_string();
-                        // Copy to clipboard so user can paste it
-                        ctx.copy_text(json);
-                        log::info!("Config loaded to clipboard - paste to import");
+
+                        // Parse and store for pickup in render loop
+                        match serde_json::from_str::<crate::config::FractalConfig>(&json) {
+                            Ok(config) => {
+                                ctx.data_mut(|data| {
+                                    data.insert_temp(egui::Id::new("pending_config_load"), config);
+                                });
+                                log::info!("Config loaded from file");
+                            }
+                            Err(e) => {
+                                log::error!("Failed to parse config: {}", e);
+                            }
+                        }
                     }
                 });
             }
@@ -963,9 +1012,21 @@ impl App {
             self.workspace.open_floating_panel(PanelType::ConfigDialog);
         }
 
-        // Check for pending Apophysis import from WASM async file dialog
+        // Check for pending config/Apophysis imports from WASM async file dialogs
         #[cfg(target_arch = "wasm32")]
         {
+            // Check for pending config load
+            if let Some(config) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<crate::config::FractalConfig>(egui::Id::new("pending_config_load"))
+            }) {
+                if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
+                    log::error!("Failed to load config: {}", e);
+                } else {
+                    log::info!("Config loaded successfully");
+                }
+            }
+
+            // Check for pending Apophysis import
             if let Some(config) = self.egui_layer.ctx.data_mut(|data| {
                 data.remove_temp::<crate::config::FractalConfig>(egui::Id::new("pending_apophysis_import"))
             }) {
@@ -1212,17 +1273,10 @@ impl App {
 
                                 match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
                                     Ok(png_data) => {
-                                        if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                                            .add_filter("PNG Image", &["png"])
-                                            .set_file_name("fractal.png")
-                                            .save_file()
-                                            .await
-                                        {
-                                            if let Err(e) = file_handle.write(&png_data).await {
-                                                log::error!("Failed to save PNG: {:?}", e);
-                                            } else {
-                                                log::info!("PNG saved: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0);
-                                            }
+                                        // Trigger direct browser download
+                                        match trigger_browser_download(&png_data, "fractal.png", "image/png") {
+                                            Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0),
+                                            Err(e) => log::error!("Failed to trigger download: {}", e),
                                         }
                                     }
                                     Err(e) => log::error!("Failed to encode PNG: {}", e),
@@ -1312,17 +1366,10 @@ impl App {
 
                                 match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
                                     Ok(png_data) => {
-                                        if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                                            .add_filter("PNG Image", &["png"])
-                                            .set_file_name("fractal.png")
-                                            .save_file()
-                                            .await
-                                        {
-                                            if let Err(e) = file_handle.write(&png_data).await {
-                                                log::error!("Failed to save PNG: {:?}", e);
-                                            } else {
-                                                log::info!("PNG saved successfully!");
-                                            }
+                                        // Trigger direct browser download
+                                        match trigger_browser_download(&png_data, "fractal.png", "image/png") {
+                                            Ok(()) => log::info!("PNG download started!"),
+                                            Err(e) => log::error!("Failed to trigger download: {}", e),
                                         }
                                     }
                                     Err(e) => log::error!("Failed to encode PNG: {}", e),
