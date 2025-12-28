@@ -15,7 +15,7 @@ pub use export::export_headless_wasm;
 
 /// Trigger a browser download of binary data (WASM only)
 #[cfg(target_arch = "wasm32")]
-fn trigger_browser_download(data: &[u8], filename: &str, mime_type: &str) -> Result<(), String> {
+pub fn trigger_browser_download(data: &[u8], filename: &str, mime_type: &str) -> Result<(), String> {
     use wasm_bindgen::JsCast;
     use web_sys::{Blob, BlobPropertyBag, Url, HtmlAnchorElement};
 
@@ -56,7 +56,7 @@ fn trigger_browser_download(data: &[u8], filename: &str, mime_type: &str) -> Res
 /// Trigger a native browser file picker and read file contents (WASM only)
 /// Uses <input type="file"> directly instead of rfd to avoid extra dialogs
 #[cfg(target_arch = "wasm32")]
-fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: &'static str) {
+pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: &'static str) {
     use wasm_bindgen::prelude::*;
     use wasm_bindgen::JsCast;
     use web_sys::{HtmlInputElement, FileReader};
@@ -627,18 +627,12 @@ impl App {
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: async file dialog
+                // WASM: direct browser download (no extra dialogs)
                 if let Ok(json) = config.to_json() {
-                    wasm_bindgen_futures::spawn_local(async move {
-                        if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                            .add_filter("Fractal Flame Config", &["fflame"])
-                            .set_file_name("fractal.fflame")
-                            .save_file()
-                            .await
-                        {
-                            let _ = file_handle.write(json.as_bytes()).await;
-                        }
-                    });
+                    let filename = format!("{}.fflame", config.flame.name.to_lowercase().replace(' ', "_"));
+                    if let Err(e) = trigger_browser_download(json.as_bytes(), &filename, "application/json") {
+                        log::error!("Failed to trigger download: {}", e);
+                    }
                 }
             }
         }
@@ -1104,6 +1098,29 @@ impl App {
                     }
                     Err(e) => {
                         log::error!("Failed to parse Apophysis XML: {}", e);
+                    }
+                }
+            }
+
+            // Check for pending animation load (raw JSON text from native file picker)
+            if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<String>(egui::Id::new("pending_animation_load_raw"))
+            }) {
+                match crate::animation::Animation::from_json(&json) {
+                    Ok(animation) => {
+                        // If animation has embedded config, load it first
+                        if let Some(ref config) = animation.base_config {
+                            log::info!("Animation '{}' has embedded config, loading it", animation.name);
+                            let description = format!("Load Animation: {}", animation.name);
+                            if let Err(e) = self.load_config_with_undo(config.clone(), description) {
+                                log::error!("Failed to load animation's embedded config: {}", e);
+                            }
+                        }
+                        self.animation_controller.load(animation);
+                        log::info!("Animation loaded successfully");
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse animation JSON: {}", e);
                     }
                 }
             }
