@@ -859,27 +859,9 @@ impl App {
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: async file dialog - load into egui memory
+                // WASM: use native file picker (no extra dialogs)
                 let ctx = self.egui_layer.ctx.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                        .add_filter("Fractal Flame", &["fflame"])
-                        .pick_file()
-                        .await
-                    {
-                        let contents = file_handle.read().await;
-                        let json = String::from_utf8_lossy(&contents).to_string();
-
-                        // Store the JSON in egui memory for pickup on next frame
-                        ctx.data_mut(|data| {
-                            data.insert_temp(
-                                egui::Id::new("pending_file_browser_json"),
-                                json
-                            );
-                        });
-                        ctx.request_repaint();
-                    }
-                });
+                trigger_browser_file_picker(".fflame", ctx, "pending_file_browser_json_raw");
             }
         }
 
@@ -1121,6 +1103,26 @@ impl App {
                     }
                     Err(e) => {
                         log::error!("Failed to parse animation JSON: {}", e);
+                    }
+                }
+            }
+
+            // Check for pending file browser JSON (raw text from native file picker)
+            if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<String>(egui::Id::new("pending_file_browser_json_raw"))
+            }) {
+                // Load the JSON into the file browser panel
+                match crate::config::FractalConfig::from_json_multi(&json) {
+                    Ok(configs) => {
+                        if configs.is_empty() {
+                            log::error!("File contains no configurations");
+                        } else {
+                            log::info!("Loaded {} config(s) from file", configs.len());
+                            self.egui_layer.load_configs_into_browser(configs, "file");
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse config JSON: {}", e);
                     }
                 }
             }
@@ -1926,9 +1928,9 @@ impl App {
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
-        // Generate one thumbnail for preset library if needed (one per frame)
-        // This is blocking but only ~1-2 seconds per thumbnail
-        // Note: Thumbnail generation uses pollster which isn't available on WASM
+        // Generate thumbnails for preset library
+        // Desktop: Blocking generation, one per frame
+        // WASM: Async generation via spawn_local
         #[cfg(not(target_arch = "wasm32"))]
         if self.egui_layer.preset_library_needs_thumbnails() {
             self.egui_layer.generate_preset_thumbnail(
@@ -1940,7 +1942,15 @@ impl App {
             window.request_redraw();
         }
 
-        // Generate one thumbnail for file browser if needed (one per frame)
+        #[cfg(target_arch = "wasm32")]
+        self.egui_layer.start_preset_library_thumbnails(
+            &self.gpu.device,
+            &self.gpu.queue,
+        );
+
+        // Generate thumbnails for file browser
+        // Desktop: Blocking generation, one per frame
+        // WASM: Async generation via spawn_local
         #[cfg(not(target_arch = "wasm32"))]
         if self.egui_layer.file_browser_needs_thumbnails() {
             self.egui_layer.generate_file_browser_thumbnail(
@@ -1951,6 +1961,12 @@ impl App {
             // Request immediate repaint to continue generation next frame
             window.request_redraw();
         }
+
+        #[cfg(target_arch = "wasm32")]
+        self.egui_layer.start_file_browser_thumbnails(
+            &self.gpu.device,
+            &self.gpu.queue,
+        );
 
         // Handle PathMap mode: query path at clicked pixel or close overlay
         #[cfg(not(target_arch = "wasm32"))]
