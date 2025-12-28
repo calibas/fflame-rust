@@ -25,8 +25,8 @@ fn trigger_browser_download(data: &[u8], filename: &str, mime_type: &str) -> Res
     blob_parts.push(&array);
 
     // Create Blob with correct MIME type
-    let mut options = BlobPropertyBag::new();
-    options.type_(mime_type);
+    let options = BlobPropertyBag::new();
+    options.set_type(mime_type);
 
     let blob = Blob::new_with_u8_array_sequence_and_options(&blob_parts, &options)
         .map_err(|e| format!("Failed to create blob: {:?}", e))?;
@@ -51,6 +51,108 @@ fn trigger_browser_download(data: &[u8], filename: &str, mime_type: &str) -> Res
     let _ = Url::revoke_object_url(&url);
 
     Ok(())
+}
+
+/// Trigger a native browser file picker and read file contents (WASM only)
+/// Uses <input type="file"> directly instead of rfd to avoid extra dialogs
+#[cfg(target_arch = "wasm32")]
+fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: &'static str) {
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::JsCast;
+    use web_sys::{HtmlInputElement, FileReader};
+
+    let window = match web_sys::window() {
+        Some(w) => w,
+        None => { log::error!("No window"); return; }
+    };
+    let document = match window.document() {
+        Some(d) => d,
+        None => { log::error!("No document"); return; }
+    };
+
+    // Create hidden file input
+    let input: HtmlInputElement = match document.create_element("input") {
+        Ok(el) => match el.dyn_into::<HtmlInputElement>() {
+            Ok(input) => input,
+            Err(_) => { log::error!("Failed to cast to input"); return; }
+        },
+        Err(_) => { log::error!("Failed to create input"); return; }
+    };
+
+    input.set_type("file");
+    input.set_accept(accept);
+    input.style().set_property("display", "none").ok();
+
+    // Append to body temporarily
+    if let Some(body) = document.body() {
+        let _ = body.append_child(&input);
+    }
+
+    // Set up change handler
+    let input_clone = input.clone();
+    let ctx_clone = ctx.clone();
+    let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+        let files = match input_clone.files() {
+            Some(f) => f,
+            None => return,
+        };
+
+        if files.length() == 0 {
+            return;
+        }
+
+        let file = match files.get(0) {
+            Some(f) => f,
+            None => return,
+        };
+
+        let reader = match FileReader::new() {
+            Ok(r) => r,
+            Err(_) => { log::error!("Failed to create FileReader"); return; }
+        };
+
+        let reader_clone = reader.clone();
+        let ctx_for_load = ctx_clone.clone();
+        let onload = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+            let result = match reader_clone.result() {
+                Ok(r) => r,
+                Err(_) => return,
+            };
+
+            let array_buffer = match result.dyn_into::<js_sys::ArrayBuffer>() {
+                Ok(ab) => ab,
+                Err(_) => return,
+            };
+
+            let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+            let mut contents = vec![0u8; uint8_array.length() as usize];
+            uint8_array.copy_to(&mut contents);
+
+            let text = String::from_utf8_lossy(&contents).to_string();
+
+            // Store in egui temp storage for pickup
+            ctx_for_load.data_mut(|data| {
+                data.insert_temp(egui::Id::new(result_id), text);
+            });
+            ctx_for_load.request_repaint();
+        }) as Box<dyn FnMut(_)>);
+
+        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+        onload.forget(); // Leak closure - it will be cleaned up when reader is done
+
+        let _ = reader.read_as_array_buffer(&file);
+
+        // Clean up input element
+        if let Some(parent) = input_clone.parent_node() {
+            let _ = parent.remove_child(&input_clone);
+        }
+    }) as Box<dyn FnMut(_)>);
+
+    input.set_onchange(Some(closure.as_ref().unchecked_ref()));
+    closure.forget(); // Leak closure - it will be called when file is selected
+
+    // Trigger file picker
+    input.click();
 }
 
 use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, window::Window};
@@ -677,31 +779,9 @@ impl App {
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: async file dialog - store result in egui temp storage for pickup in render loop
+                // WASM: native file picker - no extra dialogs
                 let ctx = self.egui_layer.ctx.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                        .add_filter("Fractal Flame", &["fflame"])
-                        .pick_file()
-                        .await
-                    {
-                        let contents = file_handle.read().await;
-                        let json = String::from_utf8_lossy(&contents).to_string();
-
-                        // Parse and store for pickup in render loop
-                        match serde_json::from_str::<crate::config::FractalConfig>(&json) {
-                            Ok(config) => {
-                                ctx.data_mut(|data| {
-                                    data.insert_temp(egui::Id::new("pending_config_load"), config);
-                                });
-                                log::info!("Config loaded from file");
-                            }
-                            Err(e) => {
-                                log::error!("Failed to parse config: {}", e);
-                            }
-                        }
-                    }
-                });
+                trigger_browser_file_picker(".fflame", ctx, "pending_config_load_raw");
             }
         }
 
@@ -764,36 +844,9 @@ impl App {
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: async file dialog
+                // WASM: native file picker - no extra dialogs
                 let ctx = self.egui_layer.ctx.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                        .add_filter("Apophysis Flame", &["flame"])
-                        .pick_file()
-                        .await
-                    {
-                        let contents = file_handle.read().await;
-                        let xml = String::from_utf8_lossy(&contents).to_string();
-                        match crate::apophysis_xml::parse_flame_xml(&xml) {
-                            Ok(configs) => {
-                                if !configs.is_empty() {
-                                    // Store the config in egui memory for pickup on next frame
-                                    ctx.data_mut(|data| {
-                                        data.insert_temp(
-                                            egui::Id::new("pending_apophysis_import"),
-                                            configs[0].clone()
-                                        );
-                                    });
-                                    log::info!("Apophysis flame imported successfully");
-                                    ctx.request_repaint();
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("Failed to parse Apophysis XML: {}", e);
-                            }
-                        }
-                    }
-                });
+                trigger_browser_file_picker(".flame", ctx, "pending_apophysis_import_raw");
             }
         }
 
@@ -1015,25 +1068,43 @@ impl App {
         // Check for pending config/Apophysis imports from WASM async file dialogs
         #[cfg(target_arch = "wasm32")]
         {
-            // Check for pending config load
-            if let Some(config) = self.egui_layer.ctx.data_mut(|data| {
-                data.remove_temp::<crate::config::FractalConfig>(egui::Id::new("pending_config_load"))
+            // Check for pending config load (raw JSON text from native file picker)
+            if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<String>(egui::Id::new("pending_config_load_raw"))
             }) {
-                if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
-                    log::error!("Failed to load config: {}", e);
-                } else {
-                    log::info!("Config loaded successfully");
+                match serde_json::from_str::<crate::config::FractalConfig>(&json) {
+                    Ok(config) => {
+                        if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
+                            log::error!("Failed to load config: {}", e);
+                        } else {
+                            log::info!("Config loaded successfully");
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse config JSON: {}", e);
+                    }
                 }
             }
 
-            // Check for pending Apophysis import
-            if let Some(config) = self.egui_layer.ctx.data_mut(|data| {
-                data.remove_temp::<crate::config::FractalConfig>(egui::Id::new("pending_apophysis_import"))
+            // Check for pending Apophysis import (raw XML text from native file picker)
+            if let Some(xml) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<String>(egui::Id::new("pending_apophysis_import_raw"))
             }) {
-                if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
-                    log::error!("Failed to import Apophysis flame: {}", e);
-                } else {
-                    log::info!("Apophysis flame imported successfully");
+                match crate::apophysis_xml::parse_flame_xml(&xml) {
+                    Ok(configs) => {
+                        if let Some(config) = configs.into_iter().next() {
+                            if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
+                                log::error!("Failed to import Apophysis flame: {}", e);
+                            } else {
+                                log::info!("Apophysis flame imported successfully");
+                            }
+                        } else {
+                            log::error!("No flames found in Apophysis file");
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to parse Apophysis XML: {}", e);
+                    }
                 }
             }
         }
