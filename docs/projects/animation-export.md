@@ -130,10 +130,10 @@ Add "Export Animation" button to Animation panel:
 - [x] Implement CLI progress callback (prints to stdout)
 - [x] Wire up CLI to core export engine
 
-### Phase 3: UI Support ✅ (Basic)
+### Phase 3: UI Support ✅ (Partial)
 - [x] Add "Export Animation" button to Animation panel
 - [x] Create export settings dialog (collapsible in Animation panel)
-- [ ] Implement background export with progress UI (currently blocks UI)
+- [x] Implement background export with progress UI
 - [ ] Add cancel support
 
 ### Phase 4: Video Encoding ✅
