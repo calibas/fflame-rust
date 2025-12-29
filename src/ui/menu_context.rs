@@ -4,6 +4,7 @@
 #[derive(Default)]
 pub struct FileMenuActions {
     pub new_flame: bool,
+    pub random_flame: bool,
     pub load_config: bool,
     pub save_config: bool,
     pub import_apophysis: bool,

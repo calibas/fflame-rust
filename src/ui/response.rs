@@ -9,6 +9,7 @@ pub struct UiResponse {
     pub config_save_file_requested: bool,
     pub config_load_file_requested: bool,
     pub apophysis_import_file_requested: bool,
+    pub random_flame_requested: bool,
 
     // Palette library management (not stored in config directly)
     pub custom_palette: Option<crate::scene::palette::Palette>,
@@ -65,6 +66,7 @@ impl Default for UiResponse {
             config_save_file_requested: false,
             config_load_file_requested: false,
             apophysis_import_file_requested: false,
+            random_flame_requested: false,
             custom_palette: None,
             palette_export_json: None,
             palette_save_file: None,
