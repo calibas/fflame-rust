@@ -1630,7 +1630,96 @@ impl App {
             }
         }
 
-        // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
+        // ============================================================================
+        // ANIMATION UPDATE (before GPU updates so animation changes are included)
+        // ============================================================================
+        // Detect animation state transitions and update FSM accordingly
+        let was_fsm_animating = self.render_mode.is_animating();
+        let is_controller_playing = self.animation_controller.state == PlaybackState::Playing;
+
+        // Detect play start: controller started playing but FSM not yet in animation mode
+        if is_controller_playing && !was_fsm_animating {
+            self.render_mode.enter_animation(self.config_manager.active_config());
+            // Enable animation mode in ConfigManager - UI changes become silent (no undo)
+            self.config_manager.set_animation_mode(true);
+        }
+
+        // Detect user stop/pause: FSM was animating but controller is no longer playing
+        // (This catches manual stop/pause clicks from UI - auto-stop is handled below after update())
+        if was_fsm_animating && !is_controller_playing {
+            // Disable animation mode before exit so undo entry creation works
+            self.config_manager.set_animation_mode(false);
+            self.handle_animation_exit();
+
+            // Only restore base config when animation is STOPPED (not paused)
+            // When paused, the fractal should stay at the current timeline position
+            if self.animation_controller.state == PlaybackState::Stopped {
+                if let Some(ref animation) = self.animation_controller.animation {
+                    if let Some(ref base_config) = animation.base_config {
+                        // Load the base config silently (the undo entry was already created by handle_animation_exit)
+                        if let Err(e) = self.config_manager.load_config_silent(base_config.clone()) {
+                            log::error!("Failed to restore base config: {}", e);
+                        }
+                        self.flame = base_config.flame.clone();
+                        self.use_overwrite_next_frame = true;
+                    }
+                }
+            }
+        }
+
+        if is_controller_playing {
+            // Update animation time (delta_time calculated at frame start, before last_frame_time update)
+            self.animation_controller.update(delta_time);
+
+            // Check if animation auto-stopped (LoopMode::Once reached end)
+            let auto_stopped = self.animation_controller.state != PlaybackState::Playing;
+            if auto_stopped {
+                // Disable animation mode before exit so undo entry creation works
+                self.config_manager.set_animation_mode(false);
+                // Animation finished naturally - exit animation mode and create undo snapshot
+                self.handle_animation_exit();
+
+                // Restore base config when animation stops (returns to original state)
+                if let Some(ref animation) = self.animation_controller.animation {
+                    if let Some(ref base_config) = animation.base_config {
+                        // Load the base config silently (the undo entry was already created by handle_animation_exit)
+                        if let Err(e) = self.config_manager.load_config_silent(base_config.clone()) {
+                            log::error!("Failed to restore base config: {}", e);
+                        }
+                        self.flame = base_config.flame.clone();
+                        self.use_overwrite_next_frame = true;
+                    }
+                }
+            } else {
+                // Animation still playing - evaluate all tracks and apply values to ConfigManager
+                let frame_values = self.animation_controller.evaluate_frame();
+
+            for (path_str, json_value) in frame_values {
+                // Parse the string key back to ConfigPath
+                if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
+                    // Convert JSON value to ConfigValue
+                    if let Some(config_value) = crate::config::json_to_config_value(&json_value, &path) {
+                        // Apply silently (no undo point)
+                        if let Err(e) = self.config_manager.update_param_silent(path, config_value) {
+                            log::warn!("Animation: failed to update {}: {}", path_str, e);
+                        }
+                    }
+                } else {
+                    log::warn!("Animation: unknown path key: {}", path_str);
+                }
+            }
+
+                // Sync flame from config (animation may have changed transform parameters)
+                self.flame = self.config_manager.active_config().flame.clone();
+            }
+        }
+
+
+        // ============================================================================
+        // GPU UPDATES (includes both UI and animation changes)
+        // ============================================================================
+        // Get pending actions from ConfigManager (includes animation's changes now)
+        // (needs to be after submit since we need a new encoder)
         // Get pending actions from ConfigManager (replaces individual boolean flags)
         let actions = self.config_manager.get_pending_actions();
 
@@ -1767,89 +1856,6 @@ impl App {
         // Clear keyboard flag for next frame
         self.view_changed_by_keyboard = false;
 
-        // ============================================================================
-        // ANIMATION UPDATE (between UI processing and rendering)
-        // ============================================================================
-        // Detect animation state transitions and update FSM accordingly
-        let was_fsm_animating = self.render_mode.is_animating();
-        let is_controller_playing = self.animation_controller.state == PlaybackState::Playing;
-
-        // Detect play start: controller started playing but FSM not yet in animation mode
-        if is_controller_playing && !was_fsm_animating {
-            self.render_mode.enter_animation(self.config_manager.active_config());
-            // Enable animation mode in ConfigManager - UI changes become silent (no undo)
-            self.config_manager.set_animation_mode(true);
-        }
-
-        // Detect user stop/pause: FSM was animating but controller is no longer playing
-        // (This catches manual stop/pause clicks from UI - auto-stop is handled below after update())
-        if was_fsm_animating && !is_controller_playing {
-            // Disable animation mode before exit so undo entry creation works
-            self.config_manager.set_animation_mode(false);
-            self.handle_animation_exit();
-
-            // Only restore base config when animation is STOPPED (not paused)
-            // When paused, the fractal should stay at the current timeline position
-            if self.animation_controller.state == PlaybackState::Stopped {
-                if let Some(ref animation) = self.animation_controller.animation {
-                    if let Some(ref base_config) = animation.base_config {
-                        // Load the base config silently (the undo entry was already created by handle_animation_exit)
-                        if let Err(e) = self.config_manager.load_config_silent(base_config.clone()) {
-                            log::error!("Failed to restore base config: {}", e);
-                        }
-                        self.flame = base_config.flame.clone();
-                        self.use_overwrite_next_frame = true;
-                    }
-                }
-            }
-        }
-
-        if is_controller_playing {
-            // Update animation time (delta_time calculated at frame start, before last_frame_time update)
-            self.animation_controller.update(delta_time);
-
-            // Check if animation auto-stopped (LoopMode::Once reached end)
-            let auto_stopped = self.animation_controller.state != PlaybackState::Playing;
-            if auto_stopped {
-                // Disable animation mode before exit so undo entry creation works
-                self.config_manager.set_animation_mode(false);
-                // Animation finished naturally - exit animation mode and create undo snapshot
-                self.handle_animation_exit();
-
-                // Restore base config when animation stops (returns to original state)
-                if let Some(ref animation) = self.animation_controller.animation {
-                    if let Some(ref base_config) = animation.base_config {
-                        // Load the base config silently (the undo entry was already created by handle_animation_exit)
-                        if let Err(e) = self.config_manager.load_config_silent(base_config.clone()) {
-                            log::error!("Failed to restore base config: {}", e);
-                        }
-                        self.flame = base_config.flame.clone();
-                        self.use_overwrite_next_frame = true;
-                    }
-                }
-            }
-
-            // Evaluate all tracks and apply values to ConfigManager (silently, no undo)
-            let frame_values = self.animation_controller.evaluate_frame();
-
-            for (path_str, json_value) in frame_values {
-                // Parse the string key back to ConfigPath
-                if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
-                    // Convert JSON value to ConfigValue
-                    if let Some(config_value) = crate::config::json_to_config_value(&json_value, &path) {
-                        // Apply silently (no undo point)
-                        if let Err(e) = self.config_manager.update_param_silent(path, config_value) {
-                            log::warn!("Animation: failed to update {}: {}", path_str, e);
-                        }
-                    }
-                } else {
-                    log::warn!("Animation: unknown path key: {}", path_str);
-                }
-            }
-
-            // Sync flame from config (animation may have changed transform parameters)
-            self.flame = self.config_manager.active_config().flame.clone();
-        }
 
         // ============================================================================
         // PHASE 3: Get FINAL Config and Render Fractal

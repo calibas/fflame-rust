@@ -83,6 +83,11 @@
     - Translation files in `locales/*.yml`
     - Language switcher in Settings → Preferences
 
+## Environment
+- Shell within VSCode: Git Bash (MSYS2 MinGW64)
+- Use forward slashes for paths
+- Avoid `/dev/null` (creates literal files on Windows)
+
 ### Key Concepts
 - **Fractal Flames**: IFS (Iterated Function System) with variations
 - **Render Modes**: 2D (classic) and 3D (pseudo-3D with depth)
