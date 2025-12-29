@@ -25,6 +25,7 @@ pub struct PanelContext<'a> {
     // Action flags
     pub add_transform: &'a mut bool,
     pub delete_transform: &'a mut Option<usize>,
+    pub clone_transform: &'a mut Option<usize>,
     pub undo_requested: &'a mut bool,
     pub redo_requested: &'a mut bool,
     pub preset_changed: &'a mut bool,
@@ -166,6 +167,7 @@ impl<'a> PanelViewer<'a> {
             self.context.flame,
             self.context.add_transform,
             self.context.delete_transform,
+            self.context.clone_transform,
         );
     }
 

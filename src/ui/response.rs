@@ -29,6 +29,7 @@ pub struct UiResponse {
     // Transform management (creates config deltas but needs special handling)
     pub add_transform: bool,
     pub delete_transform: Option<usize>,
+    pub clone_transform: Option<usize>,
 
     // Panel open requests
     pub open_palette_editor: bool,
@@ -76,6 +77,7 @@ impl Default for UiResponse {
             png_export_transparent: false,
             add_transform: false,
             delete_transform: None,
+            clone_transform: None,
             open_palette_editor: false,
             open_config_dialog: false,
             fractal_viewport_size: None,

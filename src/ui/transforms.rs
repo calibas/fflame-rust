@@ -203,12 +203,13 @@ pub fn render_transforms_content(
     flame: &mut Flame,
     add_transform: &mut bool,
     delete_transform: &mut Option<usize>,
+    clone_transform: &mut Option<usize>,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
     ui.heading(format!("Transforms ({})", flame.transforms.len()));
 
-    // Add/Delete transform buttons
+    // Add transform button
     ui.horizontal(|ui| {
         if ui.button("➕ Add Transform").clicked() {
             *add_transform = true;
@@ -236,6 +237,7 @@ pub fn render_transforms_content(
     ui.separator();
 
     let mut delete_index = None;
+    let mut clone_index = None;
     let num_transforms = flame.transforms.len();
     egui::ScrollArea::vertical().show(ui, |ui| {
         // Regular transforms
@@ -311,12 +313,18 @@ pub fn render_transforms_content(
 
                         ui.separator();
 
-                        // Delete button (only show if more than 1 transform exists)
-                        if num_transforms > 1 {
-                            if ui.button("🗑 Delete Transform").clicked() {
-                                delete_index = Some(i);
+                        // Clone and Delete buttons
+                        ui.horizontal(|ui| {
+                            if ui.button("📋 Clone").on_hover_text("Create a copy of this transform").clicked() {
+                                clone_index = Some(i);
                             }
-                        }
+                            // Delete button (only show if more than 1 transform exists)
+                            if num_transforms > 1 {
+                                if ui.button("🗑 Delete").on_hover_text("Delete this transform").clicked() {
+                                    delete_index = Some(i);
+                                }
+                            }
+                        });
                     });
             });
         }
@@ -433,6 +441,11 @@ pub fn render_transforms_content(
     // Set delete_transform if a transform was marked for deletion
     if let Some(idx) = delete_index {
         *delete_transform = Some(idx);
+    }
+
+    // Set clone_transform if a transform was marked for cloning
+    if let Some(idx) = clone_index {
+        *clone_transform = Some(idx);
     }
 
     max_update
