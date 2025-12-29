@@ -269,6 +269,7 @@ impl EguiLayer {
         let mut preset_changed = false;
         let mut add_transform = false;
         let mut delete_transform = None;
+        let mut clone_transform = None;
 
         // Config import/export
         let mut config_export_json = None;
@@ -362,6 +363,7 @@ impl EguiLayer {
                         // Action flags
                         add_transform: &mut add_transform,
                         delete_transform: &mut delete_transform,
+                        clone_transform: &mut clone_transform,
                         undo_requested: &mut undo_requested,
                         redo_requested: &mut redo_requested,
                         preset_changed: &mut preset_changed,
@@ -584,6 +586,7 @@ impl EguiLayer {
             png_export_transparent,
             add_transform,
             delete_transform,
+            clone_transform,
             open_palette_editor,
             open_config_dialog,
             fractal_viewport_size,

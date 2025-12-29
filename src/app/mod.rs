@@ -701,6 +701,32 @@ impl App {
             }
         }
 
+        // Handle clone transform
+        if let Some(idx) = ui_response.clone_transform {
+            let config = self.config_manager.active_config();
+
+            if idx < config.flame.transforms.len() {
+                // Clone the transform
+                let cloned_transform = config.flame.transforms[idx].clone();
+                // Insert after the original transform
+                let insert_idx = idx + 1;
+
+                // Create specialized snapshot for efficient undo/redo
+                let change = crate::config::ConfigChange::add_transform_snapshot(
+                    insert_idx,
+                    cloned_transform,
+                    format!("Clone Transform {}", idx + 1),
+                );
+
+                if let Err(e) = self.config_manager.apply_structural_change(change) {
+                    eprintln!("Failed to clone transform: {}", e);
+                } else {
+                    // Update app state from config
+                    self.flame = self.config_manager.active_config().flame.clone();
+                }
+            }
+        }
+
         // Handle custom palette from editor or library
         if let Some(custom_pal) = ui_response.custom_palette {
             // Add or update palette in library (prevents duplicates)
