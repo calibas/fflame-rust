@@ -27,6 +27,10 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::PresetLibrary);
                 }
 
+                if ui.button("🎲 Random Flame").clicked() {
+                    menu_actions.file.random_flame = true;
+                }
+
                 ui.separator();
 
                 if ui.button("Import Apophysis XML...").clicked() {

@@ -727,6 +727,28 @@ impl App {
             }
         }
 
+        // Handle random flame generation
+        if ui_response.random_flame_requested {
+            let random_flame = crate::scene::randomize::generate_random_flame();
+
+            // Create a new config with the random flame
+            let mut new_config = crate::config::FractalConfig::default();
+            new_config.flame = random_flame;
+
+            // Use a random palette from the library
+            if self.palette_library.len() > 0 {
+                let palette_idx = rand::random::<usize>() % self.palette_library.len();
+                if let Some(palette) = self.palette_library.get(palette_idx) {
+                    new_config.palette = Some(palette.clone());
+                }
+            }
+
+            // Load the random config with undo support
+            if let Err(e) = self.load_config_with_undo(new_config, "Random Flame".to_string()) {
+                eprintln!("Failed to load random flame: {}", e);
+            }
+        }
+
         // Handle custom palette from editor or library
         if let Some(custom_pal) = ui_response.custom_palette {
             // Add or update palette in library (prevents duplicates)
