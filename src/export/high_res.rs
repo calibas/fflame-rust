@@ -183,13 +183,18 @@ impl HighResExporter {
             width, height, workgroups, samples_per_dispatch, buffer_size_mb
         );
 
-        // Create transform buffer
-        let transforms: Vec<GpuTransform> = config
+        // Create transform buffer (include final transform if present)
+        let mut transforms: Vec<GpuTransform> = config
             .flame
             .transforms
             .iter()
             .map(|t| GpuTransform::from_transform(t, global_registry()))
             .collect();
+
+        // Append final transform if present (same as FlameBuffers::update_transforms)
+        if let Some(ref final_xform) = config.flame.final_transform {
+            transforms.push(GpuTransform::from_transform(final_xform, global_registry()));
+        }
 
         let transform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Export Transform Buffer"),
@@ -223,13 +228,18 @@ impl HighResExporter {
             mapped_at_creation: false,
         });
 
-        // Create and populate variation params buffer
-        let variation_params: Vec<GpuVariationParams> = config
+        // Create and populate variation params buffer (include final transform if present)
+        let mut variation_params: Vec<GpuVariationParams> = config
             .flame
             .transforms
             .iter()
             .map(|xform| GpuVariationParams::from_transform(xform, global_registry()))
             .collect();
+
+        // Append final transform variation params if present
+        if let Some(ref final_xform) = config.flame.final_transform {
+            variation_params.push(GpuVariationParams::from_transform(final_xform, global_registry()));
+        }
 
         let max_transforms = 32;
         let variation_params_size = max_transforms * std::mem::size_of::<GpuVariationParams>() as u64;
@@ -295,11 +305,20 @@ impl HighResExporter {
             ..Default::default()
         });
 
-        // Build active variations map
+        // Build active variations map (include final transform)
         let mut active_variations = std::collections::HashMap::new();
         for transform in &config.flame.transforms {
             for name in transform.active_variations() {
                 let weight = transform.get_variation(&name);
+                if weight != 0.0 {
+                    active_variations.insert(name, weight);
+                }
+            }
+        }
+        // Include final transform's variations in shader
+        if let Some(ref final_xform) = config.flame.final_transform {
+            for name in final_xform.active_variations() {
+                let weight = final_xform.get_variation(&name);
                 if weight != 0.0 {
                     active_variations.insert(name, weight);
                 }
@@ -704,8 +723,8 @@ impl HighResExporter {
                 camera_rotation_y: config.camera_rotation_y,
                 camera_z: config.camera_z,
                 histogram_color_scale: config.histogram_color_scale,
-                has_final_transform: 0,
-                final_transform_index: 0,
+                has_final_transform: if config.flame.final_transform.is_some() { 1 } else { 0 },
+                final_transform_index: config.flame.transforms.len() as u32,
                 bits_per_transform: crate::gpu::buffers::bits_per_transform(config.flame.transforms.len() as u32),
                 path_map_style: config.path_map_style as u32,
                 path_capture_mode: config.path_capture_mode as u32,

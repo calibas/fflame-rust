@@ -240,6 +240,10 @@ impl FlameRenderer {
         self.width = width;
         self.height = height;
 
+        // Update transform tracking from flame (critical for final transform support)
+        self.num_transforms = flame.transforms.len() as u32;
+        self.has_final_transform = flame.final_transform.is_some();
+
         // Recreate buffers with new size
         self.buffers = FlameBuffers::new(device, queue, width, height, flame);
 
