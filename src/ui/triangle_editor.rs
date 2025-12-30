@@ -139,8 +139,29 @@ fn render_triangle_editor_core(
                     .max(y[0].abs())
                     .max(y[1].abs());
             }
-            // Add 20% padding
-            let padded_extent = max_extent * 1.2;
+            // Add flat padding (not percentage) to prevent feedback loop when dragging near edge
+            // Using percentage (e.g., * 1.2) causes: drag → extent grows → point moves → extent grows more
+            let target_extent = max_extent + 0.5;
+
+            // Get previous extent from persisted state
+            let prev_extent = ui.ctx().data_mut(|d| {
+                d.get_persisted::<f32>(egui::Id::new("triangle_editor_extent"))
+                    .unwrap_or(target_extent)
+            });
+
+            // While dragging, only allow extent to grow (never shrink) to prevent jumpiness
+            // Shrinking only happens on mouse release
+            let is_dragging = response.dragged();
+            let padded_extent = if is_dragging {
+                prev_extent.max(target_extent) // Only grow while dragging
+            } else {
+                target_extent // Allow shrinking on release
+            };
+
+            // Persist the current extent for next frame
+            ui.ctx().data_mut(|d| {
+                d.insert_persisted(egui::Id::new("triangle_editor_extent"), padded_extent);
+            });
 
             // Define coordinate mapping: fractal space [-extent, extent] → canvas pixels
             let world_min = -padded_extent;
@@ -164,26 +185,18 @@ fn render_triangle_editor_core(
             // Draw canvas background
             painter.rect_filled(rect, 0.0, Color32::from_rgb(20, 20, 20));
 
-            // Draw grid
-            let grid_spacing = 0.5; // Grid every 0.5 units
-            let grid_color = Color32::from_rgb(40, 40, 40);
-            let axis_color = Color32::from_rgb(60, 60, 60);
+            // Draw X/Y axes only (no grid lines)
+            let axis_color = Color32::from_rgb(180, 180, 180);
 
-            for i in 0..=((world_size / grid_spacing) as i32) {
-                let world_coord = world_min + (i as f32) * grid_spacing;
+            // X axis (horizontal line at y=0)
+            let x_axis_start = to_canvas([world_min, 0.0]);
+            let x_axis_end = to_canvas([world_max, 0.0]);
+            painter.line_segment([x_axis_start, x_axis_end], Stroke::new(1.0, axis_color));
 
-                // Vertical lines
-                let p1 = to_canvas([world_coord, world_min]);
-                let p2 = to_canvas([world_coord, world_max]);
-                let color = if world_coord.abs() < 0.01 { axis_color } else { grid_color };
-                painter.line_segment([p1, p2], Stroke::new(1.0, color));
-
-                // Horizontal lines
-                let p1 = to_canvas([world_min, world_coord]);
-                let p2 = to_canvas([world_max, world_coord]);
-                let color = if world_coord.abs() < 0.01 { axis_color } else { grid_color };
-                painter.line_segment([p1, p2], Stroke::new(1.0, color));
-            }
+            // Y axis (vertical line at x=0)
+            let y_axis_start = to_canvas([0.0, world_min]);
+            let y_axis_end = to_canvas([0.0, world_max]);
+            painter.line_segment([y_axis_start, y_axis_end], Stroke::new(1.0, axis_color));
 
             // === INTERACTION: Mouse dragging with different modes ===
             #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
