@@ -144,7 +144,7 @@ impl VariationInfo {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VariationCategory {
     /// Basic 2D variations (Linear, Sinusoidal, etc.)
     Basic2D,

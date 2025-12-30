@@ -115,9 +115,36 @@ fn render_triangle_editor_core(
             let (response, painter) = ui.allocate_painter(canvas_size, egui::Sense::drag());
             let rect = response.rect;
 
-            // Define coordinate mapping: fractal space [-2, 2] → canvas pixels
-            let world_min = -2.0f32;
-            let world_max = 2.0f32;
+            // Calculate dynamic bounds from all transform vertices
+            // Find the maximum extent of any vertex across all transforms
+            let mut max_extent = 2.0f32; // Minimum bounds
+            for transform in flame.transforms.iter() {
+                let (o, x, y) = transform.to_triangle_apophysis();
+                max_extent = max_extent
+                    .max(o[0].abs())
+                    .max(o[1].abs())
+                    .max(x[0].abs())
+                    .max(x[1].abs())
+                    .max(y[0].abs())
+                    .max(y[1].abs());
+            }
+            // Also check final transform if it exists
+            if let Some(ref final_xform) = flame.final_transform {
+                let (o, x, y) = final_xform.to_triangle_apophysis();
+                max_extent = max_extent
+                    .max(o[0].abs())
+                    .max(o[1].abs())
+                    .max(x[0].abs())
+                    .max(x[1].abs())
+                    .max(y[0].abs())
+                    .max(y[1].abs());
+            }
+            // Add 20% padding
+            let padded_extent = max_extent * 1.2;
+
+            // Define coordinate mapping: fractal space [-extent, extent] → canvas pixels
+            let world_min = -padded_extent;
+            let world_max = padded_extent;
             let world_size = world_max - world_min;
 
             // Helper function: world coordinates → canvas pixels
