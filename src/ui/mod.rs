@@ -298,6 +298,7 @@ impl EguiLayer {
         // Panel open requests
         let mut open_palette_editor = false;
         let mut open_config_dialog = false;
+        let mut open_triangle_editor = false;
 
         // Fractal viewport size tracking
         let mut fractal_viewport_size = None;
@@ -369,6 +370,7 @@ impl EguiLayer {
                         redo_requested: &mut redo_requested,
                         preset_changed: &mut preset_changed,
                         open_palette_editor: &mut open_palette_editor,
+                        open_triangle_editor: &mut open_triangle_editor,
 
                         // UI state
                         current_preset_index,
@@ -592,6 +594,7 @@ impl EguiLayer {
             clone_transform,
             open_palette_editor,
             open_config_dialog,
+            open_triangle_editor,
             fractal_viewport_size,
             needs_repaint,
             selected_preset_config,

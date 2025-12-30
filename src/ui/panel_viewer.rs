@@ -30,6 +30,7 @@ pub struct PanelContext<'a> {
     pub redo_requested: &'a mut bool,
     pub preset_changed: &'a mut bool,
     pub open_palette_editor: &'a mut bool,
+    pub open_triangle_editor: &'a mut bool,
 
     // UI state
     pub current_preset_index: &'a mut usize,
@@ -168,6 +169,7 @@ impl<'a> PanelViewer<'a> {
             self.context.add_transform,
             self.context.delete_transform,
             self.context.clone_transform,
+            self.context.open_triangle_editor,
         );
     }
 
