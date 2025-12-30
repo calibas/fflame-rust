@@ -1,0 +1,250 @@
+//! GPU buffer update logic
+//!
+//! Extracted from mod.rs to reduce file size and improve maintainability.
+
+use super::App;
+
+impl App {
+    /// Process pending config actions and update GPU buffers accordingly.
+    ///
+    /// This handles:
+    /// - Flame updates (transforms, variations)
+    /// - View parameter updates (zoom, pan, rotation, camera)
+    /// - Palette and color mode updates
+    /// - Tone curve updates
+    /// - Shader rebuilds (when variation set changes)
+    /// - Accumulation resets
+    ///
+    /// Returns whether overwrite mode should be used for the current frame.
+    pub(super) fn process_gpu_updates(&mut self, view_changed_by_keyboard: bool) -> bool {
+
+        // Get pending actions from ConfigManager (includes animation's changes now)
+        let actions = self.config_manager.get_pending_actions();
+
+        // Determine if any GPU updates are needed
+        let needs_update = actions.reset_accumulation
+            || actions.update_flame
+            || actions.update_palette
+            || actions.update_tone_curve
+            || actions.update_view
+            || actions.rebuild_shader
+            || view_changed_by_keyboard;
+
+        if needs_update {
+            if let Some(ref mut renderer) = self.flame_renderer {
+                // Get current config for updates
+                let update_config = self.config_manager.active_config();
+
+                let mut update_encoder =
+                    self.gpu
+                        .device
+                        .create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                            label: Some("Update Encoder"),
+                        });
+
+                // Update flame if UpdateAction indicates (includes preview mode live updates)
+                if actions.update_flame {
+                    renderer.update_flame(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &self.flame,
+                        self.config_manager.system_settings().iterations_per_thread,
+                        self.config_manager.system_settings().burn_in,
+                        update_config.zoom,
+                        update_config.pan_x,
+                        update_config.pan_y,
+                        update_config.rotation,
+                        update_config.camera_rotation_x,
+                        update_config.camera_rotation_y,
+                        update_config.camera_z,
+                        update_config.speed_factor,
+                    );
+                }
+
+                // Update view parameters (includes view changes and iteration changes)
+                if actions.update_view || view_changed_by_keyboard {
+                    renderer.set_deterministic_rng(update_config.deterministic_rng);
+                    renderer.update_iterations(
+                        &self.gpu.queue,
+                        self.config_manager.system_settings().iterations_per_thread,
+                        self.config_manager.system_settings().burn_in,
+                        update_config.zoom,
+                        update_config.pan_x,
+                        update_config.pan_y,
+                        update_config.rotation,
+                        update_config.camera_rotation_x,
+                        update_config.camera_rotation_y,
+                        update_config.camera_z,
+                        update_config.speed_factor,
+                    );
+                }
+
+                // Update palette if needed (also handles color mode changes)
+                if actions.update_palette {
+                    // Get palette from ConfigManager (includes preview mode changes from palette editor)
+                    let palette = update_config
+                        .palette
+                        .as_ref()
+                        .or_else(|| self.palette_library.get(update_config.palette_index));
+
+                    if let Some(palette) = palette {
+                        renderer.update_palette(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            palette,
+                            update_config.palette_rotation,
+                        );
+                    }
+
+                    // Update color mode in GPU params (ColorMode changes trigger update_palette)
+                    renderer.set_color_mode(
+                        &self.gpu.queue,
+                        update_config.color_mode,
+                        self.config_manager.system_settings().iterations_per_thread,
+                        self.config_manager.system_settings().burn_in,
+                        update_config.zoom,
+                        update_config.pan_x,
+                        update_config.pan_y,
+                        update_config.rotation,
+                        update_config.camera_rotation_x,
+                        update_config.camera_rotation_y,
+                        update_config.camera_z,
+                        update_config.speed_factor,
+                    );
+
+                    // Update path buffer allocation and shaders based on color_mode (PathMap needs buffers)
+                    renderer.update_path_features(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &update_config.flame,
+                    );
+                }
+
+                // Update tone curve LUT if changed
+                if actions.update_tone_curve {
+                    renderer.update_curve_lut(&self.gpu.queue, &update_config.tonemap_curve);
+                }
+
+                // Rebuild shader if variation set changed
+                if actions.rebuild_shader {
+                    // TODO: Implement shader rebuild logic when variation system supports it
+                    // For now, this would require recreating the compute pipeline
+                }
+
+                // Handle accumulation reset based on change type
+                let should_full_reset = actions.reset_accumulation || view_changed_by_keyboard;
+                let has_view_or_color_change = actions.update_view || actions.update_palette;
+
+                if should_full_reset {
+                    // Structural changes: Clear buffer and reset counters (blank frame expected)
+                    renderer.reset(
+                        &mut update_encoder,
+                        &self.gpu.queue,
+                        self.config_manager.system_settings().iterations_per_thread,
+                        update_config.zoom,
+                        update_config.pan_x,
+                        update_config.pan_y,
+                        update_config.rotation,
+                        update_config.camera_rotation_x,
+                        update_config.camera_rotation_y,
+                        update_config.camera_z,
+                        update_config.speed_factor,
+                    );
+                    self.frames_since_accumulation = 0;
+                    self.rendering_complete = false; // Reset completion flag
+                    self.clear_paths_next_frame = true; // Clear path buffer on full reset
+                } else if has_view_or_color_change
+                    && renderer.total_iterations() >= update_config.max_iterations
+                {
+                    // View/color changes when fractal has stopped iterating:
+                    // Reset counter to restart iteration (smooth transition via overwrite mode)
+                    renderer.reset_iteration_counter();
+                    self.frames_since_accumulation = 0;
+                    self.rendering_complete = false; // Reset completion flag
+                    self.clear_paths_next_frame = true; // Clear path buffer when restarting
+                }
+
+                self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
+            }
+        }
+
+        // Update overwrite mode based on changes
+        self.update_overwrite_mode(&actions, view_changed_by_keyboard);
+
+        // Clear pending actions after executing them
+        self.config_manager.clear_pending_actions();
+
+        // Return current overwrite mode state
+        self.use_overwrite_next_frame
+    }
+
+    /// Update the overwrite mode flag based on recent changes.
+    ///
+    /// Overwrite mode keeps accumulation in "replace" mode for smooth transitions
+    /// during parameter dragging. It stays ON for 100ms after the last change,
+    /// then resets iteration counter for a clean rebuild.
+    fn update_overwrite_mode(
+        &mut self,
+        actions: &crate::config::UpdateAction,
+        view_changed_by_keyboard: bool,
+    ) {
+        use web_time::Instant;
+
+        // Note: Excludes tone_curve (post-processing only, doesn't affect accumulation buffer)
+        let had_changes = actions.update_view || actions.update_palette || actions.update_flame;
+        let now = Instant::now();
+
+        // Track previous overwrite state to detect transitions
+        let was_overwrite = self.use_overwrite_next_frame;
+
+        if had_changes && !actions.reset_accumulation {
+            // Changes happened → enable overwrite mode and update timestamp
+            self.use_overwrite_next_frame = true;
+            self.last_param_change_time = Some(now);
+        } else if !had_changes {
+            // No changes this frame → check if we're still within the smooth transition window
+            if let Some(last_change) = self.last_param_change_time {
+                let time_since_change = now.duration_since(last_change);
+                // Keep overwrite ON for 100ms after last change (~6 frames at 60fps)
+                self.use_overwrite_next_frame = time_since_change.as_millis() < 100;
+
+                // When overwrite window expires, reset iteration counter for clean rebuild
+                if was_overwrite && !self.use_overwrite_next_frame {
+                    if let Some(ref mut renderer) = self.flame_renderer {
+                        renderer.reset_iteration_counter();
+                        self.rendering_complete = false; // Reset completion flag
+                        self.clear_paths_next_frame = true; // Clear path buffer for clean rebuild
+                        log::debug!(
+                            "Overwrite window expired → reset iteration counter for clean rebuild"
+                        );
+                    }
+                }
+            } else {
+                self.use_overwrite_next_frame = false;
+            }
+        }
+        // If reset_accumulation=true, disable overwrite (let normal accumulation work after reset)
+
+        // Suppress unused warning (keyboard changes are handled in process_gpu_updates)
+        let _ = view_changed_by_keyboard;
+    }
+
+    /// Determine if overwrite mode should be used for the current frame.
+    ///
+    /// Overwrite mode is used when:
+    /// - Active parameter changes are happening (drag, scroll)
+    /// - Fractal has reached max_iterations (allows live updates)
+    /// - Animation is playing in responsive mode
+    pub(super) fn should_use_overwrite(&self, is_animation_playing: bool) -> bool {
+        let has_stopped = self
+            .flame_renderer
+            .as_ref()
+            .map(|r| r.total_iterations() >= self.config_manager.active_config().max_iterations)
+            .unwrap_or(false);
+
+        let animation_uses_overwrite =
+            is_animation_playing && self.animation_controller.use_overwrite_mode();
+
+        self.use_overwrite_next_frame || has_stopped || animation_uses_overwrite
+    }
+}
