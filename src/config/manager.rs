@@ -1260,9 +1260,12 @@ impl ConfigManager {
                     .get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let weight: f32 = value.try_into()?;
-                if weight == 0.0 {
+                // Use NaN as sentinel value to signal removal
+                if weight.is_nan() {
                     xform.variations.remove(variation);
                 } else {
+                    // Always insert/update - don't auto-remove at 0.0
+                    // This allows variations to stay visible at weight 0
                     xform.variations.insert(variation.clone(), weight);
                 }
             }
@@ -1380,9 +1383,11 @@ impl ConfigManager {
                     .as_mut()
                     .ok_or(ConfigError::InvalidIndex)?;
                 let weight: f32 = value.try_into()?;
-                if weight == 0.0 {
+                // Use NaN as sentinel value to signal removal
+                if weight.is_nan() {
                     final_xform.variations.remove(variation);
                 } else {
+                    // Always insert/update - don't auto-remove at 0.0
                     final_xform.variations.insert(variation.clone(), weight);
                 }
             }

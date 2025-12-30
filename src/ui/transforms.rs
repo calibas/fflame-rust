@@ -456,6 +456,7 @@ pub fn render_transforms_content(
     add_transform: &mut bool,
     delete_transform: &mut Option<usize>,
     clone_transform: &mut Option<usize>,
+    open_triangle_editor: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
@@ -516,6 +517,8 @@ pub fn render_transforms_content(
                                 ui.ctx().data_mut(|d| {
                                     d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), Some(i));
                                 });
+                                // Open Triangle Editor panel if not already open
+                                *open_triangle_editor = true;
                             }
 
                             // Clone button
@@ -551,8 +554,8 @@ pub fn render_transforms_content(
                                 index: i,
                                 variation: var_name,
                             };
-                            // Set weight to 0 to remove (Transform::set_variation removes if ~0)
-                            if let Ok(update_type) = config_manager.update_param(path, 0.0f32.into()) {
+                            // Use NaN as sentinel value to signal removal
+                            if let Ok(update_type) = config_manager.update_param(path, f32::NAN.into()) {
                                 max_update = max_update.max(update_type);
                             }
                         }
@@ -725,7 +728,8 @@ fn render_final_transform(
                     let path = ConfigPath::FinalTransformVariation {
                         variation: var_name,
                     };
-                    if let Ok(update_type) = config_manager.update_param(path, 0.0f32.into()) {
+                    // Use NaN as sentinel value to signal removal
+                    if let Ok(update_type) = config_manager.update_param(path, f32::NAN.into()) {
                         *max_update = (*max_update).max(update_type);
                     }
                 }

@@ -71,11 +71,15 @@ impl Transform {
 
     /// Set a variation weight by name
     pub fn set_variation(&mut self, name: &str, weight: f32) {
-        if weight.abs() < 1e-6 {
-            self.variations.remove(name);
-        } else {
-            self.variations.insert(name.to_string(), weight);
-        }
+        // Always insert/update the weight - don't auto-remove at zero
+        // This allows variations to remain visible in UI at weight 0
+        // Use remove_variation() to explicitly remove a variation
+        self.variations.insert(name.to_string(), weight);
+    }
+
+    /// Remove a variation from this transform
+    pub fn remove_variation(&mut self, name: &str) {
+        self.variations.remove(name);
     }
 
     /// Get a variation weight by name
