@@ -87,6 +87,7 @@
 - Shell within VSCode: Git Bash (MSYS2 MinGW64)
 - Use forward slashes for paths
 - Avoid `/dev/null` (creates literal files on Windows)
+- NO `sed` EVER! It's never worked out well.
 
 ### Key Concepts
 - **Fractal Flames**: IFS (Iterated Function System) with variations

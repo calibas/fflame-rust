@@ -396,13 +396,17 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Upload initial transforms
+        // Upload initial transforms (include final transform if present)
         let registry = crate::variations::global_registry();
-        let gpu_transforms: Vec<GpuTransform> = flame
+        let mut gpu_transforms: Vec<GpuTransform> = flame
             .transforms
             .iter()
             .map(|xform| GpuTransform::from_transform(xform, registry))
             .collect();
+        // Append final transform if present (same as update_transforms)
+        if let Some(ref final_xform) = flame.final_transform {
+            gpu_transforms.push(GpuTransform::from_transform(final_xform, registry));
+        }
         queue.write_buffer(&transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
 
         // Create variation parameters storage buffer sized for MAX_TRANSFORMS
@@ -414,12 +418,16 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Upload initial variation parameters
-        let gpu_params: Vec<GpuVariationParams> = flame
+        // Upload initial variation parameters (include final transform if present)
+        let mut gpu_params: Vec<GpuVariationParams> = flame
             .transforms
             .iter()
             .map(|xform| GpuVariationParams::from_transform(xform, registry))
             .collect();
+        // Append final transform params if present (same as update_variation_params)
+        if let Some(ref final_xform) = flame.final_transform {
+            gpu_params.push(GpuVariationParams::from_transform(final_xform, registry));
+        }
         queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&gpu_params));
 
         // Create params uniform buffer
