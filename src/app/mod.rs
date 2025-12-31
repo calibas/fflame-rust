@@ -974,6 +974,8 @@ impl App {
                         codec: export_settings.video_codec,
                         hardware_accel: export_settings.hardware_accel,
                         quality: export_settings.video_quality,
+                        preset: export_settings.preset,
+                        tune: export_settings.tune,
                     },
                 };
 
