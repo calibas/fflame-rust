@@ -1703,62 +1703,184 @@ fn build_ffmpeg_args(config: &AnimationExportConfig) -> Vec<String> {
     args.push("-c:v".to_string());
     args.push(encoder.to_string());
 
-    // Quality settings
+    // Quality settings (matching export_animation_fast implementation)
     let is_hardware = settings.hardware_accel != HardwareAccel::None;
 
     match settings.codec {
-        VideoCodec::H264 | VideoCodec::H265 => {
+        VideoCodec::H264 => {
             if is_hardware {
                 match settings.hardware_accel {
                     HardwareAccel::Nvenc => {
+                        // FIX: Use constqp mode for constant quality
                         args.push("-rc".to_string());
-                        args.push("vbr".to_string());
-                        args.push("-cq".to_string());
+                        args.push("constqp".to_string());
+                        args.push("-qp".to_string());
                         args.push(settings.quality.to_string());
-                        args.push("-preset".to_string());
-                        args.push("p4".to_string());
+
+                        // Apply preset
+                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
+                        if !preset.is_empty() {
+                            args.push("-preset".to_string());
+                            args.push(preset.to_string());
+                        }
                     }
                     HardwareAccel::Qsv => {
+                        // FIX: Add look_ahead 0 to force constant QP
                         args.push("-global_quality".to_string());
                         args.push(settings.quality.to_string());
-                        args.push("-preset".to_string());
-                        args.push("medium".to_string());
+                        args.push("-look_ahead".to_string());
+                        args.push("0".to_string());
+
+                        // Apply preset
+                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
+                        if !preset.is_empty() {
+                            args.push("-preset".to_string());
+                            args.push(preset.to_string());
+                        }
                     }
                     HardwareAccel::Amf => {
+                        // Already correct: constant QP mode
                         args.push("-rc".to_string());
                         args.push("cqp".to_string());
                         args.push("-qp".to_string());
                         args.push(settings.quality.to_string());
+
+                        // Apply preset
+                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
+                        if !preset.is_empty() {
+                            args.push("-preset".to_string());
+                            args.push(preset.to_string());
+                        }
                     }
                     HardwareAccel::VideoToolbox => {
-                        let vt_quality = 100 - (settings.quality as i32 * 2).min(100).max(0);
+                        // FIX: Correct quality scale conversion
+                        let vt_quality = (100 - (settings.quality as i32 * 100 / 51)).clamp(1, 100);
                         args.push("-q:v".to_string());
                         args.push(vt_quality.to_string());
                     }
                     HardwareAccel::None => {}
                 }
             } else {
+                // CPU libx264
                 args.push("-crf".to_string());
                 args.push(settings.quality.to_string());
+
+                // Apply preset
+                let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
                 args.push("-preset".to_string());
-                args.push("medium".to_string());
-                if settings.codec == VideoCodec::H265 {
-                    args.push("-x265-params".to_string());
-                    args.push("log-level=error".to_string());
+                args.push(preset.to_string());
+
+                // Apply tune (CPU only)
+                if let Some(tune) = settings.tune.ffmpeg_arg() {
+                    args.push("-tune".to_string());
+                    args.push(tune.to_string());
                 }
+            }
+            args.push("-pix_fmt".to_string());
+            args.push("yuv420p".to_string());
+        }
+        VideoCodec::H265 => {
+            if is_hardware {
+                match settings.hardware_accel {
+                    HardwareAccel::Nvenc => {
+                        // FIX: Use constqp mode for constant quality
+                        args.push("-rc".to_string());
+                        args.push("constqp".to_string());
+                        args.push("-qp".to_string());
+                        args.push(settings.quality.to_string());
+
+                        // Apply preset
+                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
+                        if !preset.is_empty() {
+                            args.push("-preset".to_string());
+                            args.push(preset.to_string());
+                        }
+                    }
+                    HardwareAccel::Qsv => {
+                        // FIX: Add look_ahead 0 to force constant QP
+                        args.push("-global_quality".to_string());
+                        args.push(settings.quality.to_string());
+                        args.push("-look_ahead".to_string());
+                        args.push("0".to_string());
+
+                        // Apply preset
+                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
+                        if !preset.is_empty() {
+                            args.push("-preset".to_string());
+                            args.push(preset.to_string());
+                        }
+                    }
+                    HardwareAccel::Amf => {
+                        // Already correct: constant QP mode
+                        args.push("-rc".to_string());
+                        args.push("cqp".to_string());
+                        args.push("-qp".to_string());
+                        args.push(settings.quality.to_string());
+
+                        // Apply preset
+                        let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
+                        if !preset.is_empty() {
+                            args.push("-preset".to_string());
+                            args.push(preset.to_string());
+                        }
+                    }
+                    HardwareAccel::VideoToolbox => {
+                        // FIX: Correct quality scale conversion
+                        let vt_quality = (100 - (settings.quality as i32 * 100 / 51)).clamp(1, 100);
+                        args.push("-q:v".to_string());
+                        args.push(vt_quality.to_string());
+                    }
+                    HardwareAccel::None => {}
+                }
+            } else {
+                // CPU libx265
+                args.push("-crf".to_string());
+                args.push(settings.quality.to_string());
+
+                // Apply preset
+                let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
+                args.push("-preset".to_string());
+                args.push(preset.to_string());
+
+                // Apply tune (CPU only)
+                if let Some(tune) = settings.tune.ffmpeg_arg() {
+                    args.push("-tune".to_string());
+                    args.push(tune.to_string());
+                }
+
+                args.push("-x265-params".to_string());
+                args.push("log-level=error".to_string());
             }
             args.push("-pix_fmt".to_string());
             args.push("yuv420p".to_string());
         }
         VideoCodec::VP9 => {
             if settings.hardware_accel == HardwareAccel::Qsv {
+                // FIX: Add look_ahead 0 for QSV
                 args.push("-global_quality".to_string());
                 args.push(settings.quality.to_string());
+                args.push("-look_ahead".to_string());
+                args.push("0".to_string());
+
+                // Apply preset
+                let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
+                if !preset.is_empty() {
+                    args.push("-preset".to_string());
+                    args.push(preset.to_string());
+                }
             } else {
+                // CPU libvpx-vp9
                 args.push("-crf".to_string());
                 args.push(settings.quality.to_string());
                 args.push("-b:v".to_string());
                 args.push("0".to_string());
+
+                // Apply preset (VP9 uses -speed instead of -preset)
+                let preset = settings.preset.ffmpeg_arg(settings.hardware_accel);
+                args.push("-speed".to_string());
+                args.push(preset.to_string());
+
+                // VP9 doesn't support -tune parameter
             }
             args.push("-pix_fmt".to_string());
             args.push("yuv420p".to_string());
