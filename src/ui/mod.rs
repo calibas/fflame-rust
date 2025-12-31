@@ -27,7 +27,7 @@ pub mod workspace;
 
 pub use animation_panel::ExportProgress;
 pub use track_editor::TrackEditorState;
-pub use font_loader::ensure_font_for_locale;
+pub use font_loader::{ensure_font_for_locale, initialize_default_fonts};
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
@@ -97,6 +97,9 @@ pub struct EguiLayer {
 impl EguiLayer {
     pub fn new(window: &Window, device: &Device, format: TextureFormat) -> Self {
         let ctx = egui_dock::egui::Context::default();
+
+        // Initialize fonts with Noto Sans (better Unicode coverage than Ubuntu-Light)
+        font_loader::initialize_default_fonts(&ctx);
 
         // Configure style to disable window shadows
         ctx.set_visuals(egui_dock::egui::Visuals {

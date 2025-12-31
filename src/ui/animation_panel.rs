@@ -70,7 +70,7 @@ impl Default for AnimationExportSettings {
             iterations_per_thread: 256,
             video_codec: VideoCodec::H265,
             hardware_accel: HardwareAccel::None,
-            video_quality: 18,
+            video_quality: 12,
         }
     }
 }
@@ -522,7 +522,7 @@ fn render_export_controls(
                         ui.label("Quality:");
                         ui.add(egui::Slider::new(&mut settings.video_quality, 0..=51).text("CRF"));
                     });
-                    ui.small("Lower = better quality, larger file. 18 = visually lossless");
+                    ui.small("Lower = better quality, larger file. Around 12 is recommended");
 
                     ui.separator();
 

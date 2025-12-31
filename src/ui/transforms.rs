@@ -278,9 +278,6 @@ fn render_enabled_variation(
 
     ui.horizontal(|ui| {
         // Delete button
-        if ui.small_button("✕").on_hover_text("Remove variation").clicked() {
-            delete_requested = true;
-        }
 
         // Weight slider
         let mut value = current_weight;
@@ -307,6 +304,10 @@ fn render_enabled_variation(
                 variation: variation_name.to_string(),
             };
             let _ = config_manager.force_commit_preview(&path);
+        }
+        
+        if ui.small_button("🗑").on_hover_text("Remove variation").clicked() {
+            delete_requested = true;
         }
     });
 
@@ -676,10 +677,6 @@ fn render_final_transform(
                             .unwrap_or(&name);
 
                         ui.horizontal(|ui| {
-                            if ui.small_button("✕").clicked() {
-                                var_to_delete = Some(name.clone());
-                            }
-
                             let mut value = *weight;
                             let response = ui.add(
                                 egui::Slider::new(&mut value, -10.0..=10.0)
@@ -700,6 +697,9 @@ fn render_final_transform(
                                     variation: name.clone(),
                                 };
                                 let _ = config_manager.force_commit_preview(&path);
+                            }
+                            if ui.small_button("🗑").on_hover_text("Remove variation").clicked() {
+                                var_to_delete = Some(name.clone());
                             }
                         });
 
