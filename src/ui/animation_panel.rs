@@ -59,6 +59,10 @@ pub struct AnimationExportSettings {
     pub hardware_accel: HardwareAccel,
     /// Video quality (CRF)
     pub video_quality: u8,
+    /// Encoding preset (speed/quality tradeoff)
+    pub preset: crate::animation::export::EncodingPreset,
+    /// Encoding tune (optimization target, CPU only)
+    pub tune: crate::animation::export::EncodingTune,
 }
 
 impl Default for AnimationExportSettings {
@@ -72,6 +76,8 @@ impl Default for AnimationExportSettings {
             video_codec: VideoCodec::H265,
             hardware_accel: HardwareAccel::None,
             video_quality: 12,
+            preset: crate::animation::export::EncodingPreset::default(),
+            tune: crate::animation::export::EncodingTune::default(),
         }
     }
 }
@@ -531,6 +537,66 @@ fn render_export_controls(
                         ui.add(egui::Slider::new(&mut settings.video_quality, 0..=51).text(t!("animation_panel.crf").as_ref()));
                     });
                     ui.small(t!("animation_panel.quality_hint"));
+
+                    // Preset dropdown
+                    ui.horizontal(|ui| {
+                        ui.label("Preset:");
+
+                        use crate::animation::export::EncodingPreset;
+                        let available_presets = EncodingPreset::available_for(settings.hardware_accel);
+
+                        if available_presets.is_empty() {
+                            ui.label("(not supported)");
+                        } else {
+                            let old_accel = settings.hardware_accel;
+
+                            // Reset preset to default if hardware accel changed
+                            if let Some(prev_accel) = ui.memory_mut(|mem| {
+                                mem.data.get_temp::<HardwareAccel>(egui::Id::new("last_hw_accel"))
+                            }) {
+                                if prev_accel != old_accel {
+                                    settings.preset = EncodingPreset::default_for(old_accel);
+                                }
+                            }
+                            ui.memory_mut(|mem| {
+                                mem.data.insert_temp(egui::Id::new("last_hw_accel"), old_accel);
+                            });
+
+                            egui::ComboBox::from_id_salt("preset_combo")
+                                .selected_text(settings.preset.display_name())
+                                .show_ui(ui, |ui| {
+                                    for preset in available_presets {
+                                        ui.selectable_value(
+                                            &mut settings.preset,
+                                            preset,
+                                            preset.display_name()
+                                        );
+                                    }
+                                });
+                        }
+                    });
+                    ui.small("Faster = quick encoding (larger file), Slower = better compression");
+
+                    // Tune dropdown (CPU encoders only)
+                    if settings.hardware_accel == HardwareAccel::None {
+                        ui.horizontal(|ui| {
+                            ui.label("Tune:");
+
+                            use crate::animation::export::EncodingTune;
+                            egui::ComboBox::from_id_salt("tune_combo")
+                                .selected_text(settings.tune.display_name())
+                                .show_ui(ui, |ui| {
+                                    for &tune in EncodingTune::all() {
+                                        ui.selectable_value(
+                                            &mut settings.tune,
+                                            tune,
+                                            tune.display_name()
+                                        );
+                                    }
+                                });
+                        });
+                        ui.small("Animation tune recommended for fractal flames");
+                    }
 
                     ui.separator();
 
