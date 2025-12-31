@@ -1136,7 +1136,9 @@ pub async fn export_animation_fast(
     });
 
     // Spawn FFmpeg writer thread
-    let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<u8>>(4);
+    // Channel buffer: 16 frames (~31 MB at 800×600×4 bytes) to prevent blocking
+    // Increased from 4 to reduce starvation risk when FFmpeg writer gets CPU-starved
+    let (frame_tx, frame_rx) = mpsc::sync_channel::<Vec<u8>>(16);
 
     // Build FFmpeg command
     let ffmpeg_args = build_ffmpeg_args(&export_config);
@@ -1284,22 +1286,26 @@ pub async fn export_animation_fast(
         // Map and read buffer
         let map_start = Instant::now();
         let buffer_slice = staging_buffer.slice(..);
-        let (tx, mut rx) = futures::channel::oneshot::channel();
+        let (tx, rx) = futures::channel::oneshot::channel();
         buffer_slice.map_async(MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
 
-        // Poll until mapped
-        loop {
-            let _ = device.poll(PollType::Poll);
-            match rx.try_recv() {
-                Ok(Some(Ok(()))) => break,
-                Ok(Some(Err(e))) => {
-                    return Err(AnimationExportError::GpuError(format!("Buffer map error: {:?}", e)));
-                }
-                _ => {}
-            }
-        }
+        // Wait for mapping to complete (proper blocking with timeout)
+        let _ = device.poll(PollType::Wait {
+            submission_index: None,
+            timeout: Some(std::time::Duration::from_secs(30)),  // 30s timeout to detect GPU hangs
+        });
+
+        // Await the mapping result
+        rx.await
+            .map_err(|_| AnimationExportError::GpuError(
+                format!("GPU mapping timed out or channel closed (frame {})", frame)
+            ))?
+            .map_err(|e| AnimationExportError::GpuError(
+                format!("Buffer map error on frame {}: {:?}", frame, e)
+            ))?;
+
         timing_stats.map_wait_time_ms += map_start.elapsed().as_secs_f64() * 1000.0;
 
         // Copy data

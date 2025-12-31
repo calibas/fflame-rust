@@ -466,6 +466,16 @@ impl App {
             return Ok(());
         }
 
+        // Skip ALL rendering during video export to eliminate GPU contention
+        // Export uses a separate GPU device but still competes for driver resources
+        // This prevents "Render error: Other" spam and gives export full GPU bandwidth
+        let is_video_exporting = self.animation_export_progress.lock()
+            .map(|p| p.is_exporting)
+            .unwrap_or(false);
+        if is_video_exporting {
+            return Ok(());  // UI still receives events (can cancel), just doesn't render
+        }
+
         let render_start = Instant::now();
 
         // Calculate delta time BEFORE updating last_frame_time (for animation)
