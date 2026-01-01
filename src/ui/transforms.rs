@@ -2,6 +2,22 @@ use crate::scene::transforms::{Flame, RenderMode};
 use crate::variations::{VariationCategory, global_registry};
 use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam};
 use super::variation_params::render_variation_params;
+use egui::Color32;
+
+/// Get a distinct color for each transform index (matches Triangle Editor)
+fn get_transform_color(index: usize) -> Color32 {
+    let colors = [
+        Color32::from_rgb(255, 100, 100), // Red
+        Color32::from_rgb(100, 255, 100), // Green
+        Color32::from_rgb(100, 100, 255), // Blue
+        Color32::from_rgb(255, 255, 100), // Yellow
+        Color32::from_rgb(255, 100, 255), // Magenta
+        Color32::from_rgb(100, 255, 255), // Cyan
+        Color32::from_rgb(255, 150, 100), // Orange
+        Color32::from_rgb(150, 100, 255), // Purple
+    ];
+    colors[index % colors.len()]
+}
 
 /// Render weight control (always visible)
 fn render_weight_control(
@@ -498,18 +514,39 @@ pub fn render_transforms_content(
         // Regular transforms
         for (i, transform) in flame.transforms.iter_mut().enumerate() {
             ui.push_id(i, |ui| {
-                egui::CollapsingHeader::new(format!("Transform {}", i + 1))
-                    .default_open(i == 0)
-                    .show(ui, |ui| {
+                // Custom header with bold text and colored circle
+                let transform_color = get_transform_color(i);
+
+                // Use a horizontal layout to place circle after header
+                let id = ui.make_persistent_id(format!("transform_header_{}", i));
+                let default_open = true;
+                let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
+
+                let header_response = ui.horizontal(|ui| {
+                    // Toggle button (arrow)
+                    let icon_response = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+
+                    // Bold header text
+                    let header_text = egui::RichText::new(format!("Transform {}", i + 1))
+                        .strong()
+                        .size(14.0);
+                    let text_response = ui.label(header_text);
+
+                    // Colored circle indicator
+                    let (circle_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                    ui.painter().circle_filled(circle_rect.center(), 5.0, transform_color);
+
+                    // Make entire row clickable
+                    icon_response | text_response
+                });
+
+                // Toggle on click anywhere in header row
+                if header_response.inner.clicked() {
+                    state.toggle(ui);
+                }
+
+                state.show_body_unindented(ui, |ui| {
                         // === ALWAYS VISIBLE ===
-
-                        // Weight control
-                        let weight_update = render_weight_control(ui, config_manager, i, transform);
-                        max_update = max_update.max(weight_update);
-
-                        // Color controls (palette position + preview)
-                        let color_update = render_color_controls(ui, config_manager, i, transform);
-                        max_update = max_update.max(color_update);
 
                         // Edit Triangle button
                         ui.horizontal(|ui| {
@@ -535,18 +572,58 @@ pub fn render_transforms_content(
                             }
                         });
 
+                        // Weight control
+                        let weight_update = render_weight_control(ui, config_manager, i, transform);
+                        max_update = max_update.max(weight_update);
+
+                        // Color controls (palette position + preview)
+                        let color_update = render_color_controls(ui, config_manager, i, transform);
+                        max_update = max_update.max(color_update);
+
+                        // === ADVANCED SECTION (collapsed) ===
+                        egui::CollapsingHeader::new("Advanced")
+                            .id_salt(format!("advanced_{}", i))
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                // Affine Matrix
+                                ui.label("Affine Matrix");
+                                let affine_update = render_affine_controls(ui, config_manager, i, transform, render_mode);
+                                max_update = max_update.max(affine_update);
+
+                                ui.add_space(4.0);
+
+                                // Color Speed and Opacity
+                                let advanced_update = render_advanced_settings(ui, config_manager, i, transform);
+                                max_update = max_update.max(advanced_update);
+                            });
+
                         ui.add_space(4.0);
 
-                        // === VARIATIONS SECTION ===
+                        // === VARIATIONS SECTION (with border) ===
                         let popup_id = ui.id().with("add_var_popup");
-                        let (var_update, var_to_delete, var_to_add) = render_variations_section(
-                            ui,
-                            config_manager,
-                            i,
-                            transform,
-                            render_mode,
-                            popup_id,
-                        );
+                        let mut var_update = UpdateType::None;
+                        let mut var_to_delete = None;
+                        let mut var_to_add = None;
+
+                        egui::Frame::none()
+                            .fill(ui.visuals().extreme_bg_color)
+                            .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                            .rounding(4.0)
+                            .inner_margin(6.0)
+                            .show(ui, |ui| {
+                                let (update, to_delete, to_add) = render_variations_section(
+                                    ui,
+                                    config_manager,
+                                    i,
+                                    transform,
+                                    render_mode,
+                                    popup_id,
+                                );
+                                var_update = update;
+                                var_to_delete = to_delete;
+                                var_to_add = to_add;
+                            });
+
                         max_update = max_update.max(var_update);
 
                         // Handle variation deletion
@@ -573,22 +650,6 @@ pub fn render_transforms_content(
                             }
                         }
 
-                        // === ADVANCED SECTION (collapsed) ===
-                        egui::CollapsingHeader::new("Advanced")
-                            .id_salt(format!("advanced_{}", i))
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                // Affine Matrix
-                                ui.label("Affine Matrix");
-                                let affine_update = render_affine_controls(ui, config_manager, i, transform, render_mode);
-                                max_update = max_update.max(affine_update);
-
-                                ui.add_space(4.0);
-
-                                // Color Speed and Opacity
-                                let advanced_update = render_advanced_settings(ui, config_manager, i, transform);
-                                max_update = max_update.max(advanced_update);
-                            });
                     });
             });
         }
