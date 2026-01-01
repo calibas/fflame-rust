@@ -288,6 +288,16 @@ tooltips:
   remove_variation: "Remove variation"
   final_transform_help: "Post-processing transform applied once to every point after iteration loop.\nUsed for framing, positioning, or global effects."
 
+  affine_a: "X scale - horizontal stretch/compress"
+  affine_b: "Y shear - vertical skew"
+  affine_c: "X shear - horizontal skew"
+  affine_d: "Y scale - vertical stretch/compress"
+  affine_e: "X offset - horizontal translation"
+  affine_f: "Y offset - vertical translation"
+  affine_g: "Z offset - depth in 3D mode"
+  color_speed: "How fast the color index changes during iteration.\n-1 to 1, where 0 = no change."
+  opacity: "Transparency of points from this transform.\n0 = invisible, 1 = fully opaque"
+
   blend_rate: "How fast new samples blend with existing.\n0.01 = slow/smooth, 1.0 = fast/flickery"
   dynamic_blend: "Exponential convergence (old) vs fixed rate (new).\nFixed rate gives more consistent results."
   density_compression: "Slows accumulation in bright areas.\n0 = disabled, 100 = strong effect"

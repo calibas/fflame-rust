@@ -108,9 +108,9 @@ fn render_affine_controls(
 
     // Row 1: a, b
     ui.horizontal(|ui| {
-        ui.label(t!("transform.affine_a"));
+        ui.label(t!("transform.affine_a")).on_hover_text(t!("tooltips.affine_a"));
         let mut temp_a = transform.a;
-        let response_a = ui.add(egui::DragValue::new(&mut temp_a).speed(0.01));
+        let response_a = ui.add(egui::DragValue::new(&mut temp_a).speed(0.01)).on_hover_text(t!("tooltips.affine_a"));
         if response_a.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::A },
@@ -124,9 +124,9 @@ fn render_affine_controls(
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::A });
         }
 
-        ui.label(t!("transform.affine_b"));
+        ui.label(t!("transform.affine_b")).on_hover_text(t!("tooltips.affine_b"));
         let mut temp_b = transform.b;
-        let response_b = ui.add(egui::DragValue::new(&mut temp_b).speed(0.01));
+        let response_b = ui.add(egui::DragValue::new(&mut temp_b).speed(0.01)).on_hover_text(t!("tooltips.affine_b"));
         if response_b.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::B },
@@ -143,9 +143,9 @@ fn render_affine_controls(
 
     // Row 2: c, d
     ui.horizontal(|ui| {
-        ui.label(t!("transform.affine_c"));
+        ui.label(t!("transform.affine_c")).on_hover_text(t!("tooltips.affine_c"));
         let mut temp_c = transform.c;
-        let response_c = ui.add(egui::DragValue::new(&mut temp_c).speed(0.01));
+        let response_c = ui.add(egui::DragValue::new(&mut temp_c).speed(0.01)).on_hover_text(t!("tooltips.affine_c"));
         if response_c.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::C },
@@ -159,9 +159,9 @@ fn render_affine_controls(
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::C });
         }
 
-        ui.label(t!("transform.affine_d"));
+        ui.label(t!("transform.affine_d")).on_hover_text(t!("tooltips.affine_d"));
         let mut temp_d = transform.d;
-        let response_d = ui.add(egui::DragValue::new(&mut temp_d).speed(0.01));
+        let response_d = ui.add(egui::DragValue::new(&mut temp_d).speed(0.01)).on_hover_text(t!("tooltips.affine_d"));
         if response_d.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::D },
@@ -178,9 +178,9 @@ fn render_affine_controls(
 
     // Row 3: e, f
     ui.horizontal(|ui| {
-        ui.label(t!("transform.affine_e"));
+        ui.label(t!("transform.affine_e")).on_hover_text(t!("tooltips.affine_e"));
         let mut temp_e = transform.e;
-        let response_e = ui.add(egui::DragValue::new(&mut temp_e).speed(0.01));
+        let response_e = ui.add(egui::DragValue::new(&mut temp_e).speed(0.01)).on_hover_text(t!("tooltips.affine_e"));
         if response_e.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::E },
@@ -194,9 +194,9 @@ fn render_affine_controls(
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::E });
         }
 
-        ui.label(t!("transform.affine_f"));
+        ui.label(t!("transform.affine_f")).on_hover_text(t!("tooltips.affine_f"));
         let mut temp_f = transform.f;
-        let response_f = ui.add(egui::DragValue::new(&mut temp_f).speed(0.01));
+        let response_f = ui.add(egui::DragValue::new(&mut temp_f).speed(0.01)).on_hover_text(t!("tooltips.affine_f"));
         if response_f.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::F },
@@ -214,9 +214,9 @@ fn render_affine_controls(
     // Z offset (only in 3D mode)
     if matches!(render_mode, RenderMode::ThreeD) {
         ui.horizontal(|ui| {
-            ui.label(t!("transform.affine_g"));
+            ui.label(t!("transform.affine_g")).on_hover_text(t!("tooltips.affine_g"));
             let mut temp_g = transform.g;
-            let response_g = ui.add(egui::DragValue::new(&mut temp_g).speed(0.01));
+            let response_g = ui.add(egui::DragValue::new(&mut temp_g).speed(0.01)).on_hover_text(t!("tooltips.affine_g"));
             if response_g.changed() {
                 if let Ok(update_type) = config_manager.update_param(
                     ConfigPath::TransformAffine { index, param: AffineParam::G },
@@ -246,7 +246,8 @@ fn render_advanced_settings(
 
     // Color Speed (Symmetry)
     let mut temp_speed = transform.color_speed;
-    let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")));
+    let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")))
+        .on_hover_text(t!("tooltips.color_speed"));
     if response_speed.changed() {
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformColorSpeed { index },
@@ -262,7 +263,8 @@ fn render_advanced_settings(
 
     // Opacity slider
     let mut temp_opacity = transform.opacity;
-    let response_opacity = ui.add(egui::Slider::new(&mut temp_opacity, 0.0..=1.0).text(t!("transform.opacity")));
+    let response_opacity = ui.add(egui::Slider::new(&mut temp_opacity, 0.0..=1.0).text(t!("transform.opacity")))
+        .on_hover_text(t!("tooltips.opacity"));
     if response_opacity.changed() {
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformOpacity { index },
@@ -889,9 +891,9 @@ fn render_final_transform(
                         // Affine Matrix
                         ui.label(t!("transform.affine_matrix"));
                         macro_rules! affine_param_final {
-                            ($label:expr, $field:ident, $param:ident) => {
+                            ($label:expr, $tooltip:expr, $field:ident, $param:ident) => {
                                 ui.horizontal(|ui| {
-                                    ui.label($label);
+                                    ui.label($label).on_hover_text($tooltip);
                                     let mut temp = final_xform.$field;
                                     let response = ui.add(egui::DragValue::new(&mut temp).speed(0.01));
                                     if response.changed() {
@@ -910,22 +912,23 @@ fn render_final_transform(
                             };
                         }
 
-                        affine_param_final!(t!("transform.affine_a"), a, A);
-                        affine_param_final!(t!("transform.affine_b"), b, B);
-                        affine_param_final!(t!("transform.affine_c"), c, C);
-                        affine_param_final!(t!("transform.affine_d"), d, D);
-                        affine_param_final!(t!("transform.affine_e"), e, E);
-                        affine_param_final!(t!("transform.affine_f"), f, F);
+                        affine_param_final!(t!("transform.affine_a"), t!("tooltips.affine_a"), a, A);
+                        affine_param_final!(t!("transform.affine_b"), t!("tooltips.affine_b"), b, B);
+                        affine_param_final!(t!("transform.affine_c"), t!("tooltips.affine_c"), c, C);
+                        affine_param_final!(t!("transform.affine_d"), t!("tooltips.affine_d"), d, D);
+                        affine_param_final!(t!("transform.affine_e"), t!("tooltips.affine_e"), e, E);
+                        affine_param_final!(t!("transform.affine_f"), t!("tooltips.affine_f"), f, F);
 
                         if matches!(render_mode, RenderMode::ThreeD) {
-                            affine_param_final!(t!("transform.affine_g"), g, G);
+                            affine_param_final!(t!("transform.affine_g"), t!("tooltips.affine_g"), g, G);
                         }
 
                         ui.add_space(4.0);
 
                         // Color Speed
                         let mut temp_speed = final_xform.color_speed;
-                        let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")));
+                        let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")))
+                            .on_hover_text(t!("tooltips.color_speed"));
                         if response_speed.changed() {
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::FinalTransformColorSpeed,
