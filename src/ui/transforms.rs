@@ -524,7 +524,7 @@ pub fn render_transforms_content(
 
                 let header_response = ui.horizontal(|ui| {
                     // Toggle button (arrow)
-                    let icon_response = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+                    let _icon_response = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
 
                     // Bold header text
                     let header_text = egui::RichText::new(format!("Transform {}", i + 1))
@@ -537,7 +537,7 @@ pub fn render_transforms_content(
                     ui.painter().circle_filled(circle_rect.center(), 5.0, transform_color);
 
                     // Make entire row clickable
-                    icon_response | text_response
+                    text_response
                 });
 
                 // Toggle on click anywhere in header row
@@ -545,7 +545,17 @@ pub fn render_transforms_content(
                     state.toggle(ui);
                 }
 
-                state.show_body_unindented(ui, |ui| {
+                state.show_body_indented(&header_response.response, ui, |ui| {
+                        // Add padding around transform body
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin {
+                                left: 0,
+                                right: 5,
+                                top: 5,
+                                bottom: 5,
+                            })
+                            .show(ui, |ui| {
+
                         // === ALWAYS VISIBLE ===
 
                         // Edit Triangle button
@@ -605,10 +615,10 @@ pub fn render_transforms_content(
                         let mut var_to_delete = None;
                         let mut var_to_add = None;
 
-                        egui::Frame::none()
+                        egui::Frame::new()
                             .fill(ui.visuals().extreme_bg_color)
                             .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
-                            .rounding(4.0)
+                            .corner_radius(4.0)
                             .inner_margin(6.0)
                             .show(ui, |ui| {
                                 let (update, to_delete, to_add) = render_variations_section(
@@ -650,7 +660,8 @@ pub fn render_transforms_content(
                             }
                         }
 
-                    });
+                    }); // end Frame
+                }); // end show_body_indented
             });
         }
 
