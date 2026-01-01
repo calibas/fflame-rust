@@ -490,16 +490,6 @@ fn apply_config_value(
                 }
             }
         }
-        (ConfigPath::FinalTransformColor, ConfigValue::Float(v)) => {
-            if let Some(ref mut final_xform) = config.flame.final_transform {
-                final_xform.color = *v;
-            }
-        }
-        (ConfigPath::FinalTransformColorSpeed, ConfigValue::Float(v)) => {
-            if let Some(ref mut final_xform) = config.flame.final_transform {
-                final_xform.color_speed = *v;
-            }
-        }
         (ConfigPath::FinalTransformVariation { variation }, ConfigValue::Float(v)) => {
             if let Some(ref mut final_xform) = config.flame.final_transform {
                 final_xform.variations.insert(variation.clone(), *v);

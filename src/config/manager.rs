@@ -944,22 +944,6 @@ impl ConfigManager {
                 };
                 Ok(value.into())
             }
-            ConfigPath::FinalTransformColor => {
-                let final_xform = config
-                    .flame
-                    .final_transform
-                    .as_ref()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Ok(final_xform.color.into())
-            }
-            ConfigPath::FinalTransformColorSpeed => {
-                let final_xform = config
-                    .flame
-                    .final_transform
-                    .as_ref()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Ok(final_xform.color_speed.into())
-            }
             ConfigPath::FinalTransformVariation { variation } => {
                 let final_xform = config
                     .flame
@@ -1356,24 +1340,6 @@ impl ConfigManager {
                     AffineParam::F => final_xform.f = new_value,
                     AffineParam::G => final_xform.g = new_value,
                 }
-            }
-            ConfigPath::FinalTransformColor => {
-                let final_xform = self
-                    .current
-                    .flame
-                    .final_transform
-                    .as_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                final_xform.color = value.try_into()?;
-            }
-            ConfigPath::FinalTransformColorSpeed => {
-                let final_xform = self
-                    .current
-                    .flame
-                    .final_transform
-                    .as_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                final_xform.color_speed = value.try_into()?;
             }
             ConfigPath::FinalTransformVariation { variation } => {
                 let final_xform = self
