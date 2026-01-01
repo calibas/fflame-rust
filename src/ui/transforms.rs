@@ -3,6 +3,7 @@ use crate::variations::{VariationCategory, global_registry};
 use crate::config::{ConfigManager, ConfigPath, UpdateType, AffineParam};
 use super::variation_params::render_variation_params;
 use egui::Color32;
+use rust_i18n::t;
 
 /// Get a distinct color for each transform index (matches Triangle Editor)
 fn get_transform_color(index: usize) -> Color32 {
@@ -29,7 +30,10 @@ fn render_weight_control(
     let mut max_update = UpdateType::None;
 
     let mut temp_weight = transform.weight;
-    let response = ui.add(egui::Slider::new(&mut temp_weight, 0.0..=1024.0).logarithmic(true).text("Weight"));
+    let response = ui.add(egui::Slider::new(&mut temp_weight, 0.0..=1024.0)
+        .logarithmic(true)
+        .text(t!("transform.weight")))
+      .on_hover_text(t!("tooltips.transform_weight"));
     if response.changed() {
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformWeight { index },
@@ -60,9 +64,9 @@ fn render_color_controls(
         let mut temp_color = transform.color;
         let response_color = ui.add(
             egui::Slider::new(&mut temp_color, 0.0..=1.0)
-                .text("Color")
-                .show_value(false)
-        );
+                .text(t!("transform.color"))
+                
+        ).on_hover_text(t!("tooltips.transform_color"));
         if response_color.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformColor { index },
@@ -104,7 +108,7 @@ fn render_affine_controls(
 
     // Row 1: a, b
     ui.horizontal(|ui| {
-        ui.label("a:");
+        ui.label(t!("transform.affine_a"));
         let mut temp_a = transform.a;
         let response_a = ui.add(egui::DragValue::new(&mut temp_a).speed(0.01));
         if response_a.changed() {
@@ -120,7 +124,7 @@ fn render_affine_controls(
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::A });
         }
 
-        ui.label("b:");
+        ui.label(t!("transform.affine_b"));
         let mut temp_b = transform.b;
         let response_b = ui.add(egui::DragValue::new(&mut temp_b).speed(0.01));
         if response_b.changed() {
@@ -139,7 +143,7 @@ fn render_affine_controls(
 
     // Row 2: c, d
     ui.horizontal(|ui| {
-        ui.label("c:");
+        ui.label(t!("transform.affine_c"));
         let mut temp_c = transform.c;
         let response_c = ui.add(egui::DragValue::new(&mut temp_c).speed(0.01));
         if response_c.changed() {
@@ -155,7 +159,7 @@ fn render_affine_controls(
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::C });
         }
 
-        ui.label("d:");
+        ui.label(t!("transform.affine_d"));
         let mut temp_d = transform.d;
         let response_d = ui.add(egui::DragValue::new(&mut temp_d).speed(0.01));
         if response_d.changed() {
@@ -174,7 +178,7 @@ fn render_affine_controls(
 
     // Row 3: e, f
     ui.horizontal(|ui| {
-        ui.label("e:");
+        ui.label(t!("transform.affine_e"));
         let mut temp_e = transform.e;
         let response_e = ui.add(egui::DragValue::new(&mut temp_e).speed(0.01));
         if response_e.changed() {
@@ -190,7 +194,7 @@ fn render_affine_controls(
             let _ = config_manager.force_commit_preview(&ConfigPath::TransformAffine { index, param: AffineParam::E });
         }
 
-        ui.label("f:");
+        ui.label(t!("transform.affine_f"));
         let mut temp_f = transform.f;
         let response_f = ui.add(egui::DragValue::new(&mut temp_f).speed(0.01));
         if response_f.changed() {
@@ -210,7 +214,7 @@ fn render_affine_controls(
     // Z offset (only in 3D mode)
     if matches!(render_mode, RenderMode::ThreeD) {
         ui.horizontal(|ui| {
-            ui.label("g (Z):");
+            ui.label(t!("transform.affine_g"));
             let mut temp_g = transform.g;
             let response_g = ui.add(egui::DragValue::new(&mut temp_g).speed(0.01));
             if response_g.changed() {
@@ -242,7 +246,7 @@ fn render_advanced_settings(
 
     // Color Speed (Symmetry)
     let mut temp_speed = transform.color_speed;
-    let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text("Color Speed"));
+    let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")));
     if response_speed.changed() {
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformColorSpeed { index },
@@ -258,7 +262,7 @@ fn render_advanced_settings(
 
     // Opacity slider
     let mut temp_opacity = transform.opacity;
-    let response_opacity = ui.add(egui::Slider::new(&mut temp_opacity, 0.0..=1.0).text("Opacity"));
+    let response_opacity = ui.add(egui::Slider::new(&mut temp_opacity, 0.0..=1.0).text(t!("transform.opacity")));
     if response_opacity.changed() {
         if let Ok(update_type) = config_manager.update_param(
             ConfigPath::TransformOpacity { index },
@@ -293,8 +297,6 @@ fn render_enabled_variation(
         .unwrap_or(variation_name);
 
     ui.horizontal(|ui| {
-        // Delete button
-
         // Weight slider
         let mut value = current_weight;
         let response = ui.add(
@@ -322,7 +324,8 @@ fn render_enabled_variation(
             let _ = config_manager.force_commit_preview(&path);
         }
         
-        if ui.small_button("🗑").on_hover_text("Remove variation").clicked() {
+        // Delete button
+        if ui.small_button(t!("variations.remove")).on_hover_text(t!("tooltips.remove_variation")).clicked() {
             delete_requested = true;
         }
     });
@@ -330,7 +333,7 @@ fn render_enabled_variation(
     // Show parameters if variation has them
     if let Some(var_info) = var_info {
         if !var_info.parameters.is_empty() {
-            egui::CollapsingHeader::new(format!("{} Parameters", display_name))
+            egui::CollapsingHeader::new(t!("variations.parameters", name = display_name))
                 .id_salt(format!("params_{}_{}", transform_index, variation_name))
                 .default_open(false)
                 .show(ui, |ui| {
@@ -362,7 +365,7 @@ fn render_variations_section(
     let mut variation_to_delete: Option<String> = None;
     let mut variation_to_add: Option<String> = None;
 
-    ui.label("Variations");
+    ui.label(t!("transform.variations"));
 
     // Get enabled variations sorted by name for consistent display
     let mut enabled: Vec<(String, f32)> = transform.variations.iter()
@@ -371,7 +374,7 @@ fn render_variations_section(
     enabled.sort_by(|a, b| a.0.cmp(&b.0));
 
     if enabled.is_empty() {
-        ui.label(egui::RichText::new("No variations enabled").italics().weak());
+        ui.label(egui::RichText::new(t!("transform.no_variations")).italics().weak());
     } else {
         for (name, weight) in &enabled {
             let (update, delete) = render_enabled_variation(
@@ -391,7 +394,7 @@ fn render_variations_section(
     ui.add_space(4.0);
 
     // Add Variation button
-    let add_btn = ui.button("➕ Add Variation");
+    let add_btn = ui.button(t!("variations.add"));
     if add_btn.clicked() {
         ui.memory_mut(|mem| mem.toggle_popup(add_variation_popup_id));
     }
@@ -405,7 +408,7 @@ fn render_variations_section(
         let search_id = ui.id().with("search");
         let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
         ui.horizontal(|ui| {
-            ui.label("Search:");
+            ui.label(t!("variations.search"));
             ui.text_edit_singleline(&mut search_text);
         });
         ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
@@ -481,7 +484,7 @@ pub fn render_transforms_content(
 
     // Add transform button
     ui.horizontal(|ui| {
-        if ui.button("➕ Add Transform").clicked() {
+        if ui.button(t!("transform.add")).clicked() {
             *add_transform = true;
         }
     });
@@ -491,7 +494,7 @@ pub fn render_transforms_content(
     // Final Transform checkbox
     ui.horizontal(|ui| {
         let mut has_final = flame.final_transform.is_some();
-        if ui.checkbox(&mut has_final, "Enable Final Transform").changed() {
+        if ui.checkbox(&mut has_final, t!("transform.enable_final")).changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::FinalTransformEnabled,
                 has_final.into()
@@ -500,7 +503,7 @@ pub fn render_transforms_content(
                 max_update = max_update.max(update_type);
             }
         }
-        if ui.button("❓").on_hover_text("Post-processing transform applied once to every point after iteration loop.\nUsed for framing, positioning, or global effects.").clicked() {}
+        if ui.button("❓").on_hover_text(t!("tooltips.final_transform_help")).clicked() {}
     });
 
     ui.separator();
@@ -560,7 +563,7 @@ pub fn render_transforms_content(
 
                         // Edit Triangle button
                         ui.horizontal(|ui| {
-                            if ui.button("Edit 🔺").on_hover_text("Select in Triangle Editor").clicked() {
+                            if ui.button(t!("transform.edit_triangle")).on_hover_text(t!("tooltips.transform_edit_triangle")).clicked() {
                                 // Update the shared selection state that Triangle Editor also reads
                                 ui.ctx().data_mut(|d| {
                                     d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), Some(i));
@@ -570,13 +573,13 @@ pub fn render_transforms_content(
                             }
 
                             // Clone button
-                            if ui.button("Clone").on_hover_text("Create a copy").clicked() {
+                            if ui.button(t!("transform.clone")).on_hover_text(t!("tooltips.transform_clone")).clicked() {
                                 clone_index = Some(i);
                             }
 
                             // Delete button (only if more than 1 transform)
                             if num_transforms > 1 {
-                                if ui.button("🗑").on_hover_text("Delete").clicked() {
+                                if ui.button(t!("transform.delete")).on_hover_text(t!("tooltips.transform_delete")).clicked() {
                                     delete_index = Some(i);
                                 }
                             }
@@ -591,12 +594,12 @@ pub fn render_transforms_content(
                         max_update = max_update.max(color_update);
 
                         // === ADVANCED SECTION (collapsed) ===
-                        egui::CollapsingHeader::new("Advanced")
+                        egui::CollapsingHeader::new(t!("transform.advanced"))
                             .id_salt(format!("advanced_{}", i))
                             .default_open(false)
                             .show(ui, |ui| {
                                 // Affine Matrix
-                                ui.label("Affine Matrix");
+                                ui.label(t!("transform.affine_matrix"));
                                 let affine_update = render_affine_controls(ui, config_manager, i, transform, render_mode);
                                 max_update = max_update.max(affine_update);
 
@@ -697,12 +700,12 @@ fn render_final_transform(
         let style = ui.style_mut();
         style.visuals.collapsing_header_frame = true;
 
-        egui::CollapsingHeader::new("Transform [Final]")
+        egui::CollapsingHeader::new(t!("transform.final"))
             .default_open(false)
             .show(ui, |ui| {
                 ui.colored_label(
                     egui::Color32::LIGHT_GRAY,
-                    "Applied once to all points after iteration."
+                    t!("transform.final_description"),
                 );
                 ui.separator();
 
@@ -712,7 +715,7 @@ fn render_final_transform(
                 // Color control
                 let mut temp_color = final_xform.color;
                 let response_color = ui.add(
-                    egui::Slider::new(&mut temp_color, 0.0..=1.0).text("Color")
+                    egui::Slider::new(&mut temp_color, 0.0..=1.0).text(t!("transform.color"))
                 );
                 if response_color.changed() {
                     if let Ok(update_type) = config_manager.update_param(
@@ -729,7 +732,7 @@ fn render_final_transform(
 
                 // Variations for final transform
                 ui.add_space(4.0);
-                ui.label("Variations");
+                ui.label(t!("transform.variations"));
 
                 let mut enabled: Vec<(String, f32)> = final_xform.variations.iter()
                     .map(|(k, v)| (k.clone(), *v))
@@ -739,7 +742,7 @@ fn render_final_transform(
                 let mut var_to_delete: Option<String> = None;
 
                 if enabled.is_empty() {
-                    ui.label(egui::RichText::new("No variations enabled").italics().weak());
+                    ui.label(egui::RichText::new(t!("transform.no_variations")).italics().weak());
                 } else {
                     for (name, weight) in &enabled {
                         let registry = global_registry();
@@ -770,7 +773,7 @@ fn render_final_transform(
                                 };
                                 let _ = config_manager.force_commit_preview(&path);
                             }
-                            if ui.small_button("🗑").on_hover_text("Remove variation").clicked() {
+                            if ui.small_button("🗑").on_hover_text(t!("tooltips.remove_variation")).clicked() {
                                 var_to_delete = Some(name.clone());
                             }
                         });
@@ -778,7 +781,7 @@ fn render_final_transform(
                         // Parameters
                         if let Some(var_info) = var_info {
                             if !var_info.parameters.is_empty() {
-                                egui::CollapsingHeader::new(format!("{} Parameters", display_name))
+                                egui::CollapsingHeader::new(t!("variations.parameters", name = display_name))
                                     .id_salt(format!("final_params_{}", name))
                                     .default_open(false)
                                     .show(ui, |ui| {
@@ -808,7 +811,7 @@ fn render_final_transform(
 
                 // Add Variation button for final transform
                 let popup_id = ui.id().with("add_var_popup_final");
-                let add_btn = ui.button("➕ Add Variation");
+                let add_btn = ui.button(t!("variations.add"));
                 if add_btn.clicked() {
                     ui.memory_mut(|mem| mem.toggle_popup(popup_id));
                 }
@@ -820,7 +823,7 @@ fn render_final_transform(
                     let search_id = ui.id().with("search_final");
                     let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
                     ui.horizontal(|ui| {
-                        ui.label("Search:");
+                        ui.label(t!("variations.search"));
                         ui.text_edit_singleline(&mut search_text);
                     });
                     ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
@@ -879,12 +882,12 @@ fn render_final_transform(
                 });
 
                 // Advanced section for final transform
-                egui::CollapsingHeader::new("Advanced")
+                egui::CollapsingHeader::new(t!("transform.advanced"))
                     .id_salt("advanced_final")
                     .default_open(false)
                     .show(ui, |ui| {
                         // Affine Matrix
-                        ui.label("Affine Matrix");
+                        ui.label(t!("transform.affine_matrix"));
                         macro_rules! affine_param_final {
                             ($label:expr, $field:ident, $param:ident) => {
                                 ui.horizontal(|ui| {
@@ -907,22 +910,22 @@ fn render_final_transform(
                             };
                         }
 
-                        affine_param_final!("a:", a, A);
-                        affine_param_final!("b:", b, B);
-                        affine_param_final!("c:", c, C);
-                        affine_param_final!("d:", d, D);
-                        affine_param_final!("e:", e, E);
-                        affine_param_final!("f:", f, F);
+                        affine_param_final!(t!("transform.affine_a"), a, A);
+                        affine_param_final!(t!("transform.affine_b"), b, B);
+                        affine_param_final!(t!("transform.affine_c"), c, C);
+                        affine_param_final!(t!("transform.affine_d"), d, D);
+                        affine_param_final!(t!("transform.affine_e"), e, E);
+                        affine_param_final!(t!("transform.affine_f"), f, F);
 
                         if matches!(render_mode, RenderMode::ThreeD) {
-                            affine_param_final!("g (Z):", g, G);
+                            affine_param_final!(t!("transform.affine_g"), g, G);
                         }
 
                         ui.add_space(4.0);
 
                         // Color Speed
                         let mut temp_speed = final_xform.color_speed;
-                        let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text("Color Speed"));
+                        let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")));
                         if response_speed.changed() {
                             if let Ok(update_type) = config_manager.update_param(
                                 ConfigPath::FinalTransformColorSpeed,
