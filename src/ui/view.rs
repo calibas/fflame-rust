@@ -37,8 +37,33 @@ pub fn render_view_content(
 
     ui.label("Pan");
     ui.horizontal(|ui| {
-        ui.label(format!("({:.3}, {:.3})", config.pan_x, config.pan_y));
-        ui.label("(use mouse drag or arrow keys/buttons)");
+        ui.label("X:");
+        let mut pan_x = config.pan_x;
+        let response_x = ui.add(
+            egui::DragValue::new(&mut pan_x)
+                .speed(0.001 / config.zoom)
+                .custom_formatter(|v, _| format!("{:.7}", v))
+        );
+        if response_x.changed() {
+            let _ = config_manager.update_param(
+                ConfigPath::Pan,
+                (pan_x, config.pan_y).into()
+            );
+        }
+
+        ui.label("Y:");
+        let mut pan_y = config.pan_y;
+        let response_y = ui.add(
+            egui::DragValue::new(&mut pan_y)
+                .speed(0.001 / config.zoom)
+                .custom_formatter(|v, _| format!("{:.7}", v))
+        );
+        if response_y.changed() {
+            let _ = config_manager.update_param(
+                ConfigPath::Pan,
+                (config.pan_x, pan_y).into()
+            );
+        }
     });
 
     // Pan step size depends on zoom
