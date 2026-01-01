@@ -515,167 +515,165 @@ pub fn render_transforms_content(
     let num_transforms = flame.transforms.len();
     let render_mode = flame.render_mode;
 
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        // Regular transforms
-        for (i, transform) in flame.transforms.iter_mut().enumerate() {
-            ui.push_id(i, |ui| {
-                // Custom header with bold text and colored circle
-                let transform_color = get_transform_color(i);
+    // Regular transforms
+    for (i, transform) in flame.transforms.iter_mut().enumerate() {
+        ui.push_id(i, |ui| {
+            // Custom header with bold text and colored circle
+            let transform_color = get_transform_color(i);
 
-                // Use a horizontal layout to place circle after header
-                let id = ui.make_persistent_id(format!("transform_header_{}", i));
-                let default_open = true;
-                let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
+            // Use a horizontal layout to place circle after header
+            let id = ui.make_persistent_id(format!("transform_header_{}", i));
+            let default_open = true;
+            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
 
-                let header_response = ui.horizontal(|ui| {
-                    // Toggle button (arrow)
-                    let _icon_response = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
+            let header_response = ui.horizontal(|ui| {
+                // Toggle button (arrow)
+                let _icon_response = state.show_toggle_button(ui, egui::collapsing_header::paint_default_icon);
 
-                    // Bold header text
-                    let header_text = egui::RichText::new(format!("Transform {}", i + 1))
-                        .strong()
-                        .size(14.0);
-                    let text_response = ui.label(header_text);
+                // Bold header text
+                let header_text = egui::RichText::new(format!("Transform {}", i + 1))
+                    .strong()
+                    .size(14.0);
+                let text_response = ui.label(header_text);
 
-                    // Colored circle indicator
-                    let (circle_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                    ui.painter().circle_filled(circle_rect.center(), 5.0, transform_color);
+                // Colored circle indicator
+                let (circle_rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                ui.painter().circle_filled(circle_rect.center(), 5.0, transform_color);
 
-                    // Make entire row clickable
-                    text_response
-                });
+                // Make entire row clickable
+                text_response
+            });
 
-                // Toggle on click anywhere in header row
-                if header_response.inner.clicked() {
-                    state.toggle(ui);
-                }
+            // Toggle on click anywhere in header row
+            if header_response.inner.clicked() {
+                state.toggle(ui);
+            }
 
-                state.show_body_indented(&header_response.response, ui, |ui| {
-                        // Add padding around transform body
-                        egui::Frame::new()
-                            .inner_margin(egui::Margin {
-                                left: 0,
-                                right: 5,
-                                top: 5,
-                                bottom: 5,
-                            })
-                            .show(ui, |ui| {
+            state.show_body_indented(&header_response.response, ui, |ui| {
+                    // Add padding around transform body
+                    egui::Frame::new()
+                        .inner_margin(egui::Margin {
+                            left: 0,
+                            right: 5,
+                            top: 5,
+                            bottom: 5,
+                        })
+                        .show(ui, |ui| {
 
-                        // === ALWAYS VISIBLE ===
+                    // === ALWAYS VISIBLE ===
 
-                        // Edit Triangle button
-                        ui.horizontal(|ui| {
-                            if ui.button(t!("transform.edit_triangle")).on_hover_text(t!("tooltips.transform_edit_triangle")).clicked() {
-                                // Update the shared selection state that Triangle Editor also reads
-                                ui.ctx().data_mut(|d| {
-                                    d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), Some(i));
-                                });
-                                // Open Triangle Editor panel if not already open
-                                *open_triangle_editor = true;
+                    // Edit Triangle button
+                    ui.horizontal(|ui| {
+                        if ui.button(t!("transform.edit_triangle")).on_hover_text(t!("tooltips.transform_edit_triangle")).clicked() {
+                            // Update the shared selection state that Triangle Editor also reads
+                            ui.ctx().data_mut(|d| {
+                                d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), Some(i));
+                            });
+                            // Open Triangle Editor panel if not already open
+                            *open_triangle_editor = true;
+                        }
+
+                        // Clone button
+                        if ui.button(t!("transform.clone")).on_hover_text(t!("tooltips.transform_clone")).clicked() {
+                            clone_index = Some(i);
+                        }
+
+                        // Delete button (only if more than 1 transform)
+                        if num_transforms > 1 {
+                            if ui.button(t!("transform.delete")).on_hover_text(t!("tooltips.transform_delete")).clicked() {
+                                delete_index = Some(i);
                             }
+                        }
+                    });
 
-                            // Clone button
-                            if ui.button(t!("transform.clone")).on_hover_text(t!("tooltips.transform_clone")).clicked() {
-                                clone_index = Some(i);
-                            }
+                    // Weight control
+                    let weight_update = render_weight_control(ui, config_manager, i, transform);
+                    max_update = max_update.max(weight_update);
 
-                            // Delete button (only if more than 1 transform)
-                            if num_transforms > 1 {
-                                if ui.button(t!("transform.delete")).on_hover_text(t!("tooltips.transform_delete")).clicked() {
-                                    delete_index = Some(i);
-                                }
-                            }
+                    // Color controls (palette position + preview)
+                    let color_update = render_color_controls(ui, config_manager, i, transform);
+                    max_update = max_update.max(color_update);
+
+                    // === ADVANCED SECTION (collapsed) ===
+                    egui::CollapsingHeader::new(t!("transform.advanced"))
+                        .id_salt(format!("advanced_{}", i))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            // Affine Matrix
+                            ui.label(t!("transform.affine_matrix"));
+                            let affine_update = render_affine_controls(ui, config_manager, i, transform, render_mode);
+                            max_update = max_update.max(affine_update);
+
+                            ui.add_space(4.0);
+
+                            // Color Speed and Opacity
+                            let advanced_update = render_advanced_settings(ui, config_manager, i, transform);
+                            max_update = max_update.max(advanced_update);
                         });
 
-                        // Weight control
-                        let weight_update = render_weight_control(ui, config_manager, i, transform);
-                        max_update = max_update.max(weight_update);
+                    ui.add_space(4.0);
 
-                        // Color controls (palette position + preview)
-                        let color_update = render_color_controls(ui, config_manager, i, transform);
-                        max_update = max_update.max(color_update);
+                    // === VARIATIONS SECTION (with border) ===
+                    let popup_id = ui.id().with("add_var_popup");
+                    let mut var_update = UpdateType::None;
+                    let mut var_to_delete = None;
+                    let mut var_to_add = None;
 
-                        // === ADVANCED SECTION (collapsed) ===
-                        egui::CollapsingHeader::new(t!("transform.advanced"))
-                            .id_salt(format!("advanced_{}", i))
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                // Affine Matrix
-                                ui.label(t!("transform.affine_matrix"));
-                                let affine_update = render_affine_controls(ui, config_manager, i, transform, render_mode);
-                                max_update = max_update.max(affine_update);
+                    egui::Frame::new()
+                        .fill(ui.visuals().extreme_bg_color)
+                        .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                        .corner_radius(4.0)
+                        .inner_margin(6.0)
+                        .show(ui, |ui| {
+                            let (update, to_delete, to_add) = render_variations_section(
+                                ui,
+                                config_manager,
+                                i,
+                                transform,
+                                render_mode,
+                                popup_id,
+                            );
+                            var_update = update;
+                            var_to_delete = to_delete;
+                            var_to_add = to_add;
+                        });
 
-                                ui.add_space(4.0);
+                    max_update = max_update.max(var_update);
 
-                                // Color Speed and Opacity
-                                let advanced_update = render_advanced_settings(ui, config_manager, i, transform);
-                                max_update = max_update.max(advanced_update);
-                            });
-
-                        ui.add_space(4.0);
-
-                        // === VARIATIONS SECTION (with border) ===
-                        let popup_id = ui.id().with("add_var_popup");
-                        let mut var_update = UpdateType::None;
-                        let mut var_to_delete = None;
-                        let mut var_to_add = None;
-
-                        egui::Frame::new()
-                            .fill(ui.visuals().extreme_bg_color)
-                            .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
-                            .corner_radius(4.0)
-                            .inner_margin(6.0)
-                            .show(ui, |ui| {
-                                let (update, to_delete, to_add) = render_variations_section(
-                                    ui,
-                                    config_manager,
-                                    i,
-                                    transform,
-                                    render_mode,
-                                    popup_id,
-                                );
-                                var_update = update;
-                                var_to_delete = to_delete;
-                                var_to_add = to_add;
-                            });
-
-                        max_update = max_update.max(var_update);
-
-                        // Handle variation deletion
-                        if let Some(var_name) = var_to_delete {
-                            let path = ConfigPath::TransformVariation {
-                                index: i,
-                                variation: var_name,
-                            };
-                            // Use NaN as sentinel value to signal removal
-                            if let Ok(update_type) = config_manager.update_param(path, f32::NAN.into()) {
-                                max_update = max_update.max(update_type);
-                            }
+                    // Handle variation deletion
+                    if let Some(var_name) = var_to_delete {
+                        let path = ConfigPath::TransformVariation {
+                            index: i,
+                            variation: var_name,
+                        };
+                        // Use NaN as sentinel value to signal removal
+                        if let Ok(update_type) = config_manager.update_param(path, f32::NAN.into()) {
+                            max_update = max_update.max(update_type);
                         }
+                    }
 
-                        // Handle variation addition
-                        if let Some(var_name) = var_to_add {
-                            let path = ConfigPath::TransformVariation {
-                                index: i,
-                                variation: var_name,
-                            };
-                            // Add with weight 1.0 (not 0.0 since that would remove it immediately)
-                            if let Ok(update_type) = config_manager.update_param(path, 1.0f32.into()) {
-                                max_update = max_update.max(update_type);
-                            }
+                    // Handle variation addition
+                    if let Some(var_name) = var_to_add {
+                        let path = ConfigPath::TransformVariation {
+                            index: i,
+                            variation: var_name,
+                        };
+                        // Add with weight 1.0 (not 0.0 since that would remove it immediately)
+                        if let Ok(update_type) = config_manager.update_param(path, 1.0f32.into()) {
+                            max_update = max_update.max(update_type);
                         }
+                    }
 
-                    }); // end Frame
-                }); // end show_body_indented
-            });
-        }
+                }); // end Frame
+            }); // end show_body_indented
+        });
+    }
 
-        // Final transform (if enabled)
-        if let Some(final_xform) = &mut flame.final_transform {
-            ui.separator();
-            render_final_transform(ui, config_manager, final_xform, render_mode, &mut max_update);
-        }
-    });
+    // Final transform (if enabled)
+    if let Some(final_xform) = &mut flame.final_transform {
+        ui.separator();
+        render_final_transform(ui, config_manager, final_xform, render_mode, &mut max_update);
+    }
 
     // Set delete_transform if a transform was marked for deletion
     if let Some(idx) = delete_index {
