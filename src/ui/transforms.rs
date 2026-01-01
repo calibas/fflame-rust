@@ -709,26 +709,8 @@ fn render_final_transform(
                 );
                 ui.separator();
 
-                // Weight (not really used for final transform, but keep for consistency)
-                // Final transforms don't have weight in the traditional sense
-
-                // Color control
-                let mut temp_color = final_xform.color;
-                let response_color = ui.add(
-                    egui::Slider::new(&mut temp_color, 0.0..=1.0).text(t!("transform.color"))
-                );
-                if response_color.changed() {
-                    if let Ok(update_type) = config_manager.update_param(
-                        ConfigPath::FinalTransformColor,
-                        temp_color.into()
-                    ) {
-                        final_xform.color = config_manager.active_config().flame.final_transform.as_ref().unwrap().color;
-                        *max_update = (*max_update).max(update_type);
-                    }
-                }
-                if response_color.drag_stopped() {
-                    let _ = config_manager.force_commit_preview(&ConfigPath::FinalTransformColor);
-                }
+                // Note: Weight, Color, Color Speed, and Opacity are NOT used for final transforms.
+                // The final transform only applies affine + variations to position after color is computed.
 
                 // Variations for final transform
                 ui.add_space(4.0);
@@ -921,24 +903,8 @@ fn render_final_transform(
                             affine_param_final!(t!("transform.affine_g"), t!("tooltips.affine_g"), g, G);
                         }
 
-                        ui.add_space(4.0);
-
-                        // Color Speed
-                        let mut temp_speed = final_xform.color_speed;
-                        let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")))
-                            .on_hover_text(t!("tooltips.color_speed"));
-                        if response_speed.changed() {
-                            if let Ok(update_type) = config_manager.update_param(
-                                ConfigPath::FinalTransformColorSpeed,
-                                temp_speed.into()
-                            ) {
-                                final_xform.color_speed = config_manager.active_config().flame.final_transform.as_ref().unwrap().color_speed;
-                                *max_update = (*max_update).max(update_type);
-                            }
-                        }
-                        if response_speed.drag_stopped() {
-                            let _ = config_manager.force_commit_preview(&ConfigPath::FinalTransformColorSpeed);
-                        }
+                        // Note: Color, Color Speed, Opacity, and Weight are NOT used by the final transform.
+                        // The final transform only applies affine + variations to position after color is computed.
                     });
             });
     });

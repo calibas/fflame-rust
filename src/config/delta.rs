@@ -93,10 +93,11 @@ pub enum ConfigPath {
     TransformScale { index: usize },
 
     // ===== Final Transform (require iteration reset) =====
+    // Note: Final transform does NOT use color, color_speed, opacity, or weight.
+    // These fields exist in the Transform struct but are never read by shaders.
+    // Color is computed during iteration loop, final transform only affects position.
     FinalTransformEnabled,
     FinalTransformAffine { param: AffineParam },
-    FinalTransformColor,
-    FinalTransformColorSpeed,
     FinalTransformVariation { variation: String },
     FinalTransformVariationParam {
         variation: String,
@@ -241,8 +242,6 @@ impl Display for ConfigPath {
             ConfigPath::FinalTransformAffine { param } => {
                 write!(f, "Final Transform → Affine {:?}", param)
             }
-            ConfigPath::FinalTransformColor => write!(f, "Final Transform → Color"),
-            ConfigPath::FinalTransformColorSpeed => write!(f, "Final Transform → Color Speed"),
             ConfigPath::FinalTransformVariation { variation } => {
                 write!(f, "Final Transform → {} variation", variation)
             }
@@ -750,8 +749,6 @@ impl ConfigPath {
             | ConfigPath::TransformScale { .. }
             | ConfigPath::FinalTransformEnabled
             | ConfigPath::FinalTransformAffine { .. }
-            | ConfigPath::FinalTransformColor
-            | ConfigPath::FinalTransformColorSpeed
             | ConfigPath::FinalTransformVariation { .. }
             | ConfigPath::FinalTransformVariationParam { .. }
             | ConfigPath::FinalTransformOriginX
@@ -853,8 +850,6 @@ impl ConfigPath {
             ConfigPath::FinalTransformAffine { param } => {
                 format!("FinalTransform.Affine.{}", param.to_char())
             }
-            ConfigPath::FinalTransformColor => "FinalTransform.Color".to_string(),
-            ConfigPath::FinalTransformColorSpeed => "FinalTransform.ColorSpeed".to_string(),
             ConfigPath::FinalTransformVariation { variation } => {
                 format!("FinalTransform.Variation.{}", variation)
             }
@@ -983,8 +978,6 @@ impl ConfigPath {
         if parts.len() >= 2 && parts[0] == "FinalTransform" {
             match parts[1] {
                 "Enabled" => return Some(ConfigPath::FinalTransformEnabled),
-                "Color" => return Some(ConfigPath::FinalTransformColor),
-                "ColorSpeed" => return Some(ConfigPath::FinalTransformColorSpeed),
                 "Affine" if parts.len() == 3 => {
                     let param = AffineParam::from_char(parts[2].chars().next()?)?;
                     return Some(ConfigPath::FinalTransformAffine { param });
@@ -1112,8 +1105,6 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TransformRotation { .. }
         | ConfigPath::TransformScale { .. }
         | ConfigPath::FinalTransformAffine { .. }
-        | ConfigPath::FinalTransformColor
-        | ConfigPath::FinalTransformColorSpeed
         | ConfigPath::FinalTransformVariation { .. }
         | ConfigPath::FinalTransformVariationParam { .. }
         | ConfigPath::FinalTransformOriginX
@@ -1414,7 +1405,6 @@ mod tests {
         let paths = vec![
             ConfigPath::FinalTransformEnabled,
             ConfigPath::FinalTransformAffine { param: AffineParam::E },
-            ConfigPath::FinalTransformColor,
             ConfigPath::FinalTransformVariation { variation: "spherical".to_string() },
         ];
 
