@@ -119,6 +119,23 @@ impl Workspace {
         }
     }
 
+    /// Activate (focus) a panel tab if it exists, or open it as floating if not
+    pub fn activate_panel(&mut self, panel_type: PanelType) {
+        // Try to find and activate the tab
+        if let Some((surface_index, node_index, tab_index)) = self.find_tab(panel_type) {
+            self.dock_state.set_active_tab((surface_index, node_index, tab_index));
+        } else {
+            // Panel doesn't exist, open as floating window
+            self.dock_state.add_window(vec![panel_type]);
+        }
+    }
+
+    /// Find the location of a panel tab (surface, node, tab index)
+    fn find_tab(&self, panel_type: PanelType) -> Option<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, egui_dock::TabIndex)> {
+        // Use find_tab API to locate the panel
+        self.dock_state.find_tab(&panel_type)
+    }
+
     /// Create Beginner layout: Simple tabbed panel with Colors and Transforms
     fn create_beginner_layout() -> DockState<PanelType> {
         let mut state = DockState::new(vec![PanelType::Colors]);
@@ -139,11 +156,11 @@ impl Workspace {
             vec![PanelType::Transforms],
         );
 
-        // Split right for other controls (Colors, View, Rendering, History)
+        // Split right for other controls (Colors, View, Triangle Editor, Rendering, History)
         let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.75, // Right panel starts at 75% (takes remaining 25%)
-            vec![PanelType::Colors, PanelType::View, PanelType::Rendering, PanelType::History],
+            vec![PanelType::Colors, PanelType::View, PanelType::TriangleEditor, PanelType::Rendering, PanelType::History],
         );
 
         state

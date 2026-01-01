@@ -541,7 +541,7 @@ impl App {
         }
         if ui_response.open_triangle_editor {
             use crate::ui::workspace::PanelType;
-            self.workspace.open_floating_panel(PanelType::TriangleEditor);
+            self.workspace.activate_panel(PanelType::TriangleEditor);
         }
     }
 
