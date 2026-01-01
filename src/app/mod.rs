@@ -210,7 +210,7 @@ pub struct App {
     pub(super) rendering_complete: bool,  // True when rendering has finished (max_iterations reached)
     pub(super) clear_paths_next_frame: bool,  // Clear path buffer on next compute pass (full reset)
     pub(super) ui_needs_repaint: bool,  // Track if UI is requesting repaints (for frame rate boost)
-    pub(super) pending_redraws: u32,  // Counter for queued redraws (for UI animations after input)
+    pub(super) last_input_time: Option<web_time::Instant>,  // Time of last user input (for idle detection)
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
@@ -288,7 +288,7 @@ impl App {
             rendering_complete: false,
             clear_paths_next_frame: true,  // Clear paths on first frame
             ui_needs_repaint: false,
-            pending_redraws: 0,
+            last_input_time: None,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             export_width,
             export_height,
@@ -314,14 +314,13 @@ impl App {
                         WindowEvent::MouseInput { .. } |
                         WindowEvent::MouseWheel { .. } |
                         WindowEvent::KeyboardInput { .. } => {
-                            // Queue 15 frames for UI animations (hover effects, transitions, etc.)
-                            app.pending_redraws = 15;
+                            // Track last input time for UI idle detection (tooltips, animations)
+                            app.last_input_time = Some(web_time::Instant::now());
                             window.request_redraw();
                         }
                         WindowEvent::Resized(_) |
                         WindowEvent::ScaleFactorChanged { .. } => {
-                            // Window events need just 1 frame
-                            app.pending_redraws = 1;
+                            app.last_input_time = Some(web_time::Instant::now());
                             window.request_redraw();
                         }
                         _ => {}
@@ -402,10 +401,16 @@ impl App {
                     // Update present mode based on system settings
                     app.gpu.set_present_mode(app.config_manager.system_settings().vsync_enabled);
 
+                    // Time-based UI idle detection (600ms after last input)
+                    const UI_IDLE_TIMEOUT: Duration = Duration::from_millis(700);
+                    let ui_active = app.last_input_time
+                        .map(|t| t.elapsed() < UI_IDLE_TIMEOUT)
+                        .unwrap_or(false);
+
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
-                    if is_rendering || animation_playing || app.pending_redraws > 0 {
-                        // Actively rendering fractals OR UI animations pending
+                    if is_rendering || animation_playing || ui_active {
+                        // Actively rendering fractals OR UI is active (for tooltips, hover effects)
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
                             window.request_redraw();
@@ -423,19 +428,6 @@ impl App {
                                 }
                             } else {
                                 window.request_redraw();
-                            }
-                        }
-
-                        // Decrement pending redraws counter after requesting next frame
-                        // AboutToWait fires AFTER RedrawRequested, so we're counting frames that just drew
-                        // While actively rendering, keep counter at minimum 1 for UI responsiveness
-                        if app.pending_redraws > 0 {
-                            if is_rendering {
-                                // Keep at least 1 while rendering for smooth UI
-                                app.pending_redraws = app.pending_redraws.saturating_sub(1).max(1);
-                            } else {
-                                // Not rendering: count down to 0 normally
-                                app.pending_redraws -= 1;
                             }
                         }
                     } else {

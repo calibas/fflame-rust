@@ -560,7 +560,7 @@ pub fn render_transforms_content(
 
                         // Edit Triangle button
                         ui.horizontal(|ui| {
-                            if ui.button("🔺 Edit Triangle").on_hover_text("Select in Triangle Editor").clicked() {
+                            if ui.button("Edit 🔺").on_hover_text("Select in Triangle Editor").clicked() {
                                 // Update the shared selection state that Triangle Editor also reads
                                 ui.ctx().data_mut(|d| {
                                     d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), Some(i));
@@ -570,7 +570,7 @@ pub fn render_transforms_content(
                             }
 
                             // Clone button
-                            if ui.button("📋 Clone").on_hover_text("Create a copy").clicked() {
+                            if ui.button("Clone").on_hover_text("Create a copy").clicked() {
                                 clone_index = Some(i);
                             }
 
