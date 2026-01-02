@@ -701,8 +701,13 @@ fn render_final_transform(
         let style = ui.style_mut();
         style.visuals.collapsing_header_frame = true;
 
-        egui::CollapsingHeader::new(t!("transform.final"))
-            .default_open(false)
+        // Bold header text
+        let header_text = egui::RichText::new(t!("transform.final"))
+            .strong()
+            .size(14.0);
+
+        egui::CollapsingHeader::new(header_text)
+            .default_open(true)
             .show(ui, |ui| {
                 ui.colored_label(
                     egui::Color32::LIGHT_GRAY,
@@ -722,6 +727,8 @@ fn render_final_transform(
                     // Open Triangle Editor panel if not already open
                     *open_triangle_editor = true;
                 }
+
+                ui.add_space(4.0);
 
                 // Advanced section for final transform
                 egui::CollapsingHeader::new(t!("transform.advanced"))
@@ -768,10 +775,14 @@ fn render_final_transform(
                     });
 
                 // Variations section for final transform
-                egui::CollapsingHeader::new(t!("transform.variations"))
-                    .id_salt("variations_final")
-                    .default_open(false)
+                egui::Frame::new()
+                    .fill(ui.visuals().extreme_bg_color)
+                    .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+                    .corner_radius(4.0)
+                    .inner_margin(6.0)
                     .show(ui, |ui| {
+                        ui.label(t!("transform.variations"));
+
                         let mut enabled: Vec<(String, f32)> = final_xform.variations.iter()
                             .map(|(k, v)| (k.clone(), *v))
                             .collect();
