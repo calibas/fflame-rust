@@ -8,7 +8,7 @@ use egui_wgpu::wgpu::{CommandEncoderDescriptor, Device, Queue, TextureFormat};
 
 use crate::config::FractalConfig;
 use crate::renderer::compute_kernel::FlameRenderer;
-use crate::scene::palette::PaletteLibrary;
+use crate::scene::palette::global_palette_library;
 
 /// Configuration for a render job
 pub struct RenderJob<'a> {
@@ -169,8 +169,8 @@ pub async fn render(
         &job.config.flame,
     );
 
-    // Get palette
-    let palette_library = PaletteLibrary::new();
+    // Get palette (use global singleton for fallback lookup)
+    let palette_library = global_palette_library().read().unwrap();
     let palette = job
         .config
         .palette

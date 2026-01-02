@@ -4,7 +4,7 @@
 ///   cargo run --release --bin simple_benchmark
 
 use fractal_flame_wgpu::scene::{
-    presets::PresetLibrary,
+    presets::global_preset_library,
     transforms::*,
 };
 use fractal_flame_wgpu::variations::VariationRegistry;
@@ -14,7 +14,7 @@ fn main() {
     println!("=== Fractal Flame CPU Benchmark ===");
     println!();
 
-    let presets = PresetLibrary::new();
+    let presets = global_preset_library();
 
     // Benchmark each preset
     for config in presets.presets() {

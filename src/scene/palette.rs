@@ -516,6 +516,7 @@ impl<'de> serde::Deserialize<'de> for Palette {
 }
 
 /// Collection of available palettes organized into packs
+#[derive(Clone)]
 pub struct PaletteLibrary {
     /// Flat list of all palettes (backward compatibility)
     palettes: Vec<Palette>,
@@ -976,6 +977,33 @@ mod tests {
         assert!(compact_json.len() < legacy_json.len() / 2,
             "Compact format should be at least 50% smaller");
     }
+}
+
+// ===== GLOBAL SINGLETON =====
+
+use once_cell::sync::Lazy;
+use std::sync::RwLock;
+
+/// Global palette library singleton (mutable via RwLock)
+///
+/// This provides a single shared instance of PaletteLibrary for the entire application.
+/// Use RwLock because PaletteLibrary needs to be mutable (add custom palettes, enable/disable packs).
+///
+/// # Usage
+/// ```ignore
+/// // Read access (most common)
+/// let library = global_palette_library().read().unwrap();
+/// let palette = library.get(index);
+///
+/// // Write access (rare - adding custom palette)
+/// let mut library = global_palette_library().write().unwrap();
+/// library.add(custom_palette);
+/// ```
+pub fn global_palette_library() -> &'static RwLock<PaletteLibrary> {
+    static LIBRARY: Lazy<RwLock<PaletteLibrary>> = Lazy::new(|| {
+        RwLock::new(PaletteLibrary::new())
+    });
+    &LIBRARY
 }
 
 // ===== PALETTE PACK SYSTEM =====
