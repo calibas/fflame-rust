@@ -72,7 +72,7 @@ pub fn render_menu_bar(
                     menu_actions.edit.undo = true;
                 }
 
-                if ui.add_enabled(menu_state.can_redo, egui::Button::new("⮬ Redo")).clicked() {
+                if ui.add_enabled(menu_state.can_redo, egui::Button::new("⮫ Redo")).clicked() {
                     menu_actions.edit.redo = true;
                 }
 

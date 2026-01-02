@@ -496,7 +496,7 @@ pub fn render_transforms_content(
     // Final Transform checkbox
     ui.horizontal(|ui| {
         let mut has_final = flame.final_transform.is_some();
-        if ui.checkbox(&mut has_final, t!("transform.enable_final")).changed() {
+        if ui.checkbox(&mut has_final, t!("transform.enable_final")).on_hover_text(t!("tooltips.final_transform_help")).changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::FinalTransformEnabled,
                 has_final.into()
@@ -505,7 +505,7 @@ pub fn render_transforms_content(
                 max_update = max_update.max(update_type);
             }
         }
-        if ui.button("❓").on_hover_text(t!("tooltips.final_transform_help")).clicked() {}
+        // if ui.button("❓").clicked() {}
     });
 
     ui.separator();
@@ -709,14 +709,11 @@ fn render_final_transform(
         egui::CollapsingHeader::new(header_text)
             .default_open(true)
             .show(ui, |ui| {
-                ui.colored_label(
-                    egui::Color32::LIGHT_GRAY,
-                    t!("transform.final_description"),
-                );
-                ui.separator();
 
                 // Note: Weight, Color, Color Speed, and Opacity are NOT used for final transforms.
                 // The final transform only applies affine + variations to position after color is computed.
+
+                ui.add_space(3.0);
 
                 // Edit Triangle button
                 if ui.button(t!("transform.edit_triangle")).on_hover_text(t!("tooltips.transform_edit_triangle")).clicked() {
@@ -728,7 +725,7 @@ fn render_final_transform(
                     *open_triangle_editor = true;
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(3.0);
 
                 // Advanced section for final transform
                 egui::CollapsingHeader::new(t!("transform.advanced"))
@@ -742,7 +739,7 @@ fn render_final_transform(
                                 ui.horizontal(|ui| {
                                     ui.label($label).on_hover_text($tooltip);
                                     let mut temp = final_xform.$field;
-                                    let response = ui.add(egui::DragValue::new(&mut temp).speed(0.01));
+                                    let response = ui.add(egui::DragValue::new(&mut temp).speed(0.01)).on_hover_text($tooltip);
                                     if response.changed() {
                                         if let Ok(update_type) = config_manager.update_param(
                                             ConfigPath::FinalTransformAffine { param: AffineParam::$param },

@@ -14,7 +14,7 @@ enum MouseMode {
 
 impl Default for MouseMode {
     fn default() -> Self {
-        MouseMode::MovePoints
+        MouseMode::Rotate
     }
 }
 
@@ -86,10 +86,10 @@ fn render_triangle_editor_core(
                 ui.label("Mode:");
                 let old_mode = mouse_mode;
 
-                ui.selectable_value(&mut mouse_mode, MouseMode::MovePoints, "🎯 Move Points");
-                ui.selectable_value(&mut mouse_mode, MouseMode::Translate, "↔ Translate");
                 ui.selectable_value(&mut mouse_mode, MouseMode::Rotate, "↻ Rotate");
-                ui.selectable_value(&mut mouse_mode, MouseMode::Scale, "⇄ Scale");
+                ui.selectable_value(&mut mouse_mode, MouseMode::Translate, "↔ Translate");
+                ui.selectable_value(&mut mouse_mode, MouseMode::Scale, "🔺 Scale");
+                ui.selectable_value(&mut mouse_mode, MouseMode::MovePoints, "✏ Move Points");
 
                 // Persist mode if changed
                 if mouse_mode != old_mode {
@@ -829,7 +829,7 @@ fn render_triangle_editor_core(
 
                         // Scale buttons
                         ui.horizontal(|ui| {
-                            if ui.button("⇄ Scale Up").clicked() {
+                            if ui.button("🔺 Scale Up").clicked() {
                                 let (o_curr, x_curr, y_curr) = transform.to_triangle_apophysis();
                                 let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
                                 let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
@@ -842,7 +842,7 @@ fn render_triangle_editor_core(
                                     max_update = max_update.max(update);
                                 }
                             }
-                            if ui.button("⇄ Scale Down").clicked() {
+                            if ui.button("🔻 Scale Down").clicked() {
                                 let (o_curr, x_curr, y_curr) = transform.to_triangle_apophysis();
                                 let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
                                 let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];

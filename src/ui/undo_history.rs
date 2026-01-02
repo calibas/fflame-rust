@@ -89,7 +89,7 @@ pub fn render_undo_history_content(
             }
         });
         ui.add_enabled_ui(config_manager.can_redo(), |ui| {
-            if ui.button("⮬ Redo").clicked() {
+            if ui.button("⮫ Redo").clicked() {
                 *redo_requested = true;
             }
         });

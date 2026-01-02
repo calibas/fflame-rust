@@ -333,6 +333,12 @@ impl EguiLayer {
         let fractal_texture_id = self.fractal_texture_id();
 
         let full_output = self.ctx.run(raw_input, |ctx| {
+            // Debug: Print font info once after fonts are available
+            static FONT_DEBUG_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !FONT_DEBUG_DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                font_loader::debug_font_info(ctx);
+            }
+
             // Render menu bar
             menu_bar::render_menu_bar(
                 ctx,
