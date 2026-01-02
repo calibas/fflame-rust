@@ -166,6 +166,30 @@ fn apply_font(ctx: &Context, font_name: &str, font_data: Vec<u8>) {
     ctx.set_fonts(fonts);
 }
 
+/// Debug: Print font configuration and test glyph availability
+/// Call this after fonts are initialized to see which fonts are loaded
+/// and which font provides each test character.
+pub fn debug_font_info(ctx: &Context) {
+    log::info!("=== FONT DEBUG INFO ===");
+
+    // Print font families
+    ctx.fonts(|fonts| {
+        let definitions = fonts.definitions();
+
+        log::info!("Loaded font data:");
+        for name in definitions.font_data.keys() {
+            log::info!("  - {}", name);
+        }
+
+        log::info!("Font families:");
+        for (family, names) in &definitions.families {
+            log::info!("  {:?}: {:?}", family, names);
+        }
+    });
+
+    log::info!("=== END FONT DEBUG ===");
+}
+
 /// Reset to egui's default font
 fn reset_to_default_font(ctx: &Context) {
     // Get mutable FontDefinitions
