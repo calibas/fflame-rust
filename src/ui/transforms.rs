@@ -672,7 +672,7 @@ pub fn render_transforms_content(
     // Final transform (if enabled)
     if let Some(final_xform) = &mut flame.final_transform {
         ui.separator();
-        render_final_transform(ui, config_manager, final_xform, render_mode, &mut max_update);
+        render_final_transform(ui, config_manager, final_xform, render_mode, &mut max_update, open_triangle_editor);
     }
 
     // Set delete_transform if a transform was marked for deletion
@@ -695,6 +695,7 @@ fn render_final_transform(
     final_xform: &mut crate::scene::transforms::Transform,
     render_mode: RenderMode,
     max_update: &mut UpdateType,
+    open_triangle_editor: &mut bool,
 ) {
     ui.push_id("final_transform", |ui| {
         let style = ui.style_mut();
@@ -712,156 +713,15 @@ fn render_final_transform(
                 // Note: Weight, Color, Color Speed, and Opacity are NOT used for final transforms.
                 // The final transform only applies affine + variations to position after color is computed.
 
-                // Variations for final transform
-                ui.add_space(4.0);
-                ui.label(t!("transform.variations"));
-
-                let mut enabled: Vec<(String, f32)> = final_xform.variations.iter()
-                    .map(|(k, v)| (k.clone(), *v))
-                    .collect();
-                enabled.sort_by(|a, b| a.0.cmp(&b.0));
-
-                let mut var_to_delete: Option<String> = None;
-
-                if enabled.is_empty() {
-                    ui.label(egui::RichText::new(t!("transform.no_variations")).italics().weak());
-                } else {
-                    for (name, weight) in &enabled {
-                        let registry = global_registry();
-                        let var_info = registry.get(&name);
-                        let display_name = var_info
-                            .map(|v| v.display_name.as_str())
-                            .unwrap_or(&name);
-
-                        ui.horizontal(|ui| {
-                            let mut value = *weight;
-                            let response = ui.add(
-                                egui::Slider::new(&mut value, -10.0..=10.0)
-                                    .text(display_name)
-                                    .clamping(egui::SliderClamping::Never)
-                            );
-
-                            if response.changed() {
-                                let path = ConfigPath::FinalTransformVariation {
-                                    variation: name.clone(),
-                                };
-                                if let Ok(update_type) = config_manager.update_param(path, value.into()) {
-                                    *max_update = (*max_update).max(update_type);
-                                }
-                            }
-                            if response.drag_stopped() {
-                                let path = ConfigPath::FinalTransformVariation {
-                                    variation: name.clone(),
-                                };
-                                let _ = config_manager.force_commit_preview(&path);
-                            }
-                            if ui.small_button("🗑").on_hover_text(t!("tooltips.remove_variation")).clicked() {
-                                var_to_delete = Some(name.clone());
-                            }
-                        });
-
-                        // Parameters
-                        if let Some(var_info) = var_info {
-                            if !var_info.parameters.is_empty() {
-                                egui::CollapsingHeader::new(t!("variations.parameters", name = display_name))
-                                    .id_salt(format!("final_params_{}", name))
-                                    .default_open(false)
-                                    .show(ui, |ui| {
-                                        let param_update = super::variation_params::render_variation_params_final(
-                                            ui,
-                                            config_manager,
-                                            &name,
-                                            &var_info.parameters,
-                                        );
-                                        *max_update = (*max_update).max(param_update);
-                                    });
-                            }
-                        }
-                    }
-                }
-
-                // Handle deletion
-                if let Some(var_name) = var_to_delete {
-                    let path = ConfigPath::FinalTransformVariation {
-                        variation: var_name,
-                    };
-                    // Use NaN as sentinel value to signal removal
-                    if let Ok(update_type) = config_manager.update_param(path, f32::NAN.into()) {
-                        *max_update = (*max_update).max(update_type);
-                    }
-                }
-
-                // Add Variation button for final transform
-                let popup_id = ui.id().with("add_var_popup_final");
-                let add_btn = ui.button(t!("variations.add"));
-                if add_btn.clicked() {
-                    ui.memory_mut(|mem| mem.toggle_popup(popup_id));
-                }
-
-                egui::popup_below_widget(ui, popup_id, &add_btn, egui::PopupCloseBehavior::CloseOnClick, |ui| {
-                    ui.set_min_width(250.0);
-                    ui.set_max_height(300.0);
-
-                    let search_id = ui.id().with("search_final");
-                    let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
-                    ui.horizontal(|ui| {
-                        ui.label(t!("variations.search"));
-                        ui.text_edit_singleline(&mut search_text);
+                // Edit Triangle button
+                if ui.button(t!("transform.edit_triangle")).on_hover_text(t!("tooltips.transform_edit_triangle")).clicked() {
+                    // Set selection to None (final transform) in the shared state
+                    ui.ctx().data_mut(|d| {
+                        d.insert_persisted(egui::Id::new("triangle_editor_selected_transform"), None::<usize>);
                     });
-                    ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
-
-                    ui.separator();
-
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        let registry = global_registry();
-                        let search_lower = search_text.to_lowercase();
-
-                        let categories: Vec<VariationCategory> = if matches!(render_mode, RenderMode::ThreeD) {
-                            vec![
-                                VariationCategory::Basic2D,
-                                VariationCategory::Advanced2D,
-                                VariationCategory::Depth3D,
-                                VariationCategory::Rotation3D,
-                                VariationCategory::Full3D,
-                            ]
-                        } else {
-                            vec![
-                                VariationCategory::Basic2D,
-                                VariationCategory::Advanced2D,
-                            ]
-                        };
-
-                        for category in categories {
-                            let variations = registry.by_category(category);
-                            let filtered: Vec<_> = variations
-                                .iter()
-                                .filter(|v| {
-                                    let matches_search = search_text.is_empty()
-                                        || v.name.to_lowercase().contains(&search_lower)
-                                        || v.display_name.to_lowercase().contains(&search_lower);
-                                    let not_enabled = !final_xform.variations.contains_key(&v.name);
-                                    matches_search && not_enabled
-                                })
-                                .collect();
-
-                            if !filtered.is_empty() {
-                                ui.label(egui::RichText::new(format!("{:?}", category)).strong());
-                                for var_info in filtered {
-                                    if ui.selectable_label(false, &var_info.display_name).clicked() {
-                                        let path = ConfigPath::FinalTransformVariation {
-                                            variation: var_info.name.clone(),
-                                        };
-                                        if let Ok(update_type) = config_manager.update_param(path, 1.0f32.into()) {
-                                            *max_update = (*max_update).max(update_type);
-                                        }
-                                        ui.memory_mut(|mem| mem.close_popup(popup_id));
-                                    }
-                                }
-                                ui.add_space(4.0);
-                            }
-                        }
-                    });
-                });
+                    // Open Triangle Editor panel if not already open
+                    *open_triangle_editor = true;
+                }
 
                 // Advanced section for final transform
                 egui::CollapsingHeader::new(t!("transform.advanced"))
@@ -906,6 +766,160 @@ fn render_final_transform(
                         // Note: Color, Color Speed, Opacity, and Weight are NOT used by the final transform.
                         // The final transform only applies affine + variations to position after color is computed.
                     });
+
+                // Variations section for final transform
+                egui::CollapsingHeader::new(t!("transform.variations"))
+                    .id_salt("variations_final")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        let mut enabled: Vec<(String, f32)> = final_xform.variations.iter()
+                            .map(|(k, v)| (k.clone(), *v))
+                            .collect();
+                        enabled.sort_by(|a, b| a.0.cmp(&b.0));
+
+                        let mut var_to_delete: Option<String> = None;
+
+                        if enabled.is_empty() {
+                            ui.label(egui::RichText::new(t!("transform.no_variations")).italics().weak());
+                        } else {
+                            for (name, weight) in &enabled {
+                                let registry = global_registry();
+                                let var_info = registry.get(&name);
+                                let display_name = var_info
+                                    .map(|v| v.display_name.as_str())
+                                    .unwrap_or(&name);
+
+                                ui.horizontal(|ui| {
+                                    let mut value = *weight;
+                                    let response = ui.add(
+                                        egui::Slider::new(&mut value, -10.0..=10.0)
+                                            .text(display_name)
+                                            .clamping(egui::SliderClamping::Never)
+                                    );
+
+                                    if response.changed() {
+                                        let path = ConfigPath::FinalTransformVariation {
+                                            variation: name.clone(),
+                                        };
+                                        if let Ok(update_type) = config_manager.update_param(path, value.into()) {
+                                            *max_update = (*max_update).max(update_type);
+                                        }
+                                    }
+                                    if response.drag_stopped() {
+                                        let path = ConfigPath::FinalTransformVariation {
+                                            variation: name.clone(),
+                                        };
+                                        let _ = config_manager.force_commit_preview(&path);
+                                    }
+                                    if ui.small_button("🗑").on_hover_text(t!("tooltips.remove_variation")).clicked() {
+                                        var_to_delete = Some(name.clone());
+                                    }
+                                });
+
+                                // Parameters
+                                if let Some(var_info) = var_info {
+                                    if !var_info.parameters.is_empty() {
+                                        egui::CollapsingHeader::new(t!("variations.parameters", name = display_name))
+                                            .id_salt(format!("final_params_{}", name))
+                                            .default_open(false)
+                                            .show(ui, |ui| {
+                                                let param_update = super::variation_params::render_variation_params_final(
+                                                    ui,
+                                                    config_manager,
+                                                    &name,
+                                                    &var_info.parameters,
+                                                );
+                                                *max_update = (*max_update).max(param_update);
+                                            });
+                                    }
+                                }
+                            }
+                        }
+
+                        // Handle deletion
+                        if let Some(var_name) = var_to_delete {
+                            let path = ConfigPath::FinalTransformVariation {
+                                variation: var_name,
+                            };
+                            // Use NaN as sentinel value to signal removal
+                            if let Ok(update_type) = config_manager.update_param(path, f32::NAN.into()) {
+                                *max_update = (*max_update).max(update_type);
+                            }
+                        }
+
+                        // Add Variation button for final transform
+                        let popup_id = ui.id().with("add_var_popup_final");
+                        let add_btn = ui.button(t!("variations.add"));
+                        if add_btn.clicked() {
+                            ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+                        }
+
+                        egui::popup_below_widget(ui, popup_id, &add_btn, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                            ui.set_min_width(250.0);
+                            ui.set_max_height(300.0);
+
+                            let search_id = ui.id().with("search_final");
+                            let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
+                            ui.horizontal(|ui| {
+                                ui.label(t!("variations.search"));
+                                ui.text_edit_singleline(&mut search_text);
+                            });
+                            ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
+
+                            ui.separator();
+
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                let registry = global_registry();
+                                let search_lower = search_text.to_lowercase();
+
+                                let categories: Vec<VariationCategory> = if matches!(render_mode, RenderMode::ThreeD) {
+                                    vec![
+                                        VariationCategory::Basic2D,
+                                        VariationCategory::Advanced2D,
+                                        VariationCategory::Depth3D,
+                                        VariationCategory::Rotation3D,
+                                        VariationCategory::Full3D,
+                                    ]
+                                } else {
+                                    vec![
+                                        VariationCategory::Basic2D,
+                                        VariationCategory::Advanced2D,
+                                    ]
+                                };
+
+                                for category in categories {
+                                    let variations = registry.by_category(category);
+                                    let filtered: Vec<_> = variations
+                                        .iter()
+                                        .filter(|v| {
+                                            let matches_search = search_text.is_empty()
+                                                || v.name.to_lowercase().contains(&search_lower)
+                                                || v.display_name.to_lowercase().contains(&search_lower);
+                                            let not_enabled = !final_xform.variations.contains_key(&v.name);
+                                            matches_search && not_enabled
+                                        })
+                                        .collect();
+
+                                    if !filtered.is_empty() {
+                                        ui.label(egui::RichText::new(format!("{:?}", category)).strong());
+                                        for var_info in filtered {
+                                            if ui.selectable_label(false, &var_info.display_name).clicked() {
+                                                let path = ConfigPath::FinalTransformVariation {
+                                                    variation: var_info.name.clone(),
+                                                };
+                                                if let Ok(update_type) = config_manager.update_param(path, 1.0f32.into()) {
+                                                    *max_update = (*max_update).max(update_type);
+                                                }
+                                                ui.memory_mut(|mem| mem.close_popup(popup_id));
+                                            }
+                                        }
+                                        ui.add_space(4.0);
+                                    }
+                                }
+                            });
+                        });
+                    });
+
             });
     });
 }
