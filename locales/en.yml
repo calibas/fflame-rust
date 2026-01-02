@@ -100,7 +100,7 @@ transform:
   variations: "Variations"
   parameters: "Parameters"
   advanced: "Advanced"
-  final: "Transform [Final]"
+  final: "Transform Final"
   final_description: "Applied once to all points after iteration."
   enable_final: "Enable Final Transform"
   no_variations: "No variations enabled"
