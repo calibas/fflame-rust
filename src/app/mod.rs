@@ -167,8 +167,8 @@ use crate::ui::EguiLayer;
 use crate::ui::animation_panel::ExportProgress;
 use crate::renderer::FlameRenderer;
 use crate::scene::transforms::Flame;
-use crate::scene::palette::PaletteLibrary;
-use crate::scene::presets::PresetLibrary;
+use crate::scene::palette::{global_palette_library, PaletteLibrary};
+use crate::scene::presets::{global_preset_library, PresetLibrary};
 use crate::util::PerformanceMetrics;
 use crate::config::ConfigManager;
 use crate::animation::AnimationController;
@@ -192,7 +192,7 @@ pub struct App {
 
     // Libraries (not saved in config)
     pub(super) palette_library: PaletteLibrary,
-    pub(super) preset_library: PresetLibrary,
+    pub(super) preset_library: &'static PresetLibrary,
     pub(super) current_preset_index: usize,  // UI state, not config
 
     // Animation system
@@ -231,9 +231,13 @@ impl App {
         let gpu = GpuContext::new(&window).await.expect("GPU init failed");
         let egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
-        // Load preset library and use first preset (with ALL its settings)
-        let preset_library = PresetLibrary::new();
-        let palette_library = PaletteLibrary::new();
+        // Use global preset library singleton
+        let preset_library = global_preset_library();
+        // Clone from global palette library singleton (App needs mutable copy)
+        let palette_library = {
+            let guard = global_palette_library().read().unwrap();
+            (*guard).clone()
+        };
 
         // Use entire FractalConfig from first preset (not just the flame!)
         let initial_config = preset_library.get(0)

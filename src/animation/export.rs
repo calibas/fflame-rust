@@ -1059,7 +1059,7 @@ pub async fn export_animation_fast(
     progress: &mut dyn ExportProgressCallback,
 ) -> Result<AnimationExportResult, AnimationExportError> {
     use crate::renderer::compute_kernel::FlameRenderer;
-    use crate::scene::palette::PaletteLibrary;
+    use crate::scene::palette::global_palette_library;
     use egui_wgpu::wgpu::{
         self, BufferDescriptor, BufferUsages, CommandEncoderDescriptor,
         Extent3d, MapMode, Origin3d, PollType, TextureAspect,
@@ -1117,8 +1117,8 @@ pub async fn export_animation_fast(
     let mut controller = AnimationController::new();
     controller.load(export_config.animation.clone());
 
-    // Get palette library
-    let palette_library = PaletteLibrary::new();
+    // Get palette library (use global singleton)
+    let palette_library = global_palette_library().read().unwrap();
 
     // Calculate buffer dimensions
     let bytes_per_pixel = 4u32; // RGBA8
