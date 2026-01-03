@@ -580,7 +580,7 @@ impl FlameRenderer {
 
         // 8. Update tone mapping settings from config
         // Not in live preview mode (loading config)
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, config.alpha_blend_low, config.alpha_blend_high, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.alpha_blend_low, config.alpha_blend_high, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -679,7 +679,6 @@ impl FlameRenderer {
             sample_density,
             saturation: DEFAULT_SATURATION,
             hue_shift: DEFAULT_HUE_SHIFT,
-            value_scale: DEFAULT_VALUE_SCALE,
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
@@ -690,7 +689,7 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0],
+            _pad_end: [0, 0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -879,7 +878,6 @@ impl FlameRenderer {
             sample_density,
             saturation: DEFAULT_SATURATION,
             hue_shift: DEFAULT_HUE_SHIFT,
-            value_scale: DEFAULT_VALUE_SCALE,
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
@@ -890,7 +888,7 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0],
+            _pad_end: [0, 0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -945,7 +943,6 @@ impl FlameRenderer {
             sample_density,
             saturation: config.saturation,
             hue_shift: config.hue_shift,
-            value_scale: config.value_scale,
             gamma_threshold: config.gamma_threshold,
             alpha_blend_low: config.alpha_blend_low,
             alpha_blend_high: config.alpha_blend_high,
@@ -956,13 +953,13 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0],
+            _pad_end: [0, 0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
 
-    /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, value scale, and alpha blend
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, alpha_blend_low: f32, alpha_blend_high: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, _batch_size: u32, is_live_preview: bool) {
+    /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, and alpha blend
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, alpha_blend_low: f32, alpha_blend_high: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, _batch_size: u32, is_live_preview: bool) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match tonemap_mode {
@@ -1046,7 +1043,6 @@ impl FlameRenderer {
             sample_density,
             saturation,
             hue_shift,
-            value_scale,
             gamma_threshold,
             alpha_blend_low,
             alpha_blend_high,
@@ -1057,7 +1053,7 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0],
+            _pad_end: [0, 0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }

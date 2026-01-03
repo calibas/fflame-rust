@@ -34,7 +34,6 @@ pub enum ConfigPath {
     Vibrancy,
     Saturation,
     HueShift,
-    ValueScale,
     AlphaBlendLow,
     AlphaBlendHigh,
     DensityScale,
@@ -159,7 +158,6 @@ impl Display for ConfigPath {
             ConfigPath::Vibrancy => write!(f, "Vibrancy"),
             ConfigPath::Saturation => write!(f, "Saturation"),
             ConfigPath::HueShift => write!(f, "Hue Shift"),
-            ConfigPath::ValueScale => write!(f, "Value Scale"),
             ConfigPath::AlphaBlendLow => write!(f, "Alpha Blend Low"),
             ConfigPath::AlphaBlendHigh => write!(f, "Alpha Blend High"),
             ConfigPath::DensityScale => write!(f, "Density Scale"),
@@ -699,7 +697,6 @@ impl ConfigPath {
             | ConfigPath::Vibrancy
             | ConfigPath::Saturation
             | ConfigPath::HueShift
-            | ConfigPath::ValueScale
             | ConfigPath::AlphaBlendLow
             | ConfigPath::AlphaBlendHigh
             | ConfigPath::DensityScale
@@ -793,7 +790,6 @@ impl ConfigPath {
             ConfigPath::Vibrancy => "Vibrancy".to_string(),
             ConfigPath::Saturation => "Saturation".to_string(),
             ConfigPath::HueShift => "HueShift".to_string(),
-            ConfigPath::ValueScale => "ValueScale".to_string(),
             ConfigPath::AlphaBlendLow => "AlphaBlendLow".to_string(),
             ConfigPath::AlphaBlendHigh => "AlphaBlendHigh".to_string(),
             ConfigPath::DensityScale => "DensityScale".to_string(),
@@ -900,7 +896,6 @@ impl ConfigPath {
             "Vibrancy" => return Some(ConfigPath::Vibrancy),
             "Saturation" => return Some(ConfigPath::Saturation),
             "HueShift" => return Some(ConfigPath::HueShift),
-            "ValueScale" => return Some(ConfigPath::ValueScale),
             "AlphaBlendLow" => return Some(ConfigPath::AlphaBlendLow),
             "AlphaBlendHigh" => return Some(ConfigPath::AlphaBlendHigh),
             "DensityScale" => return Some(ConfigPath::DensityScale),
@@ -1079,7 +1074,6 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::Vibrancy
         | ConfigPath::Saturation
         | ConfigPath::HueShift
-        | ConfigPath::ValueScale
         | ConfigPath::AlphaBlendLow
         | ConfigPath::AlphaBlendHigh
         | ConfigPath::DensityScale

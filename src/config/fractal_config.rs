@@ -114,10 +114,6 @@ pub struct FractalConfig {
     #[serde(default = "default_hue_shift")]
     pub hue_shift: f32,
 
-    /// Value scale: brightness multiplier (1.0 = no change, >1.0 = brighter)
-    #[serde(default = "default_value_scale")]
-    pub value_scale: f32,
-
     /// Alpha blend low threshold: start blending toward linear alpha at this gamma-corrected value
     /// Lower = more gamma-corrected (no halos), Higher = more linear (more detail at edges)
     #[serde(default = "default_alpha_blend_low")]
@@ -171,10 +167,6 @@ fn default_saturation() -> f32 {
 
 fn default_hue_shift() -> f32 {
     super::defaults::DEFAULT_HUE_SHIFT
-}
-
-fn default_value_scale() -> f32 {
-    super::defaults::DEFAULT_VALUE_SCALE
 }
 
 fn default_alpha_blend_low() -> f32 {
@@ -254,7 +246,6 @@ impl Default for FractalConfig {
             vibrancy: default_vibrancy(),
             saturation: default_saturation(),
             hue_shift: default_hue_shift(),
-            value_scale: default_value_scale(),
             alpha_blend_low: default_alpha_blend_low(),
             alpha_blend_high: default_alpha_blend_high(),
             deterministic_rng: false,
@@ -333,7 +324,6 @@ impl FractalConfig {
         if config.vibrancy == defaults.vibrancy { obj.remove("vibrancy"); }
         if config.saturation == defaults.saturation { obj.remove("saturation"); }
         if config.hue_shift == defaults.hue_shift { obj.remove("hue_shift"); }
-        if config.value_scale == defaults.value_scale { obj.remove("value_scale"); }
 
         // Other
         if config.deterministic_rng == defaults.deterministic_rng { obj.remove("deterministic_rng"); }
