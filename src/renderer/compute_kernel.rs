@@ -1228,12 +1228,11 @@ impl FlameRenderer {
             }
         }
 
-        // Update shaders if path feature state changed
-        if needs_path != shader_has_path {
-            let constants = self.build_shader_constants(flame);
-            if self.pipelines.ensure_shaders_current_with_constants(device, flame, needs_path, constants) {
-                changed = true;
-            }
+        // Update shaders if any shader constants changed (path features, color mode, etc.)
+        // The shader cache compares all constants and only rebuilds if something changed
+        let constants = self.build_shader_constants(flame);
+        if self.pipelines.ensure_shaders_current_with_constants(device, flame, needs_path, constants) {
+            changed = true;
         }
 
         changed
