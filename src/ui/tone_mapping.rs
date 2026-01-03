@@ -231,10 +231,6 @@ pub fn render_colors_content(
                 max_update = max_update.max(result.update_type);
             }
 
-            if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::ValueScale, 0.0..=3.0, "Value Scale") {
-                max_update = max_update.max(result.update_type);
-            }
-
             if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::DensityScale, 0.01..=10.0, "Density Scale") {
                 max_update = max_update.max(result.update_type);
             }

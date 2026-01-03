@@ -766,7 +766,6 @@ impl ConfigManager {
             ConfigPath::Vibrancy => Ok(config.vibrancy.into()),
             ConfigPath::Saturation => Ok(config.saturation.into()),
             ConfigPath::HueShift => Ok(config.hue_shift.into()),
-            ConfigPath::ValueScale => Ok(config.value_scale.into()),
             ConfigPath::AlphaBlendLow => Ok(config.alpha_blend_low.into()),
             ConfigPath::AlphaBlendHigh => Ok(config.alpha_blend_high.into()),
             ConfigPath::DensityScale => Ok(config.density_scale.into()),
@@ -1077,9 +1076,6 @@ impl ConfigManager {
             }
             ConfigPath::HueShift => {
                 self.current.hue_shift = value.try_into()?;
-            }
-            ConfigPath::ValueScale => {
-                self.current.value_scale = value.try_into()?;
             }
             ConfigPath::AlphaBlendLow => {
                 self.current.alpha_blend_low = value.try_into()?;

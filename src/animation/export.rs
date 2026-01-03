@@ -395,7 +395,6 @@ fn apply_config_value(
         (ConfigPath::Vibrancy, ConfigValue::Float(v)) => config.vibrancy = *v,
         (ConfigPath::Saturation, ConfigValue::Float(v)) => config.saturation = *v,
         (ConfigPath::HueShift, ConfigValue::Float(v)) => config.hue_shift = *v,
-        (ConfigPath::ValueScale, ConfigValue::Float(v)) => config.value_scale = *v,
         (ConfigPath::DensityScale, ConfigValue::Float(v)) => config.density_scale = *v,
 
         // Color
