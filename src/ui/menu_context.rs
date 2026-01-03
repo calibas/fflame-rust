@@ -35,20 +35,11 @@ pub struct ViewMenuActions {
     pub show_grid: bool,
 }
 
-/// Actions that can be triggered from the Transform menu
-#[derive(Default)]
-pub struct TransformMenuActions {
-    pub add_transform: bool,
-    pub delete_transform: Option<usize>,
-    pub randomize_transform: bool,
-}
-
 /// Actions that can be triggered from the Rendering menu
 #[derive(Default)]
 pub struct RenderingMenuActions {
     pub pause_toggle: bool,
     pub reset_accumulation: bool,
-    pub set_speed: Option<u32>, // Speed multiplier (1, 2, 4, 8, 16)
     pub set_iterations_per_thread: Option<u32>, // Iterations per thread (64, 128, 256, 512, 1024)
 }
 
@@ -58,7 +49,6 @@ pub struct MenuActions {
     pub file: FileMenuActions,
     pub edit: EditMenuActions,
     pub view: ViewMenuActions,
-    pub transform: TransformMenuActions,
     pub rendering: RenderingMenuActions,
 }
 
