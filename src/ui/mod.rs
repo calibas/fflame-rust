@@ -558,9 +558,6 @@ impl EguiLayer {
         undo_requested |= menu_actions.edit.undo;
         redo_requested |= menu_actions.edit.redo;
 
-        // Extract Transform menu actions (OR with existing value from panel button)
-        add_transform |= menu_actions.transform.add_transform;
-
         // Handle Rendering menu actions
         if menu_actions.rendering.pause_toggle {
             *paused = !*paused;
@@ -569,8 +566,6 @@ impl EguiLayer {
         if menu_actions.rendering.reset_accumulation {
             let _ = config_manager.request_reset();
         }
-
-        // Speed multiplier removed - now use VSync and target_fps instead
 
         if let Some(ipt) = menu_actions.rendering.set_iterations_per_thread {
             let _ = config_manager.update_system_setting(

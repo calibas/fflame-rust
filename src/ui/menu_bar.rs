@@ -117,34 +117,6 @@ pub fn render_menu_bar(
                 }
             });
 
-            // Transforms Menu
-            ui.menu_button("Transforms", |ui| {
-                // Panel visibility toggles
-                let transforms_open = workspace.panel_exists(super::workspace::PanelType::Transforms);
-                if ui.selectable_label(transforms_open, "Show Transform Editor").clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Transforms);
-
-                }
-                let triangle_editor_open = workspace.panel_exists(super::workspace::PanelType::TriangleEditor);
-                if ui.selectable_label(triangle_editor_open, "Show Triangle Editor").clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor);
-
-                }
-                let palette_editor_open = workspace.panel_exists(super::workspace::PanelType::PaletteEditor);
-                if ui.selectable_label(palette_editor_open, "Show Palette Editor").clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor);
-
-                }
-
-                ui.separator();
-
-                // Add Transform (functional)
-                if ui.button("Add Transform").clicked() {
-                    menu_actions.transform.add_transform = true;
-
-                }
-            });
-
             // Rendering Menu
             ui.menu_button(t!("menu.rendering"), |ui| {
                 // Pause/Resume
@@ -162,21 +134,9 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                // Speed submenu
-                ui.menu_button("Speed ▶", |ui| {
-                    for &speed in &[1u32, 2, 4, 8, 16] {
-                        if ui.button(format!("{}x", speed)).clicked() {
-                            menu_actions.rendering.set_speed = Some(speed);
-
-                        }
-                    }
-                });
-
-                ui.separator();
-
                 // Iterations per Thread submenu
-                ui.menu_button("Iterations per Thread ▶", |ui| {
-                    for &ipt in &[32u32, 64, 128, 256, 512, 1024] {
+                ui.menu_button("Iterations per Thread", |ui| {
+                    for &ipt in &[128, 256, 512, 1024, 2048, 4096] {
                         if ui.button(format!("{}", ipt)).clicked() {
                             menu_actions.rendering.set_iterations_per_thread = Some(ipt);
 
