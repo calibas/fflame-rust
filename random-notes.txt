@@ -333,3 +333,10 @@ Check downsampling method. Have everything use TIledRenderer.
 
 
 FFT Image Analysis for fracticality when auto-training.
+
+
+Hook up voxel engine and use voxels to store the 3D result instead of a 2D image.
+
+
+How to implement "true 3D" that can enable movement and true perspective? Voxel engine? Godot (slow for voxels https://voxel-tools.readthedocs.io/en/latest/performance/)?
+Best out there? (still in development) https://voxelchain.app/
