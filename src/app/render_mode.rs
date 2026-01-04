@@ -51,6 +51,13 @@ impl Default for RenderModeState {
 ///
 /// Tracks the current rendering mode and manages transitions.
 /// Stores snapshots needed for undo when exiting special modes.
+///
+/// ## Brightness Boost and Ping-Pong Buffer Timing
+///
+/// The accumulation system uses ping-pong buffers with a 1-frame delay:
+/// tonemap always reads the buffer written in the PREVIOUS frame.
+/// To match this, brightness boost decisions use `prev_frame_low_density`
+/// which tracks what was written last frame, not what we're writing now.
 #[derive(Default)]
 pub struct RenderModeFSM {
     /// Current state
@@ -65,6 +72,9 @@ pub struct RenderModeFSM {
     frames_since_low_density_exit: u32,
     /// Whether we were in a low-density mode before transitioning to Normal
     was_in_low_density_mode: bool,
+    /// Whether the PREVIOUS frame was in low-density mode
+    /// Used to match ping-pong buffer timing (tonemap reads previous frame's buffer)
+    prev_frame_low_density: bool,
 }
 
 /// Result of a state transition
@@ -208,17 +218,21 @@ impl RenderModeFSM {
     ///
     /// Call this every frame to track how long since we exited a low-density mode.
     /// The `is_iterating` parameter indicates if normal accumulation is happening.
+    ///
+    /// IMPORTANT: `prev_frame_low_density` handles the ENTRY case (ping-pong timing).
+    /// `was_in_low_density_mode` handles the EXIT case (8-frame rebuild period).
     pub fn update_brightness_state(&mut self, is_iterating: bool) {
-        let is_low_density = self.should_use_overwrite();
+        let is_low_density_now = self.should_use_overwrite();
 
-        if is_low_density {
-            // In Animating or Overwrite mode - buffer has low density
+        // was_in_low_density_mode tracks the EXIT case only
+        // It gets set when we transition FROM low-density TO normal mode
+        if !is_low_density_now && self.prev_frame_low_density {
+            // Just exited low-density mode this frame
             self.was_in_low_density_mode = true;
             self.frames_since_low_density_exit = 0;
         } else if self.was_in_low_density_mode {
-            // Just exited to Normal mode
+            // Already in exit countdown - count frames until buffer has enough density
             if is_iterating {
-                // Normal accumulation is building density - count frames until buffer is full
                 self.frames_since_low_density_exit += 1;
                 // After ~8 frames, buffer has enough density (matches 8x boost factor)
                 if self.frames_since_low_density_exit > 8 {
@@ -229,18 +243,29 @@ impl RenderModeFSM {
         }
     }
 
+    /// Called at end of frame to save current state for next frame's brightness decision.
+    /// This matches the ping-pong buffer timing where tonemap reads previous frame's buffer.
+    pub fn end_frame(&mut self) {
+        self.prev_frame_low_density = self.should_use_overwrite();
+    }
+
     /// Check if brightness boost should be applied.
     ///
-    /// Returns true when the accumulation buffer has low density:
-    /// - Currently in Animating or Overwrite mode
-    /// - Recently exited and buffer is still rebuilding
+    /// Returns true when the accumulation buffer being READ (not written) has low density.
+    /// Due to ping-pong buffers, tonemap reads the PREVIOUS frame's buffer,
+    /// so we use `prev_frame_low_density` instead of current state.
+    ///
+    /// Also continues boost during the 8-frame rebuild period after exiting low-density mode.
     pub fn needs_brightness_boost(&self) -> bool {
-        self.should_use_overwrite() || self.was_in_low_density_mode
+        // Use PREVIOUS frame's state for entering (matches ping-pong timing)
+        // Use was_in_low_density_mode for exiting (8-frame rebuild period)
+        self.prev_frame_low_density || self.was_in_low_density_mode
     }
 
     /// Get debug info for brightness state
-    pub fn brightness_debug(&self) -> (bool, u32, bool) {
-        (self.was_in_low_density_mode, self.frames_since_low_density_exit, self.needs_brightness_boost())
+    /// Returns (prev_frame_low_density, was_in_low_density_mode, frames_since_exit, needs_boost)
+    pub fn brightness_debug(&self) -> (bool, bool, u32, bool) {
+        (self.prev_frame_low_density, self.was_in_low_density_mode, self.frames_since_low_density_exit, self.needs_brightness_boost())
     }
 }
 
