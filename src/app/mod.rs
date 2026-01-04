@@ -1124,12 +1124,20 @@ impl App {
             renderer.set_path_map_style(final_config.path_map_style);
             // Calculate batch_size for tonemap (same logic as accumulation)
             let batch_size_for_tonemap = if use_overwrite { 1 } else { self.accumulation_batch_size };
-            // is_live_preview: Brightness boost for low-density preview during active editing
-            // Only applies when:
-            // 1. We're in overwrite mode (parameter changes happening)
-            // 2. AND we're still iterating (not at max_iterations with full density buffer)
-            // When max_iterations is reached, buffer has full density - no boost needed
-            let is_live_preview = use_overwrite && should_iterate;
+
+            // Update FSM brightness state and get boost decision
+            // The FSM tracks when we're in Animating/Overwrite mode and for how long after
+            self.render_mode.update_brightness_state(should_iterate);
+            let is_live_preview = self.render_mode.needs_brightness_boost();
+
+            // Debug logging for brightness transitions
+            let (was_low, frames_exit, _) = self.render_mode.brightness_debug();
+            if was_low || frames_exit <= 10 {
+                log::info!(
+                    "Brightness: state={:?}, should_iterate={}, was_low={}, frames_exit={}, is_live_preview={}",
+                    self.render_mode.state(), should_iterate, was_low, frames_exit, is_live_preview
+                );
+            }
             renderer.update_tonemap(&self.gpu.queue, final_config.tonemap_mode, final_config.use_curve,
                 final_config.exposure, final_config.gamma, final_config.gamma_threshold, final_config.brightness,
                 final_config.vibrancy, final_config.saturation, final_config.hue_shift,
