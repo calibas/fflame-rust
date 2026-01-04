@@ -702,6 +702,12 @@ impl FlameRenderer {
         self.total_iterations
     }
 
+    /// Get effective iterations for brightness calculation
+    /// This only counts iterations done in normal (non-overwrite) mode
+    pub fn effective_iterations(&self) -> u64 {
+        self.effective_iterations
+    }
+
     /// Get fractal output texture view for display
     pub fn get_fractal_texture_view(&self) -> &TextureView {
         &self.fractal_texture_view

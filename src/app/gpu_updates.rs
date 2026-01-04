@@ -183,6 +183,8 @@ impl App {
     /// Overwrite mode keeps accumulation in "replace" mode for smooth transitions
     /// during parameter dragging. It stays ON for 100ms after the last change,
     /// then resets iteration counter for a clean rebuild.
+    ///
+    /// Also updates the RenderModeFSM to track Overwrite state for brightness boost.
     fn update_overwrite_mode(
         &mut self,
         actions: &crate::config::UpdateAction,
@@ -205,6 +207,12 @@ impl App {
             // Changes happened → enable overwrite mode and update timestamp
             self.use_overwrite_next_frame = true;
             self.last_param_change_time = Some(now);
+
+            // Update FSM to Overwrite state (for brightness boost tracking)
+            // Only if not animating (animation takes priority)
+            if !is_animation_playing {
+                self.render_mode.enter_overwrite(self.config_manager.active_config());
+            }
         } else if !had_changes {
             // No changes this frame → check if we're still within the smooth transition window
             if let Some(last_change) = self.last_param_change_time {
@@ -215,6 +223,9 @@ impl App {
                 // When overwrite window expires, reset iteration counter for clean rebuild
                 // BUT skip this during animation playback - we want continuous accumulation
                 if was_overwrite && !self.use_overwrite_next_frame && !is_animation_playing {
+                    // Exit overwrite mode in FSM
+                    self.render_mode.exit_overwrite();
+
                     if let Some(ref mut renderer) = self.flame_renderer {
                         renderer.reset_iteration_counter();
                         self.rendering_complete = false; // Reset completion flag
