@@ -182,7 +182,7 @@ view:
   # Tooltips
   tooltip_zoom: "Controls the magnification level.\nHigher = more zoomed in."
   tooltip_pan: "Move the fractal view left/right or up/down."
-  tooltip_rotation: "Rotate the entire view.\nKeyboard: R key + drag"
+  tooltip_rotation: "Rotate the entire view."
   tooltip_render_mode: "2D = classic flat rendering.\n3D = depth-aware with perspective."
   tooltip_perspective: "Strength of 3D perspective effect.\n0 = orthographic, higher = more depth."
   tooltip_camera_pitch: "3D camera rotation (up/down).\nTilts the view vertically."
