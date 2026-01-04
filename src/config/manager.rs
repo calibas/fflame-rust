@@ -1135,16 +1135,24 @@ impl ConfigManager {
                 self.current.speed_factor = value.try_into()?;
             }
             ConfigPath::BackgroundColor => {
-                self.current.background_color = value.try_into()?;
+                let c: [f32; 3] = value.try_into()?;
+                self.current.background_color = [
+                    c[0].clamp(0.0, 1.0),
+                    c[1].clamp(0.0, 1.0),
+                    c[2].clamp(0.0, 1.0),
+                ];
             }
             ConfigPath::BackgroundColorR => {
-                self.current.background_color[0] = value.try_into()?;
+                let v: f32 = value.try_into()?;
+                self.current.background_color[0] = v.clamp(0.0, 1.0);
             }
             ConfigPath::BackgroundColorG => {
-                self.current.background_color[1] = value.try_into()?;
+                let v: f32 = value.try_into()?;
+                self.current.background_color[1] = v.clamp(0.0, 1.0);
             }
             ConfigPath::BackgroundColorB => {
-                self.current.background_color[2] = value.try_into()?;
+                let v: f32 = value.try_into()?;
+                self.current.background_color[2] = v.clamp(0.0, 1.0);
             }
 
             // Rendering settings

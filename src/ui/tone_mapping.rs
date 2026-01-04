@@ -588,7 +588,7 @@ pub fn render_colors_content(
             if ui.color_edit_button_rgb(&mut bg_array).changed() {
                 if let Ok(update) = config_manager.update_param(
                     ConfigPath::BackgroundColor,
-                    [bg_array[0], bg_array[1], bg_array[2]].into()
+                    bg_array.into()
                 ) {
                     max_update = max_update.max(update);
                 }
