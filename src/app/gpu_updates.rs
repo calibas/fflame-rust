@@ -188,6 +188,7 @@ impl App {
         actions: &crate::config::UpdateAction,
         view_changed_by_keyboard: bool,
     ) {
+        use crate::animation::PlaybackState;
         use web_time::Instant;
 
         // Note: Excludes tone_curve (post-processing only, doesn't affect accumulation buffer)
@@ -196,6 +197,9 @@ impl App {
 
         // Track previous overwrite state to detect transitions
         let was_overwrite = self.use_overwrite_next_frame;
+
+        // Check if animation is currently playing
+        let is_animation_playing = self.animation_controller.state == PlaybackState::Playing;
 
         if had_changes && !actions.reset_accumulation {
             // Changes happened → enable overwrite mode and update timestamp
@@ -209,7 +213,8 @@ impl App {
                 self.use_overwrite_next_frame = time_since_change.as_millis() < 100;
 
                 // When overwrite window expires, reset iteration counter for clean rebuild
-                if was_overwrite && !self.use_overwrite_next_frame {
+                // BUT skip this during animation playback - we want continuous accumulation
+                if was_overwrite && !self.use_overwrite_next_frame && !is_animation_playing {
                     if let Some(ref mut renderer) = self.flame_renderer {
                         renderer.reset_iteration_counter();
                         self.rendering_complete = false; // Reset completion flag

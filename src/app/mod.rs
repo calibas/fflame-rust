@@ -1124,8 +1124,12 @@ impl App {
             renderer.set_path_map_style(final_config.path_map_style);
             // Calculate batch_size for tonemap (same logic as accumulation)
             let batch_size_for_tonemap = if use_overwrite { 1 } else { self.accumulation_batch_size };
-            // is_live_preview: Only during active editing, not when rendering stops
-            let is_live_preview = self.use_overwrite_next_frame;
+            // is_live_preview: Brightness boost for low-density preview during active editing
+            // Only applies when:
+            // 1. We're in overwrite mode (parameter changes happening)
+            // 2. AND we're still iterating (not at max_iterations with full density buffer)
+            // When max_iterations is reached, buffer has full density - no boost needed
+            let is_live_preview = use_overwrite && should_iterate;
             renderer.update_tonemap(&self.gpu.queue, final_config.tonemap_mode, final_config.use_curve,
                 final_config.exposure, final_config.gamma, final_config.gamma_threshold, final_config.brightness,
                 final_config.vibrancy, final_config.saturation, final_config.hue_shift,
