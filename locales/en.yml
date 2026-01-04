@@ -161,19 +161,33 @@ palette:
 view:
   title: "View"
   zoom: "Zoom"
-  pan_x: "Pan X"
-  pan_y: "Pan Y"
+  zoom_in: "➕ Zoom In"
+  zoom_out: "➖ Zoom Out"
+  zoom_value: "Value:"
+  pan: "Pan"
+  pan_x: "X:"
+  pan_y: "Y:"
+  arrow_controls: "Arrow Controls"
   rotation: "Rotation"
-  camera_pitch: "Camera Pitch"
-  camera_yaw: "Camera Yaw"
-  camera_z: "Camera Z"
-  reset: "Reset View"
+  render_mode: "Render Mode"
+  mode_2d: "2D"
+  mode_3d: "3D"
+  perspective: "Perspective"
+  camera_3d: "3D Camera Rotation"
+  camera_pitch: "Pitch (X):"
+  camera_yaw: "Yaw (Y):"
+  camera_z: "Z Position:"
+  reset: "🔄 Reset View"
 
-  # Projection
-  projection: "Projection"
-  projection_orthographic: "Orthographic"
-  projection_perspective: "Perspective"
-  projection_strength: "Perspective Strength"
+  # Tooltips
+  tooltip_zoom: "Controls the magnification level.\nHigher = more zoomed in."
+  tooltip_pan: "Move the fractal view left/right or up/down."
+  tooltip_rotation: "Rotate the entire view.\nKeyboard: R key + drag"
+  tooltip_render_mode: "2D = classic flat rendering.\n3D = depth-aware with perspective."
+  tooltip_perspective: "Strength of 3D perspective effect.\n0 = orthographic, higher = more depth."
+  tooltip_camera_pitch: "3D camera rotation (up/down).\nTilts the view vertically."
+  tooltip_camera_yaw: "3D camera rotation (left/right).\nRotates the view horizontally."
+  tooltip_camera_z: "Camera Z position.\nMoves the viewpoint closer/further."
 
 # Rendering Controls
 rendering:
@@ -352,14 +366,8 @@ common:
   enabled: "Enabled"
   disabled: "Disabled"
 
-# Tooltips
+# Tooltips (for controls not in specific panels)
 tooltips:
-  zoom: "Controls the magnification level.\nHigher = more zoomed in."
-  pan: "Move the fractal view left/right or up/down."
-  rotation: "Rotate the entire view.\nKeyboard: R key + drag"
-  camera_pitch: "3D camera rotation (up/down).\nOnly visible in 3D mode."
-  camera_yaw: "3D camera rotation (left/right).\nOnly visible in 3D mode."
-
   transform_weight: "Probability of selecting this transform.\nHigher = more influence on final image."
   transform_color: "Position in color palette (0.0-1.0).\nAffects color when using Palette Color Mode."
   transform_edit_triangle: "Select in Triangle Editor"
