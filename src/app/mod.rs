@@ -1131,11 +1131,11 @@ impl App {
             let is_live_preview = self.render_mode.needs_brightness_boost();
 
             // Debug logging for brightness transitions
-            let (was_low, frames_exit, _) = self.render_mode.brightness_debug();
-            if was_low || frames_exit <= 10 {
+            let (prev_low, was_low, frames_exit, _) = self.render_mode.brightness_debug();
+            if prev_low || was_low || frames_exit <= 10 {
                 log::info!(
-                    "Brightness: state={:?}, should_iterate={}, was_low={}, frames_exit={}, is_live_preview={}",
-                    self.render_mode.state(), should_iterate, was_low, frames_exit, is_live_preview
+                    "Brightness: state={:?}, prev_low={}, was_low={}, frames_exit={}, is_live_preview={}",
+                    self.render_mode.state(), prev_low, was_low, frames_exit, is_live_preview
                 );
             }
             renderer.update_tonemap(&self.gpu.queue, final_config.tonemap_mode, final_config.use_curve,
@@ -1264,6 +1264,9 @@ impl App {
 
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
 
+        // Save current low-density state for next frame's brightness decision
+        // (matches ping-pong buffer timing - tonemap reads previous frame's buffer)
+        self.render_mode.end_frame();
 
         Ok(())
     }
