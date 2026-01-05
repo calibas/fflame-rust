@@ -25,17 +25,17 @@ pub fn render_settings_content(
     let config = config_manager.active_config().clone();
 
     // Section 1: File & Project
-    egui::CollapsingHeader::new("File & Project")
+    egui::CollapsingHeader::new(t!("settings.file_project"))
         .default_open(true)
         .show(ui, |ui| {
             // Preset selector
-            ui.label("Presets");
+            ui.label(t!("settings.presets"));
             let presets = preset_library.presets();
             let current_preset_name = presets.get(*current_preset_index)
                 .map(|p| p.flame.name.as_str())
                 .unwrap_or("Unknown");
 
-            egui::ComboBox::from_label("Load Preset")
+            egui::ComboBox::from_label(t!("settings.load_preset"))
                 .selected_text(current_preset_name)
                 .show_ui(ui, |ui| {
                     for (idx, preset) in presets.iter().enumerate() {
@@ -59,7 +59,7 @@ pub fn render_settings_content(
             ui.separator();
 
             // Config Import/Export
-            if ui.button("📁 Config Import/Export").clicked() {
+            if ui.button(t!("settings.config_import_export")).clicked() {
                 *open_config_dialog = true;
             }
 
@@ -68,17 +68,17 @@ pub fn render_settings_content(
     ui.separator();
 
     // Section 2: Rendering Controls
-    egui::CollapsingHeader::new("Rendering")
+    egui::CollapsingHeader::new(t!("settings.rendering"))
         .default_open(true)
         .show(ui, |ui| {
             // Pause/Reset buttons
             ui.horizontal(|ui| {
-                let button_text = if *paused { "▶ Resume" } else { "⏸ Pause" };
-                if ui.button(button_text).clicked() {
+                let button_text = if *paused { t!("settings.resume") } else { t!("settings.pause") };
+                if ui.button(button_text.as_ref()).clicked() {
                     *paused = !*paused;
                 }
 
-                if ui.button("🔄 Reset Accumulation").clicked() {
+                if ui.button(t!("settings.reset_accumulation").as_ref()).clicked() {
                     config_manager.request_reset();
                 }
             });
@@ -87,27 +87,28 @@ pub fn render_settings_content(
 
             // Max iterations control
             if let Some(renderer) = &flame_renderer {
-                ui.label("Max Iterations");
+                ui.label(t!("settings.max_iterations"));
 
                 // Show progress
                 let current = renderer.total_iterations();
                 let max = config.max_iterations;
                 if current >= max {
-                    ui.label("✅ Max iterations reached");
+                    ui.label(t!("settings.max_iterations_reached"));
                 } else {
                     let progress = current as f64 / max as f64;
-                    ui.label(format!("Progress: {} / {} ({:.1}%)",
-                        format_iterations(current),
-                        format_iterations(max),
-                        progress * 100.0
+                    ui.label(t!("settings.progress",
+                        current = format_iterations(current),
+                        max = format_iterations(max),
+                        percent = format!("{:.1}", progress * 100.0)
                     ));
                 }
 
                 // Max iterations slider (30M to 1T with logarithmic scale)
                 let mut log_value = (config.max_iterations as f64).log10();
                 if ui.add(egui::Slider::new(&mut log_value, 7.47713..=12.0)
-                    .text("Max Iterations")
+                    .text(t!("settings.max_iterations"))
                     .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64))))
+                    .on_hover_text(t!("settings.tooltip_max_iterations"))
                     .changed()
                 {
                     let new_max_iterations = 10f64.powf(log_value) as u64;
@@ -120,12 +121,8 @@ pub fn render_settings_content(
             // Render settings - Iterations per thread
             let mut temp_iterations = config_manager.system_settings().iterations_per_thread;
             let response = ui.add(egui::Slider::new(&mut temp_iterations, 1..=4096)
-                .text("Iterations per Thread"))
-                .on_hover_text(
-                    "GPU workgroup performance tuning.\n\
-                    Higher values = fewer dispatches, better GPU utilization.\n\
-                    Lower values = more frequent updates, smoother animation."
-                );
+                .text(t!("settings.iterations_per_thread")))
+                .on_hover_text(t!("settings.tooltip_iterations_per_thread"));
 
             if response.changed() {
                 let _ = config_manager.update_system_setting(
@@ -137,13 +134,8 @@ pub fn render_settings_content(
             // Burn-in iterations
             let mut temp_burn_in = config_manager.system_settings().burn_in;
             let response = ui.add(egui::Slider::new(&mut temp_burn_in, 0..=4096)
-                .text("Burn-in Iterations"))
-                .on_hover_text(
-                    "Skip first N iterations before plotting.\n\
-                    Allows points to 'settle' onto the attractor before contributing to the image.\n\
-                    Higher values = cleaner results but slower convergence.\n\
-                    0 = no burn-in (may show artifacts from random starting points)"
-                );
+                .text(t!("settings.burn_in")))
+                .on_hover_text(t!("settings.tooltip_burn_in"));
 
             if response.changed() {
                 let _ = config_manager.update_system_setting(
@@ -156,16 +148,8 @@ pub fn render_settings_content(
             let mut temp_histogram = config.histogram_color_scale;
             let response = ui.add(egui::Slider::new(&mut temp_histogram, 1.0..=100.0)
                 .logarithmic(true)
-                .text("Histogram Color Scale"))
-                .on_hover_text(
-                    "Controls color precision vs overflow protection in histogram accumulation.\n\
-                    Lower values prevent artifacts in zoomed-out scenes.\n\
-                    Higher values give better color accuracy but overflow sooner.\n\n\
-                    1-5: Maximum overflow protection (65535+ hits), very low precision\n\
-                    10: Balanced (6553 hits, 10 color levels) - recommended default\n\
-                    50: Higher precision (1310 hits, 50 color levels)\n\
-                    100: Maximum precision (655 hits, 100 color levels) - classic"
-                );
+                .text(t!("settings.histogram_color_scale")))
+                .on_hover_text(t!("settings.tooltip_histogram_color_scale"));
 
             if response.changed() {
                 let _ = config_manager.update_param(
@@ -182,13 +166,8 @@ pub fn render_settings_content(
             let mut temp_limit = config.target_iterations_per_pixel;
             let response = ui.add(egui::Slider::new(&mut temp_limit, 0..=1_000_000)
                 .logarithmic(true)
-                .text("Target Iterations Per Pixel"))
-                .on_hover_text(
-                    "Stop accumulating pixel after N hits (0 = disabled).\n\
-                    Prevents over-sampling dense areas.\n\
-                    Low values (5-100) for quick previews.\n\
-                    High values (100K-1M) for quality."
-                );
+                .text(t!("settings.target_iterations_per_pixel")))
+                .on_hover_text(t!("settings.tooltip_target_iterations_per_pixel"));
 
             if response.changed() {
                 let _ = config_manager.update_param(
@@ -203,12 +182,8 @@ pub fn render_settings_content(
 
             // Dynamic blend mode
             let mut temp_dynamic = config.use_dynamic_blend;
-            if ui.checkbox(&mut temp_dynamic, "Use Dynamic Blend")
-                .on_hover_text(
-                    "Exponential convergence (old behavior).\n\
-                    When enabled, blend rate adapts over time.\n\
-                    When disabled, uses fixed blend rate below."
-                )
+            if ui.checkbox(&mut temp_dynamic, t!("settings.use_dynamic_blend").as_ref())
+                .on_hover_text(t!("settings.tooltip_use_dynamic_blend"))
                 .changed()
             {
                 let _ = config_manager.update_param(
@@ -223,15 +198,8 @@ pub fn render_settings_content(
                 !config.use_dynamic_blend,
                 egui::Slider::new(&mut temp_blend, 0.001..=1.0)
                     .logarithmic(true)
-                    .text("Fixed Blend Rate")
-            ).on_hover_text(
-                "Controls how quickly new samples blend with history.\n\
-                Only active when Dynamic Blend is disabled.\n\n\
-                0.001 = Nearly permanent (very slow fade)\n\
-                0.01 = Very slow/smooth\n\
-                0.1 = Balanced (default)\n\
-                1.0 = Fast/flickery"
-            );
+                    .text(t!("settings.fixed_blend_rate"))
+            ).on_hover_text(t!("settings.tooltip_fixed_blend_rate"));
 
             if response.changed() {
                 let _ = config_manager.update_param(
@@ -250,7 +218,10 @@ pub fn render_settings_content(
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let mut vsync = config_manager.system_settings().vsync_enabled;
-                if ui.checkbox(&mut vsync, "Enable VSync").changed() {
+                if ui.checkbox(&mut vsync, t!("settings.enable_vsync").as_ref())
+                    .on_hover_text(t!("settings.tooltip_vsync"))
+                    .changed()
+                {
                     let _ = config_manager.update_system_setting(
                         crate::config::ConfigPath::SystemVsyncEnabled,
                         vsync.into()
@@ -260,7 +231,7 @@ pub fn render_settings_content(
                 // Only show target FPS when VSync is disabled
                 if !config_manager.system_settings().vsync_enabled {
                     ui.horizontal(|ui| {
-                        ui.label("Target FPS:");
+                        ui.label(t!("settings.target_fps"));
                         let mut target_fps = config_manager.system_settings().target_fps;
                         if ui.add(egui::Slider::new(&mut target_fps, 10.0..=1000.0).suffix(" FPS")).changed() {
                             let _ = config_manager.update_system_setting(
@@ -274,34 +245,34 @@ pub fn render_settings_content(
 
             #[cfg(target_arch = "wasm32")]
             {
-                ui.label("VSync: Always Enabled (WebGPU limitation)");
-                ui.add_enabled(false, egui::Checkbox::new(&mut true, "Enable VSync"))
-                    .on_disabled_hover_text("WebGPU only supports VSync mode (Fifo present mode)");
+                ui.label(t!("settings.vsync_wasm"));
+                ui.add_enabled(false, egui::Checkbox::new(&mut true, t!("settings.enable_vsync").as_ref()))
+                    .on_disabled_hover_text(t!("settings.tooltip_vsync_wasm"));
             }
         });
 
     ui.separator();
 
     // Section 3: Export
-    egui::CollapsingHeader::new("Export")
+    egui::CollapsingHeader::new(t!("settings.export_section"))
         .default_open(false)
         .show(ui, |ui| {
-            ui.label("PNG Export");
+            ui.label(t!("settings.png_export"));
 
-            if ui.button("Export with Background").clicked() {
+            if ui.button(t!("settings.export_with_background").as_ref()).clicked() {
                 *png_export_with_background = true;
             }
 
-            if ui.button("Export Transparent").clicked() {
+            if ui.button(t!("settings.export_transparent").as_ref()).clicked() {
                 *png_export_transparent = true;
             }
 
             ui.separator();
-            ui.checkbox(use_custom_export_size, "Use Custom Export Size");
+            ui.checkbox(use_custom_export_size, t!("settings.use_custom_size").as_ref());
 
             ui.add_enabled_ui(*use_custom_export_size, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Width:");
+                    ui.label(t!("settings.width"));
                     if ui.add(egui::DragValue::new(export_width).range(64..=8192).speed(10)).changed() {
                         let _ = config_manager.update_system_setting(
                             crate::config::ConfigPath::SystemExportWidth,
@@ -310,7 +281,7 @@ pub fn render_settings_content(
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Height:");
+                    ui.label(t!("settings.height"));
                     if ui.add(egui::DragValue::new(export_height).range(64..=8192).speed(10)).changed() {
                         let _ = config_manager.update_system_setting(
                             crate::config::ConfigPath::SystemExportHeight,
@@ -318,31 +289,31 @@ pub fn render_settings_content(
                         );
                     }
                 });
-                ui.label(format!("Export resolution: {}×{}", export_width, export_height));
+                ui.label(t!("settings.export_resolution", width = export_width, height = export_height));
             });
 
             if !*use_custom_export_size {
-                ui.label("Export will use current viewport size");
+                ui.label(t!("settings.export_viewport_size"));
             }
         });
 
     ui.separator();
 
     // Section 4: Preferences
-    egui::CollapsingHeader::new("Preferences")
+    egui::CollapsingHeader::new(t!("settings.preferences"))
         .default_open(false)
         .show(ui, |ui| {
             // Language selector moved to menu bar (globe icon 🌐)
-            ui.label("Language: Use the 🌐 globe icon in the menu bar");
+            ui.label(t!("settings.language_hint"));
 
             ui.separator();
 
             // Advanced settings
             let mut temp_deterministic = config.deterministic_rng;
-            if ui.checkbox(&mut temp_deterministic, "Deterministic RNG").on_hover_text(
-                "Use fixed random seed for reproducible rendering.\n\
-                Enable for testing/comparison, disable for varied output."
-            ).changed() {
+            if ui.checkbox(&mut temp_deterministic, t!("settings.deterministic_rng").as_ref())
+                .on_hover_text(t!("settings.tooltip_deterministic_rng"))
+                .changed()
+            {
                 let _ = config_manager.update_param(
                     ConfigPath::DeterministicRng,
                     temp_deterministic.into()
