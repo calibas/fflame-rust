@@ -1303,23 +1303,28 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/rng.wgsl"));
         shader.push('\n');
 
-        // 3. Standard utilities (MUST come before variations - defines get_param)
+        // 3. Add NUM_TRANSFORMS constant (required by utilities.wgsl even though export uses runtime version)
+        // Set to 32 (max transforms) - this is only used by select_transform_const which export doesn't call
+        shader.push_str("const NUM_TRANSFORMS: u32 = 32u;\n");
+        shader.push('\n');
+
+        // 4. Standard utilities (MUST come before variations - defines get_param)
         shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
         shader.push('\n');
 
-        // 4. Affine (3D)
+        // 5. Affine (3D)
         shader.push_str(include_str!("../shaders/core/affine_3d.wgsl"));
         shader.push('\n');
 
-        // 5. Core variations (3D) from embedded VariationDef WGSL (only active ones)
+        // 6. Core variations (3D) from embedded VariationDef WGSL (only active ones)
         shader.push_str(&self.generate_variation_code(&active_3d, true));
         shader.push('\n');
 
-        // 6. Generate apply_variations (no inlining for export shaders)
+        // 7. Generate apply_variations (no inlining for export shaders)
         shader.push_str(&self.build_apply_variations_3d(&active_3d, None));
         shader.push('\n');
 
-        // 7. Export main
+        // 8. Export main
         shader.push_str(include_str!("../shaders/core/main_3d_export.wgsl"));
 
         shader

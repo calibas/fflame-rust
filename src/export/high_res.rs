@@ -433,9 +433,10 @@ impl HighResExporter {
         });
 
         // ===== Create tonemap pipeline for GPU tonemapping =====
+        // Use export-specific shader without path buffer/palette bindings (only 5 bindings: 0-4)
         let tonemap_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Export Tonemap Shader"),
-            source: ShaderSource::Wgsl(include_str!("../../shaders/tonemap.wgsl").into()),
+            source: ShaderSource::Wgsl(include_str!("../../shaders/tonemap_export.wgsl").into()),
         });
 
         // Tonemap bind group layout (matches FlamePipelines)
