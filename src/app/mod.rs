@@ -1130,14 +1130,6 @@ impl App {
             self.render_mode.update_brightness_state(should_iterate);
             let is_live_preview = self.render_mode.needs_brightness_boost();
 
-            // Debug logging for brightness transitions
-            let (prev_low, was_low, frames_exit, _) = self.render_mode.brightness_debug();
-            if prev_low || was_low || frames_exit <= 10 {
-                log::info!(
-                    "Brightness: state={:?}, prev_low={}, was_low={}, frames_exit={}, is_live_preview={}",
-                    self.render_mode.state(), prev_low, was_low, frames_exit, is_live_preview
-                );
-            }
             renderer.update_tonemap(&self.gpu.queue, final_config.tonemap_mode, final_config.use_curve,
                 final_config.exposure, final_config.gamma, final_config.gamma_threshold, final_config.brightness,
                 final_config.vibrancy, final_config.saturation, final_config.hue_shift,

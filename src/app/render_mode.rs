@@ -67,9 +67,6 @@ pub struct RenderModeFSM {
     pre_animation_snapshot: Option<FractalConfig>,
     /// Config snapshot taken when entering Overwrite mode (if needed)
     pre_overwrite_snapshot: Option<FractalConfig>,
-    /// Frames since exiting a low-density mode (Animating or Overwrite)
-    /// Used to continue brightness boost while buffer rebuilds
-    frames_since_low_density_exit: u32,
     /// Whether we were in a low-density mode before transitioning to Normal
     was_in_low_density_mode: bool,
     /// Whether the PREVIOUS frame was in low-density mode
@@ -220,7 +217,7 @@ impl RenderModeFSM {
     /// The `is_iterating` parameter indicates if normal accumulation is happening.
     ///
     /// IMPORTANT: `prev_frame_low_density` handles the ENTRY case (ping-pong timing).
-    /// `was_in_low_density_mode` handles the EXIT case (8-frame rebuild period).
+    /// `was_in_low_density_mode` handles the EXIT case.
     pub fn update_brightness_state(&mut self, is_iterating: bool) {
         let is_low_density_now = self.should_use_overwrite();
 
@@ -229,15 +226,10 @@ impl RenderModeFSM {
         if !is_low_density_now && self.prev_frame_low_density {
             // Just exited low-density mode this frame
             self.was_in_low_density_mode = true;
-            self.frames_since_low_density_exit = 0;
         } else if self.was_in_low_density_mode {
-            // Already in exit countdown - count frames until buffer has enough density
+            // Turn off brightness boost after iteration begins
             if is_iterating {
-                self.frames_since_low_density_exit += 1;
-                // After ~8 frames, buffer has enough density (matches 8x boost factor)
-                if self.frames_since_low_density_exit > 8 {
-                    self.was_in_low_density_mode = false;
-                }
+                self.was_in_low_density_mode = false;
             }
             // If not iterating (stopped at max_iterations), keep boost until we start iterating again
         }
@@ -264,8 +256,8 @@ impl RenderModeFSM {
 
     /// Get debug info for brightness state
     /// Returns (prev_frame_low_density, was_in_low_density_mode, frames_since_exit, needs_boost)
-    pub fn brightness_debug(&self) -> (bool, bool, u32, bool) {
-        (self.prev_frame_low_density, self.was_in_low_density_mode, self.frames_since_low_density_exit, self.needs_brightness_boost())
+    pub fn brightness_debug(&self) -> (bool, bool, bool) {
+        (self.prev_frame_low_density, self.was_in_low_density_mode, self.needs_brightness_boost())
     }
 }
 
