@@ -174,7 +174,7 @@ impl App {
 
     /// High-resolution CPU export using HighResExporter (same system as CLI)
     #[cfg(not(target_arch = "wasm32"))]
-    fn export_high_res_cpu(&self, _transparent: bool, config: FractalConfig) {
+    fn export_high_res_cpu(&self, transparent: bool, config: FractalConfig) {
         use crate::export::{HighResExporter, CliExportProgress};
         use std::time::Instant;
 
@@ -195,7 +195,7 @@ impl App {
 
         // Run export with CLI-style progress (prints to console)
         let mut progress = CliExportProgress;
-        let rgba_result = pollster::block_on(exporter.export(&config, config.max_iterations, &mut progress));
+        let rgba_result = pollster::block_on(exporter.export(&config, config.max_iterations, transparent, &mut progress));
 
         let rgba_data = match rgba_result {
             Ok(data) => data,
