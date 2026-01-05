@@ -322,9 +322,15 @@ tonemap:
 # History Panel
 history:
   title: "Undo History"
+  heading: "History"
   current: "Current"
   jump_to: "Jump to this state"
   clear: "Clear History"
+  initial_state: "Initial state"
+  undo: "Undo"
+  redo: "Redo"
+  total_entries: "Total entries: %{count} (including initial state)"
+  current_position: "Current position: #%{position}"
 
 # Triangle Editor Panel
 triangle_editor:
