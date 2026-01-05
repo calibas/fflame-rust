@@ -77,7 +77,7 @@ impl App {
         if let Some(ref json) = ui_response.config_import_requested {
             match FractalConfig::from_json(json) {
                 Ok(config) => {
-                    if let Err(e) = self.load_config_with_undo(config, "Import Config".to_string()) {
+                    if let Err(e) = self.load_config_with_undo(config, "history.action.import_config".to_string()) {
                         eprintln!("Failed to import config: {}", e);
                     }
                 }
@@ -185,7 +185,7 @@ impl App {
             }
 
             // Load the random config with undo support
-            if let Err(e) = self.load_config_with_undo(new_config, "Random Flame".to_string()) {
+            if let Err(e) = self.load_config_with_undo(new_config, "history.action.random_flame".to_string()) {
                 eprintln!("Failed to load random flame: {}", e);
             }
         }
@@ -390,7 +390,7 @@ impl App {
                             } else if configs.len() == 1 {
                                 // Single config: load directly
                                 let config = configs.into_iter().next().unwrap();
-                                if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
+                                if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string()) {
                                     eprintln!("Failed to load config: {}", e);
                                 } else {
                                     println!("Config loaded from: {}", path.display());
@@ -408,7 +408,7 @@ impl App {
 
                                 // Load the first config
                                 let first_config = configs.into_iter().next().unwrap();
-                                if let Err(e) = self.load_config_with_undo(first_config, "Load Config".to_string()) {
+                                if let Err(e) = self.load_config_with_undo(first_config, "history.action.load_config".to_string()) {
                                     eprintln!("Failed to load config: {}", e);
                                 }
 
@@ -450,7 +450,7 @@ impl App {
                                     } else if configs.len() == 1 {
                                         // Single flame: import directly
                                         let config = configs.into_iter().next().unwrap();
-                                        if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
+                                        if let Err(e) = self.load_config_with_undo(config, "history.action.import_apophysis".to_string()) {
                                             eprintln!("Failed to import flame: {}", e);
                                         } else {
                                             println!("Imported Apophysis flame from: {}", path.display());
@@ -468,7 +468,7 @@ impl App {
 
                                         // Load the first config
                                         let first_config = configs.into_iter().next().unwrap();
-                                        if let Err(e) = self.load_config_with_undo(first_config, "Import Apophysis Flame".to_string()) {
+                                        if let Err(e) = self.load_config_with_undo(first_config, "history.action.import_apophysis".to_string()) {
                                             eprintln!("Failed to import flame: {}", e);
                                         }
 
@@ -548,7 +548,7 @@ impl App {
     /// Handle preset selection from Preset Library panel
     fn handle_preset_selection(&mut self, ui_response: &UiResponse) {
         if let Some(ref config) = ui_response.selected_preset_config {
-            if let Err(e) = self.load_config_with_undo(config.clone(), "Load Preset".to_string()) {
+            if let Err(e) = self.load_config_with_undo(config.clone(), "history.action.load_preset".to_string()) {
                 log::error!("Failed to load preset: {}", e);
             } else {
                 log::info!("Preset loaded successfully");
@@ -567,7 +567,7 @@ impl App {
             }) {
                 match serde_json::from_str::<FractalConfig>(&json) {
                     Ok(config) => {
-                        if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
+                        if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string()) {
                             log::error!("Failed to load config: {}", e);
                         } else {
                             log::info!("Config loaded successfully");
@@ -586,7 +586,7 @@ impl App {
                 match crate::apophysis_xml::parse_flame_xml(&xml) {
                     Ok(configs) => {
                         if let Some(config) = configs.into_iter().next() {
-                            if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
+                            if let Err(e) = self.load_config_with_undo(config, "history.action.import_apophysis".to_string()) {
                                 log::error!("Failed to import Apophysis flame: {}", e);
                             } else {
                                 log::info!("Apophysis flame imported successfully");
@@ -610,7 +610,7 @@ impl App {
                         // If animation has embedded config, load it first
                         if let Some(ref config) = animation.base_config {
                             log::info!("Animation '{}' has embedded config, loading it", animation.name);
-                            let description = format!("Load Animation: {}", animation.name);
+                            let description = format!("history.action.load_animation_config|name={}", animation.name);
                             if let Err(e) = self.load_config_with_undo(config.clone(), description) {
                                 log::error!("Failed to load animation's embedded config: {}", e);
                             }

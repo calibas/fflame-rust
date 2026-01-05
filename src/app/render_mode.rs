@@ -152,7 +152,7 @@ impl RenderModeFSM {
             TransitionResult::CreateUndo {
                 before,
                 after: current_config.clone(),
-                description: "Animation".to_string(),
+                description: "history.action.animation_exit".to_string(),
             }
         } else {
             log::warn!("RenderMode: Exited Animating but no pre-animation snapshot found");

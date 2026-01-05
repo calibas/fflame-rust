@@ -1,6 +1,38 @@
 use crate::config::ConfigManager;
 use rust_i18n::t;
 
+/// Translate a history description
+///
+/// Descriptions can be:
+/// - Simple i18n keys: `history.action.reset_view`
+/// - i18n keys with parameters: `history.action.translate_up|name=Transform 1`
+/// - Fallback: returned as-is if not a valid i18n key
+fn translate_description(description: &str) -> String {
+    // Check if this looks like an i18n key (starts with "history.")
+    if description.starts_with("history.") {
+        // Check for parameters (pipe-separated: key|param1=value1|param2=value2)
+        if let Some(pipe_pos) = description.find('|') {
+            let key = &description[..pipe_pos];
+            let params_str = &description[pipe_pos + 1..];
+
+            // Parse the "name" parameter (most common case)
+            // Format: key|name=value
+            if let Some(name_value) = params_str.strip_prefix("name=") {
+                t!(key, name = name_value).to_string()
+            } else {
+                // Unknown parameter format - just translate the key
+                t!(key).to_string()
+            }
+        } else {
+            // Simple key without parameters
+            t!(description).to_string()
+        }
+    } else {
+        // Not an i18n key - return as-is (backward compatibility with old descriptions)
+        description.to_string()
+    }
+}
+
 /// Render undo/redo history content (for docking panels)
 pub fn render_undo_history_content(
     ui: &mut egui::Ui,
@@ -66,7 +98,8 @@ pub fn render_undo_history_content(
                     };
 
                     // Entry number (1-indexed, including initial state as #1)
-                    let label = format!("{}. {}", i + 2, change.description);
+                    let translated = translate_description(&change.description);
+                    let label = format!("{}. {}", i + 2, translated);
 
                     if ui.selectable_label(false, egui::RichText::new(label).color(text_color)).clicked() {
                         // For now, just do one undo/redo
