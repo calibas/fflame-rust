@@ -665,6 +665,10 @@ impl App {
             // Sync flame and trigger refresh
             self.flame = self.config_manager.active_config().flame.clone();
             self.use_overwrite_next_frame = true;
+
+            // Always reset accumulation when seeking - ensures histogram is cleared
+            // even if animated values didn't change (e.g., scrubbing to same position)
+            self.config_manager.request_reset();
         }
     }
 
