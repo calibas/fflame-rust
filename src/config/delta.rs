@@ -263,6 +263,180 @@ impl Display for ConfigPath {
     }
 }
 
+/// Represents an i18n key with optional parameters for translation
+#[derive(Debug, Clone)]
+pub struct I18nKey {
+    /// The translation key (e.g., "history.param.zoom")
+    pub key: String,
+    /// Optional parameters for interpolation (e.g., index, variation name)
+    pub params: Vec<(String, String)>,
+}
+
+impl I18nKey {
+    /// Create a simple key with no parameters
+    pub fn simple(key: &str) -> Self {
+        Self {
+            key: key.to_string(),
+            params: Vec::new(),
+        }
+    }
+
+    /// Create a key with parameters
+    pub fn with_params(key: &str, params: Vec<(&str, String)>) -> Self {
+        Self {
+            key: key.to_string(),
+            params: params.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        }
+    }
+}
+
+impl ConfigPath {
+    /// Convert to an i18n key for translation
+    /// Returns an I18nKey struct with the key and any parameters needed for interpolation
+    pub fn to_i18n_key(&self) -> I18nKey {
+        match self {
+            // View
+            ConfigPath::Zoom => I18nKey::simple("history.param.zoom"),
+            ConfigPath::Pan => I18nKey::simple("history.param.pan"),
+            ConfigPath::PanX => I18nKey::simple("history.param.pan_x"),
+            ConfigPath::PanY => I18nKey::simple("history.param.pan_y"),
+            ConfigPath::Rotation => I18nKey::simple("history.param.rotation"),
+            ConfigPath::CameraRotationX => I18nKey::simple("history.param.camera_pitch"),
+            ConfigPath::CameraRotationY => I18nKey::simple("history.param.camera_yaw"),
+            ConfigPath::CameraZ => I18nKey::simple("history.param.camera_z"),
+
+            // Tone mapping
+            ConfigPath::Exposure => I18nKey::simple("history.param.exposure"),
+            ConfigPath::Gamma => I18nKey::simple("history.param.gamma"),
+            ConfigPath::GammaThreshold => I18nKey::simple("history.param.gamma_threshold"),
+            ConfigPath::Brightness => I18nKey::simple("history.param.brightness"),
+            ConfigPath::Vibrancy => I18nKey::simple("history.param.vibrancy"),
+            ConfigPath::Saturation => I18nKey::simple("history.param.saturation"),
+            ConfigPath::HueShift => I18nKey::simple("history.param.hue_shift"),
+            ConfigPath::AlphaBlendLow => I18nKey::simple("history.param.alpha_blend_low"),
+            ConfigPath::AlphaBlendHigh => I18nKey::simple("history.param.alpha_blend_high"),
+            ConfigPath::DensityScale => I18nKey::simple("history.param.density_scale"),
+            ConfigPath::TonemapMode => I18nKey::simple("history.param.tonemap_mode"),
+            ConfigPath::TonemapCurve => I18nKey::simple("history.param.tone_curve"),
+            ConfigPath::UseCurve => I18nKey::simple("history.param.use_tone_curve"),
+
+            // Color
+            ConfigPath::ColorMode => I18nKey::simple("history.param.color_mode"),
+            ConfigPath::PathMapStyle => I18nKey::simple("history.param.pathmap_style"),
+            ConfigPath::PathCaptureMode => I18nKey::simple("history.param.pathmap_capture_mode"),
+            ConfigPath::PathTrackingMode => I18nKey::simple("history.param.pathmap_tracking_mode"),
+            ConfigPath::PaletteIndex => I18nKey::simple("history.param.palette"),
+            ConfigPath::Palette => I18nKey::simple("history.param.palette_data"),
+            ConfigPath::PaletteRotation => I18nKey::simple("history.param.palette_rotation"),
+            ConfigPath::SpeedFactor => I18nKey::simple("history.param.speed_blend_factor"),
+            ConfigPath::BackgroundColor => I18nKey::simple("history.param.background_color"),
+            ConfigPath::BackgroundColorR => I18nKey::simple("history.param.background_red"),
+            ConfigPath::BackgroundColorG => I18nKey::simple("history.param.background_green"),
+            ConfigPath::BackgroundColorB => I18nKey::simple("history.param.background_blue"),
+
+            // Rendering
+            ConfigPath::HistogramColorScale => I18nKey::simple("history.param.histogram_color_scale"),
+            ConfigPath::BlendFactor => I18nKey::simple("history.param.blend_factor"),
+            ConfigPath::UseDynamicBlend => I18nKey::simple("history.param.use_dynamic_blend"),
+            ConfigPath::TargetIterationsPerPixel => I18nKey::simple("history.param.target_iterations_per_pixel"),
+            ConfigPath::MaxIterations => I18nKey::simple("history.param.max_iterations"),
+            ConfigPath::DeterministicRng => I18nKey::simple("history.param.deterministic_rng"),
+
+            // Transforms
+            ConfigPath::TransformCount => I18nKey::simple("history.param.transform_count"),
+            ConfigPath::TransformWeight { index } => I18nKey::with_params(
+                "history.param.transform_weight",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformColor { index } => I18nKey::with_params(
+                "history.param.transform_color",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformColorSpeed { index } => I18nKey::with_params(
+                "history.param.transform_color_speed",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformOpacity { index } => I18nKey::with_params(
+                "history.param.transform_opacity",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformAffine { index, param } => I18nKey::with_params(
+                "history.param.transform_affine",
+                vec![
+                    ("index", (index + 1).to_string()),
+                    ("param", format!("{:?}", param)),
+                ],
+            ),
+            ConfigPath::TransformVariation { index, variation } => I18nKey::with_params(
+                "history.param.transform_variation",
+                vec![
+                    ("index", (index + 1).to_string()),
+                    ("variation", variation.clone()),
+                ],
+            ),
+            ConfigPath::TransformVariationParam { index, variation, param } => I18nKey::with_params(
+                "history.param.transform_variation_param",
+                vec![
+                    ("index", (index + 1).to_string()),
+                    ("variation", variation.clone()),
+                    ("param", param.clone()),
+                ],
+            ),
+            ConfigPath::TransformOriginX { index } => I18nKey::with_params(
+                "history.param.transform_origin_x",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformOriginY { index } => I18nKey::with_params(
+                "history.param.transform_origin_y",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformRotation { index } => I18nKey::with_params(
+                "history.param.transform_rotation",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformScale { index } => I18nKey::with_params(
+                "history.param.transform_scale",
+                vec![("index", (index + 1).to_string())],
+            ),
+
+            // Final Transform
+            ConfigPath::FinalTransformEnabled => I18nKey::simple("history.param.final_transform_enabled"),
+            ConfigPath::FinalTransformAffine { param } => I18nKey::with_params(
+                "history.param.final_transform_affine",
+                vec![("param", format!("{:?}", param))],
+            ),
+            ConfigPath::FinalTransformVariation { variation } => I18nKey::with_params(
+                "history.param.final_transform_variation",
+                vec![("variation", variation.clone())],
+            ),
+            ConfigPath::FinalTransformVariationParam { variation, param } => I18nKey::with_params(
+                "history.param.final_transform_variation_param",
+                vec![
+                    ("variation", variation.clone()),
+                    ("param", param.clone()),
+                ],
+            ),
+            ConfigPath::FinalTransformOriginX => I18nKey::simple("history.param.final_transform_origin_x"),
+            ConfigPath::FinalTransformOriginY => I18nKey::simple("history.param.final_transform_origin_y"),
+            ConfigPath::FinalTransformRotation => I18nKey::simple("history.param.final_transform_rotation"),
+            ConfigPath::FinalTransformScale => I18nKey::simple("history.param.final_transform_scale"),
+
+            // Flame
+            ConfigPath::RenderMode => I18nKey::simple("history.param.render_mode"),
+            ConfigPath::PerspectiveStrength => I18nKey::simple("history.param.perspective_strength"),
+
+            // System Settings
+            ConfigPath::SystemIterationsPerThread => I18nKey::simple("history.param.system_iterations_per_thread"),
+            ConfigPath::SystemBurnIn => I18nKey::simple("history.param.system_burn_in"),
+            ConfigPath::SystemVsyncEnabled => I18nKey::simple("history.param.system_vsync_enabled"),
+            ConfigPath::SystemTargetFps => I18nKey::simple("history.param.system_target_fps"),
+            ConfigPath::SystemExportWidth => I18nKey::simple("history.param.system_export_width"),
+            ConfigPath::SystemExportHeight => I18nKey::simple("history.param.system_export_height"),
+            ConfigPath::SystemLanguage => I18nKey::simple("history.param.system_language"),
+        }
+    }
+}
+
 /// A value that can be stored in FractalConfig
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfigValue {

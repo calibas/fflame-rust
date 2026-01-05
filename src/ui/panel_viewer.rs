@@ -555,7 +555,7 @@ impl<'a> PanelViewer<'a> {
                             (crate::config::ConfigPath::Zoom, new_zoom.into()),
                             (crate::config::ConfigPath::Pan, (new_pan_x, new_pan_y).into()),
                         ],
-                        "Zoom In (Wheel)".to_string()
+                        "history.action.wheel_zoom".to_string()
                     );
                 } else {
                     // No mouse position, zoom to center

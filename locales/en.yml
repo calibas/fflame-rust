@@ -332,6 +332,119 @@ history:
   total_entries: "Total entries: %{count} (including initial state)"
   current_position: "Current position: #%{position}"
 
+  # Parameter names (for history descriptions)
+  # These are keys used by ConfigPath::to_i18n_key()
+  param:
+    # View
+    zoom: "Zoom"
+    pan: "Pan"
+    pan_x: "Pan X"
+    pan_y: "Pan Y"
+    rotation: "Rotation"
+    camera_pitch: "Camera Pitch"
+    camera_yaw: "Camera Yaw"
+    camera_z: "Camera Z"
+
+    # Tone mapping
+    exposure: "Exposure"
+    gamma: "Gamma"
+    gamma_threshold: "Gamma Threshold"
+    brightness: "Brightness"
+    vibrancy: "Vibrancy"
+    saturation: "Saturation"
+    hue_shift: "Hue Shift"
+    alpha_blend_low: "Alpha Blend Low"
+    alpha_blend_high: "Alpha Blend High"
+    density_scale: "Density Scale"
+    tonemap_mode: "Tonemap Mode"
+    tone_curve: "Tone Curve"
+    use_tone_curve: "Use Tone Curve"
+
+    # Color
+    color_mode: "Color Mode"
+    pathmap_style: "PathMap Style"
+    pathmap_capture_mode: "PathMap Capture Mode"
+    pathmap_tracking_mode: "PathMap Tracking Mode"
+    palette: "Palette"
+    palette_data: "Palette Data"
+    palette_rotation: "Palette Rotation"
+    speed_blend_factor: "Speed Blend Factor"
+    background_color: "Background Color"
+    background_red: "Background Red"
+    background_green: "Background Green"
+    background_blue: "Background Blue"
+
+    # Rendering
+    histogram_color_scale: "Histogram Color Scale"
+    blend_factor: "Blend Factor"
+    use_dynamic_blend: "Use Dynamic Blend"
+    target_iterations_per_pixel: "Target Iterations Per Pixel"
+    max_iterations: "Max Iterations"
+    deterministic_rng: "Deterministic RNG"
+
+    # Transforms
+    transform_count: "Transform Count"
+    transform_weight: "Transform %{index} → Weight"
+    transform_color: "Transform %{index} → Color"
+    transform_color_speed: "Transform %{index} → Color Speed"
+    transform_opacity: "Transform %{index} → Opacity"
+    transform_affine: "Transform %{index} → Affine %{param}"
+    transform_variation: "Transform %{index} → %{variation} variation"
+    transform_variation_param: "Transform %{index} → %{variation} → %{param}"
+    transform_origin_x: "Transform %{index} → Origin X"
+    transform_origin_y: "Transform %{index} → Origin Y"
+    transform_rotation: "Transform %{index} → Rotation"
+    transform_scale: "Transform %{index} → Scale"
+
+    # Final Transform
+    final_transform_enabled: "Final Transform → Enabled"
+    final_transform_affine: "Final Transform → Affine %{param}"
+    final_transform_variation: "Final Transform → %{variation} variation"
+    final_transform_variation_param: "Final Transform → %{variation} → %{param}"
+    final_transform_origin_x: "Final Transform → Origin X"
+    final_transform_origin_y: "Final Transform → Origin Y"
+    final_transform_rotation: "Final Transform → Rotation"
+    final_transform_scale: "Final Transform → Scale"
+
+    # Flame
+    render_mode: "Render Mode"
+    perspective_strength: "Perspective Strength"
+
+    # System Settings
+    system_iterations_per_thread: "System: Iterations Per Thread"
+    system_burn_in: "System: Burn-in Iterations"
+    system_vsync_enabled: "System: VSync Enabled"
+    system_target_fps: "System: Target FPS"
+    system_export_width: "System: Export Width"
+    system_export_height: "System: Export Height"
+    system_language: "System: Language"
+
+  # Action descriptions (for batch updates and load operations)
+  action:
+    reset_view: "Reset View"
+    triangle_edit_move: "Triangle Edit (Move Points)"
+    triangle_edit_translate: "Triangle Edit (Translate)"
+    triangle_edit_rotate: "Triangle Edit (Rotate)"
+    triangle_edit_scale: "Triangle Edit (Scale)"
+    triangle_edit_coords: "Edit triangle coordinates (%{name})"
+    triangle_reset_identity: "Reset to identity (%{name})"
+    translate_up: "Translate up (%{name})"
+    translate_down: "Translate down (%{name})"
+    translate_left: "Translate left (%{name})"
+    translate_right: "Translate right (%{name})"
+    rotate_cw: "Rotate CW (%{name})"
+    rotate_ccw: "Rotate CCW (%{name})"
+    scale_up: "Scale up (%{name})"
+    scale_down: "Scale down (%{name})"
+    import_config: "Import Config"
+    load_config: "Load Config"
+    load_preset: "Load Preset"
+    random_flame: "Random Flame"
+    import_apophysis: "Import Apophysis Flame"
+    load_animation_config: "Load Animation Config"
+    animation_exit: "Animation Exit"
+    wheel_zoom: "Wheel Zoom"
+
 # Triangle Editor Panel
 triangle_editor:
   title: "Triangle Editor"

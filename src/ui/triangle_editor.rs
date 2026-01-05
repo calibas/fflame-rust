@@ -314,7 +314,7 @@ fn render_triangle_editor_core(
                                 // Apply triangle changes via update_batch
                                 transform.from_triangle_apophysis(o, x, y);
                                 let changes = make_affine_changes(transform);
-                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Move Points)".to_string()) {
+                                if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_move".to_string()) {
                                     // Sync transform from active_config for live preview
                                     sync_transform(transform, config_manager);
                                     max_update = max_update.max(update_type);
@@ -352,7 +352,7 @@ fn render_triangle_editor_core(
                                 // Apply triangle changes via update_batch
                                 transform.from_triangle_apophysis(o, x, y);
                                 let changes = make_affine_changes(transform);
-                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Translate)".to_string()) {
+                                if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_translate".to_string()) {
                                     sync_transform(transform, config_manager);
                                     max_update = max_update.max(update_type);
                                 }
@@ -405,7 +405,7 @@ fn render_triangle_editor_core(
                                 // Apply triangle changes via update_batch
                                 transform.from_triangle_apophysis(o, x, y);
                                 let changes = make_affine_changes(transform);
-                                if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Rotate)".to_string()) {
+                                if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_rotate".to_string()) {
                                     sync_transform(transform, config_manager);
                                     max_update = max_update.max(update_type);
                                 }
@@ -466,7 +466,7 @@ fn render_triangle_editor_core(
                                         // Apply triangle changes via update_batch
                                         transform.from_triangle_apophysis(o, x, y);
                                         let changes = make_affine_changes(transform);
-                                        if let Ok(update_type) = config_manager.update_batch(changes, "Triangle Edit (Scale)".to_string()) {
+                                        if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_scale".to_string()) {
                                             sync_transform(transform, config_manager);
                                             max_update = max_update.max(update_type);
                                         }
@@ -749,7 +749,7 @@ fn render_triangle_editor_core(
                                 x_new[1] += 0.1;
                                 y_new[1] += 0.1;
                                 if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("Translate up ({})", transform_name)) {
+                                    &format!("history.action.translate_up|name={}", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -761,7 +761,7 @@ fn render_triangle_editor_core(
                                 x_new[0] -= 0.1;
                                 y_new[0] -= 0.1;
                                 if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("Translate left ({})", transform_name)) {
+                                    &format!("history.action.translate_left|name={}", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -771,7 +771,7 @@ fn render_triangle_editor_core(
                                 x_new[1] -= 0.1;
                                 y_new[1] -= 0.1;
                                 if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("Translate down ({})", transform_name)) {
+                                    &format!("history.action.translate_down|name={}", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -781,7 +781,7 @@ fn render_triangle_editor_core(
                                 x_new[0] += 0.1;
                                 y_new[0] += 0.1;
                                 if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("Translate right ({})", transform_name)) {
+                                    &format!("history.action.translate_right|name={}", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -810,7 +810,7 @@ fn render_triangle_editor_core(
                                 let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
 
                                 if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("Rotate CW ({})", transform_name)) {
+                                    &format!("history.action.rotate_cw|name={}", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -833,7 +833,7 @@ fn render_triangle_editor_core(
                                 let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
 
                                 if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("Rotate CCW ({})", transform_name)) {
+                                    &format!("history.action.rotate_ccw|name={}", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -853,7 +853,7 @@ fn render_triangle_editor_core(
                                 let y_new = [o_curr[0] + y_vec[0] * 1.1, o_curr[1] + y_vec[1] * 1.1];
 
                                 if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("Scale up ({})", transform_name)) {
+                                    &format!("history.action.scale_up|name={}", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -869,7 +869,7 @@ fn render_triangle_editor_core(
                                 let y_new = [o_curr[0] + y_vec[0] * 0.9, o_curr[1] + y_vec[1] * 0.9];
 
                                 if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("Scale down ({})", transform_name)) {
+                                    &format!("history.action.scale_down|name={}", transform_name)) {
                                     max_update = max_update.max(update);
                                 }
                             }
@@ -888,7 +888,7 @@ fn render_triangle_editor_core(
                     // Use lazy=true while dragging
                     if let Ok(update) = config_manager.update_batch(
                         changes,
-                        format!("Edit triangle coordinates ({})", transform_name)
+                        format!("history.action.triangle_edit_coords|name={}", transform_name)
                     ) {
                         max_update = max_update.max(update);
                     }
@@ -1033,7 +1033,7 @@ fn render_triangle_editor_core(
                         let changes = make_affine_changes(&identity_transform);
                         if let Ok(update) = config_manager.update_batch(
                             changes,
-                            format!("Reset to identity ({})", transform_name)
+                            format!("history.action.triangle_reset_identity|name={}", transform_name)
                         ) {
                             max_update = max_update.max(update);
                         }

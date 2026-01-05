@@ -242,7 +242,7 @@ pub fn render_view_content(
                 (ConfigPath::CameraRotationY, 0.0.into()),
                 (ConfigPath::CameraZ, 0.0.into()),
             ],
-            "Reset View".to_string()
+            "history.action.reset_view".to_string()
         );
     }
 }
