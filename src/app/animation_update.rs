@@ -122,6 +122,9 @@ impl App {
                 }
                 self.flame = base_config.flame.clone();
                 self.use_overwrite_next_frame = true;
+
+                // Reset accumulation to start fresh (same as Reset Accumulation button)
+                self.config_manager.request_reset();
             }
         }
     }
