@@ -184,6 +184,8 @@ view:
   tooltip_pan: "Move the fractal view left/right or up/down."
   tooltip_rotation: "Rotate the entire view."
   tooltip_render_mode: "2D = classic flat rendering.\n3D = depth-aware with perspective."
+  tooltip_mode_2d: "Classic flat rendering.\nAll points projected onto a 2D plane."
+  tooltip_mode_3d: "Depth-aware rendering with perspective.\nEnables 3D variations and camera rotation."
   tooltip_perspective: "Strength of 3D perspective effect.\n0 = orthographic, higher = more depth."
   tooltip_camera_pitch: "3D camera rotation (up/down).\nTilts the view vertically."
   tooltip_camera_yaw: "3D camera rotation (left/right).\nRotates the view horizontally."
@@ -323,6 +325,75 @@ history:
   current: "Current"
   jump_to: "Jump to this state"
   clear: "Clear History"
+
+# Triangle Editor Panel
+triangle_editor:
+  title: "Triangle Editor"
+  heading: "Affine Transform Visualizer"
+  description: "Displays the coordinate system for each transform as triangles (O, X, Y)"
+  no_transforms: "No transforms available"
+
+  # Transform selector
+  transform_label: "Transform:"
+  transform_n: "Transform %{n}"
+  transform_final: "Transform [Final]"
+
+  # Mouse modes
+  mode_label: "Mode:"
+  mode_rotate: "Rotate"
+  mode_translate: "Translate"
+  mode_scale: "Scale"
+  mode_move_points: "Move Points"
+
+  # Mode descriptions
+  mode_desc_move_points: "Click and drag O, X, or Y points individually"
+  mode_desc_translate: "Click and drag anywhere to move the entire triangle"
+  mode_desc_rotate: "Click and drag to rotate the triangle around O"
+  mode_desc_scale: "Click and drag along perpendicular axis to X-Y line to scale"
+
+  # Coordinates section
+  triangle_coords: "Triangle Coordinates (%{name}):"
+  point_x: "X:"
+  point_y: "Y:"
+  point_o: "O:"
+  coord_x: "x:"
+  coord_y: "y:"
+
+  # Quick actions
+  quick_actions: "Quick Actions:"
+  rotate_cw: "Rotate CW"
+  rotate_ccw: "Rotate CCW"
+  scale_up: "Scale Up"
+  scale_down: "Scale Down"
+
+  # Affine coefficients
+  affine_coefficients: "Affine Coefficients:"
+  reset_identity: "Reset to Identity"
+
+  # Tooltips
+  tooltip_transform_selector: "Choose which transform to edit.\nEach transform defines an affine mapping."
+  tooltip_mode_rotate: "Drag to rotate the triangle around origin (O).\nRotation affects the a, b, d, e coefficients."
+  tooltip_mode_translate: "Drag to move the entire triangle.\nTranslation affects c and f coefficients."
+  tooltip_mode_scale: "Drag perpendicular to X-Y line to scale.\nScaling affects a, b, d, e coefficients."
+  tooltip_mode_move_points: "Drag individual O, X, or Y points.\nDirectly edit the triangle shape."
+  tooltip_point_x: "X axis point. Defines the direction and scale\nof the horizontal axis after transformation."
+  tooltip_point_y: "Y axis point. Defines the direction and scale\nof the vertical axis after transformation."
+  tooltip_point_o: "Origin point. The translation (offset)\napplied by this transform."
+  tooltip_translate_up: "Move triangle up by 0.1 units"
+  tooltip_translate_down: "Move triangle down by 0.1 units"
+  tooltip_translate_left: "Move triangle left by 0.1 units"
+  tooltip_translate_right: "Move triangle right by 0.1 units"
+  tooltip_rotate_cw: "Rotate triangle 15° clockwise around origin"
+  tooltip_rotate_ccw: "Rotate triangle 15° counter-clockwise around origin"
+  tooltip_scale_up: "Scale triangle up by 10% from origin"
+  tooltip_scale_down: "Scale triangle down by 10% from origin"
+  tooltip_reset_identity: "Reset to identity transform (no scaling, rotation, or translation)"
+  tooltip_affine_a: "Horizontal scale. 1.0 = no change.\nAffects X component of X-axis vector."
+  tooltip_affine_b: "Horizontal shear. Skews shape horizontally.\nAffects Y component of X-axis vector."
+  tooltip_affine_c: "X translation. Moves transform horizontally.\nOrigin X coordinate."
+  tooltip_affine_d: "Vertical shear. Skews shape vertically.\nAffects X component of Y-axis vector."
+  tooltip_affine_e: "Vertical scale. 1.0 = no change.\nAffects Y component of Y-axis vector."
+  tooltip_affine_f: "Y translation. Moves transform vertically.\nOrigin Y coordinate."
 
 # Settings Panel
 settings:
