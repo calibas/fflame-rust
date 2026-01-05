@@ -42,12 +42,6 @@ pub struct FractalConfig {
     /// Histogram color scale (precision vs overflow protection, default: 10.0)
     #[serde(default = "default_histogram_color_scale")]
     pub histogram_color_scale: f32,
-    /// Low-density smoothing (0.0 = no smoothing, 1.0 = maximum smoothing, default: 0.5)
-    #[serde(default = "default_low_density_smoothing")]
-    pub low_density_smoothing: f32,
-    /// Density compression strength (0.0 = linear, 100.0 = strong compression, default: 0.0)
-    #[serde(default)]
-    pub density_compression_strength: f32,
     /// Blend factor for accumulation (0.01 = slow/smooth, 1.0 = fast/flickery, default: 0.1)
     #[serde(default = "default_blend_factor")]
     pub blend_factor: f32,
@@ -193,10 +187,6 @@ fn default_histogram_color_scale() -> f32 {
     super::defaults::DEFAULT_HISTOGRAM_COLOR_SCALE
 }
 
-fn default_low_density_smoothing() -> f32 {
-    super::defaults::DEFAULT_LOW_DENSITY_SMOOTHING
-}
-
 fn default_blend_factor() -> f32 {
     super::defaults::DEFAULT_BLEND_FACTOR
 }
@@ -223,8 +213,6 @@ impl Default for FractalConfig {
             speed_factor: 0.5,
             max_iterations: default_max_iterations(),
             histogram_color_scale: default_histogram_color_scale(),
-            low_density_smoothing: default_low_density_smoothing(),
-            density_compression_strength: 0.0,
             blend_factor: default_blend_factor(),
             use_dynamic_blend: default_use_dynamic_blend(),
             target_iterations_per_pixel: 0,
@@ -300,8 +288,6 @@ impl FractalConfig {
         if config.speed_factor == defaults.speed_factor { obj.remove("speed_factor"); }
         if config.max_iterations == defaults.max_iterations { obj.remove("max_iterations"); }
         if config.histogram_color_scale == defaults.histogram_color_scale { obj.remove("histogram_color_scale"); }
-        if config.low_density_smoothing == defaults.low_density_smoothing { obj.remove("low_density_smoothing"); }
-        if config.density_compression_strength == defaults.density_compression_strength { obj.remove("density_compression_strength"); }
         if config.blend_factor == defaults.blend_factor { obj.remove("blend_factor"); }
         if config.use_dynamic_blend == defaults.use_dynamic_blend { obj.remove("use_dynamic_blend"); }
         if config.target_iterations_per_pixel == defaults.target_iterations_per_pixel { obj.remove("target_iterations_per_pixel"); }

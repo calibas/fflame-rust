@@ -139,8 +139,6 @@ pub struct FlameRenderer {
     deterministic_rng: bool,
     frame_counter: u32, // For deterministic seed progression
     histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
-    low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
-    density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression (default: 0.0)
     burn_in: u32, // Burn-in iterations (for Depth gradient in PathMap mode)
     blend_factor: f32, // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
@@ -221,8 +219,6 @@ impl FlameRenderer {
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
-            low_density_smoothing: 0.5, // Moderate smoothing default
-            density_compression_strength: 0.0, // Linear accumulation default (no compression)
             burn_in: 20, // Default burn-in iterations
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
             use_dynamic_blend: true, // Default to clamped exponential (0.8 → 0.01)
@@ -432,8 +428,6 @@ impl FlameRenderer {
             height: self.height,
             blend_factor,
             histogram_color_scale: self.histogram_color_scale,
-            low_density_smoothing: self.low_density_smoothing,
-            density_compression_strength: self.density_compression_strength,
             target_iterations_per_pixel: self.target_iterations_per_pixel,
             _pad0: 0.0,
             background_r: self.background_color[0],
@@ -527,7 +521,6 @@ impl FlameRenderer {
         self.current_render_mode = config.flame.render_mode;
         self.perspective_strength = config.flame.perspective_strength;
         self.histogram_color_scale = config.histogram_color_scale;
-        self.low_density_smoothing = config.low_density_smoothing;
         self.burn_in = burn_in;
 
         // 5. Update palette with hue rotation
@@ -786,17 +779,6 @@ impl FlameRenderer {
         self.histogram_color_scale = scale;
         // Update GPU params immediately so new scale takes effect
         self.update_iterations(queue, iterations_per_thread, burn_in, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
-    }
-
-    pub fn set_low_density_smoothing(&mut self, smoothing: f32) {
-        self.low_density_smoothing = smoothing;
-        // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
-    }
-
-    /// Set density compression strength (0.0 = linear, 100.0 = strong compression)
-    pub fn set_density_compression_strength(&mut self, strength: f32) {
-        self.density_compression_strength = strength;
-        // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
     }
 
     /// Set blend factor for accumulation (0.01 = slow/smooth, 1.0 = fast/flickery)

@@ -32,8 +32,6 @@ pub const DEFAULT_ALPHA_BLEND_LOW: f32 = 0.3; // Start blending toward linear at
 pub const DEFAULT_ALPHA_BLEND_HIGH: f32 = 0.8; // Full linear alpha above this value
 
 // Accumulation
-pub const DEFAULT_LOW_DENSITY_SMOOTHING: f32 = 0.5; // Moderate smoothing
-pub const DEFAULT_DENSITY_COMPRESSION: f32 = 0.0; // No compression
 pub const DEFAULT_BLEND_FACTOR: f32 = 0.1; // 10% blend rate (used when dynamic blend is off)
 pub const DEFAULT_USE_DYNAMIC_BLEND: bool = true; // Clamped exponential: 0.8 → 0.01
 

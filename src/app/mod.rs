@@ -1112,8 +1112,6 @@ impl App {
             
             let t_tonemap = Instant::now();
             // 3. Update accumulation parameters from config
-            renderer.set_low_density_smoothing(final_config.low_density_smoothing);
-            renderer.set_density_compression_strength(final_config.density_compression_strength);
             renderer.set_blend_factor(final_config.blend_factor);
             renderer.set_use_dynamic_blend(final_config.use_dynamic_blend);
             renderer.set_target_iterations_per_pixel(final_config.target_iterations_per_pixel);

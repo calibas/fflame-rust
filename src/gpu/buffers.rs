@@ -306,14 +306,12 @@ pub struct AccumulateParams {
     pub height: u32,
     pub blend_factor: f32,
     pub histogram_color_scale: f32, // Must match compute shader value
-    pub low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing
-    pub density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression
     pub target_iterations_per_pixel: u32, // Per-pixel convergence threshold (0 = disabled)
     pub _pad0: f32,  // Padding for alignment
     pub background_r: f32,  // Background color RGB (for blending when no samples)
     pub background_g: f32,
     pub background_b: f32,
-    pub _pad1: f32,  // Total 12 fields = 48 bytes
+    pub _pad1: f32,  // Total 10 fields = 40 bytes (rounds to 48 with padding)
 }
 
 /// Manages GPU buffers and textures for fractal flame rendering
@@ -479,8 +477,6 @@ impl FlameBuffers {
             height,
             blend_factor: 1.0,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
-            low_density_smoothing: 0.5, // Default moderate smoothing
-            density_compression_strength: 0.0, // Default: linear accumulation (no compression)
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
             _pad0: 0.0,
             background_r: 0.0,  // Default black background

@@ -1,6 +1,7 @@
 use crate::scene::{presets::PresetLibrary, transforms::Flame};
 use crate::config::{ConfigManager, ConfigPath};
 use super::formatting::format_iterations;
+use rust_i18n::t;
 
 /// Render settings content (for docking panels)
 /// Same as render_settings_window (removed) but without the Window wrapper
@@ -175,51 +176,6 @@ pub fn render_settings_content(
 
             if response.drag_stopped() {
                 let _ = config_manager.force_commit_preview(&ConfigPath::HistogramColorScale);
-            }
-
-            // Low-density smoothing
-            let mut temp_smoothing = config.low_density_smoothing;
-            let response = ui.add(egui::Slider::new(&mut temp_smoothing, 0.0..=1.0)
-                .text("Low-Density Smoothing"))
-                .on_hover_text(
-                    "Reduces noise in sparse areas by slowing accumulation.\n\
-                    0 = No smoothing (noisy)\n\
-                    0.5 = Balanced (default)\n\
-                    1.0 = Maximum smoothing (smooth but slower)"
-                );
-
-            if response.changed() {
-                let _ = config_manager.update_param(
-                    ConfigPath::LowDensitySmoothing,
-                    temp_smoothing.into()
-                );
-            }
-
-            if response.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::LowDensitySmoothing);
-            }
-
-            // Density compression
-            let mut temp_compression = config.density_compression_strength;
-            let response = ui.add(egui::Slider::new(&mut temp_compression, 0.0..=100.0)
-                .text("Density Compression"))
-                .on_hover_text(
-                    "Slows accumulation in bright areas to reveal detail.\n\
-                    0 = Disabled (default)\n\
-                    25 = Gentle (20% rate in bright areas)\n\
-                    50 = Moderate (2% rate)\n\
-                    100 = Strong (1% rate)"
-                );
-
-            if response.changed() {
-                let _ = config_manager.update_param(
-                    ConfigPath::DensityCompressionStrength,
-                    temp_compression.into()
-                );
-            }
-
-            if response.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::DensityCompressionStrength);
             }
 
             // Per-pixel iteration limit
