@@ -313,12 +313,18 @@ pub fn render_colors_content(
             egui::ComboBox::from_label(t!("tonemap.color_mode"))
                 .selected_text(selected_text)
                 .show_ui(ui, |ui| {
-                    if ui.selectable_value(&mut temp_color_mode, ColorMode::Palette, t!("tonemap.color_mode_palette")).changed() {
+                    if ui.selectable_value(&mut temp_color_mode, ColorMode::Palette, t!("tonemap.color_mode_palette"))
+                        .on_hover_text(t!("tonemap.color_mode_palette_tooltip"))
+                        .changed() 
+                    {
                         if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
                             max_update = max_update.max(update);
                         }
                     }
-                    if ui.selectable_value(&mut temp_color_mode, ColorMode::Speed, t!("tonemap.color_mode_speed")).changed() {
+                    if ui.selectable_value(&mut temp_color_mode, ColorMode::Speed, t!("tonemap.color_mode_speed"))
+                        .on_hover_text(t!("tonemap.color_mode_speed_tooltip"))
+                        .changed() 
+                    {
                         if let Ok(update) = config_manager.update_param(ConfigPath::ColorMode, temp_color_mode.into()) {
                             max_update = max_update.max(update);
                         }
@@ -414,13 +420,13 @@ pub fn render_colors_content(
                     }
                 });
 
-                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteRotation, 0.0..=1.0, t!("tonemap.palette_rotation").as_ref(), None) {
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteRotation, 0.0..=1.0, t!("tonemap.palette_rotation").as_ref(), Some(t!("tonemap.tooltip_palette_rotation").as_ref())) {
                     max_update = max_update.max(result.update_type);
                 }
             }
 
             if matches!(current_color_mode, ColorMode::Speed) {
-                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::SpeedFactor, 0.0..=1.0, t!("tonemap.speed_blend_factor").as_ref(), None) {
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::SpeedFactor, 0.0..=1.0, t!("tonemap.speed_blend_factor").as_ref(), Some(t!("tonemap.tooltip_speed_factor").as_ref())) {
                     max_update = max_update.max(result.update_type);
                 }
             }
