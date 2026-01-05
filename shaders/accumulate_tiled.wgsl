@@ -6,8 +6,6 @@ struct AccumulateParams {
     height: u32,      // Tile height
     blend_factor: f32,
     histogram_color_scale: f32,
-    low_density_smoothing: f32,
-    density_compression_strength: f32,
     target_iterations_per_pixel: u32,
     _pad0: f32,
     background_r: f32,
@@ -78,11 +76,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         b_sum / density
     ), vec3<f32>(0.0), vec3<f32>(1.0));
 
-    // Adaptive blending
-    let density_threshold = 0.1;
-    let density_factor = mix(1.0, min(prev.a / density_threshold, 1.0), params.low_density_smoothing);
-    let compression_factor = 1.0 / (1.0 + prev.a * params.density_compression_strength * 0.01);
-    let final_blend = params.blend_factor * density_factor * compression_factor * convergence_gate;
+    // Multiply blend factor by convergence gate
+    let final_blend = params.blend_factor * convergence_gate;
 
     // Blend RGB
     let blend_trust = clamp(prev.a / 0.05, 0.0, 1.0);

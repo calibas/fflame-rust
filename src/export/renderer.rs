@@ -937,8 +937,6 @@ impl TiledRenderer {
             height: self.tile_size,
             blend_factor: 1.0,  // Overwrite mode for export
             histogram_color_scale: config.histogram_color_scale,
-            low_density_smoothing: config.low_density_smoothing,
-            density_compression_strength: config.density_compression_strength,
             target_iterations_per_pixel: 0,  // No per-pixel limiting for export
             _pad0: 0.0,
             background_r: config.background_color[0],

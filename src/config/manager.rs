@@ -795,10 +795,6 @@ impl ConfigManager {
 
             // Rendering settings
             ConfigPath::HistogramColorScale => Ok(config.histogram_color_scale.into()),
-            ConfigPath::LowDensitySmoothing => Ok(config.low_density_smoothing.into()),
-            ConfigPath::DensityCompressionStrength => {
-                Ok(config.density_compression_strength.into())
-            }
             ConfigPath::BlendFactor => Ok(config.blend_factor.into()),
             ConfigPath::UseDynamicBlend => Ok(config.use_dynamic_blend.into()),
             ConfigPath::TargetIterationsPerPixel => {
@@ -1158,12 +1154,6 @@ impl ConfigManager {
             // Rendering settings
             ConfigPath::HistogramColorScale => {
                 self.current.histogram_color_scale = value.try_into()?;
-            }
-            ConfigPath::LowDensitySmoothing => {
-                self.current.low_density_smoothing = value.try_into()?;
-            }
-            ConfigPath::DensityCompressionStrength => {
-                self.current.density_compression_strength = value.try_into()?;
             }
             ConfigPath::BlendFactor => {
                 self.current.blend_factor = value.try_into()?;

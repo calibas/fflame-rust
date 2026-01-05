@@ -57,8 +57,6 @@ pub enum ConfigPath {
 
     // ===== Rendering settings (affects iteration speed/quality) =====
     HistogramColorScale,
-    LowDensitySmoothing,
-    DensityCompressionStrength,
     BlendFactor,
     UseDynamicBlend,
     TargetIterationsPerPixel,
@@ -181,8 +179,6 @@ impl Display for ConfigPath {
 
             // Rendering
             ConfigPath::HistogramColorScale => write!(f, "Histogram Color Scale"),
-            ConfigPath::LowDensitySmoothing => write!(f, "Low-Density Smoothing"),
-            ConfigPath::DensityCompressionStrength => write!(f, "Density Compression"),
             ConfigPath::BlendFactor => write!(f, "Blend Factor"),
             ConfigPath::UseDynamicBlend => write!(f, "Use Dynamic Blend"),
             ConfigPath::TargetIterationsPerPixel => write!(f, "Target Iterations Per Pixel"),
@@ -725,8 +721,6 @@ impl ConfigPath {
 
             // Rendering settings - affect iteration behavior
             ConfigPath::HistogramColorScale
-            | ConfigPath::LowDensitySmoothing
-            | ConfigPath::DensityCompressionStrength
             | ConfigPath::BlendFactor
             | ConfigPath::UseDynamicBlend
             | ConfigPath::TargetIterationsPerPixel => UpdateType::IterationReset,
@@ -813,8 +807,6 @@ impl ConfigPath {
 
             // Rendering
             ConfigPath::HistogramColorScale => "HistogramColorScale".to_string(),
-            ConfigPath::LowDensitySmoothing => "LowDensitySmoothing".to_string(),
-            ConfigPath::DensityCompressionStrength => "DensityCompressionStrength".to_string(),
             ConfigPath::BlendFactor => "BlendFactor".to_string(),
             ConfigPath::UseDynamicBlend => "UseDynamicBlend".to_string(),
             ConfigPath::TargetIterationsPerPixel => "TargetIterationsPerPixel".to_string(),
@@ -916,8 +908,6 @@ impl ConfigPath {
 
             // Rendering
             "HistogramColorScale" => return Some(ConfigPath::HistogramColorScale),
-            "LowDensitySmoothing" => return Some(ConfigPath::LowDensitySmoothing),
-            "DensityCompressionStrength" => return Some(ConfigPath::DensityCompressionStrength),
             "BlendFactor" => return Some(ConfigPath::BlendFactor),
             "UseDynamicBlend" => return Some(ConfigPath::UseDynamicBlend),
             "TargetIterationsPerPixel" => return Some(ConfigPath::TargetIterationsPerPixel),
@@ -1083,8 +1073,6 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::BackgroundColorG
         | ConfigPath::BackgroundColorB
         | ConfigPath::HistogramColorScale
-        | ConfigPath::LowDensitySmoothing
-        | ConfigPath::DensityCompressionStrength
         | ConfigPath::BlendFactor
         | ConfigPath::PerspectiveStrength
         | ConfigPath::TransformWeight { .. }
