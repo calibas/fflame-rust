@@ -624,6 +624,7 @@ impl HighResExporter {
         &mut self,
         config: &FractalConfig,
         total_iterations: u64,
+        transparent: bool,
         progress: &mut dyn ExportProgress,
     ) -> Result<Vec<u8>, String> {
         // Create CPU histogram
@@ -835,7 +836,7 @@ impl HighResExporter {
         progress.on_tonemapping();
 
         // Tonemap histogram to RGBA using GPU
-        let pixels = self.tonemap_gpu(&histogram, config).await?;
+        let pixels = self.tonemap_gpu(&histogram, config, transparent).await?;
 
         progress.on_complete();
 
@@ -896,6 +897,7 @@ impl HighResExporter {
         &self,
         histogram: &[HistogramPixel],
         config: &FractalConfig,
+        transparent: bool,
     ) -> Result<Vec<u8>, String> {
         use crate::config::defaults::{DEFAULT_WHITE_LEVEL, PREFILTER_WHITE, BRIGHT_ADJUST};
 
@@ -1010,7 +1012,7 @@ impl HighResExporter {
             gamma_threshold: config.gamma_threshold,
             alpha_blend_low: config.alpha_blend_low,
             alpha_blend_high: config.alpha_blend_high,
-            transparent_mode: 0, // Normal display mode (blend with background)
+            transparent_mode: if transparent { 1 } else { 0 },
             color_mode: config.color_mode as u32,
             width: self.width,
             height: self.height,
