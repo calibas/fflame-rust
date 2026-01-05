@@ -146,7 +146,10 @@ pub fn render_view_content(
     ui.label(t!("view.render_mode")).on_hover_text(t!("view.tooltip_render_mode"));
     ui.horizontal(|ui| {
         let was_2d = matches!(config.flame.render_mode, crate::scene::transforms::RenderMode::TwoD);
-        if ui.selectable_label(was_2d, t!("view.mode_2d").as_ref()).clicked() {
+        if ui.selectable_label(was_2d, t!("view.mode_2d").as_ref())
+            .on_hover_text(t!("view.tooltip_mode_2d"))
+            .clicked()
+        {
             if let Err(e) = config_manager.update_param(
                 ConfigPath::RenderMode,
                 crate::scene::transforms::RenderMode::TwoD.into()
@@ -154,7 +157,10 @@ pub fn render_view_content(
                 log::error!("Failed to update render mode: {}", e);
             }
         }
-        if ui.selectable_label(!was_2d, t!("view.mode_3d").as_ref()).clicked() {
+        if ui.selectable_label(!was_2d, t!("view.mode_3d").as_ref())
+            .on_hover_text(t!("view.tooltip_mode_3d"))
+            .clicked()
+        {
             if let Err(e) = config_manager.update_param(
                 ConfigPath::RenderMode,
                 crate::scene::transforms::RenderMode::ThreeD.into()
