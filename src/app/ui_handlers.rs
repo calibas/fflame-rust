@@ -543,6 +543,10 @@ impl App {
             use crate::ui::workspace::PanelType;
             self.workspace.activate_panel(PanelType::TriangleEditor);
         }
+        if ui_response.open_preset_library {
+            use crate::ui::workspace::PanelType;
+            self.workspace.open_floating_panel(PanelType::PresetLibrary);
+        }
     }
 
     /// Handle preset selection from Preset Library panel

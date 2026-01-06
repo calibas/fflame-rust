@@ -28,12 +28,11 @@ pub struct PanelContext<'a> {
     pub clone_transform: &'a mut Option<usize>,
     pub undo_requested: &'a mut bool,
     pub redo_requested: &'a mut bool,
-    pub preset_changed: &'a mut bool,
     pub open_palette_editor: &'a mut bool,
     pub open_triangle_editor: &'a mut bool,
+    pub open_preset_library: &'a mut bool,
 
     // UI state
-    pub current_preset_index: &'a mut usize,
     pub paused: &'a mut bool,
     pub png_export_with_background: &'a mut bool,
     pub png_export_transparent: &'a mut bool,
@@ -236,14 +235,11 @@ impl<'a> PanelViewer<'a> {
             self.context.export_width,
             self.context.export_height,
             self.context.use_custom_export_size,
-            self.context.preset_library,
-            self.context.current_preset_index,
-            self.context.preset_changed,
-            self.context.flame,
             self.context.flame_renderer,
             self.context.paused,
             self.context.config_manager,
             self.context.open_config_dialog,
+            self.context.open_preset_library,
         );
     }
 
@@ -275,15 +271,11 @@ impl<'a> PanelViewer<'a> {
 
         // Handle animation load response
         if let Some(animation) = response.load_animation {
-            // If animation has embedded config, load it first
-            if let Some(ref config) = animation.base_config {
+            // If animation has embedded config, load it via selected_preset_config
+            // This ensures proper GPU sync and undo/redo handling
+            if let Some(config) = animation.base_config.clone() {
                 log::info!("Animation '{}' has embedded config, loading it", animation.name);
-                let description = format!("Load Animation: {}", animation.name);
-                if let Err(e) = self.context.config_manager.load_config(config.clone(), description) {
-                    log::error!("Failed to load animation's embedded config: {}", e);
-                }
-                // Mark that preset changed (triggers GPU update)
-                *self.context.preset_changed = true;
+                *self.context.selected_preset_config = Some(config);
             }
             self.context.animation_controller.load(animation);
         }

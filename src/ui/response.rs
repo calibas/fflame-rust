@@ -36,6 +36,7 @@ pub struct UiResponse {
     pub open_palette_editor: bool,
     pub open_config_dialog: bool,
     pub open_triangle_editor: bool,
+    pub open_preset_library: bool,
 
     // Fractal viewport size (for matching texture dimensions to panel)
     pub fractal_viewport_size: Option<(u32, u32)>,
@@ -84,6 +85,7 @@ impl Default for UiResponse {
             open_palette_editor: false,
             open_config_dialog: false,
             open_triangle_editor: false,
+            open_preset_library: false,
             fractal_viewport_size: None,
             needs_repaint: false,
             selected_preset_config: None,
