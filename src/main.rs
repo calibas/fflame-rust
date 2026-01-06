@@ -147,6 +147,8 @@ fn main() {
                         fractal_flame_wgpu::animation::export::HardwareAccel::None
                     },
                     quality: video_quality,
+                    preset: fractal_flame_wgpu::animation::export::EncodingPreset::default(),  // TODO: Add CLI args
+                    tune: fractal_flame_wgpu::animation::export::EncodingTune::default(),
                 };
 
                 // Run animation export mode
