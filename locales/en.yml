@@ -916,6 +916,7 @@ settings:
   pause: "⏸ Pause"
   reset_accumulation: "🔄 Reset Accumulation"
   iterations: "Iterations"
+  max_iterations: "Max Iterations"
   max_iterations_reached: "✅ Max iterations reached"
   progress: "Progress: %{current} / %{max} (%{percent}%)"
   iterations_per_thread: "Iterations per Thread"
