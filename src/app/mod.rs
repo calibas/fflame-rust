@@ -466,16 +466,6 @@ impl App {
             return Ok(());
         }
 
-        // Skip ALL rendering during video export to eliminate GPU contention
-        // Export uses a separate GPU device but still competes for driver resources
-        // This prevents "Render error: Other" spam and gives export full GPU bandwidth
-        let is_video_exporting = self.animation_export_progress.lock()
-            .map(|p| p.is_exporting)
-            .unwrap_or(false);
-        if is_video_exporting {
-            return Ok(());  // UI still receives events (can cancel), just doesn't render
-        }
-
         let render_start = Instant::now();
 
         // Calculate delta time BEFORE updating last_frame_time (for animation)
@@ -1066,12 +1056,15 @@ impl App {
 
             // Check if we should continue iterating
             // During animation playback, always iterate (ignore max_iterations limit)
-            // Skip GPU work during video export to avoid GPU contention (separate device in background thread)
+            // Skip GPU work during video/PNG export to avoid GPU contention (separate device in background thread)
             let is_video_exporting = self.animation_export_progress.lock()
                 .map(|p| p.is_exporting)
                 .unwrap_or(false);
+            let is_png_exporting = self.png_export_progress.lock()
+                .map(|p| p.is_exporting)
+                .unwrap_or(false);
             let max_iterations = Some(final_config.max_iterations);
-            let should_iterate = !self.paused && !is_video_exporting && (
+            let should_iterate = !self.paused && !is_video_exporting && !is_png_exporting && (
                 is_controller_playing ||
                 max_iterations.map_or(true, |max| renderer.total_iterations() < max)
             );
