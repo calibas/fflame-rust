@@ -883,6 +883,7 @@ impl<'a> PanelViewer<'a> {
             self.context.export_height,
             self.context.use_custom_export_size,
             self.context.config_manager,
+            *self.context.fractal_viewport_size,
         );
     }
 }
