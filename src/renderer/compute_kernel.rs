@@ -504,8 +504,9 @@ impl FlameRenderer {
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         }
 
-        // 1. Update transforms in GPU buffer
+        // 1. Update transforms and variation parameters in GPU buffer
         self.buffers.update_transforms(queue, &config.flame);
+        self.buffers.update_variation_params(queue, &config.flame);
 
         // 2. Update color mode, path map style, and capture mode
         self.color_mode = config.color_mode;

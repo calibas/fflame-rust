@@ -301,7 +301,8 @@ impl ShaderConstants {
         registry: &crate::variations::VariationRegistry,
         color_mode: u32,
     ) -> Self {
-        let num_transforms = flame.transforms.len() as u32;
+        // Ensure at least 1 transform to prevent shader overflow (NUM_TRANSFORMS - 1u)
+        let num_transforms = flame.transforms.len().max(1) as u32;
         let has_final = flame.final_transform.is_some();
         let final_idx = num_transforms; // Final comes after regular transforms
 
