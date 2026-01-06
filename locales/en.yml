@@ -514,6 +514,56 @@ triangle_editor:
   tooltip_affine_e: "Vertical scale. 1.0 = no change.\nAffects Y component of Y-axis vector."
   tooltip_affine_f: "Y translation. Moves transform vertically.\nOrigin Y coordinate."
 
+# Palette Editor Panel
+palette_editor:
+  title: "Palette Editor"
+  palette_name: "Palette Name:"
+  gradient_preview: "Gradient Preview:"
+  mode_fixed: "Mode: 🔒 Fixed 256-Color"
+  mode_free: "Mode: 🎨 Free Gradient"
+  switch_to_free: "Switch to Free Mode"
+  switch_to_fixed: "Switch to Fixed 256-Color Mode"
+  color_stops: "Color Stops:"
+  stop_label: "Stop %{index}:"
+  position: "Position"
+  add_color_stop: "➕ Add Color Stop"
+  import_export: "Import/Export Palette"
+  export_clipboard: "📋 Export to Clipboard"
+  save_as_palette: "💾 Save as .palette"
+  import_from_json: "Import from JSON:"
+  import: "✅ Import"
+  clear: "🗑 Clear"
+  load_palette: "📂 Load .palette"
+  instant_changes: "💡 All changes are applied instantly and tracked in undo history."
+  no_palette: "⚠ No palette selected"
+  no_palette_hint: "Open the Colors panel and click 'Edit Palette' to create one"
+
+  # Fixed mode warning dialog
+  warning_title: "⚠️ Convert to Fixed 256-Color Mode?"
+  warning_resample: "This will resample your gradient to exactly 256 color stops."
+  warning_locked: "Color positions will be locked at fixed intervals (0/255, 1/255, etc.)."
+  warning_revert: "You can switch back to Free Mode later without data loss."
+  convert_confirm: "✅ Convert to Fixed Mode"
+  cancel: "❌ Cancel"
+
+  # Tooltips
+  tooltip_position: "Position in the gradient (0-255)"
+  tooltip_color: "Click to change color"
+  tooltip_remove: "Remove this color stop"
+
+# Palette Library Panel
+palette_library:
+  title: "Palette Library"
+  search: "Search:"
+  search_hint: "Coming soon..."
+  palettes_count: "(%{count} palettes)"
+  no_packs: "No palette packs loaded."
+  no_packs_hint: "Place .json files in assets/palettes/packs/"
+
+  # Tooltips
+  tooltip_enable_pack: "Enable or disable this palette pack"
+  tooltip_select_palette: "Click to use this palette (creates an editable copy)"
+
 # Settings Panel
 settings:
   title: "Settings"
