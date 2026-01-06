@@ -155,6 +155,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             PanelType::PathEditor => {
                 self.render_path_editor_panel(ui);
             }
+            PanelType::Export => {
+                self.render_export_panel(ui);
+            }
         }
     }
 }
@@ -231,16 +234,9 @@ impl<'a> PanelViewer<'a> {
     fn render_rendering_panel(&mut self, ui: &mut egui::Ui) {
         super::settings::render_settings_content(
             ui,
-            self.context.png_export_with_background,
-            self.context.png_export_transparent,
-            self.context.export_width,
-            self.context.export_height,
-            self.context.use_custom_export_size,
             self.context.flame_renderer,
             self.context.paused,
             self.context.config_manager,
-            self.context.open_config_dialog,
-            self.context.open_preset_library,
         );
     }
 
@@ -875,5 +871,18 @@ impl<'a> PanelViewer<'a> {
         if let Some(filters) = response.filters_changed {
             *self.context.path_filters_changed = Some(filters);
         }
+    }
+
+    /// Render Export panel (PNG export options)
+    fn render_export_panel(&mut self, ui: &mut egui::Ui) {
+        super::export_panel::render_export_content(
+            ui,
+            self.context.png_export_with_background,
+            self.context.png_export_transparent,
+            self.context.export_width,
+            self.context.export_height,
+            self.context.use_custom_export_size,
+            self.context.config_manager,
+        );
     }
 }

@@ -1,5 +1,6 @@
 pub mod animation_panel;
 mod config_dialog;
+mod export_panel;
 pub mod file_browser;
 mod font_loader;
 mod formatting;

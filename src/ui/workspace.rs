@@ -42,6 +42,8 @@ pub enum PanelType {
     ConfigDialog,
     /// Path filter editor (block specific transform sequences)
     PathEditor,
+    /// PNG Export panel
+    Export,
 }
 
 impl std::fmt::Display for PanelType {
@@ -63,6 +65,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Help => t!("panels.help"),
             PanelType::ConfigDialog => t!("panels.config_dialog"),
             PanelType::PathEditor => t!("panels.path_editor"),
+            PanelType::Export => t!("panels.export"),
         };
         write!(f, "{}", title)
     }
