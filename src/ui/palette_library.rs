@@ -2,6 +2,7 @@
 
 use egui;
 use crate::scene::palette::{PaletteLibrary, Palette};
+use rust_i18n::t;
 
 /// Render the Palette Library panel
 /// Returns Some(palette) if user selected a new palette (cloned)
@@ -13,8 +14,8 @@ pub fn render_palette_library(
 
     // Search box (future feature)
     ui.horizontal(|ui| {
-        ui.label("Search:");
-        ui.add_enabled(false, egui::TextEdit::singleline(&mut String::new()).hint_text("Coming soon..."));
+        ui.label(t!("palette_library.search"));
+        ui.add_enabled(false, egui::TextEdit::singleline(&mut String::new()).hint_text(t!("palette_library.search_hint")));
     });
 
     ui.separator();
@@ -38,7 +39,10 @@ pub fn render_palette_library(
             // Checkbox for enabling/disabling pack
             let mut enabled = is_enabled;
             ui.horizontal(|ui| {
-                if ui.checkbox(&mut enabled, "").changed() {
+                if ui.checkbox(&mut enabled, "")
+                    .on_hover_text(t!("palette_library.tooltip_enable_pack"))
+                    .changed()
+                {
                     library.set_pack_enabled(pack_idx, enabled);
                 }
             });
@@ -51,7 +55,7 @@ pub fn render_palette_library(
             )
             .show_header(ui, |ui| {
                 ui.strong(&pack_name);
-                ui.label(format!("({} palettes)", palette_count));
+                ui.label(t!("palette_library.palettes_count", count = palette_count));
             })
             .body(|ui| {
                 // Show palettes only if pack is enabled
@@ -175,8 +179,8 @@ pub fn render_palette_library(
 
         // If no packs loaded, show message
         if library.pack_count() == 0 {
-            ui.label("No palette packs loaded.");
-            ui.label("Place .json files in assets/palettes/packs/");
+            ui.label(t!("palette_library.no_packs"));
+            ui.label(t!("palette_library.no_packs_hint"));
         }
     });
 

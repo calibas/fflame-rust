@@ -139,8 +139,6 @@ pub struct FlameRenderer {
     deterministic_rng: bool,
     frame_counter: u32, // For deterministic seed progression
     histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
-    low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing (default: 0.5)
-    density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression (default: 0.0)
     burn_in: u32, // Burn-in iterations (for Depth gradient in PathMap mode)
     blend_factor: f32, // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
@@ -221,8 +219,6 @@ impl FlameRenderer {
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
-            low_density_smoothing: 0.5, // Moderate smoothing default
-            density_compression_strength: 0.0, // Linear accumulation default (no compression)
             burn_in: 20, // Default burn-in iterations
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
             use_dynamic_blend: true, // Default to clamped exponential (0.8 → 0.01)
@@ -239,6 +235,10 @@ impl FlameRenderer {
     pub fn resize(&mut self, device: &Device, encoder: &mut CommandEncoder, queue: &Queue, width: u32, height: u32, flame: &Flame, iterations_per_thread: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
         self.width = width;
         self.height = height;
+
+        // Update transform tracking from flame (critical for final transform support)
+        self.num_transforms = flame.transforms.len() as u32;
+        self.has_final_transform = flame.final_transform.is_some();
 
         // Recreate buffers with new size
         self.buffers = FlameBuffers::new(device, queue, width, height, flame);
@@ -428,8 +428,6 @@ impl FlameRenderer {
             height: self.height,
             blend_factor,
             histogram_color_scale: self.histogram_color_scale,
-            low_density_smoothing: self.low_density_smoothing,
-            density_compression_strength: self.density_compression_strength,
             target_iterations_per_pixel: self.target_iterations_per_pixel,
             _pad0: 0.0,
             background_r: self.background_color[0],
@@ -506,8 +504,9 @@ impl FlameRenderer {
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         }
 
-        // 1. Update transforms in GPU buffer
+        // 1. Update transforms and variation parameters in GPU buffer
         self.buffers.update_transforms(queue, &config.flame);
+        self.buffers.update_variation_params(queue, &config.flame);
 
         // 2. Update color mode, path map style, and capture mode
         self.color_mode = config.color_mode;
@@ -523,7 +522,6 @@ impl FlameRenderer {
         self.current_render_mode = config.flame.render_mode;
         self.perspective_strength = config.flame.perspective_strength;
         self.histogram_color_scale = config.histogram_color_scale;
-        self.low_density_smoothing = config.low_density_smoothing;
         self.burn_in = burn_in;
 
         // 5. Update palette with hue rotation
@@ -576,7 +574,7 @@ impl FlameRenderer {
 
         // 8. Update tone mapping settings from config
         // Not in live preview mode (loading config)
-        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.value_scale, config.alpha_blend_low, config.alpha_blend_high, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false);
+        self.update_tonemap(queue, config.tonemap_mode, config.use_curve, config.exposure, config.gamma, config.gamma_threshold, config.brightness, config.vibrancy, config.saturation, config.hue_shift, config.alpha_blend_low, config.alpha_blend_high, self.width, self.height, self.total_iterations, config.max_iterations, config.zoom, iterations_per_thread, 1, false);
         self.update_curve_lut(queue, &config.tonemap_curve);
 
         // 9. Clear accumulation buffers
@@ -675,7 +673,6 @@ impl FlameRenderer {
             sample_density,
             saturation: DEFAULT_SATURATION,
             hue_shift: DEFAULT_HUE_SHIFT,
-            value_scale: DEFAULT_VALUE_SCALE,
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
@@ -686,7 +683,7 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0],
+            _pad_end: [0, 0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -697,6 +694,12 @@ impl FlameRenderer {
 
     pub fn total_iterations(&self) -> u64 {
         self.total_iterations
+    }
+
+    /// Get effective iterations for brightness calculation
+    /// This only counts iterations done in normal (non-overwrite) mode
+    pub fn effective_iterations(&self) -> u64 {
+        self.effective_iterations
     }
 
     /// Get fractal output texture view for display
@@ -777,17 +780,6 @@ impl FlameRenderer {
         self.histogram_color_scale = scale;
         // Update GPU params immediately so new scale takes effect
         self.update_iterations(queue, iterations_per_thread, burn_in, zoom, pan_x, pan_y, rotation, camera_rotation_x, camera_rotation_y, camera_z, speed_factor);
-    }
-
-    pub fn set_low_density_smoothing(&mut self, smoothing: f32) {
-        self.low_density_smoothing = smoothing;
-        // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
-    }
-
-    /// Set density compression strength (0.0 = linear, 100.0 = strong compression)
-    pub fn set_density_compression_strength(&mut self, strength: f32) {
-        self.density_compression_strength = strength;
-        // Note: This will take effect on the next accumulate pass (no need to update GPU params immediately)
     }
 
     /// Set blend factor for accumulation (0.01 = slow/smooth, 1.0 = fast/flickery)
@@ -875,7 +867,6 @@ impl FlameRenderer {
             sample_density,
             saturation: DEFAULT_SATURATION,
             hue_shift: DEFAULT_HUE_SHIFT,
-            value_scale: DEFAULT_VALUE_SCALE,
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
@@ -886,7 +877,7 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0],
+            _pad_end: [0, 0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -941,7 +932,6 @@ impl FlameRenderer {
             sample_density,
             saturation: config.saturation,
             hue_shift: config.hue_shift,
-            value_scale: config.value_scale,
             gamma_threshold: config.gamma_threshold,
             alpha_blend_low: config.alpha_blend_low,
             alpha_blend_high: config.alpha_blend_high,
@@ -952,13 +942,13 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0],
+            _pad_end: [0, 0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
 
-    /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, value scale, and alpha blend
-    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, value_scale: f32, alpha_blend_low: f32, alpha_blend_high: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, _batch_size: u32, is_live_preview: bool) {
+    /// Update tone mapping mode, curve usage, exposure, gamma, gamma_threshold, brightness, vibrancy, saturation, hue shift, and alpha blend
+    pub fn update_tonemap(&self, queue: &Queue, tonemap_mode: crate::scene::tonemap::ToneMapMode, use_curve: bool, exposure: f32, gamma: f32, gamma_threshold: f32, brightness: f32, vibrancy: f32, saturation: f32, hue_shift: f32, alpha_blend_low: f32, alpha_blend_high: f32, width: u32, height: u32, _total_iterations: u64, _max_iterations: u64, zoom: f32, iterations_per_thread: u32, _batch_size: u32, is_live_preview: bool) {
         use crate::config::defaults::*;
 
         let tonemap_mode_u32 = match tonemap_mode {
@@ -1042,7 +1032,6 @@ impl FlameRenderer {
             sample_density,
             saturation,
             hue_shift,
-            value_scale,
             gamma_threshold,
             alpha_blend_low,
             alpha_blend_high,
@@ -1053,7 +1042,7 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0],
+            _pad_end: [0, 0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -1224,12 +1213,11 @@ impl FlameRenderer {
             }
         }
 
-        // Update shaders if path feature state changed
-        if needs_path != shader_has_path {
-            let constants = self.build_shader_constants(flame);
-            if self.pipelines.ensure_shaders_current_with_constants(device, flame, needs_path, constants) {
-                changed = true;
-            }
+        // Update shaders if any shader constants changed (path features, color mode, etc.)
+        // The shader cache compares all constants and only rebuilds if something changed
+        let constants = self.build_shader_constants(flame);
+        if self.pipelines.ensure_shaders_current_with_constants(device, flame, needs_path, constants) {
+            changed = true;
         }
 
         changed

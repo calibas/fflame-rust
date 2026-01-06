@@ -281,12 +281,9 @@ fn parse_flame_element(
         vibrancy,  // Use parsed Apophysis vibrancy
         saturation: 1.5,  // Default saturation
         hue_shift: 0.0,  // Default hue shift
-        value_scale: 1.0,  // Default value scale
         gamma_threshold,  // Use parsed Apophysis gamma_threshold
         deterministic_rng: false,
         histogram_color_scale: 100.0,
-        low_density_smoothing: 0.5,
-        density_compression_strength: 0.0,
         blend_factor: 0.1,
         use_dynamic_blend: true,
         target_iterations_per_pixel: 0,

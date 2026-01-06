@@ -270,7 +270,7 @@ tooltips:
   camera_yaw: "Rotación de cámara 3D (izquierda/derecha).\nSolo visible en modo 3D."
 
   transform_weight: "Probabilidad de seleccionar esta transformación.\nMayor = más influencia en la imagen final."
-  transform_color: "Posición en la paleta de colores (0.0-1.0).\nAfecta el color al usar modo Colores de Transformación."
+  transform_color: "Posición en la paleta de colores (0.0-1.0)."
 
   blend_rate: "Qué tan rápido se mezclan las nuevas muestras con las existentes.\n0.01 = lento/suave, 1.0 = rápido/parpadeante"
   dynamic_blend: "Convergencia exponencial (antiguo) vs tasa fija (nuevo).\nLa tasa fija da resultados más consistentes."

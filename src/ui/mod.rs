@@ -1,5 +1,6 @@
 pub mod animation_panel;
 mod config_dialog;
+mod export_panel;
 pub mod file_browser;
 mod font_loader;
 mod formatting;
@@ -26,8 +27,9 @@ mod view;
 pub mod workspace;
 
 pub use animation_panel::ExportProgress;
+pub use export_panel::PngExportProgress;
 pub use track_editor::TrackEditorState;
-pub use font_loader::ensure_font_for_locale;
+pub use font_loader::{ensure_font_for_locale, initialize_default_fonts};
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
@@ -97,6 +99,9 @@ pub struct EguiLayer {
 impl EguiLayer {
     pub fn new(window: &Window, device: &Device, format: TextureFormat) -> Self {
         let ctx = egui_dock::egui::Context::default();
+
+        // Initialize fonts with Noto Sans (better Unicode coverage than Ubuntu-Light)
+        font_loader::initialize_default_fonts(&ctx);
 
         // Configure style to disable window shadows
         ctx.set_visuals(egui_dock::egui::Visuals {
@@ -250,7 +255,6 @@ impl EguiLayer {
         palette_library: &mut crate::scene::palette::PaletteLibrary,
         preset_library: &crate::scene::presets::PresetLibrary,
         animation_controller: &mut crate::animation::AnimationController,
-        current_preset_index: &mut usize,
         paused: &mut bool,
         quit_requested: &mut bool,
         can_undo: bool,
@@ -260,15 +264,16 @@ impl EguiLayer {
         export_height: &mut u32,
         use_custom_export_size: &mut bool,
         animation_export_progress: &animation_panel::ExportProgress,
+        png_export_progress: &export_panel::PngExportProgress,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
         // Note: Config change tracking now handled by ConfigManager.get_pending_actions()
         // Only non-config actions tracked here (file I/O, palette library, transforms, etc.)
 
-        let mut preset_changed = false;
         let mut add_transform = false;
         let mut delete_transform = None;
+        let mut clone_transform = None;
 
         // Config import/export
         let mut config_export_json = None;
@@ -276,6 +281,7 @@ impl EguiLayer {
         let mut config_save_file = false;
         let mut config_load_file = false;
         let mut apophysis_import_file = false;
+        let mut random_flame_requested = false;
 
         // Palette library management
         let mut custom_palette = None;
@@ -296,6 +302,8 @@ impl EguiLayer {
         // Panel open requests
         let mut open_palette_editor = false;
         let mut open_config_dialog = false;
+        let mut open_triangle_editor = false;
+        let mut open_preset_library = false;
 
         // Fractal viewport size tracking
         let mut fractal_viewport_size = None;
@@ -327,6 +335,12 @@ impl EguiLayer {
         let fractal_texture_id = self.fractal_texture_id();
 
         let full_output = self.ctx.run(raw_input, |ctx| {
+            // Debug: Print font info once after fonts are available
+            static FONT_DEBUG_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !FONT_DEBUG_DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                font_loader::debug_font_info(ctx);
+            }
+
             // Render menu bar
             menu_bar::render_menu_bar(
                 ctx,
@@ -362,13 +376,14 @@ impl EguiLayer {
                         // Action flags
                         add_transform: &mut add_transform,
                         delete_transform: &mut delete_transform,
+                        clone_transform: &mut clone_transform,
                         undo_requested: &mut undo_requested,
                         redo_requested: &mut redo_requested,
-                        preset_changed: &mut preset_changed,
                         open_palette_editor: &mut open_palette_editor,
+                        open_triangle_editor: &mut open_triangle_editor,
+                        open_preset_library: &mut open_preset_library,
 
                         // UI state
-                        current_preset_index,
                         paused,
                         png_export_with_background: &mut png_export_with_background,
                         png_export_transparent: &mut png_export_transparent,
@@ -426,6 +441,9 @@ impl EguiLayer {
                         // Path editor state
                         path_editor_state: &mut self.path_editor_state,
                         path_filters_changed: &mut path_filters_changed,
+
+                        // PNG export progress
+                        png_export_progress,
                     },
                 });
 
@@ -531,6 +549,7 @@ impl EguiLayer {
         config_load_file |= menu_actions.file.load_config;
         config_save_file |= menu_actions.file.save_config;
         apophysis_import_file |= menu_actions.file.import_apophysis;
+        random_flame_requested |= menu_actions.file.random_flame;
         if menu_actions.file.export_png {
             png_export_with_background = true;
         }
@@ -543,9 +562,6 @@ impl EguiLayer {
         undo_requested |= menu_actions.edit.undo;
         redo_requested |= menu_actions.edit.redo;
 
-        // Extract Transform menu actions (OR with existing value from panel button)
-        add_transform |= menu_actions.transform.add_transform;
-
         // Handle Rendering menu actions
         if menu_actions.rendering.pause_toggle {
             *paused = !*paused;
@@ -554,8 +570,6 @@ impl EguiLayer {
         if menu_actions.rendering.reset_accumulation {
             let _ = config_manager.request_reset();
         }
-
-        // Speed multiplier removed - now use VSync and target_fps instead
 
         if let Some(ipt) = menu_actions.rendering.set_iterations_per_thread {
             let _ = config_manager.update_system_setting(
@@ -573,6 +587,7 @@ impl EguiLayer {
             config_save_file_requested: config_save_file,
             config_load_file_requested: config_load_file,
             apophysis_import_file_requested: apophysis_import_file,
+            random_flame_requested,
             custom_palette,
             palette_export_json,
             palette_save_file,
@@ -584,8 +599,11 @@ impl EguiLayer {
             png_export_transparent,
             add_transform,
             delete_transform,
+            clone_transform,
             open_palette_editor,
             open_config_dialog,
+            open_triangle_editor,
+            open_preset_library,
             fractal_viewport_size,
             needs_repaint,
             selected_preset_config,

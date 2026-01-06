@@ -42,12 +42,6 @@ pub struct FractalConfig {
     /// Histogram color scale (precision vs overflow protection, default: 10.0)
     #[serde(default = "default_histogram_color_scale")]
     pub histogram_color_scale: f32,
-    /// Low-density smoothing (0.0 = no smoothing, 1.0 = maximum smoothing, default: 0.5)
-    #[serde(default = "default_low_density_smoothing")]
-    pub low_density_smoothing: f32,
-    /// Density compression strength (0.0 = linear, 100.0 = strong compression, default: 0.0)
-    #[serde(default)]
-    pub density_compression_strength: f32,
     /// Blend factor for accumulation (0.01 = slow/smooth, 1.0 = fast/flickery, default: 0.1)
     #[serde(default = "default_blend_factor")]
     pub blend_factor: f32,
@@ -114,10 +108,6 @@ pub struct FractalConfig {
     #[serde(default = "default_hue_shift")]
     pub hue_shift: f32,
 
-    /// Value scale: brightness multiplier (1.0 = no change, >1.0 = brighter)
-    #[serde(default = "default_value_scale")]
-    pub value_scale: f32,
-
     /// Alpha blend low threshold: start blending toward linear alpha at this gamma-corrected value
     /// Lower = more gamma-corrected (no halos), Higher = more linear (more detail at edges)
     #[serde(default = "default_alpha_blend_low")]
@@ -173,10 +163,6 @@ fn default_hue_shift() -> f32 {
     super::defaults::DEFAULT_HUE_SHIFT
 }
 
-fn default_value_scale() -> f32 {
-    super::defaults::DEFAULT_VALUE_SCALE
-}
-
 fn default_alpha_blend_low() -> f32 {
     super::defaults::DEFAULT_ALPHA_BLEND_LOW
 }
@@ -199,10 +185,6 @@ fn default_max_iterations() -> u64 {
 
 fn default_histogram_color_scale() -> f32 {
     super::defaults::DEFAULT_HISTOGRAM_COLOR_SCALE
-}
-
-fn default_low_density_smoothing() -> f32 {
-    super::defaults::DEFAULT_LOW_DENSITY_SMOOTHING
 }
 
 fn default_blend_factor() -> f32 {
@@ -231,8 +213,6 @@ impl Default for FractalConfig {
             speed_factor: 0.5,
             max_iterations: default_max_iterations(),
             histogram_color_scale: default_histogram_color_scale(),
-            low_density_smoothing: default_low_density_smoothing(),
-            density_compression_strength: 0.0,
             blend_factor: default_blend_factor(),
             use_dynamic_blend: default_use_dynamic_blend(),
             target_iterations_per_pixel: 0,
@@ -254,7 +234,6 @@ impl Default for FractalConfig {
             vibrancy: default_vibrancy(),
             saturation: default_saturation(),
             hue_shift: default_hue_shift(),
-            value_scale: default_value_scale(),
             alpha_blend_low: default_alpha_blend_low(),
             alpha_blend_high: default_alpha_blend_high(),
             deterministic_rng: false,
@@ -309,8 +288,6 @@ impl FractalConfig {
         if config.speed_factor == defaults.speed_factor { obj.remove("speed_factor"); }
         if config.max_iterations == defaults.max_iterations { obj.remove("max_iterations"); }
         if config.histogram_color_scale == defaults.histogram_color_scale { obj.remove("histogram_color_scale"); }
-        if config.low_density_smoothing == defaults.low_density_smoothing { obj.remove("low_density_smoothing"); }
-        if config.density_compression_strength == defaults.density_compression_strength { obj.remove("density_compression_strength"); }
         if config.blend_factor == defaults.blend_factor { obj.remove("blend_factor"); }
         if config.use_dynamic_blend == defaults.use_dynamic_blend { obj.remove("use_dynamic_blend"); }
         if config.target_iterations_per_pixel == defaults.target_iterations_per_pixel { obj.remove("target_iterations_per_pixel"); }
@@ -333,7 +310,6 @@ impl FractalConfig {
         if config.vibrancy == defaults.vibrancy { obj.remove("vibrancy"); }
         if config.saturation == defaults.saturation { obj.remove("saturation"); }
         if config.hue_shift == defaults.hue_shift { obj.remove("hue_shift"); }
-        if config.value_scale == defaults.value_scale { obj.remove("value_scale"); }
 
         // Other
         if config.deterministic_rng == defaults.deterministic_rng { obj.remove("deterministic_rng"); }

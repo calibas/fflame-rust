@@ -6,6 +6,48 @@
 
 use egui::Context;
 
+/// Path to Noto Sans Regular font (better Unicode coverage than Ubuntu-Light)
+const NOTO_SANS_PATH: &str = "assets/fonts/NotoSans-Regular.otf";
+
+/// Initialize fonts with Noto Sans as the default proportional font.
+/// This replaces Ubuntu-Light which has poor Unicode symbol coverage.
+/// Call this once during app initialization.
+pub fn initialize_default_fonts(ctx: &Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Ok(font_data) = std::fs::read(NOTO_SANS_PATH) {
+            let mut fonts = egui::FontDefinitions::default();
+
+            // Add Noto Sans
+            fonts.font_data.insert(
+                "NotoSans".to_owned(),
+                std::sync::Arc::new(egui::FontData::from_owned(font_data)),
+            );
+
+            // Insert Noto Sans at the front of the Proportional family
+            // This makes it the primary font, with egui's defaults as fallback
+            if let Some(family_fonts) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                family_fonts.insert(0, "NotoSans".to_owned());
+            }
+
+            ctx.set_fonts(fonts);
+            log::info!("Loaded Noto Sans as default proportional font");
+        } else {
+            log::warn!(
+                "Could not load Noto Sans from '{}' - using egui defaults",
+                NOTO_SANS_PATH
+            );
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        // WASM: Use egui defaults to avoid embedding large font files
+        log::info!("WASM build: using egui default fonts");
+        let _ = ctx; // Silence unused warning
+    }
+}
+
 /// Ensure the appropriate font is loaded for the given locale
 ///
 /// Returns true if font was loaded successfully, false if fallback is needed
@@ -122,6 +164,30 @@ fn apply_font(ctx: &Context, font_name: &str, font_data: Vec<u8>) {
     }
 
     ctx.set_fonts(fonts);
+}
+
+/// Debug: Print font configuration and test glyph availability
+/// Call this after fonts are initialized to see which fonts are loaded
+/// and which font provides each test character.
+pub fn debug_font_info(ctx: &Context) {
+    log::info!("=== FONT DEBUG INFO ===");
+
+    // Print font families
+    ctx.fonts(|fonts| {
+        let definitions = fonts.definitions();
+
+        log::info!("Loaded font data:");
+        for name in definitions.font_data.keys() {
+            log::info!("  - {}", name);
+        }
+
+        log::info!("Font families:");
+        for (family, names) in &definitions.families {
+            log::info!("  {:?}: {:?}", family, names);
+        }
+    });
+
+    log::info!("=== END FONT DEBUG ===");
 }
 
 /// Reset to egui's default font

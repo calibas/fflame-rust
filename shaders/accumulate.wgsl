@@ -6,8 +6,6 @@ struct AccumulateParams {
     height: u32,
     blend_factor: f32, // samples_this_frame / samples_accumulated
     histogram_color_scale: f32, // Must match compute shader value
-    low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing
-    density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression
     target_iterations_per_pixel: u32, // Per-pixel convergence threshold (0 = disabled)
     _pad0: f32,
     background_r: f32, // Unused - kept for struct layout compatibility
@@ -69,15 +67,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         b_sum / density
     ), vec3<f32>(0.0), vec3<f32>(1.0));
 
-    // Adaptive blending based on accumulated density to reduce low-density noise
-    let density_threshold = 0.1;
-    let density_factor = mix(1.0, min(prev.a / density_threshold, 1.0), params.low_density_smoothing);
-
-    // Apply density compression to slow accumulation in bright areas
-    let compression_factor = 1.0 / (1.0 + prev.a * params.density_compression_strength * 0.01);
-
-    // Multiply all factors together: global blend × density × compression × convergence
-    let final_blend = params.blend_factor * density_factor * compression_factor * convergence_gate;
+    // Multiply blend factor by convergence gate
+    let final_blend = params.blend_factor * convergence_gate;
 
     // Blend RGB: when prev.a is near zero, use new_color directly to avoid black contamination
     // As density builds, gradually trust the blended result more

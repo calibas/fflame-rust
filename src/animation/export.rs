@@ -395,7 +395,6 @@ fn apply_config_value(
         (ConfigPath::Vibrancy, ConfigValue::Float(v)) => config.vibrancy = *v,
         (ConfigPath::Saturation, ConfigValue::Float(v)) => config.saturation = *v,
         (ConfigPath::HueShift, ConfigValue::Float(v)) => config.hue_shift = *v,
-        (ConfigPath::ValueScale, ConfigValue::Float(v)) => config.value_scale = *v,
         (ConfigPath::DensityScale, ConfigValue::Float(v)) => config.density_scale = *v,
 
         // Color
@@ -488,16 +487,6 @@ fn apply_config_value(
                     AffineParam::F => final_xform.f = *v,
                     AffineParam::G => final_xform.g = *v,
                 }
-            }
-        }
-        (ConfigPath::FinalTransformColor, ConfigValue::Float(v)) => {
-            if let Some(ref mut final_xform) = config.flame.final_transform {
-                final_xform.color = *v;
-            }
-        }
-        (ConfigPath::FinalTransformColorSpeed, ConfigValue::Float(v)) => {
-            if let Some(ref mut final_xform) = config.flame.final_transform {
-                final_xform.color_speed = *v;
             }
         }
         (ConfigPath::FinalTransformVariation { variation }, ConfigValue::Float(v)) => {
@@ -1069,7 +1058,7 @@ pub async fn export_animation_fast(
     progress: &mut dyn ExportProgressCallback,
 ) -> Result<AnimationExportResult, AnimationExportError> {
     use crate::renderer::compute_kernel::FlameRenderer;
-    use crate::scene::palette::PaletteLibrary;
+    use crate::scene::palette::global_palette_library;
     use egui_wgpu::wgpu::{
         self, BufferDescriptor, BufferUsages, CommandEncoderDescriptor,
         Extent3d, MapMode, Origin3d, PollType, TextureAspect,
@@ -1127,8 +1116,8 @@ pub async fn export_animation_fast(
     let mut controller = AnimationController::new();
     controller.load(export_config.animation.clone());
 
-    // Get palette library
-    let palette_library = PaletteLibrary::new();
+    // Get palette library (use global singleton)
+    let palette_library = global_palette_library().read().unwrap();
 
     // Calculate buffer dimensions
     let bytes_per_pixel = 4u32; // RGBA8
