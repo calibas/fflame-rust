@@ -528,6 +528,7 @@ settings:
   file_project: "File & Project"
   presets: "Presets"
   load_preset: "Load Preset"
+  open_preset_library: "Open Preset Library"
   config_import_export: "📁 Config Import/Export"
 
   # Rendering Section

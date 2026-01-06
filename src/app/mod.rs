@@ -193,7 +193,6 @@ pub struct App {
     // Libraries (not saved in config)
     pub(super) palette_library: PaletteLibrary,
     pub(super) preset_library: &'static PresetLibrary,
-    pub(super) current_preset_index: usize,  // UI state, not config
 
     // Animation system
     pub(super) animation_controller: AnimationController,
@@ -281,7 +280,6 @@ impl App {
             quit_requested: false,
             palette_library,
             preset_library,
-            current_preset_index: 0,
             animation_controller: AnimationController::new(),
             metrics: PerformanceMetrics::new(),
             last_frame_time: None,
@@ -518,7 +516,6 @@ impl App {
             &mut self.palette_library,
             &self.preset_library,
             &mut self.animation_controller,
-            &mut self.current_preset_index,
             &mut self.paused,
             &mut self.quit_requested,
             can_undo,

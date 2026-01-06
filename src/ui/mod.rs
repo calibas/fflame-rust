@@ -253,7 +253,6 @@ impl EguiLayer {
         palette_library: &mut crate::scene::palette::PaletteLibrary,
         preset_library: &crate::scene::presets::PresetLibrary,
         animation_controller: &mut crate::animation::AnimationController,
-        current_preset_index: &mut usize,
         paused: &mut bool,
         quit_requested: &mut bool,
         can_undo: bool,
@@ -269,7 +268,6 @@ impl EguiLayer {
         // Note: Config change tracking now handled by ConfigManager.get_pending_actions()
         // Only non-config actions tracked here (file I/O, palette library, transforms, etc.)
 
-        let mut preset_changed = false;
         let mut add_transform = false;
         let mut delete_transform = None;
         let mut clone_transform = None;
@@ -302,6 +300,7 @@ impl EguiLayer {
         let mut open_palette_editor = false;
         let mut open_config_dialog = false;
         let mut open_triangle_editor = false;
+        let mut open_preset_library = false;
 
         // Fractal viewport size tracking
         let mut fractal_viewport_size = None;
@@ -377,12 +376,11 @@ impl EguiLayer {
                         clone_transform: &mut clone_transform,
                         undo_requested: &mut undo_requested,
                         redo_requested: &mut redo_requested,
-                        preset_changed: &mut preset_changed,
                         open_palette_editor: &mut open_palette_editor,
                         open_triangle_editor: &mut open_triangle_editor,
+                        open_preset_library: &mut open_preset_library,
 
                         // UI state
-                        current_preset_index,
                         paused,
                         png_export_with_background: &mut png_export_with_background,
                         png_export_transparent: &mut png_export_transparent,
@@ -599,6 +597,7 @@ impl EguiLayer {
             open_palette_editor,
             open_config_dialog,
             open_triangle_editor,
+            open_preset_library,
             fractal_viewport_size,
             needs_repaint,
             selected_preset_config,
