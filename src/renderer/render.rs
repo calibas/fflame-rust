@@ -8,7 +8,6 @@ use egui_wgpu::wgpu::{CommandEncoderDescriptor, Device, Queue, TextureFormat};
 
 use crate::config::FractalConfig;
 use crate::renderer::compute_kernel::FlameRenderer;
-use crate::scene::palette::global_palette_library;
 
 /// Configuration for a render job
 pub struct RenderJob<'a> {
@@ -169,14 +168,8 @@ pub async fn render(
         &job.config.flame,
     );
 
-    // Get palette (use global singleton for fallback lookup)
-    let palette_library = global_palette_library().read().unwrap();
-    let palette = job
-        .config
-        .palette
-        .as_ref()
-        .or_else(|| palette_library.get(job.config.palette_index))
-        .ok_or(RenderError::NoPaletteFound)?;
+    // Get palette directly from config (palette is always present)
+    let palette = &job.config.palette;
 
     // Load config into renderer
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {

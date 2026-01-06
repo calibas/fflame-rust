@@ -343,11 +343,9 @@ pub fn render_colors_content(
             if matches!(current_color_mode, ColorMode::Palette | ColorMode::Speed) {
                 let palettes = palette_library.palettes();
 
+                // Clone palette to avoid borrow checker issues with closures
                 let current_palette = config_manager.active_config().palette.clone();
-                let current_palette_name = current_palette
-                    .as_ref()
-                    .map(|p| p.name.clone())
-                    .unwrap_or_else(|| t!("tonemap.palette_none").to_string());
+                let current_palette_name = current_palette.name.clone();
 
                 egui::ComboBox::from_id_salt(format!("palette_selector_{}", palettes.len()))
                     .selected_text(&current_palette_name)
@@ -355,7 +353,7 @@ pub fn render_colors_content(
                         ui.label(t!("tonemap.palette"));
 
                         for palette in palettes.iter() {
-                            let is_selected = current_palette.as_ref().map(|p| &p.name) == Some(&palette.name);
+                            let is_selected = current_palette_name == palette.name;
                             if ui.selectable_label(is_selected, &palette.name).clicked() {
                                 let mut palette_copy = palette.clone();
 
@@ -365,7 +363,7 @@ pub fn render_colors_content(
                                     let mut counter = 2;
 
                                     while palette_library.palettes().iter().any(|p| p.name == new_name)
-                                        || (current_palette.as_ref().map(|p| &p.name) == Some(&new_name)) {
+                                        || current_palette_name == new_name {
                                         new_name = format!("{} (Custom {})", base_name, counter);
                                         counter += 1;
                                     }
@@ -393,30 +391,29 @@ pub fn render_colors_content(
                     }
 
                     if ui.button(t!("tonemap.clone_palette")).clicked() {
-                        if let Some(pal) = &current_palette {
-                            let mut cloned_palette = pal.clone();
-                            let base_name = &pal.name;
-                            let mut new_name = format!("{} (Copy)", base_name);
-                            let mut counter = 2;
+                        // Clone current palette
+                        let mut cloned_palette = current_palette.clone();
+                        let base_name = &current_palette.name;
+                        let mut new_name = format!("{} (Copy)", base_name);
+                        let mut counter = 2;
 
-                            while palette_library.palettes().iter().any(|p| p.name == new_name)
-                                || (current_palette.as_ref().map(|p| &p.name) == Some(&new_name)) {
-                                new_name = format!("{} (Copy {})", base_name, counter);
-                                counter += 1;
-                            }
-
-                            cloned_palette.name = new_name;
-                            cloned_palette.built_in = false;
-
-                            if let Ok(update) = config_manager.update_param(
-                                ConfigPath::Palette,
-                                cloned_palette.clone().into()
-                            ) {
-                                max_update = max_update.max(update);
-                            }
-
-                            *custom_palette = Some(cloned_palette);
+                        while palette_library.palettes().iter().any(|p| p.name == new_name)
+                            || current_palette_name == new_name {
+                            new_name = format!("{} (Copy {})", base_name, counter);
+                            counter += 1;
                         }
+
+                        cloned_palette.name = new_name;
+                        cloned_palette.built_in = false;
+
+                        if let Ok(update) = config_manager.update_param(
+                            ConfigPath::Palette,
+                            cloned_palette.clone().into()
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+
+                        *custom_palette = Some(cloned_palette);
                     }
                 });
 

@@ -268,8 +268,8 @@ fn parse_flame_element(
         path_map_style: PathMapStyle::default(),
         path_capture_mode: PathCaptureMode::default(),
         path_tracking_mode: PathTrackingMode::default(),
-        palette_index: 0,
-        palette,
+        // Use parsed palette, or default if not present in XML
+        palette: palette.unwrap_or_default(),
         palette_rotation: 0.0,  // Default, could parse from XML if present
         background_color: background,
         tonemap_mode: ToneMapMode::Logarithmic,

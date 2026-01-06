@@ -562,11 +562,7 @@ impl App {
                     self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
 
                     // Restore palette and color mode after buffer recreation
-                    let palette = resize_config.palette.as_ref()
-                        .or_else(|| self.palette_library.get(resize_config.palette_index));
-                    if let Some(palette) = palette {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, resize_config.palette_rotation);
-                    }
+                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, &resize_config.palette, resize_config.palette_rotation);
                     renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                         resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
@@ -724,12 +720,7 @@ impl App {
                         label: Some("WASM Custom Export Encoder"),
                     });
 
-                    let palette = export_config.palette.as_ref()
-                        .or_else(|| self.palette_library.get(export_config.palette_index))
-                        .cloned()
-                        .unwrap_or_default();
-
-                    temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &export_config, &palette, iterations_per_thread, 20); // burn_in - use default for WASM export
+                    temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &export_config, &export_config.palette, iterations_per_thread, 20); // burn_in - use default for WASM export
                     self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
                     // Render frames until we reach max_iterations
