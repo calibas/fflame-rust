@@ -2,7 +2,7 @@
 
 **Status:** In Progress
 **Created:** 2025-12-28
-**Updated:** 2025-01-02
+**Updated:** 2026-01-06
 **Priority:** High
 
 ## Overview
@@ -19,10 +19,11 @@ This project addresses accumulated UX debt in the fractal flame renderer. The ap
 
 ---
 
-## Phase 1: Tooltips & Context Help
+## Phase 1: Tooltips & Context Help ✅ COMPLETED
 
 **Priority:** High
 **Complexity:** Medium
+**Status:** Implemented
 
 ### Problem
 Many parameters have cryptic names (e.g., "a", "b", "c", "d", "e", "f" for affine transforms) or specialized meanings that aren't obvious to users unfamiliar with fractal flames.
@@ -358,34 +359,20 @@ When variations change, trigger shader rebuild:
 
 ---
 
-## Phase 6: Remove Unused Elements
+## Phase 6: Remove Unused Elements ✅ COMPLETED
 
 **Priority:** Medium
-**Complexity:** Low (requires investigation)
+**Complexity:** Low
+**Status:** Implemented
 
 ### Problem
 Some UI elements may not be functional or useful (e.g., "Density Scale").
 
-### Investigation Needed
-
-1. **Density Scale** (`density_scale` in Flame):
-   - Check if this is actually used in shaders
-   - If not used, remove from UI and config
-   - If used but redundant with exposure, document or remove
-
-2. **Other candidates**:
-   - Review all parameters for actual usage
-   - Check shader code for references
-   - Remove or hide non-functional controls
-
-### Action Items
-- [ ] Grep for `density_scale` usage in shaders and Rust code
-- [ ] Document findings
-- [ ] Remove or add "Expert only" flag
-
-### Estimated Work
-- Investigation: 1-2 hours
-- Cleanup: 1 hour
+### Resolution
+- Investigated `density_scale` - it IS used in accumulate shader for density normalization
+- Reviewed other parameters for actual usage
+- All current parameters are functional and documented with tooltips
+- Added i18n support for all UI strings
 
 ---
 
@@ -474,17 +461,15 @@ Recommended order based on impact and dependencies:
 
 1. ~~**Phase 4: Transform Clone**~~ ✅ Completed
 2. ~~**Phase 7: Label Experimental**~~ ✅ Completed
-3. **Phase 1: Tooltips** (High value, no dependencies) - **NEXT**
+3. ~~**Phase 1: Tooltips**~~ ✅ Completed
 4. ~~**Phase 3: Randomize Button**~~ ✅ Completed
 5. ~~**Phase 5: Transform Panel**~~ ✅ Completed
-6. **Phase 6: Remove Unused** (Investigation needed)
-7. **Phase 2: Progressive Disclosure** (Benefits from Phase 5)
+6. ~~**Phase 6: Remove Unused**~~ ✅ Completed
+7. **Phase 2: Progressive Disclosure** (Benefits from Phase 5) - **NEXT**
 8. **Phase 8: Panel Reorganization** (Major refactor, do last)
 
 ### Remaining Work
-- **Phase 1**: Tooltips for all parameters (~4-6 hours)
 - **Phase 2**: Skill level modes (Beginner/Standard/Expert) (~6-8 hours)
-- **Phase 6**: Investigate and remove unused parameters (~2-3 hours)
 - **Phase 8**: Panel reorganization (~8-10 hours)
 
 ---
