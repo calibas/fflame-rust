@@ -625,6 +625,117 @@ fractal_gallery:
   color_mode: "Color Mode: %{value}"
   variations_more: "%{first}, +%{count} more"
 
+# Animation Panel
+animation_panel:
+  title: "Animation"
+  no_animation: "No animation loaded"
+  duration_format: "(%{duration}s)"
+
+  # Playback controls
+  pause: "⏸ Pause"
+  resume: "▶ Resume"
+  play: "▶ Play"
+  stop: "⏹ Stop"
+  go_to_start: "Go to start"
+  go_to_end: "Go to end"
+
+  # Playback state
+  playing: "Playing %{direction}"
+  paused: "Paused"
+  stopped: "Stopped"
+
+  # Timeline
+  time_format: "%{current}s / %{total}s"
+  progress_percent: "(%{percent}%)"
+  frame_back: "◀ Frame"
+  frame_forward: "Frame ▶"
+
+  # Speed control
+  speed: "Speed:"
+  playback_speed: "Playback Speed"
+
+  # Loop mode
+  loop_mode: "Loop Mode:"
+  loop_once: "Once (Stop at end)"
+  loop_repeat: "Loop (Repeat)"
+  loop_pingpong: "Ping-Pong (Bounce)"
+
+  # Quality mode
+  quality: "Quality:"
+  quality_responsive: "Responsive (Fast)"
+  quality_high: "High Quality (Batched)"
+  quality_responsive_tooltip: "Fast preview - each frame updates immediately"
+  quality_high_tooltip: "Better quality - batches 4 frames for smoother results (slight latency)"
+
+  # File controls
+  new: "+ New"
+  new_tooltip: "Create a new empty animation"
+  load: "📂 Load"
+  load_tooltip: "Load animation from file"
+  save: "💾 Save"
+  save_tooltip: "Save animation to file"
+  file_format_hint: "Animation files are JSON format (.anim or .json)"
+
+  # Export section
+  export_header: "🎬 Export Animation"
+  exporting_status: "Exporting..."
+  frame_progress: "Frame %{current}/%{total}"
+  eta: "ETA: %{min}:%{sec}"
+  ffmpeg_not_found: "⚠ FFmpeg not found"
+  ffmpeg_hint: "Install FFmpeg and ensure it's in your PATH to export animations."
+  output: "Output:"
+  browse: "Browse..."
+  save_video_as: "Save Video As"
+  codec: "Codec:"
+  encoder: "Encoder:"
+  encoder_not_available: "%{encoder} (not available for %{codec})"
+  crf: "CRF"
+  quality_hint: "Lower = better quality, larger file. Around 12 is recommended"
+  resolution: "Resolution:"
+  frame_rate: "Frame Rate:"
+  iterations_thread: "Iterations/thread:"
+  total_frames: "Total frames: %{frames} (%{duration}s × %{fps} fps)"
+  export_video: "🎬 Export Video"
+  export_not_available_wasm: "Animation export not available in web version"
+
+# Path Editor Panel
+path_editor:
+  title: "Path Editor"
+
+  # Experimental warning
+  experimental: "Experimental Feature"
+  experimental_hint: "This feature is under development and may change or be removed."
+
+  # Header
+  heading: "Path Filters"
+  description: "Block paths matching specific transform sequences."
+  suffix_hint: "Suffix: matches at any iteration depth"
+  at_depth_hint: "At Depth: matches only at specific iteration count"
+
+  # Filter list
+  active_filters: "Active Filters"
+  no_filters: "No filters defined"
+  suffix: "Suffix"
+  at_depth: "At Depth"
+
+  # Add new filter
+  add_new_filter: "Add New Filter"
+  type: "Type:"
+  pattern: "Pattern:"
+  pattern_hint: "e.g., 0,1 or 0,0,1"
+  depth: "Depth:"
+  transform_indices_hint: "Transform indices: 0-%{max} (comma-separated, max 8)"
+  invalid_pattern: "⚠ Invalid pattern"
+  add_filter: "➕ Add Filter"
+
+  # Actions
+  apply_filters: "✓ Apply Filters"
+  clear_all: "Clear All"
+
+  # Status
+  status: "%{count} active filter(s)"
+  status_unsaved: "%{count} active filter(s) (unsaved)"
+
 # Settings Panel
 settings:
   title: "Settings"
