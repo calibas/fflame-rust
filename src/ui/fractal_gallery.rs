@@ -11,6 +11,7 @@
 use std::collections::VecDeque;
 
 use egui::{self, Color32, CursorIcon, Sense, Vec2};
+use rust_i18n::t;
 
 use crate::config::FractalConfig;
 use crate::storage::{GalleryItem, TextureCache, ThumbnailCache};
@@ -304,7 +305,7 @@ impl FractalConfigGallery {
 
         let name = self.current_generating_name().unwrap_or("...");
 
-        egui::Window::new("Generating Thumbnails...")
+        egui::Window::new(t!("fractal_gallery.generating_title"))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -314,27 +315,27 @@ impl FractalConfigGallery {
                         .text(format!("{}/{}", completed, total))
                         .animate(true),
                 );
-                ui.label(format!("Rendering \"{}\"...", name));
+                ui.label(t!("fractal_gallery.rendering", name = name));
             });
     }
 
     fn render_toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             // View mode toggle
-            ui.selectable_value(&mut self.view_mode, GalleryViewMode::Grid, "Grid");
-            ui.selectable_value(&mut self.view_mode, GalleryViewMode::List, "List");
+            ui.selectable_value(&mut self.view_mode, GalleryViewMode::Grid, t!("fractal_gallery.view_grid"));
+            ui.selectable_value(&mut self.view_mode, GalleryViewMode::List, t!("fractal_gallery.view_list"));
 
             ui.separator();
 
             // Search box
-            ui.label("Search:");
+            ui.label(t!("fractal_gallery.search"));
             ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
                     .desired_width(150.0)
-                    .hint_text("Filter by name..."),
+                    .hint_text(t!("fractal_gallery.search_hint")),
             );
 
-            if !self.search_query.is_empty() && ui.button("X").clicked() {
+            if !self.search_query.is_empty() && ui.button(t!("fractal_gallery.clear_search")).clicked() {
                 self.search_query.clear();
             }
 
@@ -342,7 +343,7 @@ impl FractalConfigGallery {
 
             // Thumbnail size slider (grid view only)
             if self.view_mode == GalleryViewMode::Grid {
-                ui.label("Size:");
+                ui.label(t!("fractal_gallery.size"));
                 ui.add(egui::Slider::new(&mut self.thumbnail_size, 64.0..=256.0).show_value(false));
             }
         });
@@ -506,21 +507,22 @@ impl FractalConfigGallery {
                     });
 
                     // Summary line
+                    let render_mode = match config.flame.render_mode {
+                        crate::scene::transforms::RenderMode::TwoD => t!("fractal_gallery.render_mode_2d"),
+                        crate::scene::transforms::RenderMode::ThreeD => t!("fractal_gallery.render_mode_3d"),
+                    };
                     ui.label(format!(
-                        "{} transforms, {}, {}",
-                        config.flame.transforms.len(),
-                        match config.flame.render_mode {
-                            crate::scene::transforms::RenderMode::TwoD => "2D",
-                            crate::scene::transforms::RenderMode::ThreeD => "3D",
-                        },
+                        "{}, {}, {}",
+                        t!("fractal_gallery.transforms_count", count = config.flame.transforms.len()),
+                        render_mode,
                         Self::format_variations(config),
                     ));
                 })
                 .body(|ui| {
                     // Expanded details
-                    ui.label(format!("Zoom: {:.2}", config.zoom));
-                    ui.label(format!("Max Iterations: {}", config.max_iterations));
-                    ui.label(format!("Color Mode: {:?}", config.color_mode));
+                    ui.label(t!("fractal_gallery.zoom", value = format!("{:.2}", config.zoom)));
+                    ui.label(t!("fractal_gallery.max_iterations", value = config.max_iterations));
+                    ui.label(t!("fractal_gallery.color_mode", value = format!("{:?}", config.color_mode)));
 
                     // Small thumbnail if available
                     if let Some(texture) = self.texture_cache.get(hash) {
@@ -548,11 +550,10 @@ impl FractalConfigGallery {
         if variations.len() <= 3 {
             variations.join(", ")
         } else {
-            format!(
-                "{}, +{} more",
-                variations[..2].join(", "),
-                variations.len() - 2
-            )
+            t!("fractal_gallery.variations_more",
+                first = variations[..2].join(", "),
+                count = variations.len() - 2
+            ).to_string()
         }
     }
 

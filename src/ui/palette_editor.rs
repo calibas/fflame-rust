@@ -253,8 +253,6 @@ fn render_palette_editor_core_impl(
 
             ui.separator();
 
-            // Note: Apply button removed - all changes now applied live via ConfigManager
-            ui.label(t!("palette_editor.instant_changes"));
 }
 
 pub fn render_fixed_mode_warning(

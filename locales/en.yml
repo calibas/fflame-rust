@@ -534,7 +534,6 @@ palette_editor:
   import: "✅ Import"
   clear: "🗑 Clear"
   load_palette: "📂 Load .palette"
-  instant_changes: "💡 All changes are applied instantly and tracked in undo history."
   no_palette: "⚠ No palette selected"
   no_palette_hint: "Open the Colors panel and click 'Edit Palette' to create one"
 
@@ -563,6 +562,68 @@ palette_library:
   # Tooltips
   tooltip_enable_pack: "Enable or disable this palette pack"
   tooltip_select_palette: "Click to use this palette (creates an editable copy)"
+
+# Preset Library Panel
+preset_library:
+  title: "Preset Library"
+
+# File Browser Panel
+file_browser:
+  title: "File Browser"
+  open_file: "📂 Open File..."
+  no_file_loaded: "No file loaded"
+  loaded_from_json: "(Loaded from JSON)"
+  file_icon: "📄 %{filename}"
+  empty_title: "No file loaded"
+  empty_hint: "Click 'Open File...' to browse .fflame files"
+  empty_description: "Files can contain one or multiple fractal configurations"
+  error_no_configs: "File contains no configurations"
+  error_load_failed: "Failed to load file: %{error}"
+  error_no_configs_json: "JSON contains no configurations"
+  error_parse_failed: "Failed to parse JSON: %{error}"
+  error_no_configs_provided: "No configurations provided"
+
+# Config Import/Export Dialog
+config_dialog:
+  title: "Config Import/Export"
+  heading: "Fractal Configuration"
+  description: "Export/import all settings except iterations and max iterations."
+  export_clipboard: "📋 Export to Clipboard"
+  save_as_fflame: "💾 Save as .fflame"
+  import_from_json: "Import from JSON:"
+  import: "✅ Import"
+  clear: "🗑 Clear"
+  load_fflame: "📁 Load .fflame"
+  import_apophysis_heading: "Import from Apophysis:"
+  load_apophysis: "🔥 Load Apophysis .flame"
+  apophysis_format_hint: "(XML format from Apophysis 7X)"
+
+# Fractal Gallery Widget (used by Preset Library and File Browser)
+fractal_gallery:
+  # View mode toggle
+  view_grid: "Grid"
+  view_list: "List"
+
+  # Search
+  search: "Search:"
+  search_hint: "Filter by name..."
+  clear_search: "X"
+
+  # Size slider
+  size: "Size:"
+
+  # Generation progress
+  generating_title: "Generating Thumbnails..."
+  rendering: "Rendering \"%{name}\"..."
+
+  # List view details
+  transforms_count: "%{count} transforms"
+  render_mode_2d: "2D"
+  render_mode_3d: "3D"
+  zoom: "Zoom: %{value}"
+  max_iterations: "Max Iterations: %{value}"
+  color_mode: "Color Mode: %{value}"
+  variations_more: "%{first}, +%{count} more"
 
 # Settings Panel
 settings:

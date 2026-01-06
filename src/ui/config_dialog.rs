@@ -1,3 +1,5 @@
+use rust_i18n::t;
+
 /// Render the Config Import/Export dialog content
 pub fn render_config_dialog_content(
     ui: &mut egui::Ui,
@@ -8,22 +10,22 @@ pub fn render_config_dialog_content(
     config_load_file: &mut bool,
     apophysis_import_file: &mut bool,
 ) {
-    ui.heading("Fractal Configuration");
-    ui.label("Export/import all settings except iterations and max iterations.");
+    ui.heading(t!("config_dialog.heading"));
+    ui.label(t!("config_dialog.description"));
     ui.separator();
 
     ui.horizontal(|ui| {
-        if ui.button("📋 Export to Clipboard").clicked() {
+        if ui.button(t!("config_dialog.export_clipboard")).clicked() {
             *config_export_json = Some(String::new()); // Will be filled in app.rs
         }
 
-        if ui.button("💾 Save as .fflame").clicked() {
+        if ui.button(t!("config_dialog.save_as_fflame")).clicked() {
             *config_save_file = true;
         }
     });
 
     ui.separator();
-    ui.label("Import from JSON:");
+    ui.label(t!("config_dialog.import_from_json"));
 
     egui::ScrollArea::vertical()
         .max_height(300.0)
@@ -32,25 +34,25 @@ pub fn render_config_dialog_content(
         });
 
     ui.horizontal(|ui| {
-        if ui.button("✅ Import").clicked() && !config_json_buffer.is_empty() {
+        if ui.button(t!("config_dialog.import")).clicked() && !config_json_buffer.is_empty() {
             *config_import_json = Some(config_json_buffer.clone());
         }
 
-        if ui.button("🗑 Clear").clicked() {
+        if ui.button(t!("config_dialog.clear")).clicked() {
             config_json_buffer.clear();
         }
 
-        if ui.button("📁 Load .fflame").clicked() {
+        if ui.button(t!("config_dialog.load_fflame")).clicked() {
             *config_load_file = true;
         }
     });
 
     ui.separator();
-    ui.label("Import from Apophysis:");
+    ui.label(t!("config_dialog.import_apophysis_heading"));
     ui.horizontal(|ui| {
-        if ui.button("🔥 Load Apophysis .flame").clicked() {
+        if ui.button(t!("config_dialog.load_apophysis")).clicked() {
             *apophysis_import_file = true;
         }
-        ui.label("(XML format from Apophysis 7X)");
+        ui.label(t!("config_dialog.apophysis_format_hint"));
     });
 }

@@ -146,14 +146,6 @@ pub fn render_palette_library(
 
                                     ui.put(img_rect, image);
 
-                                    // Add tooltip for the row
-                                    if name_response.hovered() || img_response.hovered() {
-                                        #[allow(deprecated)]
-                                        egui::show_tooltip_at_pointer(ui.ctx(), ui.layer_id(), egui::Id::new(("palette_tooltip", pack_idx, palette_idx)), |ui: &mut egui::Ui| {
-                                            ui.label(t!("palette_library.tooltip_select_palette"));
-                                        });
-                                    }
-
                                     // Handle clicks on either element
                                     if name_response.clicked() || img_response.clicked() {
                                         let mut palette_copy = palette.clone();
