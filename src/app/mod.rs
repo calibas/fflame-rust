@@ -204,8 +204,12 @@ pub struct App {
     pub(super) last_frame_time: Option<web_time::Instant>,
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
-    pub(super) use_overwrite_next_frame: bool,  // Persist overwrite mode for brief period after changes
-    pub(super) last_param_change_time: Option<web_time::Instant>,  // Track when params last changed
+    // Overwrite mode timing (100ms window after parameter changes)
+    // Note: This is intentionally separate from RenderModeFSM. The FSM manages high-level
+    // state transitions (Normal/Animating/Overwrite), while this simple timer handles the
+    // brief overwrite window. Moving the timer into FSM would add complexity for minimal benefit.
+    pub(super) use_overwrite_next_frame: bool,
+    pub(super) last_param_change_time: Option<web_time::Instant>,
     pub(super) rendering_complete: bool,  // True when rendering has finished (max_iterations reached)
     pub(super) clear_paths_next_frame: bool,  // Clear path buffer on next compute pass (full reset)
     pub(super) ui_needs_repaint: bool,  // Track if UI is requesting repaints (for frame rate boost)
