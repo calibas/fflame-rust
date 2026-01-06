@@ -2,7 +2,7 @@
 
 **Branch:** `feature/palette-improvements`
 **Created:** 2025-01-06
-**Status:** Planning
+**Status:** Phase 1 Complete
 
 ## Overview
 
@@ -50,26 +50,32 @@ The palette stored in `FractalConfig.flame.palette` (or `FractalConfig.palette`)
 
 ## Implementation Phases
 
-### Phase 1: Core Refactor
+### Phase 1: Core Refactor ✅ COMPLETE
 **Goal:** Simplify palette architecture
+**Completed:** 2025-01-06 (commit `7c80ed8`)
 
-- [ ] Make `Palette` required in FractalConfig (not `Option<Palette>`)
-- [ ] Remove `selected_palette_index` from app state
-- [ ] Update Palette Editor to edit `config.palette` directly
-- [ ] Update Palette Library to copy palette data on selection
-- [ ] Add "(Custom)" suffix when palette is modified from original
-- [ ] Remove palette cloning logic
-- [ ] Update existing presets to ensure all have palettes
-- [ ] Ensure undo/redo works for palette changes via ConfigManager
+- [x] Make `Palette` required in FractalConfig (not `Option<Palette>`)
+- [x] Remove `palette_index` field from FractalConfig
+- [x] Deprecate `ConfigPath::PaletteIndex` (returns 0, logs warning)
+- [x] Update Palette Editor to edit `config.palette` directly
+- [x] Update Palette Library - already had "(Custom)" suffix on selection
+- [x] Update existing presets to ensure all have palettes
+- [x] Backward compatibility - old configs with `palette: null` still load
+- [x] Undo/redo works for palette changes via ConfigManager
 
-**Files to modify:**
-- `src/config/fractal_config.rs` - Make palette required
-- `src/config/delta.rs` - Palette-related ConfigPath variants
-- `src/ui/palette_editor.rs` - Edit config palette directly
-- `src/ui/palette_library.rs` - Copy on select, no cloning
-- `src/ui/tone_mapping.rs` - Remove palette selection dropdown if present
-- `src/app/mod.rs` - Remove selected_palette_index state
-- `src/scene/presets.rs` - Ensure all presets have palettes
+**Files modified (17 total):**
+- `src/config/fractal_config.rs` - Made palette required, added deserializer
+- `src/config/manager.rs` - Updated Palette/PaletteIndex handling
+- `src/ui/palette_editor.rs` - Removed Option handling
+- `src/ui/tone_mapping.rs` - Simplified palette access
+- `src/ui/transforms.rs` - Direct palette access for color preview
+- `src/app/mod.rs`, `config.rs`, `gpu_updates.rs`, `ui_handlers.rs`
+- `src/renderer/render.rs` - Simplified palette access
+- `src/animation/export.rs` - Removed palette_library dependency
+- `src/export/renderer.rs`, `high_res.rs` - Direct palette access
+- `src/scene/presets.rs` - All presets now have required palettes
+- `src/apophysis_xml.rs` - Uses default palette if missing
+- `examples/export_presets.rs`, `test_apophysis_import.rs`
 
 ### Phase 2: Save Custom Palettes (Future)
 **Goal:** Allow users to save modified palettes to registry
