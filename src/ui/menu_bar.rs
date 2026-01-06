@@ -46,12 +46,8 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                if ui.button(t!("menu.export_png")).clicked() {
-                    menu_actions.file.export_png = true;
-                }
-
-                if ui.button(t!("menu.export_png_transparent")).clicked() {
-                    menu_actions.file.export_png_transparent = true;
+                if ui.button(t!("menu.export")).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Export);
                 }
 
                 ui.separator();

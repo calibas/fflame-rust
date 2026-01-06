@@ -21,8 +21,7 @@ menu:
   import_apophysis: "Import Apophysis XML..."
   export_apophysis: "Export Apophysis XML..."
   config_import_export: "📄 Config Import/Export..."
-  export_png: "🖼 Export PNG..."
-  export_png_transparent: "🖼 Export Transparent PNG..."
+  export: "🖼 Export PNG..."
   quit: "❌ Quit"
 
   # Edit Menu
@@ -105,8 +104,20 @@ panels:
   help: "Help"
   config_dialog: "Config Import/Export"
   path_editor: "Path Editor"
+  export: "Export"
   settings: "Settings"
   tone_mapping: "Tone Mapping"
+
+# Export Panel
+export:
+  heading: "Export PNG"
+  with_background: "Export with Background"
+  transparent: "Export Transparent"
+  use_custom_size: "Use Custom Export Size"
+  width: "Width:"
+  height: "Height:"
+  resolution: "Export resolution: %{width}x%{height}"
+  viewport_size: "Export will use current viewport size"
 
 # Transform Controls
 transform:
