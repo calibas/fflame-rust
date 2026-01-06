@@ -9,7 +9,9 @@
 //! - **Animating**: Animation playback. Changes are applied silently (no undo entries).
 //!   When exiting, creates a single undo entry for the entire animation session.
 //! - **Overwrite**: Live preview mode. Rapid parameter changes bypass normal undo coalescing
-//!   for immediate visual feedback.
+//!   for immediate visual feedback. Note: The 100ms overwrite window timing is managed by
+//!   simple fields in App (`use_overwrite_next_frame`, `last_param_change_time`) rather than
+//!   this FSM, as the timer logic is straightforward and doesn't benefit from FSM complexity.
 //!
 //! ## Transitions
 //!
