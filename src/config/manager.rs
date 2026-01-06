@@ -778,13 +778,13 @@ impl ConfigManager {
             ConfigPath::PathMapStyle => Ok(config.path_map_style.into()),
             ConfigPath::PathCaptureMode => Ok(config.path_capture_mode.into()),
             ConfigPath::PathTrackingMode => Ok(config.path_tracking_mode.into()),
-            ConfigPath::PaletteIndex => Ok((config.palette_index as u32).into()),
+            ConfigPath::PaletteIndex => {
+                // PaletteIndex is deprecated - return 0 for backward compatibility
+                Ok(0u32.into())
+            }
             ConfigPath::Palette => {
-                // Return embedded palette if it exists, otherwise None
-                match &config.palette {
-                    Some(pal) => Ok(ConfigValue::Palette(pal.clone())),
-                    None => Err(ConfigError::TypeMismatch), // No embedded palette
-                }
+                // Return the palette directly (always present)
+                Ok(ConfigValue::Palette(config.palette.clone()))
             }
             ConfigPath::PaletteRotation => Ok(config.palette_rotation.into()),
             ConfigPath::SpeedFactor => Ok(config.speed_factor.into()),
@@ -1106,10 +1106,8 @@ impl ConfigManager {
                 self.current.path_tracking_mode = value.try_into()?;
             }
             ConfigPath::PaletteIndex => {
-                let idx: u32 = value.try_into()?;
-                self.current.palette_index = idx as usize;
-                // Clear embedded palette when selecting from library
-                self.current.palette = None;
+                // PaletteIndex is deprecated - ignore updates
+                log::warn!("Attempted to set deprecated PaletteIndex - use Palette instead");
             }
             ConfigPath::Palette => {
                 if let ConfigValue::Palette(mut palette) = value {
@@ -1120,8 +1118,8 @@ impl ConfigManager {
                         palette.built_in = false;
                     }
 
-                    // Update embedded palette data
-                    self.current.palette = Some(palette);
+                    // Update palette data
+                    self.current.palette = palette;
                 }
             }
             ConfigPath::PaletteRotation => {

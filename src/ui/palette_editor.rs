@@ -277,13 +277,12 @@ pub fn render_fixed_mode_warning(
                 ui.horizontal(|ui| {
                     if ui.button(t!("palette_editor.convert_confirm")).clicked() {
                         // Get current palette and convert it
-                        if let Some(mut palette) = config_manager.active_config().palette.clone() {
-                            palette.convert_to_fixed();
-                            let _ = config_manager.update_param(
-                                crate::config::ConfigPath::Palette,
-                                palette.into()
-                            );
-                        }
+                        let mut palette = config_manager.active_config().palette.clone();
+                        palette.convert_to_fixed();
+                        let _ = config_manager.update_param(
+                            crate::config::ConfigPath::Palette,
+                            palette.into()
+                        );
                         palette_editor.show_fixed_mode_warning = false;
                     }
 
@@ -309,14 +308,8 @@ pub fn render_palette_editor_content(
     palette_load_file: &mut bool,
 ) {
     // Always read from config.palette (single source of truth)
-    let Some(config_palette) = &config_manager.active_config().palette else {
-        ui.label(t!("palette_editor.no_palette"));
-        ui.label(t!("palette_editor.no_palette_hint"));
-        return;
-    };
-
-    // Work on a mutable copy for this frame
-    let mut palette = config_palette.clone();
+    // Palette is always present - work on a mutable copy for this frame
+    let mut palette = config_manager.active_config().palette.clone();
 
     render_palette_editor_core_impl(
         ui,

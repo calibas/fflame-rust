@@ -28,19 +28,8 @@ impl App {
         // Sync working copy for renderer (only field not in ConfigManager)
         self.flame = config.flame.clone();
 
-        // Handle palette library updates
-        if let Some(ref palette) = config.palette {
-            // Add or update palette in library (prevents duplicates)
-            let _palette_idx = self.palette_library.add_or_update(palette.clone());
-
-            // Sync palette editor with the palette
-            self.egui_layer.update_palette_editor(palette.clone());
-        } else {
-            // No custom palette in config, sync with library palette
-            if let Some(palette) = self.palette_library.get(config.palette_index) {
-                self.egui_layer.update_palette_editor(palette.clone());
-            }
-        }
+        // Sync palette editor with the config palette
+        self.egui_layer.update_palette_editor(config.palette.clone());
 
         // Use the comprehensive load_config function to ensure all GPU state is synchronized
         // (including tone mapping, palette, transforms, params, etc.)
@@ -49,9 +38,7 @@ impl App {
                 label: Some("Config Import Encoder"),
             });
 
-            if let Some(palette) = config.palette.as_ref().or_else(|| self.palette_library.get(config.palette_index)) {
-                renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, palette, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in);
-            }
+            renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &config, &config.palette, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in);
 
             self.gpu.queue.submit(std::iter::once(encoder.finish()));
         }

@@ -385,8 +385,7 @@ impl PresetLibrary {
                     path_map_style: PathMapStyle::default(),
                     path_capture_mode: PathCaptureMode::default(),
                     path_tracking_mode: PathTrackingMode::default(),
-                    palette_index: 1,
-                    palette: Some(palette),
+                    palette,
                     palette_rotation: 0.0,
                     background_color: [0.0, 0.0, 0.0],
                     tonemap_mode: ToneMapMode::Logarithmic,
@@ -417,7 +416,7 @@ impl PresetLibrary {
             Self::flame_to_config_with_palette(create_3d_flame(), &palette_library),
             // Simple2 with specific view settings for testing
             {
-                let palette = palette_library.get(1).cloned();
+                let palette = palette_library.get(1).cloned().unwrap_or_default();
                 FractalConfig {
                     flame: create_simple2_flame(),
                     zoom: 54.76374,
@@ -434,7 +433,6 @@ impl PresetLibrary {
                     path_map_style: PathMapStyle::default(),
                     path_capture_mode: PathCaptureMode::default(),
                     path_tracking_mode: PathTrackingMode::default(),
-                    palette_index: 1,
                     palette,
                     palette_rotation: 0.0,
                     background_color: [0.0, 0.0, 0.0],
@@ -479,7 +477,8 @@ impl PresetLibrary {
     /// Helper to convert old Flame to FractalConfig with sensible defaults
     /// Uses a pre-created PaletteLibrary to avoid loading palettes multiple times
     fn flame_to_config_with_palette(flame: Flame, palette_library: &PaletteLibrary) -> FractalConfig {
-        let palette = palette_library.get(1).cloned(); // Fire palette
+        // Get Fire palette, or use default if not found
+        let palette = palette_library.get(1).cloned().unwrap_or_default();
 
         FractalConfig {
             flame,
@@ -497,7 +496,6 @@ impl PresetLibrary {
             path_map_style: PathMapStyle::default(),
             path_capture_mode: PathCaptureMode::default(),
             path_tracking_mode: PathTrackingMode::default(),
-            palette_index: 1,
             palette,
             palette_rotation: 0.0,
             background_color: [0.0, 0.0, 0.0],

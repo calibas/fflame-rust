@@ -81,16 +81,15 @@ fn render_color_controls(
         }
 
         // Show color preview at current palette position
-        if let Some(palette) = &config_manager.active_config().palette {
-            let actual_color = palette.sample_color(transform.color);
-            let color_swatch = egui::Color32::from_rgb(
-                (actual_color[0] * 255.0) as u8,
-                (actual_color[1] * 255.0) as u8,
-                (actual_color[2] * 255.0) as u8,
-            );
-            let (rect, _response) = ui.allocate_exact_size(egui::vec2(20.0, 18.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, 2.0, color_swatch);
-        }
+        let palette = &config_manager.active_config().palette;
+        let actual_color = palette.sample_color(transform.color);
+        let color_swatch = egui::Color32::from_rgb(
+            (actual_color[0] * 255.0) as u8,
+            (actual_color[1] * 255.0) as u8,
+            (actual_color[2] * 255.0) as u8,
+        );
+        let (rect, _response) = ui.allocate_exact_size(egui::vec2(20.0, 18.0), egui::Sense::hover());
+        ui.painter().rect_filled(rect, 2.0, color_swatch);
     });
 
     max_update

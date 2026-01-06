@@ -180,7 +180,7 @@ impl App {
             if self.palette_library.len() > 0 {
                 let palette_idx = rand::random::<usize>() % self.palette_library.len();
                 if let Some(palette) = self.palette_library.get(palette_idx) {
-                    new_config.palette = Some(palette.clone());
+                    new_config.palette = palette.clone();
                 }
             }
 

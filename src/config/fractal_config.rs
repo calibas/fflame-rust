@@ -64,12 +64,10 @@ pub struct FractalConfig {
     /// PathMap tracking mode (First = first 32 iterations, Recent = rolling window of 32 most recent)
     #[serde(default)]
     pub path_tracking_mode: PathTrackingMode,
-    #[serde(default)]
-    pub palette_index: usize,
-    /// The actual palette data (for complete reproducibility)
-    /// If None, will use palette_index from library
-    #[serde(default)]
-    pub palette: Option<Palette>,
+    /// The palette data - always present (required)
+    /// This is the single source of truth for the active palette
+    #[serde(default = "default_palette", deserialize_with = "deserialize_palette")]
+    pub palette: Palette,
     /// Palette rotation: -1.0 to 1.0, shifts palette indices (Apophysis: -128 to 128)
     #[serde(default = "default_palette_rotation")]
     pub palette_rotation: f32,
@@ -175,6 +173,20 @@ fn default_palette_rotation() -> f32 {
     super::defaults::DEFAULT_PALETTE_ROTATION
 }
 
+fn default_palette() -> Palette {
+    Palette::fire()
+}
+
+/// Custom deserializer to handle old configs with `palette: null` or missing palette
+fn deserialize_palette<'de, D>(deserializer: D) -> Result<Palette, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Try to deserialize as Option<Palette> for backward compatibility
+    let opt: Option<Palette> = Option::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_else(default_palette))
+}
+
 fn default_true() -> bool {
     true
 }
@@ -220,8 +232,7 @@ impl Default for FractalConfig {
             path_map_style: PathMapStyle::default(),
             path_capture_mode: PathCaptureMode::default(),
             path_tracking_mode: PathTrackingMode::default(),
-            palette_index: 0,
-            palette: None,
+            palette: default_palette(),
             palette_rotation: default_palette_rotation(),
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::default(),
@@ -294,8 +305,7 @@ impl FractalConfig {
 
         // Color settings
         if config.color_mode == defaults.color_mode { obj.remove("color_mode"); }
-        if config.palette_index == defaults.palette_index { obj.remove("palette_index"); }
-        if config.palette.is_none() { obj.remove("palette"); }
+        // Always include palette in output (it's required)
         if config.palette_rotation == defaults.palette_rotation { obj.remove("palette_rotation"); }
         if config.background_color == defaults.background_color { obj.remove("background_color"); }
 

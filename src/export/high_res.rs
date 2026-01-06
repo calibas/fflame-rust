@@ -15,7 +15,6 @@ use rayon::prelude::*;
 
 use crate::config::FractalConfig;
 use crate::gpu::buffers::{GpuParams, GpuTransform, GpuVariationParams, TonemapParams};
-use crate::scene::palette::Palette;
 use crate::scene::tonemap::ToneCurve;
 use crate::scene::transforms::RenderMode;
 use crate::shader_builder_v2::ShaderBuilder;
@@ -253,8 +252,8 @@ impl HighResExporter {
         // Upload variation params
         queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&variation_params));
 
-        // Create palette texture
-        let palette = config.palette.clone().unwrap_or_else(Palette::fire);
+        // Create palette texture (palette is always present)
+        let palette = &config.palette;
         let palette_data = palette.generate_texture_data(256);
         let palette_data_u8: Vec<u8> = palette_data
             .iter()
