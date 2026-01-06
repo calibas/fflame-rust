@@ -14,6 +14,7 @@ pub fn render_export_content(
     export_height: &mut u32,
     use_custom_export_size: &mut bool,
     config_manager: &mut ConfigManager,
+    viewport_size: Option<(u32, u32)>,
 ) {
     ui.heading(t!("export.heading"));
 
@@ -56,10 +57,13 @@ pub fn render_export_content(
                 );
             }
         });
-        ui.label(t!("export.resolution", width = export_width, height = export_height));
     });
 
-    if !*use_custom_export_size {
-        ui.label(t!("export.viewport_size"));
-    }
+    // Show actual export resolution
+    let (actual_width, actual_height) = if *use_custom_export_size {
+        (*export_width, *export_height)
+    } else {
+        viewport_size.unwrap_or((800, 600))
+    };
+    ui.label(t!("export.resolution", width = actual_width, height = actual_height));
 }
