@@ -20,27 +20,8 @@ pub fn render_settings_content(
     // Clone config to avoid borrow conflicts (allows mutation of config_manager in closures)
     let config = config_manager.active_config().clone();
 
-    // Section 1: File & Project
-    egui::CollapsingHeader::new(t!("settings.file_project"))
-        .default_open(true)
-        .show(ui, |ui| {
-            // Preset Library button
-            if ui.button(format!("📚 {}", t!("settings.open_preset_library"))).clicked() {
-                *open_preset_library = true;
-            }
 
-            ui.separator();
-
-            // Config Import/Export
-            if ui.button(t!("settings.config_import_export")).clicked() {
-                *open_config_dialog = true;
-            }
-
-        });
-
-    ui.separator();
-
-    // Section 2: Rendering Controls
+    // Section: Rendering Controls
     egui::CollapsingHeader::new(t!("settings.rendering"))
         .default_open(true)
         .show(ui, |ui| {
@@ -89,8 +70,6 @@ pub fn render_settings_content(
                 }
             }
 
-            ui.separator();
-
             // Render settings - Iterations per thread
             let mut temp_iterations = config_manager.system_settings().iterations_per_thread;
             let response = ui.add(egui::Slider::new(&mut temp_iterations, 1..=4096)
@@ -104,54 +83,69 @@ pub fn render_settings_content(
                 );
             }
 
-            // Burn-in iterations
-            let mut temp_burn_in = config_manager.system_settings().burn_in;
-            let response = ui.add(egui::Slider::new(&mut temp_burn_in, 0..=4096)
-                .text(t!("settings.burn_in")))
-                .on_hover_text(t!("settings.tooltip_burn_in"));
+            // Advanced settings (collapsed by default)
+            egui::CollapsingHeader::new(t!("settings.advanced"))
+                .default_open(false)
+                .show(ui, |ui| {
+                    // Burn-in iterations
+                    let mut temp_burn_in = config_manager.system_settings().burn_in;
+                    let response = ui.add(egui::Slider::new(&mut temp_burn_in, 0..=4096)
+                        .text(t!("settings.burn_in")))
+                        .on_hover_text(t!("settings.tooltip_burn_in"));
 
-            if response.changed() {
-                let _ = config_manager.update_system_setting(
-                    crate::config::ConfigPath::SystemBurnIn,
-                    temp_burn_in.into()
-                );
-            }
+                    if response.changed() {
+                        let _ = config_manager.update_system_setting(
+                            crate::config::ConfigPath::SystemBurnIn,
+                            temp_burn_in.into()
+                        );
+                    }
 
-            // Histogram color scale
-            let mut temp_histogram = config.histogram_color_scale;
-            let response = ui.add(egui::Slider::new(&mut temp_histogram, 1.0..=100.0)
-                .logarithmic(true)
-                .text(t!("settings.histogram_color_scale")))
-                .on_hover_text(t!("settings.tooltip_histogram_color_scale"));
+                    // Histogram color scale
+                    let mut temp_histogram = config.histogram_color_scale;
+                    let response = ui.add(egui::Slider::new(&mut temp_histogram, 1.0..=100.0)
+                        .logarithmic(true)
+                        .text(t!("settings.histogram_color_scale")))
+                        .on_hover_text(t!("settings.tooltip_histogram_color_scale"));
 
-            if response.changed() {
-                let _ = config_manager.update_param(
-                    ConfigPath::HistogramColorScale,
-                    temp_histogram.into()
-                );
-            }
+                    if response.changed() {
+                        let _ = config_manager.update_param(
+                            ConfigPath::HistogramColorScale,
+                            temp_histogram.into()
+                        );
+                    }
 
-            if response.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::HistogramColorScale);
-            }
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::HistogramColorScale);
+                    }
 
-            // Per-pixel iteration limit
-            let mut temp_limit = config.target_iterations_per_pixel;
-            let response = ui.add(egui::Slider::new(&mut temp_limit, 0..=1_000_000)
-                .logarithmic(true)
-                .text(t!("settings.target_iterations_per_pixel")))
-                .on_hover_text(t!("settings.tooltip_target_iterations_per_pixel"));
+                    // Per-pixel iteration limit
+                    let mut temp_limit = config.target_iterations_per_pixel;
+                    let response = ui.add(egui::Slider::new(&mut temp_limit, 0..=1_000_000)
+                        .logarithmic(true)
+                        .text(t!("settings.target_iterations_per_pixel")))
+                        .on_hover_text(t!("settings.tooltip_target_iterations_per_pixel"));
 
-            if response.changed() {
-                let _ = config_manager.update_param(
-                    ConfigPath::TargetIterationsPerPixel,
-                    temp_limit.into()
-                );
-            }
+                    if response.changed() {
+                        let _ = config_manager.update_param(
+                            ConfigPath::TargetIterationsPerPixel,
+                            temp_limit.into()
+                        );
+                    }
 
-            if response.drag_stopped() {
-                let _ = config_manager.force_commit_preview(&ConfigPath::TargetIterationsPerPixel);
-            }
+                    if response.drag_stopped() {
+                        let _ = config_manager.force_commit_preview(&ConfigPath::TargetIterationsPerPixel);
+                    }
+                                let mut temp_deterministic = config.deterministic_rng;
+                    if ui.checkbox(&mut temp_deterministic, t!("settings.deterministic_rng").as_ref())
+                        .on_hover_text(t!("settings.tooltip_deterministic_rng"))
+                        .changed()
+                    {
+                        let _ = config_manager.update_param(
+                            ConfigPath::DeterministicRng,
+                            temp_deterministic.into()
+                        );
+                    }
+                });
 
             // Dynamic blend mode
             let mut temp_dynamic = config.use_dynamic_blend;
@@ -184,8 +178,6 @@ pub fn render_settings_content(
             if response.drag_stopped() {
                 let _ = config_manager.force_commit_preview(&ConfigPath::BlendFactor);
             }
-
-            ui.separator();
 
             // VSync and frame rate settings (Desktop only - WASM always uses VSync)
             #[cfg(not(target_arch = "wasm32"))]
@@ -226,7 +218,7 @@ pub fn render_settings_content(
 
     ui.separator();
 
-    // Section 3: Export
+    // Section: Export
     egui::CollapsingHeader::new(t!("settings.export_section"))
         .default_open(false)
         .show(ui, |ui| {
@@ -270,27 +262,4 @@ pub fn render_settings_content(
             }
         });
 
-    ui.separator();
-
-    // Section 4: Preferences
-    egui::CollapsingHeader::new(t!("settings.preferences"))
-        .default_open(false)
-        .show(ui, |ui| {
-            // Language selector moved to menu bar (globe icon 🌐)
-            ui.label(t!("settings.language_hint"));
-
-            ui.separator();
-
-            // Advanced settings
-            let mut temp_deterministic = config.deterministic_rng;
-            if ui.checkbox(&mut temp_deterministic, t!("settings.deterministic_rng").as_ref())
-                .on_hover_text(t!("settings.tooltip_deterministic_rng"))
-                .changed()
-            {
-                let _ = config_manager.update_param(
-                    ConfigPath::DeterministicRng,
-                    temp_deterministic.into()
-                );
-            }
-        });
 }
