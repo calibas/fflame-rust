@@ -3,6 +3,7 @@
 //! Provides controls for adding, editing, and deleting animation tracks.
 
 use egui::Ui;
+use rust_i18n::t;
 use crate::animation::{
     Animation, AnimationController, CircularTrack, EasingFunction, Interpolation,
     Keyframe, OscillatorType, Track, TrackSource,
@@ -47,50 +48,50 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
 
     let mut categories = vec![
         ParameterCategory {
-            name: "View".to_string(),
+            name: t!("track_editor.category_view").to_string(),
             params: vec![
-                ("Zoom".to_string(), "Zoom".to_string()),
-                ("Pan X".to_string(), "PanX".to_string()),
-                ("Pan Y".to_string(), "PanY".to_string()),
-                ("Rotation".to_string(), "Rotation".to_string()),
-                ("Camera Rotation X".to_string(), "CameraRotationX".to_string()),
-                ("Camera Rotation Y".to_string(), "CameraRotationY".to_string()),
-                ("Camera Z".to_string(), "CameraZ".to_string()),
+                (t!("track_editor.param_zoom").to_string(), "Zoom".to_string()),
+                (t!("track_editor.param_pan_x").to_string(), "PanX".to_string()),
+                (t!("track_editor.param_pan_y").to_string(), "PanY".to_string()),
+                (t!("track_editor.param_rotation").to_string(), "Rotation".to_string()),
+                (t!("track_editor.param_camera_rotation_x").to_string(), "CameraRotationX".to_string()),
+                (t!("track_editor.param_camera_rotation_y").to_string(), "CameraRotationY".to_string()),
+                (t!("track_editor.param_camera_z").to_string(), "CameraZ".to_string()),
             ],
         },
         ParameterCategory {
-            name: "Tone Mapping".to_string(),
+            name: t!("track_editor.category_tone_mapping").to_string(),
             params: vec![
-                ("Exposure".to_string(), "Exposure".to_string()),
-                ("Gamma".to_string(), "Gamma".to_string()),
-                ("Gamma Threshold".to_string(), "GammaThreshold".to_string()),
-                ("Brightness".to_string(), "Brightness".to_string()),
-                ("Vibrancy".to_string(), "Vibrancy".to_string()),
-                ("Saturation".to_string(), "Saturation".to_string()),
-                ("Hue Shift".to_string(), "HueShift".to_string()),
-                ("Value Scale".to_string(), "ValueScale".to_string()),
-                ("Alpha Blend Low".to_string(), "AlphaBlendLow".to_string()),
-                ("Alpha Blend High".to_string(), "AlphaBlendHigh".to_string()),
-                ("Density Scale".to_string(), "DensityScale".to_string()),
+                (t!("track_editor.param_exposure").to_string(), "Exposure".to_string()),
+                (t!("track_editor.param_gamma").to_string(), "Gamma".to_string()),
+                (t!("track_editor.param_gamma_threshold").to_string(), "GammaThreshold".to_string()),
+                (t!("track_editor.param_brightness").to_string(), "Brightness".to_string()),
+                (t!("track_editor.param_vibrancy").to_string(), "Vibrancy".to_string()),
+                (t!("track_editor.param_saturation").to_string(), "Saturation".to_string()),
+                (t!("track_editor.param_hue_shift").to_string(), "HueShift".to_string()),
+                (t!("track_editor.param_value_scale").to_string(), "ValueScale".to_string()),
+                (t!("track_editor.param_alpha_blend_low").to_string(), "AlphaBlendLow".to_string()),
+                (t!("track_editor.param_alpha_blend_high").to_string(), "AlphaBlendHigh".to_string()),
+                (t!("track_editor.param_density_scale").to_string(), "DensityScale".to_string()),
             ],
         },
         ParameterCategory {
-            name: "Color".to_string(),
+            name: t!("track_editor.category_color").to_string(),
             params: vec![
-                ("Palette Rotation".to_string(), "PaletteRotation".to_string()),
-                ("Speed Factor".to_string(), "SpeedFactor".to_string()),
-                ("Histogram Color Scale".to_string(), "HistogramColorScale".to_string()),
-                ("Background Red".to_string(), "BackgroundColorR".to_string()),
-                ("Background Green".to_string(), "BackgroundColorG".to_string()),
-                ("Background Blue".to_string(), "BackgroundColorB".to_string()),
+                (t!("track_editor.param_palette_rotation").to_string(), "PaletteRotation".to_string()),
+                (t!("track_editor.param_speed_factor").to_string(), "SpeedFactor".to_string()),
+                (t!("track_editor.param_histogram_color_scale").to_string(), "HistogramColorScale".to_string()),
+                (t!("track_editor.param_background_r").to_string(), "BackgroundColorR".to_string()),
+                (t!("track_editor.param_background_g").to_string(), "BackgroundColorG".to_string()),
+                (t!("track_editor.param_background_b").to_string(), "BackgroundColorB".to_string()),
             ],
         },
         ParameterCategory {
-            name: "Rendering".to_string(),
+            name: t!("track_editor.category_rendering").to_string(),
             params: vec![
-                ("Blend Factor".to_string(), "BlendFactor".to_string()),
-                ("Perspective Strength".to_string(), "PerspectiveStrength".to_string()),
-                ("Low Density Smoothing".to_string(), "LowDensitySmoothing".to_string()),
+                (t!("track_editor.param_blend_factor").to_string(), "BlendFactor".to_string()),
+                (t!("track_editor.param_perspective_strength").to_string(), "PerspectiveStrength".to_string()),
+                (t!("track_editor.param_low_density_smoothing").to_string(), "LowDensitySmoothing".to_string()),
             ],
         },
     ];
@@ -100,21 +101,21 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
         let transform = &flame.transforms[i];
 
         let mut params = vec![
-            ("Weight".to_string(), format!("Transform.{}.Weight", i)),
-            ("Color".to_string(), format!("Transform.{}.Color", i)),
-            ("Color Speed".to_string(), format!("Transform.{}.ColorSpeed", i)),
-            ("Opacity".to_string(), format!("Transform.{}.Opacity", i)),
+            (t!("track_editor.param_weight").to_string(), format!("Transform.{}.Weight", i)),
+            (t!("track_editor.param_color").to_string(), format!("Transform.{}.Color", i)),
+            (t!("track_editor.param_color_speed").to_string(), format!("Transform.{}.ColorSpeed", i)),
+            (t!("track_editor.param_opacity").to_string(), format!("Transform.{}.Opacity", i)),
         ];
 
         // High-level transform operations (translate, rotate, scale)
-        params.push(("Origin X (Translate)".to_string(), format!("Transform.{}.OriginX", i)));
-        params.push(("Origin Y (Translate)".to_string(), format!("Transform.{}.OriginY", i)));
-        params.push(("Rotation".to_string(), format!("Transform.{}.Rotation", i)));
-        params.push(("Scale".to_string(), format!("Transform.{}.Scale", i)));
+        params.push((t!("track_editor.param_origin_x").to_string(), format!("Transform.{}.OriginX", i)));
+        params.push((t!("track_editor.param_origin_y").to_string(), format!("Transform.{}.OriginY", i)));
+        params.push((t!("track_editor.param_rotation").to_string(), format!("Transform.{}.Rotation", i)));
+        params.push((t!("track_editor.param_scale").to_string(), format!("Transform.{}.Scale", i)));
 
         // Raw affine parameters (for advanced users)
         for param in ['A', 'B', 'C', 'D', 'E', 'F', 'G'] {
-            params.push((format!("Affine {}", param), format!("Transform.{}.Affine.{}", i, param)));
+            params.push((t!("track_editor.param_affine", param = param).to_string(), format!("Transform.{}.Affine.{}", i, param)));
         }
 
         // Active variations for this transform
@@ -131,7 +132,7 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
                 .map(|v| v.display_name.clone())
                 .unwrap_or_else(|| var_name.to_string());
             params.push((
-                format!("{} (Weight)", display_name),
+                t!("track_editor.param_variation_weight", name = display_name.as_str()).to_string(),
                 format!("Transform.{}.Variation.{}", i, var_name),
             ));
 
@@ -139,7 +140,7 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
             if let Some(var_info) = registry.get(var_name) {
                 for param_def in &var_info.parameters {
                     params.push((
-                        format!("{} - {}", display_name, param_def.display_name),
+                        t!("track_editor.param_variation_param", name = display_name.as_str(), param = param_def.display_name.as_str()).to_string(),
                         format!("Transform.{}.VariationParam.{}.{}", i, var_name, param_def.name),
                     ));
                 }
@@ -147,7 +148,7 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
         }
 
         categories.push(ParameterCategory {
-            name: format!("Transform {}", i),
+            name: t!("track_editor.category_transform", index = i).to_string(),
             params,
         });
     }
@@ -155,17 +156,17 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
     // Add Final Transform category if final transform is enabled
     if let Some(ref final_xform) = flame.final_transform {
         let mut params = vec![
-            ("Origin X (Translate)".to_string(), "FinalTransform.OriginX".to_string()),
-            ("Origin Y (Translate)".to_string(), "FinalTransform.OriginY".to_string()),
-            ("Rotation".to_string(), "FinalTransform.Rotation".to_string()),
-            ("Scale".to_string(), "FinalTransform.Scale".to_string()),
-            ("Color".to_string(), "FinalTransform.Color".to_string()),
-            ("Color Speed".to_string(), "FinalTransform.ColorSpeed".to_string()),
+            (t!("track_editor.param_origin_x").to_string(), "FinalTransform.OriginX".to_string()),
+            (t!("track_editor.param_origin_y").to_string(), "FinalTransform.OriginY".to_string()),
+            (t!("track_editor.param_rotation").to_string(), "FinalTransform.Rotation".to_string()),
+            (t!("track_editor.param_scale").to_string(), "FinalTransform.Scale".to_string()),
+            (t!("track_editor.param_color").to_string(), "FinalTransform.Color".to_string()),
+            (t!("track_editor.param_color_speed").to_string(), "FinalTransform.ColorSpeed".to_string()),
         ];
 
         // Raw affine parameters (for advanced users)
         for param in ['A', 'B', 'C', 'D', 'E', 'F', 'G'] {
-            params.push((format!("Affine {}", param), format!("FinalTransform.Affine.{}", param)));
+            params.push((t!("track_editor.param_affine", param = param).to_string(), format!("FinalTransform.Affine.{}", param)));
         }
 
         // Active variations for final transform
@@ -180,14 +181,14 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
                 .map(|v| v.display_name.clone())
                 .unwrap_or_else(|| var_name.to_string());
             params.push((
-                format!("{} (Weight)", display_name),
+                t!("track_editor.param_variation_weight", name = display_name.as_str()).to_string(),
                 format!("FinalTransform.Variation.{}", var_name),
             ));
 
             if let Some(var_info) = registry.get(var_name) {
                 for param_def in &var_info.parameters {
                     params.push((
-                        format!("{} - {}", display_name, param_def.display_name),
+                        t!("track_editor.param_variation_param", name = display_name.as_str(), param = param_def.display_name.as_str()).to_string(),
                         format!("FinalTransform.VariationParam.{}.{}", var_name, param_def.name),
                     ));
                 }
@@ -195,7 +196,7 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
         }
 
         categories.push(ParameterCategory {
-            name: "Final Transform".to_string(),
+            name: t!("track_editor.category_final_transform").to_string(),
             params,
         });
     }
@@ -215,12 +216,12 @@ pub fn render_track_editor(
     // Animation header with name and duration
     if let Some(ref mut animation) = controller.animation {
         ui.horizontal(|ui| {
-            ui.label("Name:");
+            ui.label(t!("track_editor.name"));
             ui.text_edit_singleline(&mut animation.name);
         });
 
         ui.horizontal(|ui| {
-            ui.label("Duration:");
+            ui.label(t!("track_editor.duration"));
             ui.add(egui::DragValue::new(&mut animation.duration)
                 .range(0.1..=3600.0)
                 .speed(0.1)
@@ -235,11 +236,11 @@ pub fn render_track_editor(
         .map(|a| a.tracks.len() + a.circular_tracks.len())
         .unwrap_or(0);
 
-    egui::CollapsingHeader::new(format!("Tracks ({})", track_count))
+    egui::CollapsingHeader::new(t!("track_editor.tracks_header", count = track_count))
         .default_open(true)
         .show(ui, |ui| {
             // Add track button
-            if ui.add_enabled(has_animation, egui::Button::new("+ Add Track")).clicked() {
+            if ui.add_enabled(has_animation, egui::Button::new(t!("track_editor.add_track"))).clicked() {
                 state.add_track_dialog_open = true;
             }
 
@@ -276,21 +277,21 @@ fn render_add_track_dialog(
         .inner_margin(8.0)
         .corner_radius(4.0)
         .show(ui, |ui| {
-            ui.label("Add New Track");
+            ui.label(t!("track_editor.add_new_track"));
 
             // Track type selection
             ui.horizontal(|ui| {
-                ui.label("Type:");
+                ui.label(t!("track_editor.type"));
                 egui::ComboBox::from_id_salt("new_track_type")
                     .selected_text(match state.new_track_type {
-                        NewTrackType::Keyframe => "Keyframe",
-                        NewTrackType::Oscillator => "Oscillator",
-                        NewTrackType::Circular => "Circular",
+                        NewTrackType::Keyframe => t!("track_editor.type_keyframe"),
+                        NewTrackType::Oscillator => t!("track_editor.type_oscillator"),
+                        NewTrackType::Circular => t!("track_editor.type_circular"),
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut state.new_track_type, NewTrackType::Keyframe, "Keyframe");
-                        ui.selectable_value(&mut state.new_track_type, NewTrackType::Oscillator, "Oscillator");
-                        ui.selectable_value(&mut state.new_track_type, NewTrackType::Circular, "Circular");
+                        ui.selectable_value(&mut state.new_track_type, NewTrackType::Keyframe, t!("track_editor.type_keyframe").as_ref());
+                        ui.selectable_value(&mut state.new_track_type, NewTrackType::Oscillator, t!("track_editor.type_oscillator").as_ref());
+                        ui.selectable_value(&mut state.new_track_type, NewTrackType::Circular, t!("track_editor.type_circular").as_ref());
                     });
             });
 
@@ -298,12 +299,12 @@ fn render_add_track_dialog(
             let categories = animatable_parameters(flame);
 
             ui.horizontal(|ui| {
-                ui.label("Target:");
+                ui.label(t!("track_editor.target"));
                 egui::ComboBox::from_id_salt("new_track_target")
                     .selected_text(if state.new_track_target.is_empty() {
-                        "Select..."
+                        t!("track_editor.select").to_string()
                     } else {
-                        &state.new_track_target
+                        state.new_track_target.clone()
                     })
                     .show_ui(ui, |ui| {
                         for category in &categories {
@@ -324,12 +325,12 @@ fn render_add_track_dialog(
             // Second target for circular tracks
             if state.new_track_type == NewTrackType::Circular {
                 ui.horizontal(|ui| {
-                    ui.label("Target Y:");
+                    ui.label(t!("track_editor.target_y"));
                     egui::ComboBox::from_id_salt("new_track_target_y")
                         .selected_text(if state.new_track_target_y.is_empty() {
-                            "Select..."
+                            t!("track_editor.select").to_string()
                         } else {
-                            &state.new_track_target_y
+                            state.new_track_target_y.clone()
                         })
                         .show_ui(ui, |ui| {
                             for category in &categories {
@@ -355,7 +356,7 @@ fn render_add_track_dialog(
                     _ => !state.new_track_target.is_empty(),
                 };
 
-                if ui.add_enabled(can_add, egui::Button::new("Add")).clicked() {
+                if ui.add_enabled(can_add, egui::Button::new(t!("track_editor.add"))).clicked() {
                     if let Some(ref mut animation) = controller.animation {
                         match state.new_track_type {
                             NewTrackType::Keyframe => {
@@ -408,7 +409,7 @@ fn render_add_track_dialog(
                     state.new_track_target_y.clear();
                 }
 
-                if ui.button("Cancel").clicked() {
+                if ui.button(t!("track_editor.cancel")).clicked() {
                     state.add_track_dialog_open = false;
                     state.new_track_target.clear();
                     state.new_track_target_y.clear();
@@ -433,14 +434,14 @@ fn render_tracks(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditor
                     ui.horizontal(|ui| {
                         // Track name and type
                         let track_type_str = match &track.source {
-                            TrackSource::Keyframes { keyframes } => format!("Keyframes ({})", keyframes.len()),
+                            TrackSource::Keyframes { keyframes } => t!("track_editor.keyframes_count", count = keyframes.len()).to_string(),
                             TrackSource::Oscillator { oscillator_type, .. } => format!("{:?}", oscillator_type),
                         };
                         ui.strong(&path);
                         ui.label(format!("({})", track_type_str));
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("X").on_hover_text("Delete track").clicked() {
+                            if ui.small_button("X").on_hover_text(t!("track_editor.delete_track").as_ref()).clicked() {
                                 track_to_delete = Some(path.clone());
                             }
                         });
@@ -450,47 +451,47 @@ fn render_tracks(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditor
                     match &mut track.source {
                         TrackSource::Keyframes { .. } => {
                             ui.horizontal(|ui| {
-                                ui.label("Interpolation:");
+                                ui.label(t!("track_editor.interpolation"));
                                 egui::ComboBox::from_id_salt(format!("interp_{}", path))
                                     .selected_text(format!("{:?}", track.interpolation))
                                     .width(100.0)
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(&mut track.interpolation, Interpolation::Step, "Step");
-                                        ui.selectable_value(&mut track.interpolation, Interpolation::Linear, "Linear");
-                                        ui.selectable_value(&mut track.interpolation, Interpolation::Smooth, "Smooth");
-                                        ui.selectable_value(&mut track.interpolation, Interpolation::Sinusoidal, "Sinusoidal");
+                                        ui.selectable_value(&mut track.interpolation, Interpolation::Step, t!("track_editor.interpolation_step").as_ref());
+                                        ui.selectable_value(&mut track.interpolation, Interpolation::Linear, t!("track_editor.interpolation_linear").as_ref());
+                                        ui.selectable_value(&mut track.interpolation, Interpolation::Smooth, t!("track_editor.interpolation_smooth").as_ref());
+                                        ui.selectable_value(&mut track.interpolation, Interpolation::Sinusoidal, t!("track_editor.interpolation_sinusoidal").as_ref());
                                     });
                             });
 
-                            if ui.small_button("Edit Keyframes").clicked() {
+                            if ui.small_button(t!("track_editor.edit_keyframes")).clicked() {
                                 state.editing_keyframes_for = Some(path.clone());
                             }
                         }
                         TrackSource::Oscillator { oscillator_type, center, amplitude, frequency, phase } => {
                             ui.horizontal(|ui| {
-                                ui.label("Type:");
+                                ui.label(t!("track_editor.osc_type"));
                                 egui::ComboBox::from_id_salt(format!("osc_type_{}", path))
                                     .selected_text(format!("{:?}", oscillator_type))
                                     .width(80.0)
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(oscillator_type, OscillatorType::Sine, "Sine");
-                                        ui.selectable_value(oscillator_type, OscillatorType::Triangle, "Triangle");
-                                        ui.selectable_value(oscillator_type, OscillatorType::Sawtooth, "Sawtooth");
-                                        ui.selectable_value(oscillator_type, OscillatorType::Square, "Square");
+                                        ui.selectable_value(oscillator_type, OscillatorType::Sine, t!("track_editor.osc_sine").as_ref());
+                                        ui.selectable_value(oscillator_type, OscillatorType::Triangle, t!("track_editor.osc_triangle").as_ref());
+                                        ui.selectable_value(oscillator_type, OscillatorType::Sawtooth, t!("track_editor.osc_sawtooth").as_ref());
+                                        ui.selectable_value(oscillator_type, OscillatorType::Square, t!("track_editor.osc_square").as_ref());
                                     });
                             });
 
                             ui.horizontal(|ui| {
-                                ui.label("Center:");
+                                ui.label(t!("track_editor.center"));
                                 ui.add(egui::DragValue::new(center).speed(0.01));
-                                ui.label("Amplitude:");
+                                ui.label(t!("track_editor.amplitude"));
                                 ui.add(egui::DragValue::new(amplitude).speed(0.01));
                             });
 
                             ui.horizontal(|ui| {
-                                ui.label("Frequency:");
+                                ui.label(t!("track_editor.frequency"));
                                 ui.add(egui::DragValue::new(frequency).speed(0.01).suffix(" Hz"));
-                                ui.label("Phase:");
+                                ui.label(t!("track_editor.phase"));
                                 ui.add(egui::DragValue::new(phase).speed(0.01));
                             });
                         }
@@ -517,30 +518,30 @@ fn render_tracks(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditor
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.strong(format!("{}, {}", circular.target_x, circular.target_y));
-                    ui.label("(Circular)");
+                    ui.label(t!("track_editor.circular_label"));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("X").on_hover_text("Delete track").clicked() {
+                        if ui.small_button("X").on_hover_text(t!("track_editor.delete_track").as_ref()).clicked() {
                             circular_to_delete = Some(i);
                         }
                     });
                 });
 
                 ui.horizontal(|ui| {
-                    ui.label("Center:");
+                    ui.label(t!("track_editor.center"));
                     ui.add(egui::DragValue::new(&mut circular.center_x).speed(0.01).prefix("X: "));
                     ui.add(egui::DragValue::new(&mut circular.center_y).speed(0.01).prefix("Y: "));
                 });
 
                 ui.horizontal(|ui| {
-                    ui.label("Radius:");
+                    ui.label(t!("track_editor.radius"));
                     ui.add(egui::DragValue::new(&mut circular.radius).speed(0.01));
-                    ui.label("Speed:");
+                    ui.label(t!("track_editor.speed"));
                     ui.add(egui::DragValue::new(&mut circular.speed).speed(0.01).suffix(" rev/s"));
                 });
 
                 ui.horizontal(|ui| {
-                    ui.label("Phase:");
+                    ui.label(t!("track_editor.phase"));
                     ui.add(egui::DragValue::new(&mut circular.phase).speed(0.01).suffix(" rad"));
                 });
             });
@@ -565,17 +566,17 @@ fn render_keyframe_editor(
 
     if let Some(track) = animation.tracks.get_mut(track_path) {
         if let TrackSource::Keyframes { ref mut keyframes } = track.source {
-            egui::Window::new(format!("Keyframes: {}", track_path))
+            egui::Window::new(t!("track_editor.keyframe_window_title", path = track_path))
                 .collapsible(false)
                 .resizable(true)
                 .show(ui.ctx(), |ui| {
                     // Header row
                     ui.horizontal(|ui| {
-                        ui.label("Time");
+                        ui.label(t!("track_editor.time"));
                         ui.add_space(40.0);
-                        ui.label("Value");
+                        ui.label(t!("track_editor.value"));
                         ui.add_space(40.0);
-                        ui.label("Easing");
+                        ui.label(t!("track_editor.easing"));
                     });
 
                     ui.separator();
@@ -603,16 +604,16 @@ fn render_keyframe_editor(
                                 .selected_text(format!("{:?}", keyframe.easing))
                                 .width(120.0)
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::Linear, "Linear");
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseIn, "EaseIn");
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseOut, "EaseOut");
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInOut, "EaseInOut");
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInCubic, "EaseInCubic");
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseOutCubic, "EaseOutCubic");
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInOutCubic, "EaseInOutCubic");
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInSine, "EaseInSine");
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseOutSine, "EaseOutSine");
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInOutSine, "EaseInOutSine");
+                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::Linear, t!("track_editor.easing_linear").as_ref());
+                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseIn, t!("track_editor.easing_easein").as_ref());
+                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseOut, t!("track_editor.easing_easeout").as_ref());
+                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInOut, t!("track_editor.easing_easeinout").as_ref());
+                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInCubic, t!("track_editor.easing_easeincubic").as_ref());
+                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseOutCubic, t!("track_editor.easing_easeoutcubic").as_ref());
+                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInOutCubic, t!("track_editor.easing_easeinoutcubic").as_ref());
+                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInSine, t!("track_editor.easing_easeinsine").as_ref());
+                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseOutSine, t!("track_editor.easing_easeoutsine").as_ref());
+                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInOutSine, t!("track_editor.easing_easeinoutsine").as_ref());
                                 });
 
                             // Delete button (only if more than 1 keyframe)
@@ -633,7 +634,7 @@ fn render_keyframe_editor(
 
                     // Add keyframe button
                     ui.horizontal(|ui| {
-                        if ui.button("+ Add Keyframe").clicked() {
+                        if ui.button(t!("track_editor.add_keyframe")).clicked() {
                             // Add at the end with interpolated value
                             let last_time = keyframes.last().map(|k| k.time).unwrap_or(0.0);
                             let last_value = keyframes.last()
@@ -647,11 +648,11 @@ fn render_keyframe_editor(
                             });
                         }
 
-                        if ui.button("Sort by Time").clicked() {
+                        if ui.button(t!("track_editor.sort_by_time")).clicked() {
                             keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
                         }
 
-                        if ui.button("Done").clicked() {
+                        if ui.button(t!("track_editor.done")).clicked() {
                             // Sort keyframes by time before closing
                             keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
                             state.editing_keyframes_for = None;

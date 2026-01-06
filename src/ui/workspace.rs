@@ -4,6 +4,7 @@
 //! for different workflows (Beginner, Standard, Advanced, Export).
 
 use egui_dock::{DockState};
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
 /// Identifies which panel to display
@@ -45,24 +46,25 @@ pub enum PanelType {
 
 impl std::fmt::Display for PanelType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PanelType::FractalViewport => write!(f, "Fractal"),
-            PanelType::Transforms => write!(f, "Transforms"),
-            PanelType::TriangleEditor => write!(f, "Triangle Editor"),
-            PanelType::Colors => write!(f, "Colors"),
-            PanelType::PaletteEditor => write!(f, "Palette Editor"),
-            PanelType::PaletteLibrary => write!(f, "Palette Library"),
-            PanelType::PresetLibrary => write!(f, "Preset Library"),
-            PanelType::FileBrowser => write!(f, "File Browser"),
-            PanelType::View => write!(f, "View"),
-            PanelType::Rendering => write!(f, "Rendering"),
-            PanelType::History => write!(f, "History"),
-            PanelType::Animation => write!(f, "Animation"),
-            PanelType::Performance => write!(f, "Performance"),
-            PanelType::Help => write!(f, "Help"),
-            PanelType::ConfigDialog => write!(f, "Config Import/Export"),
-            PanelType::PathEditor => write!(f, "Path Editor"),
-        }
+        let title = match self {
+            PanelType::FractalViewport => t!("panels.fractal"),
+            PanelType::Transforms => t!("panels.transforms"),
+            PanelType::TriangleEditor => t!("panels.triangle_editor"),
+            PanelType::Colors => t!("panels.colors"),
+            PanelType::PaletteEditor => t!("panels.palette_editor"),
+            PanelType::PaletteLibrary => t!("panels.palette_library"),
+            PanelType::PresetLibrary => t!("panels.preset_library"),
+            PanelType::FileBrowser => t!("panels.file_browser"),
+            PanelType::View => t!("panels.view"),
+            PanelType::Rendering => t!("panels.rendering"),
+            PanelType::History => t!("panels.history"),
+            PanelType::Animation => t!("panels.animation"),
+            PanelType::Performance => t!("panels.performance"),
+            PanelType::Help => t!("panels.help"),
+            PanelType::ConfigDialog => t!("panels.config_dialog"),
+            PanelType::PathEditor => t!("panels.path_editor"),
+        };
+        write!(f, "{}", title)
     }
 }
 

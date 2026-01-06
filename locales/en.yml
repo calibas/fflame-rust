@@ -87,18 +87,26 @@ help:
   drag_pan: "  Drag     - Pan view"
   wheel_zoom: "  Wheel    - Zoom (toward cursor)"
 
-# Panel Titles
+# Panel Titles (used in tabs and window titles)
 panels:
+  fractal: "Fractal"
   transforms: "Transforms"
   triangle_editor: "Triangle Editor"
   colors: "Colors"
   palette_editor: "Palette Editor"
+  palette_library: "Palette Library"
+  preset_library: "Preset Library"
+  file_browser: "File Browser"
   view: "View"
   rendering: "Rendering"
   history: "History"
+  animation: "Animation"
+  performance: "Performance"
+  help: "Help"
+  config_dialog: "Config Import/Export"
+  path_editor: "Path Editor"
   settings: "Settings"
   tone_mapping: "Tone Mapping"
-  performance: "Performance"
 
 # Transform Controls
 transform:
@@ -714,6 +722,130 @@ animation_panel:
   export_video: "🎬 Export Video"
   export_not_available_wasm: "Animation export not available in web version"
 
+# Track Editor (Animation panel sub-section)
+track_editor:
+  # Animation header
+  name: "Name:"
+  duration: "Duration:"
+
+  # Track list
+  tracks_header: "Tracks (%{count})"
+  add_track: "+ Add Track"
+
+  # Add track dialog
+  add_new_track: "Add New Track"
+  type: "Type:"
+  type_keyframe: "Keyframe"
+  type_oscillator: "Oscillator"
+  type_circular: "Circular"
+  target: "Target:"
+  target_y: "Target Y:"
+  select: "Select..."
+  add: "Add"
+  cancel: "Cancel"
+
+  # Track types display
+  keyframes_count: "Keyframes (%{count})"
+  circular_label: "(Circular)"
+  delete_track: "Delete track"
+
+  # Track controls
+  interpolation: "Interpolation:"
+  interpolation_step: "Step"
+  interpolation_linear: "Linear"
+  interpolation_smooth: "Smooth"
+  interpolation_sinusoidal: "Sinusoidal"
+  edit_keyframes: "Edit Keyframes"
+
+  # Oscillator controls
+  osc_type: "Type:"
+  osc_sine: "Sine"
+  osc_triangle: "Triangle"
+  osc_sawtooth: "Sawtooth"
+  osc_square: "Square"
+  center: "Center:"
+  amplitude: "Amplitude:"
+  frequency: "Frequency:"
+  phase: "Phase:"
+
+  # Circular track controls
+  radius: "Radius:"
+  speed: "Speed:"
+
+  # Keyframe editor
+  keyframe_window_title: "Keyframes: %{path}"
+  time: "Time"
+  value: "Value"
+  easing: "Easing"
+  easing_linear: "Linear"
+  easing_easein: "EaseIn"
+  easing_easeout: "EaseOut"
+  easing_easeinout: "EaseInOut"
+  easing_easeincubic: "EaseInCubic"
+  easing_easeoutcubic: "EaseOutCubic"
+  easing_easeinoutcubic: "EaseInOutCubic"
+  easing_easeinsine: "EaseInSine"
+  easing_easeoutsine: "EaseOutSine"
+  easing_easeinoutsine: "EaseInOutSine"
+  add_keyframe: "+ Add Keyframe"
+  sort_by_time: "Sort by Time"
+  done: "Done"
+
+  # Animatable parameter categories
+  category_view: "View"
+  category_tone_mapping: "Tone Mapping"
+  category_color: "Color"
+  category_rendering: "Rendering"
+  category_transform: "Transform %{index}"
+  category_final_transform: "Final Transform"
+
+  # Animatable parameter names (View)
+  param_zoom: "Zoom"
+  param_pan_x: "Pan X"
+  param_pan_y: "Pan Y"
+  param_rotation: "Rotation"
+  param_camera_rotation_x: "Camera Rotation X"
+  param_camera_rotation_y: "Camera Rotation Y"
+  param_camera_z: "Camera Z"
+
+  # Animatable parameter names (Tone Mapping)
+  param_exposure: "Exposure"
+  param_gamma: "Gamma"
+  param_gamma_threshold: "Gamma Threshold"
+  param_brightness: "Brightness"
+  param_vibrancy: "Vibrancy"
+  param_saturation: "Saturation"
+  param_hue_shift: "Hue Shift"
+  param_value_scale: "Value Scale"
+  param_alpha_blend_low: "Alpha Blend Low"
+  param_alpha_blend_high: "Alpha Blend High"
+  param_density_scale: "Density Scale"
+
+  # Animatable parameter names (Color)
+  param_palette_rotation: "Palette Rotation"
+  param_speed_factor: "Speed Factor"
+  param_histogram_color_scale: "Histogram Color Scale"
+  param_background_r: "Background Red"
+  param_background_g: "Background Green"
+  param_background_b: "Background Blue"
+
+  # Animatable parameter names (Rendering)
+  param_blend_factor: "Blend Factor"
+  param_perspective_strength: "Perspective Strength"
+  param_low_density_smoothing: "Low Density Smoothing"
+
+  # Animatable parameter names (Transform)
+  param_weight: "Weight"
+  param_color: "Color"
+  param_color_speed: "Color Speed"
+  param_opacity: "Opacity"
+  param_origin_x: "Origin X (Translate)"
+  param_origin_y: "Origin Y (Translate)"
+  param_scale: "Scale"
+  param_affine: "Affine %{param}"
+  param_variation_weight: "%{name} (Weight)"
+  param_variation_param: "%{name} - %{param}"
+
 # Path Editor Panel
 path_editor:
   title: "Path Editor"
@@ -820,13 +952,37 @@ settings:
   tooltip_max_iterations: "Maximum iterations before rendering stops.\nHigher = more detail and smoother gradients.\nLower = faster preview, may look noisy."
   tooltip_deterministic_rng: "Use fixed random seed for reproducible rendering.\nEnable for testing/comparison, disable for varied output."
 
-# Performance Metrics
+# Performance Panel
 performance:
-  fps: "FPS"
-  frame_time: "Frame Time"
-  total_iterations: "Total Iterations"
-  iterations_per_second: "Iterations/sec"
-  gpu_time: "GPU Time"
+  # Header
+  heading: "Fractal Flame Renderer"
+  version: "Version: %{version}"
+  build: "Build: %{hash} (%{branch})"
+  built: "Built: %{time}"
+  profile: "Profile: %{profile}"
+
+  # Frame statistics
+  fps: "FPS: %{value}"
+  frame_time: "Frame Time: %{value} ms"
+  frame_time_range: "Frame Time Range: %{min} - %{max} ms"
+
+  # Component timings
+  component_timings: "Component Timings"
+  compute_time: "  Compute: %{value} ms"
+  accumulate_time: "  Accumulate: %{value} ms"
+  tonemap_time: "  Tonemap: %{value} ms"
+  ui_time: "  UI: %{value} ms"
+  submit_time: "  Submit: %{value} ms"
+  present_time: "  Present: %{value} ms"
+  total_measured: "  Total Measured: %{value} ms"
+  render_function: "  Render Function: %{value} ms"
+  overhead: "  Overhead (event loop): %{value} ms"
+
+  # Iteration counts
+  total_frames: "Total Frames: %{count}"
+  resolution: "Resolution: %{width}x%{height}"
+  frames_accumulated: "Frames Accumulated: %{count}"
+  total_iterations: "Total Iterations: %{count}"
 
 # Common UI Elements
 common:
@@ -884,6 +1040,29 @@ messages:
   error: "Error"
   warning: "Warning"
   info: "Info"
+
+# Fractal Viewport
+viewport:
+  initializing: "Initializing fractal renderer..."
+
+# Path Info Overlay (right-click in PathMap mode)
+path_overlay:
+  title: "Path Info"
+  coordinates: "Coordinates"
+  pixel: "  Pixel:"
+  pixel_offset: "(+%{distance}px)"
+  fractal: "  Fractal:"
+  ifs_start: "  IFS Start:"
+  path_label: "Path"
+  path_iterations: "(%{count} iterations)"
+  path_empty: "  (empty)"
+  debug_prefix_distinct: "Debug (Prefix Distinct):"
+  debug_path0: "  path0: 0x%{value}"
+  debug_mixed: "  mixed: 0x%{value} (path0 ^ iter*φ)"
+  debug_hash: "  hash:  0x%{value}"
+  debug_hue: "  hue:   %{value}"
+  preview_title: "Preview (click to select)"
+  close_hint: "Right-click elsewhere to close"
 
 # Errors
 errors:

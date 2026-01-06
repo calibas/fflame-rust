@@ -1,6 +1,7 @@
 //! TabViewer implementation for rendering docked panels
 
 use egui_dock::{egui, TabViewer};
+use rust_i18n::t;
 use super::workspace::PanelType;
 
 /// Context needed by panels to render
@@ -453,7 +454,7 @@ impl<'a> PanelViewer<'a> {
         } else {
             // Fallback if texture not available yet
             ui.centered_and_justified(|ui| {
-                ui.label("Initializing fractal renderer...");
+                ui.label(t!("viewport.initializing"));
             });
         }
     }
@@ -605,7 +606,7 @@ impl<'a> PanelViewer<'a> {
 
                         // Header row with close button
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Path Info").strong().color(egui::Color32::WHITE));
+                            ui.label(egui::RichText::new(t!("path_overlay.title")).strong().color(egui::Color32::WHITE));
 
                             // Push close button to the right
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -624,17 +625,17 @@ impl<'a> PanelViewer<'a> {
                                 ui.set_min_width(280.0);
 
                                 // Pixel coordinates section
-                                ui.label(egui::RichText::new("Coordinates").strong().color(egui::Color32::LIGHT_GRAY));
+                                ui.label(egui::RichText::new(t!("path_overlay.coordinates")).strong().color(egui::Color32::LIGHT_GRAY));
                                 ui.add_space(2.0);
 
                                 // View space (pixel) coordinates
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("  Pixel:").color(egui::Color32::GRAY));
+                                    ui.label(egui::RichText::new(t!("path_overlay.pixel")).color(egui::Color32::GRAY));
                                     ui.label(egui::RichText::new(format!("({}, {})",
                                         click_info.found_pixel.0, click_info.found_pixel.1))
                                         .color(egui::Color32::WHITE));
                                     if click_info.search_distance > 0.0 {
-                                        ui.label(egui::RichText::new(format!("(+{:.1}px)", click_info.search_distance))
+                                        ui.label(egui::RichText::new(t!("path_overlay.pixel_offset", distance = format!("{:.1}", click_info.search_distance)))
                                             .small()
                                             .color(egui::Color32::YELLOW));
                                     }
@@ -642,7 +643,7 @@ impl<'a> PanelViewer<'a> {
 
                                 // Fractal space coordinates
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("  Fractal:").color(egui::Color32::GRAY));
+                                    ui.label(egui::RichText::new(t!("path_overlay.fractal")).color(egui::Color32::GRAY));
                                     ui.label(egui::RichText::new(format!("({:.6}, {:.6})",
                                         click_info.fractal_coords.0, click_info.fractal_coords.1))
                                         .color(egui::Color32::LIGHT_GREEN));
@@ -650,7 +651,7 @@ impl<'a> PanelViewer<'a> {
 
                                 // IFS starting point
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("  IFS Start:").color(egui::Color32::GRAY));
+                                    ui.label(egui::RichText::new(t!("path_overlay.ifs_start")).color(egui::Color32::GRAY));
                                     ui.label(egui::RichText::new(format!("({:.4}, {:.4})",
                                         click_info.path_entry.initial_x, click_info.path_entry.initial_y))
                                         .color(egui::Color32::LIGHT_BLUE));
@@ -660,9 +661,8 @@ impl<'a> PanelViewer<'a> {
 
                                 // Path section
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Path").strong().color(egui::Color32::LIGHT_GRAY));
-                                    ui.label(egui::RichText::new(format!("({} iterations)",
-                                        click_info.path_entry.iteration_count))
+                                    ui.label(egui::RichText::new(t!("path_overlay.path_label")).strong().color(egui::Color32::LIGHT_GRAY));
+                                    ui.label(egui::RichText::new(t!("path_overlay.path_iterations", count = click_info.path_entry.iteration_count))
                                         .small()
                                         .color(egui::Color32::GRAY));
                                 });
@@ -681,7 +681,7 @@ impl<'a> PanelViewer<'a> {
                                         });
                                     });
                                 } else {
-                                    ui.label(egui::RichText::new("  (empty)").color(egui::Color32::GRAY));
+                                    ui.label(egui::RichText::new(t!("path_overlay.path_empty")).color(egui::Color32::GRAY));
                                 }
 
                                 ui.add_space(6.0);
@@ -695,25 +695,25 @@ impl<'a> PanelViewer<'a> {
                                 let hash = PathEntry::scramble_hash(mixed);
                                 let hue = click_info.path_entry.compute_prefix_distinct_hue();
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new("Debug (Prefix Distinct):").strong().color(egui::Color32::LIGHT_GRAY));
+                                    ui.label(egui::RichText::new(t!("path_overlay.debug_prefix_distinct")).strong().color(egui::Color32::LIGHT_GRAY));
                                 });
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(format!("  path0: 0x{:08X}", prefix))
+                                    ui.label(egui::RichText::new(t!("path_overlay.debug_path0", value = format!("{:08X}", prefix)))
                                         .small()
                                         .color(egui::Color32::YELLOW));
                                 });
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(format!("  mixed: 0x{:08X} (path0 ^ iter*φ)", mixed))
+                                    ui.label(egui::RichText::new(t!("path_overlay.debug_mixed", value = format!("{:08X}", mixed)))
                                         .small()
                                         .color(egui::Color32::YELLOW));
                                 });
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(format!("  hash:  0x{:08X}", hash))
+                                    ui.label(egui::RichText::new(t!("path_overlay.debug_hash", value = format!("{:08X}", hash)))
                                         .small()
                                         .color(egui::Color32::YELLOW));
                                 });
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(format!("  hue:   {:.6}", hue))
+                                    ui.label(egui::RichText::new(t!("path_overlay.debug_hue", value = format!("{:.6}", hue)))
                                         .small()
                                         .color(egui::Color32::YELLOW));
                                 });
@@ -723,7 +723,7 @@ impl<'a> PanelViewer<'a> {
 
                             // Right column: 9x9 color preview (clickable)
                             ui.vertical(|ui| {
-                                ui.label(egui::RichText::new("Preview (click to select)").strong().color(egui::Color32::LIGHT_GRAY));
+                                ui.label(egui::RichText::new(t!("path_overlay.preview_title")).strong().color(egui::Color32::LIGHT_GRAY));
                                 ui.add_space(4.0);
 
                                 // Render color grid
@@ -814,7 +814,7 @@ impl<'a> PanelViewer<'a> {
                         });
 
                         ui.add_space(6.0);
-                        ui.label(egui::RichText::new("Right-click elsewhere to close")
+                        ui.label(egui::RichText::new(t!("path_overlay.close_hint"))
                             .small()
                             .color(egui::Color32::DARK_GRAY));
                     });
