@@ -4,6 +4,7 @@
 //! as well as loading and saving animation files.
 
 use egui::Ui;
+use rust_i18n::t;
 use crate::animation::{Animation, AnimationController, AnimationQualityMode, LoopMode, PlaybackState};
 use crate::animation::export::{VideoCodec, HardwareAccel};
 
@@ -70,7 +71,7 @@ impl Default for AnimationExportSettings {
             iterations_per_thread: 256,
             video_codec: VideoCodec::H265,
             hardware_accel: HardwareAccel::None,
-            video_quality: 18,
+            video_quality: 12,
         }
     }
 }
@@ -106,10 +107,10 @@ pub fn render_animation_content(
     if let Some(ref animation) = controller.animation {
         ui.horizontal(|ui| {
             ui.strong(&animation.name);
-            ui.label(format!("({:.1}s)", animation.duration));
+            ui.label(t!("animation_panel.duration_format", duration = format!("{:.1}", animation.duration)));
         });
     } else {
-        ui.label("No animation loaded");
+        ui.label(t!("animation_panel.no_animation"));
     }
 
     ui.separator();
@@ -157,12 +158,12 @@ fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, _
     ui.horizontal(|ui| {
         // Play/Pause toggle button
         let play_pause_text = match controller.state {
-            PlaybackState::Playing => "⏸ Pause",
-            PlaybackState::Paused => "▶ Resume",
-            PlaybackState::Stopped => "▶ Play",
+            PlaybackState::Playing => t!("animation_panel.pause"),
+            PlaybackState::Paused => t!("animation_panel.resume"),
+            PlaybackState::Stopped => t!("animation_panel.play"),
         };
 
-        if ui.add_enabled(has_animation, egui::Button::new(play_pause_text)).clicked() {
+        if ui.add_enabled(has_animation, egui::Button::new(play_pause_text.as_ref())).clicked() {
             match controller.state {
                 PlaybackState::Playing => {
                     controller.pause();
@@ -175,17 +176,17 @@ fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, _
 
         // Stop button
         let can_stop = controller.state != PlaybackState::Stopped;
-        if ui.add_enabled(has_animation && can_stop, egui::Button::new("⏹ Stop")).clicked() {
+        if ui.add_enabled(has_animation && can_stop, egui::Button::new(t!("animation_panel.stop"))).clicked() {
             controller.stop();
         }
 
         // Skip to start
-        if ui.add_enabled(has_animation, egui::Button::new("⏮")).on_hover_text("Go to start").clicked() {
+        if ui.add_enabled(has_animation, egui::Button::new("⏮")).on_hover_text(t!("animation_panel.go_to_start")).clicked() {
             controller.seek(0.0);
         }
 
         // Skip to end
-        if ui.add_enabled(has_animation, egui::Button::new("⏭")).on_hover_text("Go to end").clicked() {
+        if ui.add_enabled(has_animation, egui::Button::new("⏭")).on_hover_text(t!("animation_panel.go_to_end")).clicked() {
             if let Some(ref animation) = controller.animation {
                 controller.seek(animation.duration);
             }
@@ -196,10 +197,10 @@ fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, _
     let state_text = match controller.state {
         PlaybackState::Playing => {
             let dir = if controller.direction() < 0.0 { "◀" } else { "▶" };
-            format!("Playing {}", dir)
+            t!("animation_panel.playing", direction = dir).to_string()
         }
-        PlaybackState::Paused => "Paused".to_string(),
-        PlaybackState::Stopped => "Stopped".to_string(),
+        PlaybackState::Paused => t!("animation_panel.paused").to_string(),
+        PlaybackState::Stopped => t!("animation_panel.stopped").to_string(),
     };
     ui.label(state_text);
 }
@@ -213,7 +214,10 @@ fn render_timeline(ui: &mut Ui, controller: &mut AnimationController) -> bool {
 
     // Time display
     ui.horizontal(|ui| {
-        ui.label(format!("{:.2}s / {:.2}s", controller.current_time, duration));
+        ui.label(t!("animation_panel.time_format",
+            current = format!("{:.2}", controller.current_time),
+            total = format!("{:.2}", duration)
+        ));
 
         // Progress percentage
         let progress = if duration > 0.0 {
@@ -221,7 +225,7 @@ fn render_timeline(ui: &mut Ui, controller: &mut AnimationController) -> bool {
         } else {
             0
         };
-        ui.label(format!("({}%)", progress));
+        ui.label(t!("animation_panel.progress_percent", percent = progress));
     });
 
     // Timeline slider
@@ -242,12 +246,12 @@ fn render_timeline(ui: &mut Ui, controller: &mut AnimationController) -> bool {
         ui.horizontal(|ui| {
             let step = 1.0 / 60.0; // ~16ms frame step
 
-            if ui.add_enabled(has_animation, egui::Button::new("◀ Frame")).clicked() {
+            if ui.add_enabled(has_animation, egui::Button::new(t!("animation_panel.frame_back"))).clicked() {
                 controller.seek((controller.current_time - step).max(0.0));
                 seek_changed = true;
             }
 
-            if ui.add_enabled(has_animation, egui::Button::new("Frame ▶")).clicked() {
+            if ui.add_enabled(has_animation, egui::Button::new(t!("animation_panel.frame_forward"))).clicked() {
                 controller.seek((controller.current_time + step).min(duration));
                 seek_changed = true;
             }
@@ -260,7 +264,7 @@ fn render_timeline(ui: &mut Ui, controller: &mut AnimationController) -> bool {
 /// Render playback speed control
 fn render_speed_control(ui: &mut Ui, controller: &mut AnimationController) {
     ui.horizontal(|ui| {
-        ui.label("Speed:");
+        ui.label(t!("animation_panel.speed"));
 
         // Quick speed buttons
         if ui.small_button("0.25x").clicked() {
@@ -280,7 +284,7 @@ fn render_speed_control(ui: &mut Ui, controller: &mut AnimationController) {
     // Fine speed slider
     ui.add(
         egui::Slider::new(&mut controller.speed, 0.1..=4.0)
-            .text("Playback Speed")
+            .text(t!("animation_panel.playback_speed"))
             .suffix("x")
             .logarithmic(true)
     );
@@ -290,7 +294,7 @@ fn render_speed_control(ui: &mut Ui, controller: &mut AnimationController) {
 fn render_loop_mode(ui: &mut Ui, controller: &mut AnimationController) {
     if let Some(ref mut animation) = controller.animation {
         ui.horizontal(|ui| {
-            ui.label("Loop Mode:");
+            ui.label(t!("animation_panel.loop_mode"));
 
             egui::ComboBox::from_id_salt("loop_mode")
                 .selected_text(loop_mode_label(animation.loop_mode))
@@ -304,18 +308,18 @@ fn render_loop_mode(ui: &mut Ui, controller: &mut AnimationController) {
 }
 
 /// Get display label for loop mode
-fn loop_mode_label(mode: LoopMode) -> &'static str {
+fn loop_mode_label(mode: LoopMode) -> String {
     match mode {
-        LoopMode::Once => "Once (Stop at end)",
-        LoopMode::Loop => "Loop (Repeat)",
-        LoopMode::PingPong => "Ping-Pong (Bounce)",
+        LoopMode::Once => t!("animation_panel.loop_once").to_string(),
+        LoopMode::Loop => t!("animation_panel.loop_repeat").to_string(),
+        LoopMode::PingPong => t!("animation_panel.loop_pingpong").to_string(),
     }
 }
 
 /// Render quality mode selector
 fn render_quality_mode(ui: &mut Ui, controller: &mut AnimationController) {
     ui.horizontal(|ui| {
-        ui.label("Quality:");
+        ui.label(t!("animation_panel.quality"));
 
         egui::ComboBox::from_id_salt("quality_mode")
             .selected_text(quality_mode_label(controller.quality_mode))
@@ -335,17 +339,17 @@ fn render_quality_mode(ui: &mut Ui, controller: &mut AnimationController) {
 
     // Show tooltip explaining the mode
     let tooltip = match controller.quality_mode {
-        AnimationQualityMode::Responsive => "Fast preview - each frame updates immediately",
-        AnimationQualityMode::HighQuality => "Better quality - batches 4 frames for smoother results (slight latency)",
+        AnimationQualityMode::Responsive => t!("animation_panel.quality_responsive_tooltip"),
+        AnimationQualityMode::HighQuality => t!("animation_panel.quality_high_tooltip"),
     };
-    ui.small(tooltip);
+    ui.small(tooltip.as_ref());
 }
 
 /// Get display label for quality mode
-fn quality_mode_label(mode: AnimationQualityMode) -> &'static str {
+fn quality_mode_label(mode: AnimationQualityMode) -> String {
     match mode {
-        AnimationQualityMode::Responsive => "Responsive (Fast)",
-        AnimationQualityMode::HighQuality => "High Quality (Batched)",
+        AnimationQualityMode::Responsive => t!("animation_panel.quality_responsive").to_string(),
+        AnimationQualityMode::HighQuality => t!("animation_panel.quality_high").to_string(),
     }
 }
 
@@ -355,11 +359,11 @@ fn render_file_controls(ui: &mut Ui, controller: &AnimationController, response:
 
     ui.horizontal(|ui| {
         // New animation button
-        if ui.button("+ New").on_hover_text("Create a new empty animation").clicked() {
+        if ui.button(t!("animation_panel.new")).on_hover_text(t!("animation_panel.new_tooltip").as_ref()).clicked() {
             response.new_animation = true;
         }
 
-        if ui.button("📂 Load").on_hover_text("Load animation from file").clicked() {
+        if ui.button(t!("animation_panel.load")).on_hover_text(t!("animation_panel.load_tooltip").as_ref()).clicked() {
             // Trigger file load dialog
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -387,13 +391,13 @@ fn render_file_controls(ui: &mut Ui, controller: &AnimationController, response:
             }
         }
 
-        if ui.add_enabled(has_animation, egui::Button::new("💾 Save")).on_hover_text("Save animation to file").clicked() {
+        if ui.add_enabled(has_animation, egui::Button::new(t!("animation_panel.save"))).on_hover_text(t!("animation_panel.save_tooltip").as_ref()).clicked() {
             response.save_animation = true;
         }
     });
 
     // Info about file format
-    ui.small("Animation files are JSON format (.anim or .json)");
+    ui.small(t!("animation_panel.file_format_hint"));
 }
 
 /// Render export controls for high-quality animation rendering
@@ -406,7 +410,7 @@ fn render_export_controls(
 ) {
     let has_animation = controller.animation.is_some();
 
-    egui::CollapsingHeader::new("🎬 Export Animation")
+    egui::CollapsingHeader::new(t!("animation_panel.export_header"))
         .default_open(progress.is_exporting) // Auto-expand when exporting
         .show(ui, |ui| {
             // Show progress bar when exporting
@@ -417,14 +421,16 @@ fn render_export_controls(
                 });
 
                 ui.add(egui::ProgressBar::new(progress.progress())
-                    .text(format!("Frame {}/{}", progress.current_frame + 1, progress.total_frames))
+                    .text(t!("animation_panel.frame_progress",
+                        current = progress.current_frame + 1,
+                        total = progress.total_frames))
                     .animate(true));
 
                 let eta = progress.eta_seconds();
                 if eta > 0.0 {
                     let eta_min = (eta / 60.0).floor() as u32;
                     let eta_sec = (eta % 60.0).floor() as u32;
-                    ui.label(format!("ETA: {}:{:02}", eta_min, eta_sec));
+                    ui.label(t!("animation_panel.eta", min = eta_min, sec = format!("{:02}", eta_sec)));
                 }
 
                 ui.separator();
@@ -436,26 +442,26 @@ fn render_export_controls(
 
                 if !ffmpeg_available {
                     ui.horizontal(|ui| {
-                        ui.label("⚠ FFmpeg not found");
+                        ui.label(t!("animation_panel.ffmpeg_not_found"));
                     });
-                    ui.small("Install FFmpeg and ensure it's in your PATH to export animations.");
+                    ui.small(t!("animation_panel.ffmpeg_hint"));
                     ui.separator();
                 }
 
                 ui.add_enabled_ui(has_animation && !progress.is_exporting && ffmpeg_available, |ui| {
                     // Output file path
                     ui.horizontal(|ui| {
-                        ui.label("Output:");
+                        ui.label(t!("animation_panel.output"));
                         let path_str = settings.output_path.to_string_lossy().to_string();
                         let mut path_display = path_str.clone();
                         if ui.text_edit_singleline(&mut path_display).changed() {
                             settings.output_path = std::path::PathBuf::from(&path_display);
                         }
 
-                        if ui.button("Browse...").clicked() {
+                        if ui.button(t!("animation_panel.browse")).clicked() {
                             let extension = settings.video_codec.extension();
                             if let Some(path) = rfd::FileDialog::new()
-                                .set_title("Save Video As")
+                                .set_title(t!("animation_panel.save_video_as").as_ref())
                                 .add_filter("Video", &[extension])
                                 .set_file_name(&format!("animation.{}", extension))
                                 .save_file()
@@ -467,7 +473,7 @@ fn render_export_controls(
 
                     // Codec selection
                     ui.horizontal(|ui| {
-                        ui.label("Codec:");
+                        ui.label(t!("animation_panel.codec"));
                         let old_codec = settings.video_codec;
                         egui::ComboBox::from_id_salt("video_codec")
                             .selected_text(settings.video_codec.display_name())
@@ -491,7 +497,7 @@ fn render_export_controls(
 
                     // Hardware acceleration
                     ui.horizontal(|ui| {
-                        ui.label("Encoder:");
+                        ui.label(t!("animation_panel.encoder"));
                         let old_accel = settings.hardware_accel;
                         egui::ComboBox::from_id_salt("hardware_accel")
                             .selected_text(settings.hardware_accel.display_name())
@@ -503,7 +509,9 @@ fn render_export_controls(
                                         let label = if supported {
                                             accel.display_name().to_string()
                                         } else {
-                                            format!("{} (not available for {})", accel.display_name(), settings.video_codec.display_name())
+                                            t!("animation_panel.encoder_not_available",
+                                                encoder = accel.display_name(),
+                                                codec = settings.video_codec.display_name()).to_string()
                                         };
                                         ui.selectable_value(&mut settings.hardware_accel, accel, label);
                                     });
@@ -519,16 +527,16 @@ fn render_export_controls(
 
                     // Quality slider
                     ui.horizontal(|ui| {
-                        ui.label("Quality:");
-                        ui.add(egui::Slider::new(&mut settings.video_quality, 0..=51).text("CRF"));
+                        ui.label(t!("animation_panel.quality"));
+                        ui.add(egui::Slider::new(&mut settings.video_quality, 0..=51).text(t!("animation_panel.crf").as_ref()));
                     });
-                    ui.small("Lower = better quality, larger file. 18 = visually lossless");
+                    ui.small(t!("animation_panel.quality_hint"));
 
                     ui.separator();
 
                     // Resolution
                     ui.horizontal(|ui| {
-                        ui.label("Resolution:");
+                        ui.label(t!("animation_panel.resolution"));
                         ui.add(egui::DragValue::new(&mut settings.width).range(100..=7680).suffix("w"));
                         ui.label("×");
                         ui.add(egui::DragValue::new(&mut settings.height).range(100..=4320).suffix("h"));
@@ -552,7 +560,7 @@ fn render_export_controls(
 
                     // FPS
                     ui.horizontal(|ui| {
-                        ui.label("Frame Rate:");
+                        ui.label(t!("animation_panel.frame_rate"));
                         ui.add(egui::DragValue::new(&mut settings.fps).range(1..=120).suffix(" fps"));
 
                         if ui.small_button("24").clicked() { settings.fps = 24; }
@@ -562,7 +570,7 @@ fn render_export_controls(
 
                     // Iterations
                     ui.horizontal(|ui| {
-                        ui.label("Iterations/thread:");
+                        ui.label(t!("animation_panel.iterations_thread"));
                         ui.add(egui::DragValue::new(&mut settings.iterations_per_thread).range(32..=4096));
                     });
 
@@ -570,14 +578,16 @@ fn render_export_controls(
                     if let Some(ref animation) = controller.animation {
                         let total_frames = (animation.duration * settings.fps as f64).ceil() as u32;
                         ui.separator();
-                        ui.label(format!("Total frames: {} ({:.1}s × {} fps)",
-                            total_frames, animation.duration, settings.fps));
+                        ui.label(t!("animation_panel.total_frames",
+                            frames = total_frames,
+                            duration = format!("{:.1}", animation.duration),
+                            fps = settings.fps));
                     }
 
                     ui.separator();
 
                     // Export button
-                    if ui.button("🎬 Export Video").clicked() {
+                    if ui.button(t!("animation_panel.export_video")).clicked() {
                         response.export_animation = Some(settings.clone());
                     }
                 });
@@ -585,7 +595,7 @@ fn render_export_controls(
 
             #[cfg(target_arch = "wasm32")]
             {
-                ui.label("Animation export not available in web version");
+                ui.label(t!("animation_panel.export_not_available_wasm"));
             }
         });
 }

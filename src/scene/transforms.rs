@@ -4,6 +4,18 @@ use serde::de::{self, Visitor, MapAccess};
 use crate::variations::VariationRegistry;
 
 /// IFS Transform with named variations (V2)
+///
+/// This struct is used for both regular transforms AND the final transform.
+/// When used as the final transform, only these fields are used:
+/// - Affine matrix (a, b, c, d, e, f, g)
+/// - Variations and variation_params
+///
+/// The following fields are IGNORED for final transforms (color is computed
+/// during the iteration loop before the final transform is applied):
+/// - weight (final transform is always applied, not selected by probability)
+/// - color (final transform doesn't affect color index)
+/// - color_speed (final transform doesn't blend colors)
+/// - opacity (final transform doesn't affect visibility)
 #[derive(Debug, Clone)]
 pub struct Transform {
     // Affine transformation matrix: x' = ax + by + e, y' = cx + dy + f
@@ -17,7 +29,8 @@ pub struct Transform {
     /// Z offset for 3D mode (z' = z + g)
     pub g: f32,
 
-    /// Probability weight for selecting this transform
+    /// Probability weight for selecting this transform.
+    /// NOTE: Ignored for final transforms.
     pub weight: f32,
 
     /// Weights for each variation function (named)
@@ -28,18 +41,21 @@ pub struct Transform {
     pub variation_params: HashMap<String, f32>,
 
     /// Color palette position (0.0 to 1.0)
-    /// Represents position in the palette for color coordinate evolution
+    /// Represents position in the palette for color coordinate evolution.
+    /// NOTE: Ignored for final transforms.
     pub color: f32,
 
     /// Color speed / symmetry (-1.0 to 1.0, Apophysis compatibility)
     /// -1.0 = full transform color replacement
     ///  0.0 = 50/50 blend
     ///  1.0 = full inheritance (transform has no color influence)
+    /// NOTE: Ignored for final transforms.
     pub color_speed: f32,
 
     /// Opacity / visibility (0.0 to 1.0, Apophysis compatibility)
     /// Controls probability of plotting points from this transform
     /// 1.0 = always plot (default), 0.0 = never plot (invisible)
+    /// NOTE: Ignored for final transforms.
     pub opacity: f32,
 }
 
@@ -71,11 +87,15 @@ impl Transform {
 
     /// Set a variation weight by name
     pub fn set_variation(&mut self, name: &str, weight: f32) {
-        if weight.abs() < 1e-6 {
-            self.variations.remove(name);
-        } else {
-            self.variations.insert(name.to_string(), weight);
-        }
+        // Always insert/update the weight - don't auto-remove at zero
+        // This allows variations to remain visible in UI at weight 0
+        // Use remove_variation() to explicitly remove a variation
+        self.variations.insert(name.to_string(), weight);
+    }
+
+    /// Remove a variation from this transform
+    pub fn remove_variation(&mut self, name: &str) {
+        self.variations.remove(name);
     }
 
     /// Get a variation weight by name

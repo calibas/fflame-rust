@@ -12,170 +12,119 @@ pub fn render_menu_bar(
         egui::MenuBar::new().ui(ui, |ui| {
             // File Menu
             ui.menu_button(t!("menu.file"), |ui| {
-                if ui.button("📂 Open...").clicked() {
+                if ui.button(t!("menu.open")).clicked() {
                     menu_actions.file.load_config = true;
                 }
 
-                if ui.button("💾 Save As...").clicked() {
+                if ui.button(t!("menu.save_as")).clicked() {
                     menu_actions.file.save_config = true;
                 }
 
                 ui.separator();
 
                 // Preset Library
-                if ui.button("📚 From Preset Library...").clicked() {
+                if ui.button(t!("menu.from_preset_library")).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::PresetLibrary);
                 }
 
+                if ui.button(t!("menu.random_flame")).clicked() {
+                    menu_actions.file.random_flame = true;
+                }
+
                 ui.separator();
 
-                if ui.button("Import Apophysis XML...").clicked() {
+                if ui.button(t!("menu.import_apophysis")).clicked() {
                     menu_actions.file.import_apophysis = true;
-
                 }
-                ui.add_enabled(false, egui::Button::new("Export Apophysis XML..."));
+                // ui.add_enabled(false, egui::Button::new(t!("menu.export_apophysis")));
 
                 ui.separator();
 
-                if ui.button("📄 Config Import/Export...").clicked() {
+                if ui.button(t!("menu.config_import_export")).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog);
-
                 }
 
                 ui.separator();
 
-                if ui.button("🖼 Export PNG...").clicked() {
-                    menu_actions.file.export_png = true;
-
-                }
-
-                if ui.button("🖼 Export Transparent PNG...").clicked() {
-                    menu_actions.file.export_png_transparent = true;
-
+                if ui.button(t!("menu.export")).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Export);
                 }
 
                 ui.separator();
 
-                if ui.button("❌ Quit").clicked() {
+                if ui.button(t!("menu.quit")).clicked() {
                     menu_actions.file.quit = true;
-
                 }
             });
 
             // Edit Menu
             ui.menu_button(t!("menu.edit"), |ui| {
-                if ui.add_enabled(menu_state.can_undo, egui::Button::new("⮪ Undo")).clicked() {
+                if ui.add_enabled(menu_state.can_undo, egui::Button::new(t!("menu.undo"))).clicked() {
                     menu_actions.edit.undo = true;
                 }
 
-                if ui.add_enabled(menu_state.can_redo, egui::Button::new("⮬ Redo")).clicked() {
+                if ui.add_enabled(menu_state.can_redo, egui::Button::new(t!("menu.redo"))).clicked() {
                     menu_actions.edit.redo = true;
                 }
 
                 ui.separator();
 
-                ui.separator();
-
-                ui.add_enabled(false, egui::Button::new("⚙ Preferences..."));
+                ui.add_enabled(false, egui::Button::new(t!("menu.preferences")));
             });
 
             // View Menu
             ui.menu_button(t!("menu.view"), |ui| {
-                if ui.button("Reset View").clicked() {
+                if ui.button(t!("menu.reset_view")).clicked() {
                     menu_actions.view.reset_view = true;
-
                 }
 
                 ui.separator();
 
-                if ui.button("Zoom In").clicked() {
+                if ui.button(t!("menu.zoom_in")).clicked() {
                     menu_actions.view.zoom_in = true;
-
                 }
 
-                if ui.button("Zoom Out").clicked() {
+                if ui.button(t!("menu.zoom_out")).clicked() {
                     menu_actions.view.zoom_out = true;
-
                 }
 
                 ui.separator();
 
                 // Radio buttons for render mode
                 let is_2d = menu_state.render_mode_2d;
-                if ui.selectable_label(is_2d, "2D Mode").clicked() {
+                if ui.selectable_label(is_2d, t!("menu.mode_2d").as_ref()).clicked() {
                     menu_actions.view.set_mode_2d = true;
-
                 }
 
-                if ui.selectable_label(!is_2d, "3D Mode").clicked() {
+                if ui.selectable_label(!is_2d, t!("menu.mode_3d").as_ref()).clicked() {
                     menu_actions.view.set_mode_3d = true;
-
-                }
-            });
-
-            // Transforms Menu
-            ui.menu_button("Transforms", |ui| {
-                // Panel visibility toggles
-                let transforms_open = workspace.panel_exists(super::workspace::PanelType::Transforms);
-                if ui.selectable_label(transforms_open, "Show Transform Editor").clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Transforms);
-
-                }
-                let triangle_editor_open = workspace.panel_exists(super::workspace::PanelType::TriangleEditor);
-                if ui.selectable_label(triangle_editor_open, "Show Triangle Editor").clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor);
-
-                }
-                let palette_editor_open = workspace.panel_exists(super::workspace::PanelType::PaletteEditor);
-                if ui.selectable_label(palette_editor_open, "Show Palette Editor").clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor);
-
-                }
-
-                ui.separator();
-
-                // Add Transform (functional)
-                if ui.button("Add Transform").clicked() {
-                    menu_actions.transform.add_transform = true;
-
                 }
             });
 
             // Rendering Menu
             ui.menu_button(t!("menu.rendering"), |ui| {
                 // Pause/Resume
-                let pause_text = if menu_state.is_paused { "▶ Resume" } else { "⏸ Pause" };
+                let pause_text = if menu_state.is_paused {
+                    t!("menu.resume")
+                } else {
+                    t!("menu.pause")
+                };
                 if ui.button(pause_text).clicked() {
                     menu_actions.rendering.pause_toggle = true;
-
                 }
 
                 // Reset Accumulation
-                if ui.button("🔄 Reset Accumulation").clicked() {
+                if ui.button(t!("menu.reset_accumulation")).clicked() {
                     menu_actions.rendering.reset_accumulation = true;
-
                 }
-
-                ui.separator();
-
-                // Speed submenu
-                ui.menu_button("Speed ▶", |ui| {
-                    for &speed in &[1u32, 2, 4, 8, 16] {
-                        if ui.button(format!("{}x", speed)).clicked() {
-                            menu_actions.rendering.set_speed = Some(speed);
-
-                        }
-                    }
-                });
 
                 ui.separator();
 
                 // Iterations per Thread submenu
-                ui.menu_button("Iterations per Thread ▶", |ui| {
-                    for &ipt in &[32u32, 64, 128, 256, 512, 1024] {
+                ui.menu_button(t!("menu.iterations_per_thread"), |ui| {
+                    for &ipt in &[128, 256, 512, 1024, 2048, 4096] {
                         if ui.button(format!("{}", ipt)).clicked() {
                             menu_actions.rendering.set_iterations_per_thread = Some(ipt);
-
                         }
                     }
                 });
@@ -185,115 +134,102 @@ pub fn render_menu_bar(
             ui.menu_button(t!("menu.window"), |ui| {
                 // Performance opens as floating window in docking system (only one instance)
                 let performance_open = workspace.panel_exists(super::workspace::PanelType::Performance);
-                if ui.selectable_label(performance_open, "📊 Performance").clicked() {
+                if ui.selectable_label(performance_open, t!("menu.window_performance").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Performance);
-
                 }
 
                 // Settings opens Rendering panel as floating window (Settings was renamed to Rendering)
                 let rendering_open = workspace.panel_exists(super::workspace::PanelType::Rendering);
-                if ui.selectable_label(rendering_open, "⚙ Rendering").clicked() {
+                if ui.selectable_label(rendering_open, t!("menu.window_rendering").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Rendering);
-
                 }
 
                 // View opens as floating window in docking system
                 let view_open = workspace.panel_exists(super::workspace::PanelType::View);
-                if ui.selectable_label(view_open, "🔍 View").clicked() {
+                if ui.selectable_label(view_open, t!("menu.window_view").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::View);
-
                 }
 
                 // Transforms opens as floating window in docking system
                 let transforms_open = workspace.panel_exists(super::workspace::PanelType::Transforms);
-                if ui.selectable_label(transforms_open, "🔧 Transforms").clicked() {
+                if ui.selectable_label(transforms_open, t!("menu.window_transforms").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Transforms);
-
                 }
 
                 // Triangle Editor opens as floating window in docking system
                 let triangle_editor_open = workspace.panel_exists(super::workspace::PanelType::TriangleEditor);
-                if ui.selectable_label(triangle_editor_open, "📐 Triangle Editor").clicked() {
+                if ui.selectable_label(triangle_editor_open, t!("menu.window_triangle_editor").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor);
-
                 }
 
                 // Tone Mapping & Colors opens Colors panel as floating window
                 let colors_open = workspace.panel_exists(super::workspace::PanelType::Colors);
-                if ui.selectable_label(colors_open, "🎨 Tone Mapping & Colors").clicked() {
+                if ui.selectable_label(colors_open, t!("menu.window_colors").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Colors);
-
                 }
 
                 ui.separator();
 
                 // Palette Editor opens as floating window in docking system
                 let palette_editor_open = workspace.panel_exists(super::workspace::PanelType::PaletteEditor);
-                if ui.selectable_label(palette_editor_open, "🎨 Palette Editor").clicked() {
+                if ui.selectable_label(palette_editor_open, t!("menu.window_palette_editor").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor);
-
                 }
 
                 let palette_library_open = workspace.panel_exists(super::workspace::PanelType::PaletteLibrary);
-                if ui.selectable_label(palette_library_open, "📚 Palette Library").clicked() {
+                if ui.selectable_label(palette_library_open, t!("menu.window_palette_library").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::PaletteLibrary);
                 }
 
                 let preset_library_open = workspace.panel_exists(super::workspace::PanelType::PresetLibrary);
-                if ui.selectable_label(preset_library_open, "📚 Preset Library").clicked() {
+                if ui.selectable_label(preset_library_open, t!("menu.window_preset_library").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::PresetLibrary);
                 }
 
                 let file_browser_open = workspace.panel_exists(super::workspace::PanelType::FileBrowser);
-                if ui.selectable_label(file_browser_open, "📂 File Browser").clicked() {
+                if ui.selectable_label(file_browser_open, t!("menu.window_file_browser").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::FileBrowser);
                 }
 
                 // Config Import/Export opens as floating window in docking system
                 let config_dialog_open = workspace.panel_exists(super::workspace::PanelType::ConfigDialog);
-                if ui.selectable_label(config_dialog_open, "📄 Config Import/Export").clicked() {
+                if ui.selectable_label(config_dialog_open, t!("menu.window_config_dialog").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog);
-
                 }
 
                 // Undo/Redo History opens as floating window in docking system
                 let history_open = workspace.panel_exists(super::workspace::PanelType::History);
-                if ui.selectable_label(history_open, "⮪ Undo/Redo History").clicked() {
+                if ui.selectable_label(history_open, t!("menu.window_history").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::History);
-
                 }
 
                 // Animation panel
                 let animation_open = workspace.panel_exists(super::workspace::PanelType::Animation);
-                if ui.selectable_label(animation_open, "🎬 Animation").clicked() {
+                if ui.selectable_label(animation_open, t!("menu.window_animation").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Animation);
                 }
 
-                // Path Editor panel
+                // Path Editor panel (experimental feature)
                 let path_editor_open = workspace.panel_exists(super::workspace::PanelType::PathEditor);
-                if ui.selectable_label(path_editor_open, "🛤 Path Editor").clicked() {
+                if ui.selectable_label(path_editor_open, t!("menu.window_path_editor").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::PathEditor);
                 }
 
                 ui.separator();
-                ui.menu_button("📐 Workspace Layout", |ui| {
+                ui.menu_button(t!("menu.workspace_layout"), |ui| {
                     let current = workspace.current_layout;
 
-                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Beginner, "Beginner").clicked() {
+                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Beginner, t!("menu.layout_beginner").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Beginner);
-
                     }
-                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Standard, "Standard").clicked() {
+                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Standard, t!("menu.layout_standard").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
-
                     }
-                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, "Advanced").clicked() {
+                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, t!("menu.layout_advanced").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Advanced);
-
                     }
-                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Export, "Export").clicked() {
+                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Export, t!("menu.layout_export").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Export);
-
                     }
                 });
             });
@@ -302,23 +238,21 @@ pub fn render_menu_bar(
             ui.menu_button(t!("menu.help"), |ui| {
                 // Help panel opens as floating window in docking system
                 let help_open = workspace.panel_exists(super::workspace::PanelType::Help);
-                if ui.selectable_label(help_open, "❓ Help").clicked() {
+                if ui.selectable_label(help_open, t!("menu.help_panel").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Help);
-
                 }
 
-                if ui.selectable_label(help_open, "⌨ Keyboard Shortcuts").clicked() {
+                if ui.selectable_label(help_open, t!("menu.keyboard_shortcuts").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::Help);
-
                 }
 
                 ui.separator();
 
-                if ui.button("🐛 Report Bug...").clicked() {
+                if ui.button(t!("menu.report_bug")).clicked() {
                     let _ = webbrowser::open("https://github.com/calibas/fflame-rust/issues/new");
                 }
 
-                if ui.button("ℹ About...").clicked() {
+                if ui.button(t!("menu.about")).clicked() {
                     let _ = webbrowser::open("https://github.com/calibas/fflame-rust");
                 }
             });

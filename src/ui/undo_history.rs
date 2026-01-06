@@ -1,4 +1,37 @@
 use crate::config::ConfigManager;
+use rust_i18n::t;
+
+/// Translate a history description
+///
+/// Descriptions can be:
+/// - Simple i18n keys: `history.action.reset_view`
+/// - i18n keys with parameters: `history.action.translate_up|name=Transform 1`
+/// - Fallback: returned as-is if not a valid i18n key
+fn translate_description(description: &str) -> String {
+    // Check if this looks like an i18n key (starts with "history.")
+    if description.starts_with("history.") {
+        // Check for parameters (pipe-separated: key|param1=value1|param2=value2)
+        if let Some(pipe_pos) = description.find('|') {
+            let key = &description[..pipe_pos];
+            let params_str = &description[pipe_pos + 1..];
+
+            // Parse the "name" parameter (most common case)
+            // Format: key|name=value
+            if let Some(name_value) = params_str.strip_prefix("name=") {
+                t!(key, name = name_value).to_string()
+            } else {
+                // Unknown parameter format - just translate the key
+                t!(key).to_string()
+            }
+        } else {
+            // Simple key without parameters
+            t!(description).to_string()
+        }
+    } else {
+        // Not an i18n key - return as-is (backward compatibility with old descriptions)
+        description.to_string()
+    }
+}
 
 /// Render undo/redo history content (for docking panels)
 pub fn render_undo_history_content(
@@ -7,7 +40,7 @@ pub fn render_undo_history_content(
     undo_requested: &mut bool,
     redo_requested: &mut bool,
 ) {
-    ui.heading("History");
+    ui.heading(t!("history.heading"));
 
     // Get unified history and current position
     let history = config_manager.history();
@@ -36,7 +69,8 @@ pub fn render_undo_history_content(
                 // Initial state is always "past" unless we're at position 0
                 let text_color = ui.style().visuals.text_color();
 
-                if ui.selectable_label(false, egui::RichText::new("1. Initial state").color(text_color)).clicked() {
+                let initial_label = format!("1. {}", t!("history.initial_state"));
+                if ui.selectable_label(false, egui::RichText::new(initial_label).color(text_color)).clicked() {
                     // Undo back to initial state
                     if position > 0 {
                         *undo_requested = true;
@@ -64,7 +98,8 @@ pub fn render_undo_history_content(
                     };
 
                     // Entry number (1-indexed, including initial state as #1)
-                    let label = format!("{}. {}", i + 2, change.description);
+                    let translated = translate_description(&change.description);
+                    let label = format!("{}. {}", i + 2, translated);
 
                     if ui.selectable_label(false, egui::RichText::new(label).color(text_color)).clicked() {
                         // For now, just do one undo/redo
@@ -84,12 +119,12 @@ pub fn render_undo_history_content(
     // Quick action buttons
     ui.horizontal(|ui| {
         ui.add_enabled_ui(config_manager.can_undo(), |ui| {
-            if ui.button("⮪ Undo").clicked() {
+            if ui.button(format!("⮪ {}", t!("history.undo"))).clicked() {
                 *undo_requested = true;
             }
         });
         ui.add_enabled_ui(config_manager.can_redo(), |ui| {
-            if ui.button("⮬ Redo").clicked() {
+            if ui.button(format!("⮫ {}", t!("history.redo"))).clicked() {
                 *redo_requested = true;
             }
         });
@@ -97,6 +132,6 @@ pub fn render_undo_history_content(
 
     // Show stats (total includes initial state as entry #1)
     ui.separator();
-    ui.label(format!("Total entries: {} (including initial state)", history.len() + 1));
-    ui.label(format!("Current position: #{}", position + 1));
+    ui.label(t!("history.total_entries", count = history.len() + 1));
+    ui.label(t!("history.current_position", position = position + 1));
 }

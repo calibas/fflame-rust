@@ -9,7 +9,9 @@
 //! - **Animating**: Animation playback. Changes are applied silently (no undo entries).
 //!   When exiting, creates a single undo entry for the entire animation session.
 //! - **Overwrite**: Live preview mode. Rapid parameter changes bypass normal undo coalescing
-//!   for immediate visual feedback.
+//!   for immediate visual feedback. Note: The 100ms overwrite window timing is managed by
+//!   simple fields in App (`use_overwrite_next_frame`, `last_param_change_time`) rather than
+//!   this FSM, as the timer logic is straightforward and doesn't benefit from FSM complexity.
 //!
 //! ## Transitions
 //!
@@ -51,6 +53,13 @@ impl Default for RenderModeState {
 ///
 /// Tracks the current rendering mode and manages transitions.
 /// Stores snapshots needed for undo when exiting special modes.
+///
+/// ## Brightness Boost and Ping-Pong Buffer Timing
+///
+/// The accumulation system uses ping-pong buffers with a 1-frame delay:
+/// tonemap always reads the buffer written in the PREVIOUS frame.
+/// To match this, brightness boost decisions use `prev_frame_low_density`
+/// which tracks what was written last frame, not what we're writing now.
 #[derive(Default)]
 pub struct RenderModeFSM {
     /// Current state
@@ -60,6 +69,11 @@ pub struct RenderModeFSM {
     pre_animation_snapshot: Option<FractalConfig>,
     /// Config snapshot taken when entering Overwrite mode (if needed)
     pre_overwrite_snapshot: Option<FractalConfig>,
+    /// Whether we were in a low-density mode before transitioning to Normal
+    was_in_low_density_mode: bool,
+    /// Whether the PREVIOUS frame was in low-density mode
+    /// Used to match ping-pong buffer timing (tonemap reads previous frame's buffer)
+    prev_frame_low_density: bool,
 }
 
 /// Result of a state transition
@@ -140,7 +154,7 @@ impl RenderModeFSM {
             TransitionResult::CreateUndo {
                 before,
                 after: current_config.clone(),
-                description: "Animation".to_string(),
+                description: "history.action.animation_exit".to_string(),
             }
         } else {
             log::warn!("RenderMode: Exited Animating but no pre-animation snapshot found");
@@ -197,6 +211,55 @@ impl RenderModeFSM {
     /// immediate visual feedback without waiting for accumulation.
     pub fn should_use_overwrite(&self) -> bool {
         matches!(self.state, RenderModeState::Overwrite | RenderModeState::Animating)
+    }
+
+    /// Update the brightness boost state each frame.
+    ///
+    /// Call this every frame to track how long since we exited a low-density mode.
+    /// The `is_iterating` parameter indicates if normal accumulation is happening.
+    ///
+    /// IMPORTANT: `prev_frame_low_density` handles the ENTRY case (ping-pong timing).
+    /// `was_in_low_density_mode` handles the EXIT case.
+    pub fn update_brightness_state(&mut self, is_iterating: bool) {
+        let is_low_density_now = self.should_use_overwrite();
+
+        // was_in_low_density_mode tracks the EXIT case only
+        // It gets set when we transition FROM low-density TO normal mode
+        if !is_low_density_now && self.prev_frame_low_density {
+            // Just exited low-density mode this frame
+            self.was_in_low_density_mode = true;
+        } else if self.was_in_low_density_mode {
+            // Turn off brightness boost after iteration begins
+            if is_iterating {
+                self.was_in_low_density_mode = false;
+            }
+            // If not iterating (stopped at max_iterations), keep boost until we start iterating again
+        }
+    }
+
+    /// Called at end of frame to save current state for next frame's brightness decision.
+    /// This matches the ping-pong buffer timing where tonemap reads previous frame's buffer.
+    pub fn end_frame(&mut self) {
+        self.prev_frame_low_density = self.should_use_overwrite();
+    }
+
+    /// Check if brightness boost should be applied.
+    ///
+    /// Returns true when the accumulation buffer being READ (not written) has low density.
+    /// Due to ping-pong buffers, tonemap reads the PREVIOUS frame's buffer,
+    /// so we use `prev_frame_low_density` instead of current state.
+    ///
+    /// Also continues boost during the 8-frame rebuild period after exiting low-density mode.
+    pub fn needs_brightness_boost(&self) -> bool {
+        // Use PREVIOUS frame's state for entering (matches ping-pong timing)
+        // Use was_in_low_density_mode for exiting (8-frame rebuild period)
+        self.prev_frame_low_density || self.was_in_low_density_mode
+    }
+
+    /// Get debug info for brightness state
+    /// Returns (prev_frame_low_density, was_in_low_density_mode, frames_since_exit, needs_boost)
+    pub fn brightness_debug(&self) -> (bool, bool, bool) {
+        (self.prev_frame_low_density, self.was_in_low_density_mode, self.needs_brightness_boost())
     }
 }
 

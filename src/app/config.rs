@@ -102,20 +102,28 @@ impl App {
     }
 
     /// Export PNG at custom dimensions using unified render API
+    /// For high-res exports, spawns a background thread with progress updates.
+    /// For normal GPU exports, runs synchronously (fast enough).
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn export_custom_size(&self, transparent: bool, config: FractalConfig, _render_time_ms: f64) {
+    pub fn export_custom_size(&mut self, transparent: bool, config: FractalConfig, _render_time_ms: f64) {
         use crate::renderer::{render, NoProgress, RenderJob};
+
+        // Check if already exporting
+        if self.png_export_progress.lock().unwrap().is_exporting {
+            log::warn!("PNG export already in progress");
+            return;
+        }
 
         println!("Exporting at custom size: {}×{}", self.export_width, self.export_height);
 
         // Check if we need CPU-based high-res export (for large resolutions)
         if crate::export::needs_cpu_export(self.export_width, self.export_height) {
             println!("  Using high-res CPU export (resolution exceeds GPU buffer limits)");
-            self.export_high_res_cpu(transparent, config);
+            self.export_high_res_cpu_background(transparent, config);
             return;
         }
 
-        // Use unified render API
+        // Regular GPU export - runs synchronously (fast enough, uses main thread GPU)
         let job = RenderJob::new(&config, self.export_width, self.export_height)
             .with_iterations_per_thread(self.config_manager.system_settings().iterations_per_thread)
             .with_burn_in(self.config_manager.system_settings().burn_in)
@@ -172,70 +180,159 @@ impl App {
         }
     }
 
-    /// High-resolution CPU export using HighResExporter (same system as CLI)
+    /// High-resolution CPU export in background thread with progress updates
     #[cfg(not(target_arch = "wasm32"))]
-    fn export_high_res_cpu(&self, _transparent: bool, config: FractalConfig) {
-        use crate::export::{HighResExporter, CliExportProgress};
-        use std::time::Instant;
+    fn export_high_res_cpu_background(&mut self, transparent: bool, config: FractalConfig) {
+        use crate::export::HighResExporter;
+        use crate::ui::PngExportProgress;
+        use std::sync::{Arc, Mutex};
 
-        let export_start = Instant::now();
         let width = self.export_width;
         let height = self.export_height;
+        let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
+        let speed_factor = config.speed_factor;
+        let max_iterations = config.max_iterations;
 
-        // Create exporter (async, but we block on it)
-        let exporter_result = pollster::block_on(HighResExporter::new(&config, width, height, None));
+        // Set initial progress state
+        {
+            let mut p = self.png_export_progress.lock().unwrap();
+            p.is_exporting = true;
+            p.current_iterations = 0;
+            p.total_iterations = max_iterations;
+            p.status = "Starting export...".to_string();
+        }
 
-        let mut exporter = match exporter_result {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("Failed to create high-res exporter: {}", e);
-                return;
+        // Clone the Arc for the background thread
+        let progress_arc = Arc::clone(&self.png_export_progress);
+
+        // Spawn background thread
+        std::thread::spawn(move || {
+            use crate::export::ExportProgress as HighResProgress;
+            use std::time::Instant;
+
+            let export_start = Instant::now();
+
+            // Progress callback that updates UI state
+            struct UiProgress {
+                progress: Arc<Mutex<PngExportProgress>>,
+                total: u64,
             }
-        };
 
-        // Run export with CLI-style progress (prints to console)
-        let mut progress = CliExportProgress;
-        let rgba_result = pollster::block_on(exporter.export(&config, config.max_iterations, &mut progress));
+            impl HighResProgress for UiProgress {
+                fn on_dispatch(&mut self, current: u64, total: u64) {
+                    // Estimate iterations based on dispatch progress
+                    let iterations = (current as f64 / total as f64 * self.total as f64) as u64;
+                    if let Ok(mut p) = self.progress.lock() {
+                        p.current_iterations = iterations;
+                        p.status = format!("Rendering... ({}/{})", current, total);
+                    }
+                }
 
-        let rgba_data = match rgba_result {
-            Ok(data) => data,
-            Err(e) => {
-                eprintln!("Failed to export: {}", e);
-                return;
-            }
-        };
+                fn on_accumulating(&mut self, _samples: u64) {
+                    if let Ok(mut p) = self.progress.lock() {
+                        p.status = "Accumulating samples...".to_string();
+                    }
+                }
 
-        let total_export_time_ms = export_start.elapsed().as_secs_f64() * 1000.0;
+                fn on_tonemapping(&mut self) {
+                    if let Ok(mut p) = self.progress.lock() {
+                        p.status = "Tonemapping...".to_string();
+                    }
+                }
 
-        // Build metadata
-        let metadata = crate::png_metadata::PngMetadata::from_app_state(
-            width,
-            height,
-            config.max_iterations,
-            total_export_time_ms,
-            self.config_manager.system_settings().iterations_per_thread,
-            config.speed_factor,
-            &config,
-        );
-
-        // Encode PNG with metadata
-        match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
-            Ok(png_data) => {
-                // Open file dialog
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("PNG Image", &["png"])
-                    .set_file_name("fractal.png")
-                    .save_file()
-                {
-                    if let Err(e) = std::fs::write(&path, png_data) {
-                        eprintln!("Failed to save PNG: {}", e);
-                    } else {
-                        println!("PNG exported to: {} ({}×{}, {:.2}s)",
-                            path.display(), width, height, total_export_time_ms / 1000.0);
+                fn on_complete(&mut self) {
+                    if let Ok(mut p) = self.progress.lock() {
+                        p.status = "Encoding PNG...".to_string();
                     }
                 }
             }
-            Err(e) => eprintln!("Failed to encode PNG: {}", e),
-        }
+
+            // Create exporter (creates its own GPU context)
+            let exporter_result = pollster::block_on(HighResExporter::new(&config, width, height, None));
+
+            let mut exporter = match exporter_result {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("Failed to create high-res exporter: {}", e);
+                    if let Ok(mut p) = progress_arc.lock() {
+                        p.is_exporting = false;
+                        p.status = format!("Error: {}", e);
+                    }
+                    return;
+                }
+            };
+
+            // Run export with UI progress
+            let mut progress = UiProgress {
+                progress: Arc::clone(&progress_arc),
+                total: max_iterations,
+            };
+            let rgba_result = pollster::block_on(exporter.export(&config, max_iterations, transparent, &mut progress));
+
+            let rgba_data = match rgba_result {
+                Ok(data) => data,
+                Err(e) => {
+                    eprintln!("Failed to export: {}", e);
+                    if let Ok(mut p) = progress_arc.lock() {
+                        p.is_exporting = false;
+                        p.status = format!("Error: {}", e);
+                    }
+                    return;
+                }
+            };
+
+            let total_export_time_ms = export_start.elapsed().as_secs_f64() * 1000.0;
+
+            // Build metadata
+            let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                width,
+                height,
+                max_iterations,
+                total_export_time_ms,
+                iterations_per_thread,
+                speed_factor,
+                &config,
+            );
+
+            // Encode PNG with metadata
+            match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
+                Ok(png_data) => {
+                    // Update status
+                    if let Ok(mut p) = progress_arc.lock() {
+                        p.status = "Saving file...".to_string();
+                    }
+
+                    // Open file dialog (note: this blocks until user responds)
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("PNG Image", &["png"])
+                        .set_file_name("fractal.png")
+                        .save_file()
+                    {
+                        if let Err(e) = std::fs::write(&path, png_data) {
+                            eprintln!("Failed to save PNG: {}", e);
+                            if let Ok(mut p) = progress_arc.lock() {
+                                p.status = format!("Error saving: {}", e);
+                            }
+                        } else {
+                            println!("PNG exported to: {} ({}×{}, {:.2}s)",
+                                path.display(), width, height, total_export_time_ms / 1000.0);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to encode PNG: {}", e);
+                    if let Ok(mut p) = progress_arc.lock() {
+                        p.status = format!("Error encoding: {}", e);
+                    }
+                }
+            }
+
+            // Mark export complete
+            if let Ok(mut p) = progress_arc.lock() {
+                p.is_exporting = false;
+                p.current_iterations = max_iterations;
+                p.status = "Complete".to_string();
+            }
+        });
     }
 }

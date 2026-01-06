@@ -244,7 +244,7 @@ async fn export_headless_cpu(
     height: u32,
     test_category: Option<String>,
     iterations_per_thread: u32,
-    _transparent: bool, // TODO: implement transparent mode for CPU export
+    transparent: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     use crate::export::{CliExportProgress, HighResExporter};
     use std::time::Instant;
@@ -260,7 +260,7 @@ async fn export_headless_cpu(
     // Run export with progress reporting
     let mut progress = CliExportProgress;
     let rgba_data = exporter
-        .export(config, total_iterations, &mut progress)
+        .export(config, total_iterations, transparent, &mut progress)
         .await?;
 
     // Calculate total export time

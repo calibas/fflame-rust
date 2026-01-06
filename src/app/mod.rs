@@ -2,6 +2,9 @@
 
 mod input;
 mod config;
+mod ui_handlers;
+mod gpu_updates;
+mod animation_update;
 pub mod export;
 pub mod render_mode;
 
@@ -162,13 +165,14 @@ use std::sync::{Arc, Mutex};
 use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
 use crate::ui::animation_panel::ExportProgress;
+use crate::ui::PngExportProgress;
 use crate::renderer::FlameRenderer;
 use crate::scene::transforms::Flame;
-use crate::scene::palette::PaletteLibrary;
-use crate::scene::presets::PresetLibrary;
+use crate::scene::palette::{global_palette_library, PaletteLibrary};
+use crate::scene::presets::{global_preset_library, PresetLibrary};
 use crate::util::PerformanceMetrics;
-use crate::config::{FractalConfig, ConfigManager};
-use crate::animation::{AnimationController, PlaybackState};
+use crate::config::ConfigManager;
+use crate::animation::AnimationController;
 
 pub struct App {
     // Core state management
@@ -189,8 +193,7 @@ pub struct App {
 
     // Libraries (not saved in config)
     pub(super) palette_library: PaletteLibrary,
-    pub(super) preset_library: PresetLibrary,
-    pub(super) current_preset_index: usize,  // UI state, not config
+    pub(super) preset_library: &'static PresetLibrary,
 
     // Animation system
     pub(super) animation_controller: AnimationController,
@@ -202,12 +205,16 @@ pub struct App {
     pub(super) last_frame_time: Option<web_time::Instant>,
     pub(super) accumulation_batch_size: u32,  // Process every N frames (1 = normal, 4 = batched)
     pub(super) frames_since_accumulation: u32,
-    pub(super) use_overwrite_next_frame: bool,  // Persist overwrite mode for brief period after changes
-    pub(super) last_param_change_time: Option<web_time::Instant>,  // Track when params last changed
+    // Overwrite mode timing (100ms window after parameter changes)
+    // Note: This is intentionally separate from RenderModeFSM. The FSM manages high-level
+    // state transitions (Normal/Animating/Overwrite), while this simple timer handles the
+    // brief overwrite window. Moving the timer into FSM would add complexity for minimal benefit.
+    pub(super) use_overwrite_next_frame: bool,
+    pub(super) last_param_change_time: Option<web_time::Instant>,
     pub(super) rendering_complete: bool,  // True when rendering has finished (max_iterations reached)
     pub(super) clear_paths_next_frame: bool,  // Clear path buffer on next compute pass (full reset)
     pub(super) ui_needs_repaint: bool,  // Track if UI is requesting repaints (for frame rate boost)
-    pub(super) pending_redraws: u32,  // Counter for queued redraws (for UI animations after input)
+    pub(super) last_input_time: Option<web_time::Instant>,  // Time of last user input (for idle detection)
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
@@ -220,6 +227,9 @@ pub struct App {
     // Animation export progress (shared with background export thread)
     pub(super) animation_export_progress: Arc<Mutex<ExportProgress>>,
 
+    // PNG export progress (shared with background export thread)
+    pub(super) png_export_progress: Arc<Mutex<PngExportProgress>>,
+
     // Rendering mode state machine (Normal, Animating, Overwrite)
     pub(super) render_mode: RenderModeFSM,
 }
@@ -228,9 +238,13 @@ impl App {
         let gpu = GpuContext::new(&window).await.expect("GPU init failed");
         let egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
-        // Load preset library and use first preset (with ALL its settings)
-        let preset_library = PresetLibrary::new();
-        let palette_library = PaletteLibrary::new();
+        // Use global preset library singleton
+        let preset_library = global_preset_library();
+        // Clone from global palette library singleton (App needs mutable copy)
+        let palette_library = {
+            let guard = global_palette_library().read().unwrap();
+            (*guard).clone()
+        };
 
         // Use entire FractalConfig from first preset (not just the flame!)
         let initial_config = preset_library.get(0)
@@ -274,7 +288,6 @@ impl App {
             quit_requested: false,
             palette_library,
             preset_library,
-            current_preset_index: 0,
             animation_controller: AnimationController::new(),
             metrics: PerformanceMetrics::new(),
             last_frame_time: None,
@@ -285,12 +298,13 @@ impl App {
             rendering_complete: false,
             clear_paths_next_frame: true,  // Clear paths on first frame
             ui_needs_repaint: false,
-            pending_redraws: 0,
+            last_input_time: None,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
             export_width,
             export_height,
             use_custom_export_size: false,  // Default to viewport size
             animation_export_progress: Arc::new(Mutex::new(ExportProgress::default())),
+            png_export_progress: Arc::new(Mutex::new(PngExportProgress::default())),
             render_mode: RenderModeFSM::new(),
         };
 
@@ -311,14 +325,13 @@ impl App {
                         WindowEvent::MouseInput { .. } |
                         WindowEvent::MouseWheel { .. } |
                         WindowEvent::KeyboardInput { .. } => {
-                            // Queue 15 frames for UI animations (hover effects, transitions, etc.)
-                            app.pending_redraws = 15;
+                            // Track last input time for UI idle detection (tooltips, animations)
+                            app.last_input_time = Some(web_time::Instant::now());
                             window.request_redraw();
                         }
                         WindowEvent::Resized(_) |
                         WindowEvent::ScaleFactorChanged { .. } => {
-                            // Window events need just 1 frame
-                            app.pending_redraws = 1;
+                            app.last_input_time = Some(web_time::Instant::now());
                             window.request_redraw();
                         }
                         _ => {}
@@ -399,10 +412,16 @@ impl App {
                     // Update present mode based on system settings
                     app.gpu.set_present_mode(app.config_manager.system_settings().vsync_enabled);
 
+                    // Time-based UI idle detection (600ms after last input)
+                    const UI_IDLE_TIMEOUT: Duration = Duration::from_millis(700);
+                    let ui_active = app.last_input_time
+                        .map(|t| t.elapsed() < UI_IDLE_TIMEOUT)
+                        .unwrap_or(false);
+
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
-                    if is_rendering || animation_playing || app.pending_redraws > 0 {
-                        // Actively rendering fractals OR UI animations pending
+                    if is_rendering || animation_playing || ui_active {
+                        // Actively rendering fractals OR UI is active (for tooltips, hover effects)
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
                             window.request_redraw();
@@ -420,19 +439,6 @@ impl App {
                                 }
                             } else {
                                 window.request_redraw();
-                            }
-                        }
-
-                        // Decrement pending redraws counter after requesting next frame
-                        // AboutToWait fires AFTER RedrawRequested, so we're counting frames that just drew
-                        // While actively rendering, keep counter at minimum 1 for UI responsiveness
-                        if app.pending_redraws > 0 {
-                            if is_rendering {
-                                // Keep at least 1 while rendering for smooth UI
-                                app.pending_redraws = app.pending_redraws.saturating_sub(1).max(1);
-                            } else {
-                                // Not rendering: count down to 0 normally
-                                app.pending_redraws -= 1;
                             }
                         }
                     } else {
@@ -504,6 +510,7 @@ impl App {
 
         // Get a snapshot of export progress for UI display
         let export_progress = self.animation_export_progress.lock().unwrap().clone();
+        let png_export_progress = self.png_export_progress.lock().unwrap().clone();
 
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
@@ -519,7 +526,6 @@ impl App {
             &mut self.palette_library,
             &self.preset_library,
             &mut self.animation_controller,
-            &mut self.current_preset_index,
             &mut self.paused,
             &mut self.quit_requested,
             can_undo,
@@ -529,6 +535,7 @@ impl App {
             &mut self.export_height,
             &mut self.use_custom_export_size,
             &export_progress,
+            &png_export_progress,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
@@ -570,7 +577,7 @@ impl App {
 
                     // Restore tonemap parameters after buffer recreation (not in live preview mode)
                     renderer.update_tonemap(&self.gpu.queue, resize_config.tonemap_mode, resize_config.use_curve, resize_config.exposure, resize_config.gamma,
-                        resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.saturation, resize_config.hue_shift, resize_config.value_scale,
+                        resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.saturation, resize_config.hue_shift,
                         resize_config.alpha_blend_low, resize_config.alpha_blend_high,
                         viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, self.config_manager.system_settings().iterations_per_thread, 1, false);
                     renderer.update_curve_lut(&self.gpu.queue, &resize_config.tonemap_curve);
@@ -596,548 +603,10 @@ impl App {
         // PHASE 2: Process ALL UI Responses and Config Updates
         // ============================================================================
 
-        // Handle config export
-        if ui_response.config_export_requested.is_some() {
-            let config = self.export_config();
-            if let Ok(json) = config.to_json() {
-                // Copy to clipboard using egui's built-in clipboard
-                self.egui_layer.ctx.copy_text(json);
-            }
-        }
+        // Handle UI responses via extracted handlers
+        self.handle_ui_responses(&ui_response);
 
-        // Handle config save to file
-        if ui_response.config_save_file_requested {
-            let config = self.export_config();
-
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                // Desktop: synchronous file dialog
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Fractal Flame Config", &["fflame"])
-                    .set_file_name("fractal.fflame")
-                    .save_file()
-                {
-                    if let Err(e) = config.save_to_file(&path) {
-                        eprintln!("Failed to save config: {}", e);
-                    } else {
-                        println!("Config saved to: {}", path.display());
-                    }
-                }
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            {
-                // WASM: direct browser download (no extra dialogs)
-                if let Ok(json) = config.to_json() {
-                    let filename = format!("{}.fflame", config.flame.name.to_lowercase().replace(' ', "_"));
-                    if let Err(e) = trigger_browser_download(json.as_bytes(), &filename, "application/json") {
-                        log::error!("Failed to trigger download: {}", e);
-                    }
-                }
-            }
-        }
-
-        // Handle config import
-        if let Some(json) = ui_response.config_import_requested {
-            match FractalConfig::from_json(&json) {
-                Ok(config) => {
-                    if let Err(e) = self.load_config_with_undo(config, "Import Config".to_string()) {
-                        eprintln!("Failed to import config: {}", e);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to import config: {}", e);
-                }
-            }
-        }
-
-        // Handle add transform
-        if ui_response.add_transform {
-            let insert_index = self.config_manager.active_config().flame.transforms.len();
-
-            // Create a new default transform with identity affine and linear variation
-            let mut new_transform = crate::scene::transforms::Transform::default();
-            // Linear variation with weight 1.0
-            new_transform.set_variation("linear", 1.0);
-            new_transform.color = 0.5;  // Mid-palette position
-            new_transform.color_speed = 0.5;
-
-            // Create specialized snapshot for efficient undo/redo
-            let change = crate::config::ConfigChange::add_transform_snapshot(
-                insert_index,
-                new_transform,
-                "Add Transform".to_string(),
-            );
-
-            if let Err(e) = self.config_manager.apply_structural_change(change) {
-                eprintln!("Failed to add transform: {}", e);
-            } else {
-                // Update app state from config
-                self.flame = self.config_manager.active_config().flame.clone();
-            }
-        }
-
-        // Handle delete transform
-        if let Some(idx) = ui_response.delete_transform {
-            let config = self.config_manager.active_config();
-
-            if config.flame.transforms.len() > 1 && idx < config.flame.transforms.len() {
-                // Get the transform before deleting
-                let deleted_transform = config.flame.transforms[idx].clone();
-
-                // Create specialized snapshot for efficient undo/redo
-                let change = crate::config::ConfigChange::delete_transform_snapshot(
-                    idx,
-                    deleted_transform,
-                    format!("Delete Transform {}", idx + 1),
-                );
-
-                if let Err(e) = self.config_manager.apply_structural_change(change) {
-                    eprintln!("Failed to delete transform: {}", e);
-                } else {
-                    // Update app state from config
-                    self.flame = self.config_manager.active_config().flame.clone();
-                }
-            }
-        }
-
-        // Handle custom palette from editor or library
-        if let Some(custom_pal) = ui_response.custom_palette {
-            // Add or update palette in library (prevents duplicates)
-            let _palette_index = self.palette_library.add_or_update(custom_pal.clone());
-
-            // Apply the palette to the config via ConfigManager
-            if let Ok(update) = self.config_manager.update_param(
-                crate::config::ConfigPath::Palette,
-                crate::config::ConfigValue::Palette(custom_pal.clone()),
-            ) {
-                // Update renderer if needed (ColorOnly or IterationReset)
-                if matches!(update, crate::config::UpdateType::ColorOnly | crate::config::UpdateType::IterationReset) {
-                    let config = self.config_manager.active_config();
-                    if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &custom_pal, config.palette_rotation);
-                    }
-                }
-            }
-        }
-
-        // Handle config load from file
-        if ui_response.config_load_file_requested {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                // Desktop: synchronous file dialog
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Fractal Flame Config", &["fflame"])
-                    .pick_file()
-                {
-                    match FractalConfig::load_multi_from_file(&path) {
-                        Ok(configs) => {
-                            if configs.is_empty() {
-                                eprintln!("No configurations found in file");
-                            } else if configs.len() == 1 {
-                                // Single config: load directly
-                                let config = configs.into_iter().next().unwrap();
-                                if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
-                                    eprintln!("Failed to load config: {}", e);
-                                } else {
-                                    println!("Config loaded from: {}", path.display());
-                                }
-                            } else {
-                                // Multiple configs: load first one and open File Browser
-                                let filename = path.file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("file")
-                                    .to_string();
-                                println!("Found {} configs in {}, loading first and opening File Browser", configs.len(), filename);
-
-                                // Load all configs into File Browser
-                                self.egui_layer.load_configs_into_browser(configs.clone(), &filename);
-
-                                // Load the first config
-                                let first_config = configs.into_iter().next().unwrap();
-                                if let Err(e) = self.load_config_with_undo(first_config, "Load Config".to_string()) {
-                                    eprintln!("Failed to load config: {}", e);
-                                }
-
-                                // Open the File Browser panel
-                                use crate::ui::workspace::PanelType;
-                                self.workspace.open_floating_panel(PanelType::FileBrowser);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to load config: {}", e);
-                        }
-                    }
-                }
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            {
-                // WASM: native file picker - no extra dialogs
-                let ctx = self.egui_layer.ctx.clone();
-                trigger_browser_file_picker(".fflame", ctx, "pending_config_load_raw");
-            }
-        }
-
-        // Handle Apophysis .flame import
-        if ui_response.apophysis_import_file_requested {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                // Desktop: synchronous file dialog
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Apophysis Flame", &["flame"])
-                    .pick_file()
-                {
-                    match std::fs::read_to_string(&path) {
-                        Ok(xml) => {
-                            match crate::apophysis_xml::parse_flame_xml(&xml) {
-                                Ok(configs) => {
-                                    if configs.is_empty() {
-                                        eprintln!("No flames found in file");
-                                    } else if configs.len() == 1 {
-                                        // Single flame: import directly
-                                        let config = configs.into_iter().next().unwrap();
-                                        if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
-                                            eprintln!("Failed to import flame: {}", e);
-                                        } else {
-                                            println!("Imported Apophysis flame from: {}", path.display());
-                                        }
-                                    } else {
-                                        // Multiple flames: load first one and open File Browser
-                                        let filename = path.file_name()
-                                            .and_then(|n| n.to_str())
-                                            .unwrap_or("file")
-                                            .to_string();
-                                        println!("Found {} flames in {}, loading first and opening File Browser", configs.len(), filename);
-
-                                        // Load all configs into File Browser
-                                        self.egui_layer.load_configs_into_browser(configs.clone(), &filename);
-
-                                        // Load the first config
-                                        let first_config = configs.into_iter().next().unwrap();
-                                        if let Err(e) = self.load_config_with_undo(first_config, "Import Apophysis Flame".to_string()) {
-                                            eprintln!("Failed to import flame: {}", e);
-                                        }
-
-                                        // Open the File Browser panel
-                                        use crate::ui::workspace::PanelType;
-                                        self.workspace.open_floating_panel(PanelType::FileBrowser);
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to parse Apophysis XML: {}", e);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to read file: {}", e);
-                        }
-                    }
-                }
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            {
-                // WASM: native file picker - no extra dialogs
-                let ctx = self.egui_layer.ctx.clone();
-                trigger_browser_file_picker(".flame", ctx, "pending_apophysis_import_raw");
-            }
-        }
-
-        // Handle file browser open request
-        if ui_response.file_browser_open_requested {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                // Desktop: synchronous file dialog
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Fractal Flame Config", &["fflame"])
-                    .pick_file()
-                {
-                    self.egui_layer.load_file_into_browser(path);
-                }
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            {
-                // WASM: use native file picker (no extra dialogs)
-                let ctx = self.egui_layer.ctx.clone();
-                trigger_browser_file_picker(".fflame", ctx, "pending_file_browser_json_raw");
-            }
-        }
-
-        // Handle palette export to clipboard
-        if let Some(palette) = ui_response.palette_export_json {
-            if let Ok(json) = serde_json::to_string_pretty(&palette) {
-                self.egui_layer.ctx.copy_text(json);
-            }
-        }
-
-        // Handle palette save to file
-        if let Some(palette) = ui_response.palette_save_file {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                // Desktop: synchronous file dialog
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Palette", &["palette"])
-                    .set_file_name("palette.palette")
-                    .save_file()
-                {
-                    if let Ok(json) = serde_json::to_string_pretty(&palette) {
-                        if let Err(e) = std::fs::write(&path, json) {
-                            eprintln!("Failed to save palette: {}", e);
-                        } else {
-                            println!("Palette saved to: {}", path.display());
-                        }
-                    }
-                }
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            {
-                // WASM: async file dialog
-                if let Ok(json) = serde_json::to_string_pretty(&palette) {
-                    wasm_bindgen_futures::spawn_local(async move {
-                        if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                            .add_filter("Palette", &["palette"])
-                            .set_file_name("palette.palette")
-                            .save_file()
-                            .await
-                        {
-                            let _ = file_handle.write(json.as_bytes()).await;
-                        }
-                    });
-                }
-            }
-        }
-
-        // Handle palette import from JSON
-        if let Some(json) = ui_response.palette_import_json {
-            match serde_json::from_str::<crate::scene::palette::Palette>(&json) {
-                Ok(mut palette) => {
-                    // Check if palette with same name exists (case-insensitive)
-                    let existing_idx = self.palette_library.iter()
-                        .position(|p| p.name.to_lowercase() == palette.name.to_lowercase());
-
-                    if existing_idx.is_some() {
-                        // Generate unique name with (Copy) or (Copy N) suffix
-                        let base_name = palette.name.clone();
-                        let mut counter = 1;
-                        let mut new_name = format!("{} (Copy)", base_name);
-
-                        while self.palette_library.iter().any(|p| p.name.to_lowercase() == new_name.to_lowercase()) {
-                            counter += 1;
-                            new_name = format!("{} (Copy {})", base_name, counter);
-                        }
-
-                        palette.name = new_name;
-                        palette.built_in = false; // Mark as custom
-                    } else {
-                        palette.built_in = false; // Mark as custom
-                    }
-
-                    // Add to library (now guaranteed to have unique name)
-                    let _palette_idx = self.palette_library.add_or_update(palette.clone());
-
-                    // Update palette editor with the new palette
-                    self.egui_layer.update_palette_editor(palette.clone());
-
-                    // Set as active palette in config (this is what the UI checks)
-                    let _ = self.config_manager.update_param(
-                        crate::config::ConfigPath::Palette,
-                        crate::config::ConfigValue::Palette(palette.clone())
-                    );
-
-                    // Update renderer
-                    let config = self.config_manager.active_config();
-                    if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to import palette: {}", e);
-                }
-            }
-        }
-
-        // Handle palette load from file
-        if ui_response.palette_load_file {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                // Desktop: synchronous file dialog
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Palette", &["palette"])
-                    .pick_file()
-                {
-                    match std::fs::read_to_string(&path) {
-                        Ok(json) => {
-                            match serde_json::from_str::<crate::scene::palette::Palette>(&json) {
-                                Ok(palette) => {
-                                    // Update palette editor
-                                    self.egui_layer.update_palette_editor(palette.clone());
-
-                                    // Add or update in library (prevents duplicates)
-                                    let palette_idx = self.palette_library.add_or_update(palette.clone());
-                                    // Set to the palette
-                                    let _ = self.config_manager.update_param(
-                                        crate::config::ConfigPath::PaletteIndex,
-                                        (palette_idx as u32).into()
-                                    );
-
-                                    // Update renderer
-                                    let config = self.config_manager.active_config();
-                                    if let Some(ref mut renderer) = self.flame_renderer {
-                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation);
-                                    }
-
-                                    println!("Palette loaded from: {}", path.display());
-                                }
-                                Err(e) => {
-                                    eprintln!("Failed to parse palette file: {}", e);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to read palette file: {}", e);
-                        }
-                    }
-                }
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            {
-                // WASM: async file dialog
-                let ctx = self.egui_layer.ctx.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    if let Some(file_handle) = rfd::AsyncFileDialog::new()
-                        .add_filter("Palette", &["palette"])
-                        .pick_file()
-                        .await
-                    {
-                        let contents = file_handle.read().await;
-                        let json = String::from_utf8_lossy(&contents).to_string();
-                        // Copy to clipboard so user can paste it
-                        ctx.copy_text(json);
-                        log::info!("Palette loaded to clipboard - paste to import");
-                    }
-                });
-            }
-        }
-
-        // Handle undo/redo from UI buttons
-        if ui_response.undo_requested {
-            self.undo();
-        }
-        if ui_response.redo_requested {
-            self.redo();
-        }
-
-        // Handle panel open requests
-        if ui_response.open_palette_editor {
-            use crate::ui::workspace::PanelType;
-            self.workspace.open_floating_panel(PanelType::PaletteEditor);
-        }
-        if ui_response.open_config_dialog {
-            use crate::ui::workspace::PanelType;
-            self.workspace.open_floating_panel(PanelType::ConfigDialog);
-        }
-
-        // Check for pending config/Apophysis imports from WASM async file dialogs
-        #[cfg(target_arch = "wasm32")]
-        {
-            // Check for pending config load (raw JSON text from native file picker)
-            if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
-                data.remove_temp::<String>(egui::Id::new("pending_config_load_raw"))
-            }) {
-                match serde_json::from_str::<crate::config::FractalConfig>(&json) {
-                    Ok(config) => {
-                        if let Err(e) = self.load_config_with_undo(config, "Load Config".to_string()) {
-                            log::error!("Failed to load config: {}", e);
-                        } else {
-                            log::info!("Config loaded successfully");
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to parse config JSON: {}", e);
-                    }
-                }
-            }
-
-            // Check for pending Apophysis import (raw XML text from native file picker)
-            if let Some(xml) = self.egui_layer.ctx.data_mut(|data| {
-                data.remove_temp::<String>(egui::Id::new("pending_apophysis_import_raw"))
-            }) {
-                match crate::apophysis_xml::parse_flame_xml(&xml) {
-                    Ok(configs) => {
-                        if let Some(config) = configs.into_iter().next() {
-                            if let Err(e) = self.load_config_with_undo(config, "Import Apophysis Flame".to_string()) {
-                                log::error!("Failed to import Apophysis flame: {}", e);
-                            } else {
-                                log::info!("Apophysis flame imported successfully");
-                            }
-                        } else {
-                            log::error!("No flames found in Apophysis file");
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to parse Apophysis XML: {}", e);
-                    }
-                }
-            }
-
-            // Check for pending animation load (raw JSON text from native file picker)
-            if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
-                data.remove_temp::<String>(egui::Id::new("pending_animation_load_raw"))
-            }) {
-                match crate::animation::Animation::from_json(&json) {
-                    Ok(animation) => {
-                        // If animation has embedded config, load it first
-                        if let Some(ref config) = animation.base_config {
-                            log::info!("Animation '{}' has embedded config, loading it", animation.name);
-                            let description = format!("Load Animation: {}", animation.name);
-                            if let Err(e) = self.load_config_with_undo(config.clone(), description) {
-                                log::error!("Failed to load animation's embedded config: {}", e);
-                            }
-                        }
-                        self.animation_controller.load(animation);
-                        log::info!("Animation loaded successfully");
-                    }
-                    Err(e) => {
-                        log::error!("Failed to parse animation JSON: {}", e);
-                    }
-                }
-            }
-
-            // Check for pending file browser JSON (raw text from native file picker)
-            if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
-                data.remove_temp::<String>(egui::Id::new("pending_file_browser_json_raw"))
-            }) {
-                // Load the JSON into the file browser panel
-                match crate::config::FractalConfig::from_json_multi(&json) {
-                    Ok(configs) => {
-                        if configs.is_empty() {
-                            log::error!("File contains no configurations");
-                        } else {
-                            log::info!("Loaded {} config(s) from file", configs.len());
-                            self.egui_layer.load_configs_into_browser(configs, "file");
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to parse config JSON: {}", e);
-                    }
-                }
-            }
-        }
-
-        // Handle preset selection from Preset Library panel
-        if let Some(config) = ui_response.selected_preset_config {
-            if let Err(e) = self.load_config_with_undo(config, "Load Preset".to_string()) {
-                log::error!("Failed to load preset: {}", e);
-            } else {
-                log::info!("Preset loaded successfully");
-            }
-        }
-
-        // Handle PNG export
+                // Handle PNG export
         if ui_response.png_export_with_background || ui_response.png_export_transparent {
             let transparent = ui_response.png_export_transparent;
 
@@ -1475,7 +944,7 @@ impl App {
 
         // Handle animation export request
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(export_settings) = ui_response.animation_export_requested {
+        if let Some(ref export_settings) = ui_response.animation_export_requested {
             // Check if already exporting
             let already_exporting = self.animation_export_progress.lock().unwrap().is_exporting;
             if already_exporting {
@@ -1547,261 +1016,22 @@ impl App {
             }
         }
 
-        // Handle animation timeline scrubbing (slider drag or frame step)
-        if ui_response.animation_seek_changed {
-            // Evaluate animation at current scrubbed time and apply to config
-            let frame_values = self.animation_controller.evaluate_frame();
+        // ============================================================================
+        // ANIMATION UPDATE (before GPU updates so animation changes are included)
+        // ============================================================================
+        let is_controller_playing = self.update_animation(delta_time);
 
-            for (path_str, json_value) in frame_values {
-                if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
-                    if let Some(config_value) = crate::config::json_to_config_value(&json_value, &path) {
-                        // Apply silently (no undo point) - just preview the position
-                        if let Err(e) = self.config_manager.update_param_silent(path, config_value) {
-                            log::warn!("Animation scrub: failed to update {}: {}", path_str, e);
-                        }
-                    }
-                }
-            }
 
-            // Sync flame from config
-            self.flame = self.config_manager.active_config().flame.clone();
-
-            // Force a GPU update to show the scrubbed frame
-            self.use_overwrite_next_frame = true;
-        }
-
-        // Handle path filter changes from Path Editor panel
-        if let Some(filters) = ui_response.path_filters_changed {
-            if let Some(ref mut renderer) = self.flame_renderer {
-                log::info!("Path filters updated: {} filters", filters.len());
-                renderer.set_path_filters(filters);
-                // Update path buffer allocation and shaders (creates buffers if needed)
-                renderer.update_path_features(&self.gpu.device, &self.gpu.queue, &self.config_manager.active_config().flame);
-                // Request reset accumulation to see effect of new filters
-                self.config_manager.request_reset();
-            }
-        }
-
-        // Handle UI responses and keyboard input (needs to be after submit since we need a new encoder)
-        // Get pending actions from ConfigManager (replaces individual boolean flags)
-        let actions = self.config_manager.get_pending_actions();
-
-        // View changes can also come from keyboard input
+        // ============================================================================
+        // GPU UPDATES (includes both UI and animation changes)
+        // ============================================================================
+        // Process pending config actions and update GPU buffers
         let view_changed_by_keyboard = self.view_changed_by_keyboard;
-
-
-        // Determine if any GPU updates are needed
-        let needs_update = actions.reset_accumulation || actions.update_flame || actions.update_palette
-            || actions.update_tone_curve || actions.update_view || actions.rebuild_shader
-            || view_changed_by_keyboard;
-
-        if needs_update {
-            if let Some(ref mut renderer) = self.flame_renderer {
-                // Get current config for updates
-                let update_config = self.config_manager.active_config();
-
-                let mut update_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
-                    label: Some("Update Encoder"),
-                });
-
-                // Update flame if UpdateAction indicates (includes preview mode live updates)
-                if actions.update_flame {
-                    renderer.update_flame(&self.gpu.device, &self.gpu.queue, &self.flame,
-                        self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
-                        update_config.zoom, update_config.pan_x, update_config.pan_y,
-                        update_config.rotation, update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
-                }
-
-                // Update view parameters (includes view changes and iteration changes)
-                if actions.update_view || view_changed_by_keyboard {
-                    renderer.set_deterministic_rng(update_config.deterministic_rng);
-                    renderer.update_iterations(&self.gpu.queue, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
-                        update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
-                        update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
-                }
-
-                // Update palette if needed (also handles color mode changes)
-                if actions.update_palette {
-                    // Get palette from ConfigManager (includes preview mode changes from palette editor)
-                    let palette = update_config.palette.as_ref()
-                        .or_else(|| self.palette_library.get(update_config.palette_index));
-
-                    if let Some(palette) = palette {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, update_config.palette_rotation);
-                    }
-
-                    // Update color mode in GPU params (ColorMode changes trigger update_palette)
-                    renderer.set_color_mode(&self.gpu.queue, update_config.color_mode,
-                        self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
-                        update_config.zoom, update_config.pan_x,
-                        update_config.pan_y, update_config.rotation, update_config.camera_rotation_x,
-                        update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
-
-                    // Update path buffer allocation and shaders based on color_mode (PathMap needs buffers)
-                    renderer.update_path_features(&self.gpu.device, &self.gpu.queue, &update_config.flame);
-                }
-
-                // Update tone curve LUT if changed
-                if actions.update_tone_curve {
-                    renderer.update_curve_lut(&self.gpu.queue, &update_config.tonemap_curve);
-                }
-
-                // Rebuild shader if variation set changed
-                if actions.rebuild_shader {
-                    // TODO: Implement shader rebuild logic when variation system supports it
-                    // For now, this would require recreating the compute pipeline
-                }
-
-                // Handle accumulation reset based on change type
-                let should_full_reset = actions.reset_accumulation || view_changed_by_keyboard;
-                let has_view_or_color_change = actions.update_view || actions.update_palette;
-
-                if should_full_reset {
-                    // Structural changes: Clear buffer and reset counters (blank frame expected)
-                    renderer.reset(&mut update_encoder, &self.gpu.queue, self.config_manager.system_settings().iterations_per_thread,
-                        update_config.zoom, update_config.pan_x, update_config.pan_y, update_config.rotation,
-                        update_config.camera_rotation_x, update_config.camera_rotation_y, update_config.camera_z, update_config.speed_factor);
-                    self.frames_since_accumulation = 0;
-                    self.rendering_complete = false;  // Reset completion flag
-                    self.clear_paths_next_frame = true;  // Clear path buffer on full reset
-                } else if has_view_or_color_change && renderer.total_iterations() >= update_config.max_iterations {
-                    // View/color changes when fractal has stopped iterating:
-                    // Reset counter to restart iteration (smooth transition via overwrite mode)
-                    renderer.reset_iteration_counter();
-                    self.frames_since_accumulation = 0;
-                    self.rendering_complete = false;  // Reset completion flag
-                    self.clear_paths_next_frame = true;  // Clear path buffer when restarting
-                }
-
-                self.gpu.queue.submit(std::iter::once(update_encoder.finish()));
-            }
-        }
-
-        // Set overwrite flag based on whether we had changes recently
-        // Keep it ON for brief period (100ms ~6 frames) after last change for smooth transitions
-        // This handles continuous drag, discrete scroll, and transform changes
-        // Note: Excludes tone_curve (post-processing only, doesn't affect accumulation buffer)
-        let had_changes = actions.update_view || actions.update_palette || actions.update_flame;
-        let now = web_time::Instant::now();
-
-        // Track previous overwrite state to detect transitions
-        let was_overwrite = self.use_overwrite_next_frame;
-
-        if had_changes && !actions.reset_accumulation {
-            // Changes happened → enable overwrite mode and update timestamp
-            self.use_overwrite_next_frame = true;
-            self.last_param_change_time = Some(now);
-        } else if !had_changes {
-            // No changes this frame → check if we're still within the smooth transition window
-            if let Some(last_change) = self.last_param_change_time {
-                let time_since_change = now.duration_since(last_change);
-                // Keep overwrite ON for 100ms after last change (~6 frames at 60fps)
-                self.use_overwrite_next_frame = time_since_change.as_millis() < 100;
-
-                // When overwrite window expires, reset iteration counter for clean rebuild
-                if was_overwrite && !self.use_overwrite_next_frame {
-                    if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.reset_iteration_counter();
-                        self.rendering_complete = false;  // Reset completion flag
-                        self.clear_paths_next_frame = true;  // Clear path buffer for clean rebuild
-                        log::debug!("Overwrite window expired → reset iteration counter for clean rebuild");
-                    }
-                }
-            } else {
-                self.use_overwrite_next_frame = false;
-            }
-        }
-        // If reset_accumulation=true, disable overwrite (let normal accumulation work after reset)
-
-        // Clear pending actions after executing them
-        self.config_manager.clear_pending_actions();
+        self.process_gpu_updates(view_changed_by_keyboard);
 
         // Clear keyboard flag for next frame
         self.view_changed_by_keyboard = false;
 
-        // ============================================================================
-        // ANIMATION UPDATE (between UI processing and rendering)
-        // ============================================================================
-        // Detect animation state transitions and update FSM accordingly
-        let was_fsm_animating = self.render_mode.is_animating();
-        let is_controller_playing = self.animation_controller.state == PlaybackState::Playing;
-
-        // Detect play start: controller started playing but FSM not yet in animation mode
-        if is_controller_playing && !was_fsm_animating {
-            self.render_mode.enter_animation(self.config_manager.active_config());
-            // Enable animation mode in ConfigManager - UI changes become silent (no undo)
-            self.config_manager.set_animation_mode(true);
-        }
-
-        // Detect user stop/pause: FSM was animating but controller is no longer playing
-        // (This catches manual stop/pause clicks from UI - auto-stop is handled below after update())
-        if was_fsm_animating && !is_controller_playing {
-            // Disable animation mode before exit so undo entry creation works
-            self.config_manager.set_animation_mode(false);
-            self.handle_animation_exit();
-
-            // Only restore base config when animation is STOPPED (not paused)
-            // When paused, the fractal should stay at the current timeline position
-            if self.animation_controller.state == PlaybackState::Stopped {
-                if let Some(ref animation) = self.animation_controller.animation {
-                    if let Some(ref base_config) = animation.base_config {
-                        // Load the base config silently (the undo entry was already created by handle_animation_exit)
-                        if let Err(e) = self.config_manager.load_config_silent(base_config.clone()) {
-                            log::error!("Failed to restore base config: {}", e);
-                        }
-                        self.flame = base_config.flame.clone();
-                        self.use_overwrite_next_frame = true;
-                    }
-                }
-            }
-        }
-
-        if is_controller_playing {
-            // Update animation time (delta_time calculated at frame start, before last_frame_time update)
-            self.animation_controller.update(delta_time);
-
-            // Check if animation auto-stopped (LoopMode::Once reached end)
-            let auto_stopped = self.animation_controller.state != PlaybackState::Playing;
-            if auto_stopped {
-                // Disable animation mode before exit so undo entry creation works
-                self.config_manager.set_animation_mode(false);
-                // Animation finished naturally - exit animation mode and create undo snapshot
-                self.handle_animation_exit();
-
-                // Restore base config when animation stops (returns to original state)
-                if let Some(ref animation) = self.animation_controller.animation {
-                    if let Some(ref base_config) = animation.base_config {
-                        // Load the base config silently (the undo entry was already created by handle_animation_exit)
-                        if let Err(e) = self.config_manager.load_config_silent(base_config.clone()) {
-                            log::error!("Failed to restore base config: {}", e);
-                        }
-                        self.flame = base_config.flame.clone();
-                        self.use_overwrite_next_frame = true;
-                    }
-                }
-            }
-
-            // Evaluate all tracks and apply values to ConfigManager (silently, no undo)
-            let frame_values = self.animation_controller.evaluate_frame();
-
-            for (path_str, json_value) in frame_values {
-                // Parse the string key back to ConfigPath
-                if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
-                    // Convert JSON value to ConfigValue
-                    if let Some(config_value) = crate::config::json_to_config_value(&json_value, &path) {
-                        // Apply silently (no undo point)
-                        if let Err(e) = self.config_manager.update_param_silent(path, config_value) {
-                            log::warn!("Animation: failed to update {}: {}", path_str, e);
-                        }
-                    }
-                } else {
-                    log::warn!("Animation: unknown path key: {}", path_str);
-                }
-            }
-
-            // Sync flame from config (animation may have changed transform parameters)
-            self.flame = self.config_manager.active_config().flame.clone();
-        }
 
         // ============================================================================
         // PHASE 3: Get FINAL Config and Render Fractal
@@ -1814,17 +1044,12 @@ impl App {
             label: Some("Fractal Render Encoder"),
         });
 
+        // Determine overwrite mode (smooth transitions during parameter changes)
+        // Must be computed before mutable borrow of flame_renderer
+        let use_overwrite = self.should_use_overwrite(is_controller_playing);
+
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
-            // Overwrite mode logic:
-            // - Use flag set in previous frame (changes were detected then, applied now)
-            // - When fractal stopped: Always allow overwrite to enable live parameter updates
-            // - During animation playback: Depends on quality mode setting
-            //   - Responsive mode: Use overwrite for smooth real-time preview
-            //   - HighQuality mode: Use batched accumulation for better quality
-            let has_stopped = renderer.total_iterations() >= final_config.max_iterations;
-            let animation_uses_overwrite = is_controller_playing && self.animation_controller.use_overwrite_mode();
-            let use_overwrite = self.use_overwrite_next_frame || has_stopped || animation_uses_overwrite;
             renderer.set_overwrite_mode(use_overwrite);
 
             // Check if we should continue iterating
@@ -1895,8 +1120,6 @@ impl App {
             
             let t_tonemap = Instant::now();
             // 3. Update accumulation parameters from config
-            renderer.set_low_density_smoothing(final_config.low_density_smoothing);
-            renderer.set_density_compression_strength(final_config.density_compression_strength);
             renderer.set_blend_factor(final_config.blend_factor);
             renderer.set_use_dynamic_blend(final_config.use_dynamic_blend);
             renderer.set_target_iterations_per_pixel(final_config.target_iterations_per_pixel);
@@ -1907,11 +1130,15 @@ impl App {
             renderer.set_path_map_style(final_config.path_map_style);
             // Calculate batch_size for tonemap (same logic as accumulation)
             let batch_size_for_tonemap = if use_overwrite { 1 } else { self.accumulation_batch_size };
-            // is_live_preview: Only during active editing, not when rendering stops
-            let is_live_preview = self.use_overwrite_next_frame;
+
+            // Update FSM brightness state and get boost decision
+            // The FSM tracks when we're in Animating/Overwrite mode and for how long after
+            self.render_mode.update_brightness_state(should_iterate);
+            let is_live_preview = self.render_mode.needs_brightness_boost();
+
             renderer.update_tonemap(&self.gpu.queue, final_config.tonemap_mode, final_config.use_curve,
                 final_config.exposure, final_config.gamma, final_config.gamma_threshold, final_config.brightness,
-                final_config.vibrancy, final_config.saturation, final_config.hue_shift, final_config.value_scale,
+                final_config.vibrancy, final_config.saturation, final_config.hue_shift,
                 final_config.alpha_blend_low, final_config.alpha_blend_high,
                 renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations, final_config.zoom,
                 self.config_manager.system_settings().iterations_per_thread, batch_size_for_tonemap, is_live_preview);
@@ -2035,6 +1262,9 @@ impl App {
 
         self.metrics.record_render_time(render_start.elapsed().as_secs_f64() * 1000.0);
 
+        // Save current low-density state for next frame's brightness decision
+        // (matches ping-pong buffer timing - tonemap reads previous frame's buffer)
+        self.render_mode.end_frame();
 
         Ok(())
     }

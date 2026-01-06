@@ -250,7 +250,6 @@ pub struct TonemapParams {
     pub sample_density: f32,  // Iterations per pixel
     pub saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
     pub hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
-    pub value_scale: f32,  // Value (brightness) multiplier (1.0 = no change)
     pub gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
     pub alpha_blend_low: f32,  // Start blending toward linear alpha at this gamma-corrected value
     pub alpha_blend_high: f32,  // Full linear alpha above this value
@@ -261,7 +260,7 @@ pub struct TonemapParams {
     pub path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct, 4=Depth, 5=OriginRadial, 6=OriginHorizontal, 7=OriginVertical
     pub burn_in: u32,  // Burn-in iterations (for Depth gradient: start depth)
     pub num_transforms: u32,  // Number of transforms (for path coloring entropy)
-    pub _pad_end: [u32; 3],  // Padding to align struct to 16-byte boundary (128 bytes total)
+    pub _pad_end: [u32; 4],  // Padding to align struct to 16-byte boundary (128 bytes total)
 }
 
 impl Default for TonemapParams {
@@ -284,7 +283,6 @@ impl Default for TonemapParams {
             sample_density: 1.0,  // Will be updated per frame
             saturation: DEFAULT_SATURATION,
             hue_shift: DEFAULT_HUE_SHIFT,
-            value_scale: DEFAULT_VALUE_SCALE,
             gamma_threshold: DEFAULT_GAMMA_THRESHOLD,
             alpha_blend_low: DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: DEFAULT_ALPHA_BLEND_HIGH,
@@ -295,7 +293,7 @@ impl Default for TonemapParams {
             path_map_style: 0,  // Prefix mode by default
             burn_in: 20,  // Default burn-in
             num_transforms: 3,  // Default 3 transforms
-            _pad_end: [0, 0, 0],
+            _pad_end: [0, 0, 0, 0],
         }
     }
 }
@@ -308,14 +306,12 @@ pub struct AccumulateParams {
     pub height: u32,
     pub blend_factor: f32,
     pub histogram_color_scale: f32, // Must match compute shader value
-    pub low_density_smoothing: f32, // 0.0 = no smoothing, 1.0 = max smoothing
-    pub density_compression_strength: f32, // 0.0 = linear, 5.0 = strong compression
     pub target_iterations_per_pixel: u32, // Per-pixel convergence threshold (0 = disabled)
     pub _pad0: f32,  // Padding for alignment
     pub background_r: f32,  // Background color RGB (for blending when no samples)
     pub background_g: f32,
     pub background_b: f32,
-    pub _pad1: f32,  // Total 12 fields = 48 bytes
+    pub _pad1: f32,  // Total 10 fields = 40 bytes (rounds to 48 with padding)
 }
 
 /// Manages GPU buffers and textures for fractal flame rendering
@@ -396,13 +392,17 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Upload initial transforms
+        // Upload initial transforms (include final transform if present)
         let registry = crate::variations::global_registry();
-        let gpu_transforms: Vec<GpuTransform> = flame
+        let mut gpu_transforms: Vec<GpuTransform> = flame
             .transforms
             .iter()
             .map(|xform| GpuTransform::from_transform(xform, registry))
             .collect();
+        // Append final transform if present (same as update_transforms)
+        if let Some(ref final_xform) = flame.final_transform {
+            gpu_transforms.push(GpuTransform::from_transform(final_xform, registry));
+        }
         queue.write_buffer(&transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
 
         // Create variation parameters storage buffer sized for MAX_TRANSFORMS
@@ -414,12 +414,16 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Upload initial variation parameters
-        let gpu_params: Vec<GpuVariationParams> = flame
+        // Upload initial variation parameters (include final transform if present)
+        let mut gpu_params: Vec<GpuVariationParams> = flame
             .transforms
             .iter()
             .map(|xform| GpuVariationParams::from_transform(xform, registry))
             .collect();
+        // Append final transform params if present (same as update_variation_params)
+        if let Some(ref final_xform) = flame.final_transform {
+            gpu_params.push(GpuVariationParams::from_transform(final_xform, registry));
+        }
         queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&gpu_params));
 
         // Create params uniform buffer
@@ -473,8 +477,6 @@ impl FlameBuffers {
             height,
             blend_factor: 1.0,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
-            low_density_smoothing: 0.5, // Default moderate smoothing
-            density_compression_strength: 0.0, // Default: linear accumulation (no compression)
             target_iterations_per_pixel: 0, // Default: disabled (no per-pixel convergence)
             _pad0: 0.0,
             background_r: 0.0,  // Default black background

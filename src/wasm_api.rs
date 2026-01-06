@@ -121,9 +121,9 @@ impl WasmApi {
     /// ```
     #[wasm_bindgen]
     pub fn load_preset(&mut self, name: &str) -> Result<(), JsValue> {
-        use crate::scene::presets::PresetLibrary;
+        use crate::scene::presets::global_preset_library;
 
-        let library = PresetLibrary::new();
+        let library = global_preset_library();
         let config = library.presets()
             .iter()
             .find(|p| p.flame.name.eq_ignore_ascii_case(name))
@@ -186,9 +186,9 @@ impl WasmApi {
     /// Returns JSON array of preset names
     #[wasm_bindgen]
     pub fn get_preset_names(&self) -> String {
-        use crate::scene::presets::PresetLibrary;
+        use crate::scene::presets::global_preset_library;
 
-        let library = PresetLibrary::new();
+        let library = global_preset_library();
         let names: Vec<&str> = library.presets()
             .iter()
             .map(|p| p.flame.name.as_str())

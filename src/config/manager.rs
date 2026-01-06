@@ -766,7 +766,6 @@ impl ConfigManager {
             ConfigPath::Vibrancy => Ok(config.vibrancy.into()),
             ConfigPath::Saturation => Ok(config.saturation.into()),
             ConfigPath::HueShift => Ok(config.hue_shift.into()),
-            ConfigPath::ValueScale => Ok(config.value_scale.into()),
             ConfigPath::AlphaBlendLow => Ok(config.alpha_blend_low.into()),
             ConfigPath::AlphaBlendHigh => Ok(config.alpha_blend_high.into()),
             ConfigPath::DensityScale => Ok(config.density_scale.into()),
@@ -796,10 +795,6 @@ impl ConfigManager {
 
             // Rendering settings
             ConfigPath::HistogramColorScale => Ok(config.histogram_color_scale.into()),
-            ConfigPath::LowDensitySmoothing => Ok(config.low_density_smoothing.into()),
-            ConfigPath::DensityCompressionStrength => {
-                Ok(config.density_compression_strength.into())
-            }
             ConfigPath::BlendFactor => Ok(config.blend_factor.into()),
             ConfigPath::UseDynamicBlend => Ok(config.use_dynamic_blend.into()),
             ConfigPath::TargetIterationsPerPixel => {
@@ -944,22 +939,6 @@ impl ConfigManager {
                 };
                 Ok(value.into())
             }
-            ConfigPath::FinalTransformColor => {
-                let final_xform = config
-                    .flame
-                    .final_transform
-                    .as_ref()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Ok(final_xform.color.into())
-            }
-            ConfigPath::FinalTransformColorSpeed => {
-                let final_xform = config
-                    .flame
-                    .final_transform
-                    .as_ref()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                Ok(final_xform.color_speed.into())
-            }
             ConfigPath::FinalTransformVariation { variation } => {
                 let final_xform = config
                     .flame
@@ -1094,9 +1073,6 @@ impl ConfigManager {
             ConfigPath::HueShift => {
                 self.current.hue_shift = value.try_into()?;
             }
-            ConfigPath::ValueScale => {
-                self.current.value_scale = value.try_into()?;
-            }
             ConfigPath::AlphaBlendLow => {
                 self.current.alpha_blend_low = value.try_into()?;
             }
@@ -1155,27 +1131,29 @@ impl ConfigManager {
                 self.current.speed_factor = value.try_into()?;
             }
             ConfigPath::BackgroundColor => {
-                self.current.background_color = value.try_into()?;
+                let c: [f32; 3] = value.try_into()?;
+                self.current.background_color = [
+                    c[0].clamp(0.0, 1.0),
+                    c[1].clamp(0.0, 1.0),
+                    c[2].clamp(0.0, 1.0),
+                ];
             }
             ConfigPath::BackgroundColorR => {
-                self.current.background_color[0] = value.try_into()?;
+                let v: f32 = value.try_into()?;
+                self.current.background_color[0] = v.clamp(0.0, 1.0);
             }
             ConfigPath::BackgroundColorG => {
-                self.current.background_color[1] = value.try_into()?;
+                let v: f32 = value.try_into()?;
+                self.current.background_color[1] = v.clamp(0.0, 1.0);
             }
             ConfigPath::BackgroundColorB => {
-                self.current.background_color[2] = value.try_into()?;
+                let v: f32 = value.try_into()?;
+                self.current.background_color[2] = v.clamp(0.0, 1.0);
             }
 
             // Rendering settings
             ConfigPath::HistogramColorScale => {
                 self.current.histogram_color_scale = value.try_into()?;
-            }
-            ConfigPath::LowDensitySmoothing => {
-                self.current.low_density_smoothing = value.try_into()?;
-            }
-            ConfigPath::DensityCompressionStrength => {
-                self.current.density_compression_strength = value.try_into()?;
             }
             ConfigPath::BlendFactor => {
                 self.current.blend_factor = value.try_into()?;
@@ -1260,9 +1238,12 @@ impl ConfigManager {
                     .get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 let weight: f32 = value.try_into()?;
-                if weight == 0.0 {
+                // Use NaN as sentinel value to signal removal
+                if weight.is_nan() {
                     xform.variations.remove(variation);
                 } else {
+                    // Always insert/update - don't auto-remove at 0.0
+                    // This allows variations to stay visible at weight 0
                     xform.variations.insert(variation.clone(), weight);
                 }
             }
@@ -1354,24 +1335,6 @@ impl ConfigManager {
                     AffineParam::G => final_xform.g = new_value,
                 }
             }
-            ConfigPath::FinalTransformColor => {
-                let final_xform = self
-                    .current
-                    .flame
-                    .final_transform
-                    .as_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                final_xform.color = value.try_into()?;
-            }
-            ConfigPath::FinalTransformColorSpeed => {
-                let final_xform = self
-                    .current
-                    .flame
-                    .final_transform
-                    .as_mut()
-                    .ok_or(ConfigError::InvalidIndex)?;
-                final_xform.color_speed = value.try_into()?;
-            }
             ConfigPath::FinalTransformVariation { variation } => {
                 let final_xform = self
                     .current
@@ -1380,9 +1343,11 @@ impl ConfigManager {
                     .as_mut()
                     .ok_or(ConfigError::InvalidIndex)?;
                 let weight: f32 = value.try_into()?;
-                if weight == 0.0 {
+                // Use NaN as sentinel value to signal removal
+                if weight.is_nan() {
                     final_xform.variations.remove(variation);
                 } else {
+                    // Always insert/update - don't auto-remove at 0.0
                     final_xform.variations.insert(variation.clone(), weight);
                 }
             }

@@ -4,6 +4,7 @@
 //! displays thumbnails for each configuration within the file.
 
 use egui;
+use rust_i18n::t;
 
 use super::fractal_gallery::{FractalConfigGallery, GalleryResponse};
 use crate::config::FractalConfig;
@@ -38,7 +39,7 @@ impl FileBrowserPanel {
         match FractalConfig::load_multi_from_file(&path) {
             Ok(configs) => {
                 if configs.is_empty() {
-                    self.error_message = Some("File contains no configurations".to_string());
+                    self.error_message = Some(t!("file_browser.error_no_configs").to_string());
                 } else {
                     log::info!("Loaded {} config(s) from {:?}", configs.len(), path);
                     self.gallery = FractalConfigGallery::new(configs);
@@ -47,7 +48,7 @@ impl FileBrowserPanel {
             }
             Err(e) => {
                 log::error!("Failed to load file {:?}: {}", path, e);
-                self.error_message = Some(format!("Failed to load file: {}", e));
+                self.error_message = Some(t!("file_browser.error_load_failed", error = e.to_string()).to_string());
             }
         }
     }
@@ -59,7 +60,7 @@ impl FileBrowserPanel {
         match FractalConfig::from_json_multi(json) {
             Ok(configs) => {
                 if configs.is_empty() {
-                    self.error_message = Some("JSON contains no configurations".to_string());
+                    self.error_message = Some(t!("file_browser.error_no_configs_json").to_string());
                 } else {
                     log::info!("Loaded {} config(s) from {}", configs.len(), source_name);
                     self.gallery = FractalConfigGallery::new(configs);
@@ -68,7 +69,7 @@ impl FileBrowserPanel {
             }
             Err(e) => {
                 log::error!("Failed to parse JSON from {}: {}", source_name, e);
-                self.error_message = Some(format!("Failed to parse JSON: {}", e));
+                self.error_message = Some(t!("file_browser.error_parse_failed", error = e.to_string()).to_string());
             }
         }
     }
@@ -79,7 +80,7 @@ impl FileBrowserPanel {
         self.current_file = None;
 
         if configs.is_empty() {
-            self.error_message = Some("No configurations provided".to_string());
+            self.error_message = Some(t!("file_browser.error_no_configs_provided").to_string());
         } else {
             log::info!("Loaded {} config(s) from {}", configs.len(), source_name);
             self.gallery = FractalConfigGallery::new(configs);
@@ -120,7 +121,7 @@ impl FileBrowserPanel {
     pub fn render(&mut self, ui: &mut egui::Ui) -> GalleryResponse {
         // Toolbar: Open file button + current file info
         ui.horizontal(|ui| {
-            if ui.button("📂 Open File...").clicked() {
+            if ui.button(t!("file_browser.open_file")).clicked() {
                 self.open_file_requested = true;
             }
 
@@ -130,11 +131,11 @@ impl FileBrowserPanel {
                 let filename = path.file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("Unknown");
-                ui.label(format!("📄 {}", filename));
+                ui.label(t!("file_browser.file_icon", filename = filename));
             } else if self.gallery.len() > 0 {
-                ui.label("(Loaded from JSON)");
+                ui.label(t!("file_browser.loaded_from_json"));
             } else {
-                ui.label("No file loaded");
+                ui.label(t!("file_browser.no_file_loaded"));
             }
         });
 
@@ -154,11 +155,11 @@ impl FileBrowserPanel {
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(50.0);
-                    ui.label("No file loaded");
+                    ui.label(t!("file_browser.empty_title"));
                     ui.add_space(10.0);
-                    ui.label("Click 'Open File...' to browse .fflame files");
+                    ui.label(t!("file_browser.empty_hint"));
                     ui.add_space(10.0);
-                    ui.label("Files can contain one or multiple fractal configurations");
+                    ui.label(t!("file_browser.empty_description"));
                 });
             });
             GalleryResponse::default()

@@ -4,6 +4,7 @@
 //! for different workflows (Beginner, Standard, Advanced, Export).
 
 use egui_dock::{DockState};
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
 /// Identifies which panel to display
@@ -41,28 +42,32 @@ pub enum PanelType {
     ConfigDialog,
     /// Path filter editor (block specific transform sequences)
     PathEditor,
+    /// PNG Export panel
+    Export,
 }
 
 impl std::fmt::Display for PanelType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PanelType::FractalViewport => write!(f, "Fractal"),
-            PanelType::Transforms => write!(f, "Transforms"),
-            PanelType::TriangleEditor => write!(f, "Triangle Editor"),
-            PanelType::Colors => write!(f, "Colors"),
-            PanelType::PaletteEditor => write!(f, "Palette Editor"),
-            PanelType::PaletteLibrary => write!(f, "Palette Library"),
-            PanelType::PresetLibrary => write!(f, "Preset Library"),
-            PanelType::FileBrowser => write!(f, "File Browser"),
-            PanelType::View => write!(f, "View"),
-            PanelType::Rendering => write!(f, "Rendering"),
-            PanelType::History => write!(f, "History"),
-            PanelType::Animation => write!(f, "Animation"),
-            PanelType::Performance => write!(f, "Performance"),
-            PanelType::Help => write!(f, "Help"),
-            PanelType::ConfigDialog => write!(f, "Config Import/Export"),
-            PanelType::PathEditor => write!(f, "Path Editor"),
-        }
+        let title = match self {
+            PanelType::FractalViewport => t!("panels.fractal"),
+            PanelType::Transforms => t!("panels.transforms"),
+            PanelType::TriangleEditor => t!("panels.triangle_editor"),
+            PanelType::Colors => t!("panels.colors"),
+            PanelType::PaletteEditor => t!("panels.palette_editor"),
+            PanelType::PaletteLibrary => t!("panels.palette_library"),
+            PanelType::PresetLibrary => t!("panels.preset_library"),
+            PanelType::FileBrowser => t!("panels.file_browser"),
+            PanelType::View => t!("panels.view"),
+            PanelType::Rendering => t!("panels.rendering"),
+            PanelType::History => t!("panels.history"),
+            PanelType::Animation => t!("panels.animation"),
+            PanelType::Performance => t!("panels.performance"),
+            PanelType::Help => t!("panels.help"),
+            PanelType::ConfigDialog => t!("panels.config_dialog"),
+            PanelType::PathEditor => t!("panels.path_editor"),
+            PanelType::Export => t!("panels.export"),
+        };
+        write!(f, "{}", title)
     }
 }
 
@@ -119,6 +124,23 @@ impl Workspace {
         }
     }
 
+    /// Activate (focus) a panel tab if it exists, or open it as floating if not
+    pub fn activate_panel(&mut self, panel_type: PanelType) {
+        // Try to find and activate the tab
+        if let Some((surface_index, node_index, tab_index)) = self.find_tab(panel_type) {
+            self.dock_state.set_active_tab((surface_index, node_index, tab_index));
+        } else {
+            // Panel doesn't exist, open as floating window
+            self.dock_state.add_window(vec![panel_type]);
+        }
+    }
+
+    /// Find the location of a panel tab (surface, node, tab index)
+    fn find_tab(&self, panel_type: PanelType) -> Option<(egui_dock::SurfaceIndex, egui_dock::NodeIndex, egui_dock::TabIndex)> {
+        // Use find_tab API to locate the panel
+        self.dock_state.find_tab(&panel_type)
+    }
+
     /// Create Beginner layout: Simple tabbed panel with Colors and Transforms
     fn create_beginner_layout() -> DockState<PanelType> {
         let mut state = DockState::new(vec![PanelType::Colors]);
@@ -139,11 +161,11 @@ impl Workspace {
             vec![PanelType::Transforms],
         );
 
-        // Split right for other controls (Colors, View, Rendering, History)
+        // Split right for other controls (Colors, View, Triangle Editor, Rendering, History)
         let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.75, // Right panel starts at 75% (takes remaining 25%)
-            vec![PanelType::Colors, PanelType::View, PanelType::Rendering, PanelType::History],
+            vec![PanelType::Colors, PanelType::View, PanelType::TriangleEditor, PanelType::Rendering, PanelType::History],
         );
 
         state

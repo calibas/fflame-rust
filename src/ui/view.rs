@@ -1,5 +1,6 @@
 use crate::scene::transforms::{Flame, RenderMode};
 use crate::config::{ConfigManager, ConfigPath};
+use rust_i18n::t;
 
 /// Render view controls content (for docking panels)
 pub fn render_view_content(
@@ -12,15 +13,15 @@ pub fn render_view_content(
     // Clone config to avoid borrow conflicts
     let config = config_manager.active_config().clone();
 
-    ui.label("Zoom");
+    ui.label(t!("view.zoom")).on_hover_text(t!("view.tooltip_zoom"));
     ui.horizontal(|ui| {
-        if ui.button("➕ Zoom In").clicked() {
+        if ui.button(t!("view.zoom_in").as_ref()).on_hover_text(t!("view.tooltip_zoom")).clicked() {
             let new_zoom = config.zoom * 1.5;
             let _ = config_manager.update_param(
                 ConfigPath::Zoom,
                 new_zoom.into());
         }
-        if ui.button("➖ Zoom Out").clicked() {
+        if ui.button(t!("view.zoom_out").as_ref()).on_hover_text(t!("view.tooltip_zoom")).clicked() {
             let new_zoom = config.zoom / 1.5;
             let _ = config_manager.update_param(
                 ConfigPath::Zoom,
@@ -29,23 +30,48 @@ pub fn render_view_content(
         }
     });
     ui.horizontal(|ui| {
-        ui.label("Value:");
+        ui.label(t!("view.zoom_value")).on_hover_text(t!("view.tooltip_zoom"));
         let _ = ui.lazy_drag(config_manager, ConfigPath::Zoom, 0.01, "");
     });
 
     ui.separator();
 
-    ui.label("Pan");
+    ui.label(t!("view.pan")).on_hover_text(t!("view.tooltip_pan"));
     ui.horizontal(|ui| {
-        ui.label(format!("({:.3}, {:.3})", config.pan_x, config.pan_y));
-        ui.label("(use mouse drag or arrow keys/buttons)");
+        ui.label(t!("view.pan_x")).on_hover_text(t!("view.tooltip_pan"));
+        let mut pan_x = config.pan_x;
+        let response_x = ui.add(
+            egui::DragValue::new(&mut pan_x)
+                .speed(0.001 / config.zoom)
+                .custom_formatter(|v, _| format!("{:.7}", v))
+        ).on_hover_text(t!("view.tooltip_pan"));
+        if response_x.changed() {
+            let _ = config_manager.update_param(
+                ConfigPath::Pan,
+                (pan_x, config.pan_y).into()
+            );
+        }
+
+        ui.label(t!("view.pan_y")).on_hover_text(t!("view.tooltip_pan"));
+        let mut pan_y = config.pan_y;
+        let response_y = ui.add(
+            egui::DragValue::new(&mut pan_y)
+                .speed(0.001 / config.zoom)
+                .custom_formatter(|v, _| format!("{:.7}", v))
+        ).on_hover_text(t!("view.tooltip_pan"));
+        if response_y.changed() {
+            let _ = config_manager.update_param(
+                ConfigPath::Pan,
+                (config.pan_x, pan_y).into()
+            );
+        }
     });
 
     // Pan step size depends on zoom
     let pan_step = 0.1 / config.zoom;
 
     ui.separator();
-    ui.label("Arrow Controls");
+    ui.label(t!("view.arrow_controls"));
 
     // Pre-calculate rotation for arrow controls
     let cos_r = (-config.rotation).cos();
@@ -100,26 +126,30 @@ pub fn render_view_content(
 
     ui.separator();
 
-    ui.label("Rotation");
-    ui.horizontal(|ui| {
-        let mut degrees = config.rotation.to_degrees();
-        let response = ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°"));
-        if response.changed() {
-            let new_rotation = degrees.to_radians();
-            let _ = config_manager.update_param(
-                ConfigPath::Rotation,
-                new_rotation.into()
-            );
-        }
-    });
+    let mut degrees = config.rotation.to_degrees();
+    let response = ui.add(
+        egui::Slider::new(&mut degrees, -180.0..=180.0)
+            .text(t!("view.rotation").as_ref())
+            .suffix("°")
+    ).on_hover_text(t!("view.tooltip_rotation"));
+    if response.changed() {
+        let new_rotation = degrees.to_radians();
+        let _ = config_manager.update_param(
+            ConfigPath::Rotation,
+            new_rotation.into()
+        );
+    }
 
     ui.separator();
 
     // 3D Rendering Controls
-    ui.label("Render Mode");
+    ui.label(t!("view.render_mode")).on_hover_text(t!("view.tooltip_render_mode"));
     ui.horizontal(|ui| {
         let was_2d = matches!(config.flame.render_mode, crate::scene::transforms::RenderMode::TwoD);
-        if ui.selectable_label(was_2d, "2D").clicked() {
+        if ui.selectable_label(was_2d, t!("view.mode_2d").as_ref())
+            .on_hover_text(t!("view.tooltip_mode_2d"))
+            .clicked()
+        {
             if let Err(e) = config_manager.update_param(
                 ConfigPath::RenderMode,
                 crate::scene::transforms::RenderMode::TwoD.into()
@@ -127,7 +157,10 @@ pub fn render_view_content(
                 log::error!("Failed to update render mode: {}", e);
             }
         }
-        if ui.selectable_label(!was_2d, "3D").clicked() {
+        if ui.selectable_label(!was_2d, t!("view.mode_3d").as_ref())
+            .on_hover_text(t!("view.tooltip_mode_3d"))
+            .clicked()
+        {
             if let Err(e) = config_manager.update_param(
                 ConfigPath::RenderMode,
                 crate::scene::transforms::RenderMode::ThreeD.into()
@@ -142,10 +175,11 @@ pub fn render_view_content(
         let mut perspective = config.flame.perspective_strength;
         let response = ui.add(
             egui::Slider::new(&mut perspective, 0.0..=10.0)
-                .text("Perspective")
+                .text(t!("view.perspective").as_ref())
                 .step_by(0.1)
-        );
-        if response.changed() {
+        ).on_hover_text(t!("view.tooltip_perspective"));
+        let changed = response.changed();
+        if changed {
             if let Err(e) = config_manager.update_param(
                 ConfigPath::PerspectiveStrength,
                 perspective.into()
@@ -160,43 +194,45 @@ pub fn render_view_content(
     // 3D Camera rotation controls (only visible in 3D mode)
     if matches!(flame.render_mode, RenderMode::ThreeD) {
         ui.separator();
-        ui.label("3D Camera Rotation");
+        ui.label(t!("view.camera_3d"));
+
+        let mut degrees_x = config.camera_rotation_x.to_degrees();
+        let response = ui.add(
+            egui::Slider::new(&mut degrees_x, -180.0..=180.0)
+                .text(t!("view.camera_pitch").as_ref())
+                .suffix("°")
+        ).on_hover_text(t!("view.tooltip_camera_pitch"));
+        if response.changed() {
+            let new_camera_x = degrees_x.to_radians();
+            let _ = config_manager.update_param(
+                ConfigPath::CameraRotationX,
+                new_camera_x.into()
+            );
+        }
+
+        let mut degrees_y = config.camera_rotation_y.to_degrees();
+        let response = ui.add(
+            egui::Slider::new(&mut degrees_y, -180.0..=180.0)
+                .text(t!("view.camera_yaw").as_ref())
+                .suffix("°")
+        ).on_hover_text(t!("view.tooltip_camera_yaw"));
+        if response.changed() {
+            let new_camera_y = degrees_y.to_radians();
+            let _ = config_manager.update_param(
+                ConfigPath::CameraRotationY,
+                new_camera_y.into()
+            );
+        }
 
         ui.horizontal(|ui| {
-            ui.label("Pitch (X):");
-            let mut degrees_x = config.camera_rotation_x.to_degrees();
-            let response = ui.add(egui::Slider::new(&mut degrees_x, -180.0..=180.0).suffix("°"));
-            if response.changed() {
-                let new_camera_x = degrees_x.to_radians();
-                let _ = config_manager.update_param(
-                    ConfigPath::CameraRotationX,
-                    new_camera_x.into()
-                );
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("Yaw (Y):");
-            let mut degrees_y = config.camera_rotation_y.to_degrees();
-            let response = ui.add(egui::Slider::new(&mut degrees_y, -180.0..=180.0).suffix("°"));
-            if response.changed() {
-                let new_camera_y = degrees_y.to_radians();
-                let _ = config_manager.update_param(
-                    ConfigPath::CameraRotationY,
-                    new_camera_y.into()
-                );
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("Z Position:");
+            ui.label(t!("view.camera_z")).on_hover_text(t!("view.tooltip_camera_z"));
             let _ = ui.lazy_drag(config_manager, ConfigPath::CameraZ, 0.01, "");
         });
     }
 
     ui.separator();
 
-    if ui.button("🔄 Reset View").clicked() {
+    if ui.button(t!("view.reset").as_ref()).clicked() {
         let _ = config_manager.update_batch(
             vec![
                 (ConfigPath::Zoom, 1.0.into()),
@@ -206,7 +242,7 @@ pub fn render_view_content(
                 (ConfigPath::CameraRotationY, 0.0.into()),
                 (ConfigPath::CameraZ, 0.0.into()),
             ],
-            "Reset View".to_string()
+            "history.action.reset_view".to_string()
         );
     }
 }

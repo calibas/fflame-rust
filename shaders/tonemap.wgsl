@@ -23,7 +23,6 @@ struct TonemapParams {
     sample_density: f32,  // Iterations per pixel
     saturation: f32,  // Color saturation boost (1.0 = no change, >1.0 = more saturated)
     hue_shift: f32,  // Hue rotation in degrees (-180.0 to 180.0)
-    value_scale: f32,  // Value (brightness) multiplier (1.0 = no change)
     gamma_threshold: f32,  // Smooths gamma curve at low densities (default 0.0025)
     alpha_blend_low: f32,  // Start blending toward linear alpha at this value
     alpha_blend_high: f32,  // Full linear alpha above this value
@@ -37,6 +36,7 @@ struct TonemapParams {
     _pad0: u32,  // Padding to 16-byte boundary
     _pad1: u32,
     _pad2: u32,
+    _pad3: u32,
 }
 
 // Path storage entry (matches compute shader PathEntry)
@@ -353,79 +353,119 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let bucket_green = accum.g * bucket_count;
     let bucket_blue = accum.b * bucket_count;
 
-    // ===== STAGE 3A: Apply Brightness to Palette Colors =====
-    // Calculate brightness scaling factor (ls) from logarithmic curve
-    var ls = brightness_scale(bucket_count) / tonemap_params.prefilter_white;
+    // Variables for tone mapping output
+    var color: vec3<f32>;
+    var alpha: f32 = 0.0;
 
-    // Apply brightness scaling to accumulated color sums
-    var fp0 = ls * bucket_red;     // brightness-scaled red
-    var fp1 = ls * bucket_green;   // brightness-scaled green
-    var fp2 = ls * bucket_blue;    // brightness-scaled blue
-    let fp3 = ls * bucket_count * tonemap_params.white_level;  // weighted density
+    // ===== TONE MAP MODE BRANCHING =====
+    // 0 = Linear, 1 = Logarithmic (Apophysis), 2 = Density Visualization
+    if (tonemap_params.tonemap_mode == 0u) {
+        // ===== LINEAR MODE =====
+        // Simple linear scaling with gamma correction
+        // Good for low-dynamic-range flames or when you want direct control
 
-    // ===== STAGE 3B: Apply Gamma to Density =====
-    // Invert gamma (Apophysis ImageMaker.pas:410)
-    let gamma = select(1.0 / tonemap_params.gamma, tonemap_params.gamma, tonemap_params.gamma == 0.0);
+        // Apply exposure directly to averaged colors (no logarithmic curve)
+        color = accum.rgb * tonemap_params.exposure;
 
-    // Pre-calculate funcval for gamma threshold (Apophysis setup phase)
-    // funcval = gamma_threshold ^ (gamma - 1)
-    var funcval = 0.0;
-    if (tonemap_params.gamma_threshold != 0.0) {
-        funcval = pow(tonemap_params.gamma_threshold, gamma - 1.0);
-    }
+        // Simple gamma correction
+        let gamma = select(1.0 / tonemap_params.gamma, tonemap_params.gamma, tonemap_params.gamma == 0.0);
+        color = pow(color, vec3<f32>(gamma));
 
-    // Apply gamma to density with threshold smoothing
-    var alpha = 0.0;
-    if (fp3 > 0.0) {
-        if (fp3 <= tonemap_params.gamma_threshold) {
-            // Blend between linear and gamma curves at low densities
-            let frac = fp3 / tonemap_params.gamma_threshold;
-            alpha = (1.0 - frac) * fp3 * funcval + frac * pow(fp3, gamma);
+        // Alpha from density with simple scaling
+        alpha = clamp(bucket_count * 0.01 * tonemap_params.density_scale, 0.0, 1.0);
+
+    } else if (tonemap_params.tonemap_mode == 2u) {
+        // ===== DENSITY VISUALIZATION MODE =====
+        // Shows raw density as grayscale - useful for debugging and analysis
+
+        // Normalize density to visible range using exposure as sensitivity
+        let normalized_density = clamp(bucket_count * 0.01 * tonemap_params.exposure, 0.0, 1.0);
+
+        // Apply gamma for better visibility of low-density areas
+        let gamma = select(1.0 / tonemap_params.gamma, tonemap_params.gamma, tonemap_params.gamma == 0.0);
+        let gamma_density = pow(normalized_density, gamma);
+
+        // Output as grayscale
+        color = vec3<f32>(gamma_density, gamma_density, gamma_density);
+
+        // Alpha matches density
+        alpha = normalized_density;
+
+    } else {
+        // ===== LOGARITHMIC MODE (DEFAULT - Apophysis compatible) =====
+
+        // ===== STAGE 3A: Apply Brightness to Palette Colors =====
+        // Calculate brightness scaling factor (ls) from logarithmic curve
+        var ls = brightness_scale(bucket_count) / tonemap_params.prefilter_white;
+
+        // Apply brightness scaling to accumulated color sums
+        var fp0 = ls * bucket_red;     // brightness-scaled red
+        var fp1 = ls * bucket_green;   // brightness-scaled green
+        var fp2 = ls * bucket_blue;    // brightness-scaled blue
+        let fp3 = ls * bucket_count * tonemap_params.white_level;  // weighted density
+
+        // ===== STAGE 3B: Apply Gamma to Density =====
+        // Invert gamma (Apophysis ImageMaker.pas:410)
+        let gamma = select(1.0 / tonemap_params.gamma, tonemap_params.gamma, tonemap_params.gamma == 0.0);
+
+        // Pre-calculate funcval for gamma threshold (Apophysis setup phase)
+        // funcval = gamma_threshold ^ (gamma - 1)
+        var funcval = 0.0;
+        if (tonemap_params.gamma_threshold != 0.0) {
+            funcval = pow(tonemap_params.gamma_threshold, gamma - 1.0);
+        }
+
+        // Apply gamma to density with threshold smoothing
+        if (fp3 > 0.0) {
+            if (fp3 <= tonemap_params.gamma_threshold) {
+                // Blend between linear and gamma curves at low densities
+                let frac = fp3 / tonemap_params.gamma_threshold;
+                alpha = (1.0 - frac) * fp3 * funcval + frac * pow(fp3, gamma);
+            } else {
+                // Standard gamma curve
+                alpha = pow(fp3, gamma);
+            }
+        }
+
+        // ===== STAGE 3C: Calculate Vibrancy-Weighted Multiplier (REUSE ls!) =====
+        // Scale vibrancy to Apophysis range (ImageMaker.pas:412)
+        let vib = round(tonemap_params.vibrancy * 256.0);
+        let notvib = 256.0 - vib;
+
+        // Calculate vibrancy-weighted brightness multiplier (ImageMaker.pas:599)
+        // IMPORTANT: ls is OVERWRITTEN here with a new meaning!
+        if (fp3 > 0.0) {
+            ls = vib * alpha / fp3;
         } else {
-            // Standard gamma curve
-            alpha = pow(fp3, gamma);
+            ls = 0.0;
+        }
+
+        // ===== STAGE 3D: Vibrancy Blend =====
+        // Blend between new (gamma on brightness) and old (gamma on colors) algorithms
+        // ImageMaker.pas:612-621
+        if (notvib > 0.0) {
+            // NEW algorithm: ls * fp[x] (vibrancy-weighted brightness × brightness-scaled color)
+            let new_r = ls * fp0;
+            let new_g = ls * fp1;
+            let new_b = ls * fp2;
+
+            // OLD algorithm: notvib * power(fp[x], gamma) (gamma applied to colors)
+            let old_r = notvib * pow(fp0, gamma);
+            let old_g = notvib * pow(fp1, gamma);
+            let old_b = notvib * pow(fp2, gamma);
+
+            // Additive blend
+            color = vec3<f32>(new_r + old_r, new_g + old_g, new_b + old_b);
+        } else {
+            // Pure new algorithm (vibrancy >= 256)
+            color = vec3<f32>(ls * fp0, ls * fp1, ls * fp2);
         }
     }
 
-    // ===== STAGE 3C: Calculate Vibrancy-Weighted Multiplier (REUSE ls!) =====
-    // Scale vibrancy to Apophysis range (ImageMaker.pas:412)
-    let vib = round(tonemap_params.vibrancy * 256.0);
-    let notvib = 256.0 - vib;
-
-    // Calculate vibrancy-weighted brightness multiplier (ImageMaker.pas:599)
-    // IMPORTANT: ls is OVERWRITTEN here with a new meaning!
-    if (fp3 > 0.0) {
-        ls = vib * alpha / fp3;
-    } else {
-        ls = 0.0;
-    }
-
-    // ===== STAGE 3D: Vibrancy Blend =====
-    // Blend between new (gamma on brightness) and old (gamma on colors) algorithms
-    // ImageMaker.pas:612-621
-    var color: vec3<f32>;
-    if (notvib > 0.0) {
-        // NEW algorithm: ls * fp[x] (vibrancy-weighted brightness × brightness-scaled color)
-        let new_r = ls * fp0;
-        let new_g = ls * fp1;
-        let new_b = ls * fp2;
-
-        // OLD algorithm: notvib * power(fp[x], gamma) (gamma applied to colors)
-        let old_r = notvib * pow(fp0, gamma);
-        let old_g = notvib * pow(fp1, gamma);
-        let old_b = notvib * pow(fp2, gamma);
-
-        // Additive blend
-        color = vec3<f32>(new_r + old_r, new_g + old_g, new_b + old_b);
-    } else {
-        // Pure new algorithm (vibrancy >= 256)
-        color = vec3<f32>(ls * fp0, ls * fp1, ls * fp2);
-    }
-
     // ===== STAGE 3E: HSV Adjustments =====
-    // Apply hue shift, saturation boost, and value scaling
+    // Apply hue shift and saturation boost
     // Only convert to HSV if at least one adjustment is active
-    let needs_hsv = tonemap_params.saturation != 1.0 || tonemap_params.hue_shift != 0.0 || tonemap_params.value_scale != 1.0;
+    let needs_hsv = tonemap_params.saturation != 1.0 || tonemap_params.hue_shift != 0.0;
     if (needs_hsv) {
         var hsv = rgb_to_hsv(color);
 
@@ -445,16 +485,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             hsv.y = clamp(hsv.y * tonemap_params.saturation, 0.0, 1.0);
         }
 
-        // Value scaling (brightness multiplier)
-        if (tonemap_params.value_scale != 1.0) {
-            hsv.z = clamp(hsv.z * tonemap_params.value_scale, 0.0, 1.0);
-        }
-
         color = hsv_to_rgb(hsv);
     }
 
-    // Apply exposure (our extension, not in Apophysis)
-    color *= tonemap_params.exposure;
+    // Apply exposure for Logarithmic mode only (Linear mode applies it earlier)
+    // Density mode uses exposure as sensitivity, already applied
+    if (tonemap_params.tonemap_mode == 1u) {
+        color *= tonemap_params.exposure;
+    }
 
     // Clamp to valid range
     color = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));

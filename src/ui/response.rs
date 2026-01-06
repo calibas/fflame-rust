@@ -9,6 +9,7 @@ pub struct UiResponse {
     pub config_save_file_requested: bool,
     pub config_load_file_requested: bool,
     pub apophysis_import_file_requested: bool,
+    pub random_flame_requested: bool,
 
     // Palette library management (not stored in config directly)
     pub custom_palette: Option<crate::scene::palette::Palette>,
@@ -29,10 +30,13 @@ pub struct UiResponse {
     // Transform management (creates config deltas but needs special handling)
     pub add_transform: bool,
     pub delete_transform: Option<usize>,
+    pub clone_transform: Option<usize>,
 
     // Panel open requests
     pub open_palette_editor: bool,
     pub open_config_dialog: bool,
+    pub open_triangle_editor: bool,
+    pub open_preset_library: bool,
 
     // Fractal viewport size (for matching texture dimensions to panel)
     pub fractal_viewport_size: Option<(u32, u32)>,
@@ -64,6 +68,7 @@ impl Default for UiResponse {
             config_save_file_requested: false,
             config_load_file_requested: false,
             apophysis_import_file_requested: false,
+            random_flame_requested: false,
             custom_palette: None,
             palette_export_json: None,
             palette_save_file: None,
@@ -76,8 +81,11 @@ impl Default for UiResponse {
             png_export_transparent: false,
             add_transform: false,
             delete_transform: None,
+            clone_transform: None,
             open_palette_editor: false,
             open_config_dialog: false,
+            open_triangle_editor: false,
+            open_preset_library: false,
             fractal_viewport_size: None,
             needs_repaint: false,
             selected_preset_config: None,

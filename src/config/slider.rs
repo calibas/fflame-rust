@@ -25,6 +25,7 @@ pub struct ConfigSlider<'a> {
     drag_start_value: Option<f32>,  // Value when drag started
     range: std::ops::RangeInclusive<f32>,
     label: String,
+    tooltip: Option<String>,
     lazy: bool,
 }
 
@@ -48,6 +49,7 @@ impl<'a> ConfigSlider<'a> {
             drag_start_value: None,
             range,
             label: label.into(),
+            tooltip: None,
             lazy: false,
         })
     }
@@ -55,6 +57,12 @@ impl<'a> ConfigSlider<'a> {
     /// Enable lazy undo (throttled captures every 500ms)
     pub fn lazy(mut self, lazy: bool) -> Self {
         self.lazy = lazy;
+        self
+    }
+
+    /// Set tooltip text shown on hover
+    pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
+        self.tooltip = Some(tooltip.into());
         self
     }
 
@@ -72,6 +80,11 @@ impl<'a> ConfigSlider<'a> {
         }
 
         let response = ui.add(egui::Slider::new(&mut self.current_value, self.range.clone()).text(&self.label));
+
+        // Apply tooltip if set
+        if let Some(ref tooltip) = self.tooltip {
+            response.clone().on_hover_text(tooltip);
+        }
 
         let changed = response.changed();
         let is_being_dragged = response.dragged();
@@ -138,7 +151,8 @@ pub trait ConfigSliderUi {
     ///     &mut config_manager,
     ///     ConfigPath::Exposure,
     ///     0.1..=5.0,
-    ///     "Exposure"
+    ///     "Exposure",
+    ///     Some("Tooltip text")
     /// )?;
     /// ```
     fn config_slider(
@@ -147,6 +161,7 @@ pub trait ConfigSliderUi {
         path: ConfigPath,
         range: std::ops::RangeInclusive<f32>,
         label: &str,
+        tooltip: Option<&str>,
     ) -> Result<ConfigSliderResult, ConfigError>;
 
     /// Add a config-bound drag value (lazy undo enabled by default)
@@ -168,7 +183,7 @@ pub trait LazyUndoUi: ConfigSliderUi {
     ///
     /// # Example
     /// ```ignore
-    /// if ui.lazy_slider(&mut manager, ConfigPath::Exposure, 0.1..=5.0, "Exposure")?.changed {
+    /// if ui.lazy_slider(&mut manager, ConfigPath::Exposure, 0.1..=5.0, "Exposure", None)?.changed {
     ///     // Handle changes if needed
     /// }
     /// ```
@@ -178,8 +193,9 @@ pub trait LazyUndoUi: ConfigSliderUi {
         path: ConfigPath,
         range: std::ops::RangeInclusive<f32>,
         label: &str,
+        tooltip: Option<&str>,
     ) -> Result<ConfigSliderResult, ConfigError> {
-        self.config_slider(manager, path, range, label)
+        self.config_slider(manager, path, range, label, tooltip)
     }
 
     /// Add a drag value with lazy undo (500ms throttle)
@@ -201,10 +217,14 @@ impl ConfigSliderUi for egui::Ui {
         path: ConfigPath,
         range: std::ops::RangeInclusive<f32>,
         label: &str,
+        tooltip: Option<&str>,
     ) -> Result<ConfigSliderResult, ConfigError> {
-        ConfigSlider::new(manager, path, range, label)?
-            .lazy(true)
-            .show(self)
+        let mut slider = ConfigSlider::new(manager, path, range, label)?
+            .lazy(true);
+        if let Some(tip) = tooltip {
+            slider = slider.tooltip(tip);
+        }
+        slider.show(self)
     }
 
     fn config_drag_value(

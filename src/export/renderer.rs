@@ -937,8 +937,6 @@ impl TiledRenderer {
             height: self.tile_size,
             blend_factor: 1.0,  // Overwrite mode for export
             histogram_color_scale: config.histogram_color_scale,
-            low_density_smoothing: config.low_density_smoothing,
-            density_compression_strength: config.density_compression_strength,
             target_iterations_per_pixel: 0,  // No per-pixel limiting for export
             _pad0: 0.0,
             background_r: config.background_color[0],
@@ -1019,7 +1017,6 @@ impl TiledRenderer {
             sample_density: 1.0,  // Will be calculated based on iterations
             saturation: config.saturation,
             hue_shift: config.hue_shift,
-            value_scale: config.value_scale,
             gamma_threshold: config.gamma_threshold,
             alpha_blend_low: config.alpha_blend_low,
             alpha_blend_high: config.alpha_blend_high,
@@ -1030,7 +1027,7 @@ impl TiledRenderer {
             path_map_style: config.path_map_style as u32,
             burn_in: 20, // Default burn-in for export
             num_transforms: config.flame.transforms.len() as u32,
-            _pad_end: [0, 0, 0],
+            _pad_end: [0, 0, 0, 0],
         };
         self.queue.write_buffer(&self.tonemap_params_buffer, 0, bytemuck::bytes_of(&tonemap_params));
 

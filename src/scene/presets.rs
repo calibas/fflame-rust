@@ -1,5 +1,5 @@
 use super::transforms::{Flame, Transform};
-use super::palette::{ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode, PaletteLibrary, Palette};
+use super::palette::{ColorMode, PathMapStyle, PathCaptureMode, PathTrackingMode, global_palette_library, Palette, PaletteLibrary};
 use super::tonemap::{ToneMapMode, ToneCurve};
 use crate::config::FractalConfig;
 
@@ -361,12 +361,13 @@ impl Default for PresetLibrary {
 
 impl PresetLibrary {
     pub fn new() -> Self {
+        // Use global palette library singleton
+        let palette_library = global_palette_library().read().unwrap();
+
         // Always start with built-in presets
         let mut presets = vec![
         // Julian Disc Sea
             {
-                // let palette_library = PaletteLibrary::new();
-                // let palette = palette_library.get(1).cloned();
                 let palette = Palette::from_hex_string("South Sea Bather".to_string(), "B9EAEB,C1EEEB,C5F2EB,C9F2EB,C9F6EB,CDF6EB,CDF6EB,CDF2EB,D1F2EB,D2EEEB,D1F2E1,D6F2EB,DDF6FE,D5F2F4,F2FAF4,E2F2EB,DEF2EB,D6F2EB,D6F2F4,D1EEF4,D1EEF4,CDEEF4,CDEEEB,C9EEEB,C9EEEB,C9EEF4,C9EEF4,C9F2F4,CDF2F4,D1F2F4,D2F2F4,D1F6F4,CDF2F4,C5F2F4,BDF2F4,BDF2F4,B9EEF4,B5F2F4,BDF2F4,C1F2F4,C5F2FE,C5F2FE,BDF2F4,B5F2F4,B1F2F4,B5EEF4,BDEAEB,BDEAEB,C1E6EB,C1E6EB,BDE6E1,B5E6E1,A5E6E1,A5E2E1,A1E2EB,9DE6EA,99DEF4,A5E2F4,A5E6F4,A5E6F4,A9E2F4,ADE2EB,B1E2EB,B1DEEB,B1E2EB,B1E6F4,B1E2F4,B1E2F4,B1E2F4,ADE2F4,A9E2F4,A1E6FE,9DE6FE,A5EAF4,ADEAF4,B1EEEA,B9EEEB,C1EEEB,C5EEEB,C5EEEB,C9EEEB,C9F2F4,C5F2F4,C5EEF4,C5EAF4,C5EAF4,C5EAF4,C1E6EB,C1E6EB,C5EAE1,C5E6E2,C2E2CF,CE9B84,B27F71,A68455,918055,9A8055,A27255,A2764B,B6724B,BA7F67,D2A484,C6E2C6,C9EAE1,CEEED8,DEAB83,CE9B7A,BE907A,CA977A,DBA384,E6B796,FAE9CE,DEEAEB,D1EEEB,C1E2EB,BDDEEB,B5DEEB,ADE2F4,A9E2F4,A9E2F4,ADE6F4,ADEAEB,ADEAEA,ADE6EB,ADE2EB,ADE2EA,B1E6E2,B5E6E2,BDE6EB,C1E6F4,C5EAF4,C9EAF4,C9EEF4,C9EEF4,C9EEF4,C9EEF4,C9EEF4,C9F2F4,C9F2F4,C9F2F4,C9F2F4,C9F2F4,C5EEF4,C1EEFE,B1EEFE,ADE6F4,B1E6F4,B1EAF4,B5EEF4,BDEEF4,C1F2F4,C9F6F4,CDF6F4,CDF6F4,CDF6F4,CDF2F4,CDEEF4,CDEEFE,C9EEFE,C5EEFE,C1EEF4,C1EEF4,C1EAF4,C1EAEB,C1EAEB,C1EAEB,BDEAF4,B9EAF4,B5EAF4,B5E6F4,B5E6F4,B5EAF4,BDEAF4,C1EAF4,C5EAEB,C5EAEB,C9EAEB,C9EAF4,CDEAF4,CDEEF4,CDEEF4,CDEEF4,CDF2F4,C9F2EB,C9F2EB,C5F2EB,C1EAF4,B9E6F4,B5E2F4,B5E2F4,B5E6F4,B5E6F4,B9EAEB,BDEEEB,BDF2EB,C1EEEB,C5EEEB,C5EEEB,C5EEE1,C1EAE1,BDDED8,AA9471,756842,483725,0B0C09,242C25,4C7567,9E9171,B1CEC5,BDE2D8,BDEAE2,C1EEEB,BDEEF4,BDEEF4,BDEEF4,B9EAF4,B9EAF4,B9E6F4,BDE6EB,BDE6EB,BDEAF4,C1EEF4,C5F2FE,C9F6FE,C9F2FE,C5EEFE,C1EEF4,BDEEEB,B9EAEB,B1E6EA,B5E6EB,B5E6EB,B9E2EB,B5E6EB,BDE6EB,C1EAEB,C1EAF4,BDEAF4,B9E6F4,B5E6F4,B1E6F4,B1E6EB,A9E2EB,A9E2EB,A1DEE1,89BEC5,9E917A,957C67,857967,8D6A4B,8D5F42,856342,796C42,796438,756841,5D5938", true).unwrap_or_default();
                 FractalConfig {
                     flame: create_jdisc_sea_flame(),
@@ -397,12 +398,9 @@ impl PresetLibrary {
                     vibrancy: 1.0,
                     saturation: 3.0,
                     hue_shift: 0.0,
-                    value_scale: 1.0,
                     gamma_threshold: 150.0,
                     deterministic_rng: false,
                     histogram_color_scale: 100.0,
-                    low_density_smoothing: 0.5,
-                    density_compression_strength: 0.0,
                     blend_factor: 0.1,
                     use_dynamic_blend: true,
                     target_iterations_per_pixel: 0,
@@ -410,16 +408,15 @@ impl PresetLibrary {
                     alpha_blend_high: crate::config::defaults::DEFAULT_ALPHA_BLEND_HIGH,
                 }
             },
-            Self::flame_to_config(create_simple_flame()),
-            Self::flame_to_config(create_spherical_flame()),
-            Self::flame_to_config(create_spiral_flame()),
-            Self::flame_to_config(create_julia_flame()),
-            Self::flame_to_config(create_complex_flame()),
-            Self::flame_to_config(create_flower_of_life()),
-            Self::flame_to_config(create_3d_flame()),
+            Self::flame_to_config_with_palette(create_simple_flame(), &palette_library),
+            Self::flame_to_config_with_palette(create_spherical_flame(), &palette_library),
+            Self::flame_to_config_with_palette(create_spiral_flame(), &palette_library),
+            Self::flame_to_config_with_palette(create_julia_flame(), &palette_library),
+            Self::flame_to_config_with_palette(create_complex_flame(), &palette_library),
+            Self::flame_to_config_with_palette(create_flower_of_life(), &palette_library),
+            Self::flame_to_config_with_palette(create_3d_flame(), &palette_library),
             // Simple2 with specific view settings for testing
             {
-                let palette_library = PaletteLibrary::new();
                 let palette = palette_library.get(1).cloned();
                 FractalConfig {
                     flame: create_simple2_flame(),
@@ -450,12 +447,9 @@ impl PresetLibrary {
                     vibrancy: 1.0,
                     saturation: 1.0,
                     hue_shift: 0.0,
-                    value_scale: 1.0,
                     gamma_threshold: 0.0025,
                     deterministic_rng: false,
                     histogram_color_scale: 100.0,
-                    low_density_smoothing: 0.5,
-                    density_compression_strength: 0.0,
                     blend_factor: 0.1,
                     use_dynamic_blend: true,
                     target_iterations_per_pixel: 0,
@@ -483,11 +477,8 @@ impl PresetLibrary {
     }
 
     /// Helper to convert old Flame to FractalConfig with sensible defaults
-    fn flame_to_config(flame: Flame) -> FractalConfig {
-        use crate::scene::palette::PaletteLibrary;
-
-        // Get palette from library for complete export
-        let palette_library = PaletteLibrary::new();
+    /// Uses a pre-created PaletteLibrary to avoid loading palettes multiple times
+    fn flame_to_config_with_palette(flame: Flame, palette_library: &PaletteLibrary) -> FractalConfig {
         let palette = palette_library.get(1).cloned(); // Fire palette
 
         FractalConfig {
@@ -519,18 +510,23 @@ impl PresetLibrary {
             vibrancy: 1.0,
             saturation: 1.0,
             hue_shift: 0.0,
-            value_scale: 1.0,
             gamma_threshold: 0.0025,
             deterministic_rng: false,
             histogram_color_scale: 100.0,
-            low_density_smoothing: 0.5,
-            density_compression_strength: 0.0,
             blend_factor: 0.1,
             use_dynamic_blend: true,
             target_iterations_per_pixel: 0,
             alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: crate::config::defaults::DEFAULT_ALPHA_BLEND_HIGH,
         }
+    }
+
+    /// Helper to convert old Flame to FractalConfig with sensible defaults
+    /// Uses global palette library singleton
+    #[allow(dead_code)]
+    fn flame_to_config(flame: Flame) -> FractalConfig {
+        let palette_library = global_palette_library().read().unwrap();
+        Self::flame_to_config_with_palette(flame, &palette_library)
     }
 
     pub fn presets(&self) -> &[FractalConfig] {
@@ -548,4 +544,23 @@ impl PresetLibrary {
     pub fn is_empty(&self) -> bool {
         self.presets.is_empty()
     }
+}
+
+// ===== GLOBAL SINGLETON =====
+
+use once_cell::sync::Lazy;
+
+/// Global preset library singleton (immutable)
+///
+/// This provides a single shared instance of PresetLibrary for the entire application.
+/// Since PresetLibrary is immutable after creation, no locking is needed.
+///
+/// # Usage
+/// ```ignore
+/// let library = global_preset_library();
+/// let preset = library.get(0);
+/// ```
+pub fn global_preset_library() -> &'static PresetLibrary {
+    static LIBRARY: Lazy<PresetLibrary> = Lazy::new(PresetLibrary::new);
+    &LIBRARY
 }

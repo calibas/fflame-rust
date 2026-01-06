@@ -4,6 +4,7 @@
 //! transform sequences during fractal iteration.
 
 use crate::gpu::buffers::GpuPathFilter;
+use rust_i18n::t;
 
 /// State for a single filter being edited
 #[derive(Clone, Debug)]
@@ -91,11 +92,11 @@ impl FilterEntry {
     }
 
     /// Get a human-readable filter type description
-    pub fn filter_type_label(&self) -> &'static str {
+    pub fn filter_type_label(&self) -> String {
         if self.depth == 0 {
-            "Suffix"
+            t!("path_editor.suffix").to_string()
         } else {
-            "At Depth"
+            t!("path_editor.at_depth").to_string()
         }
     }
 }
@@ -182,22 +183,29 @@ pub fn render_path_editor_content(
 ) -> PathEditorResponse {
     let mut response = PathEditorResponse::default();
 
-    ui.heading("Path Filters");
+    // Experimental feature warning
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(t!("path_editor.experimental")).strong().color(egui::Color32::from_rgb(255, 180, 0)));
+    });
+    ui.label(egui::RichText::new(t!("path_editor.experimental_hint").as_ref()).small().italics());
+    ui.add_space(8.0);
+
+    ui.heading(t!("path_editor.heading"));
     ui.add_space(4.0);
 
-    ui.label("Block paths matching specific transform sequences.");
-    ui.label(egui::RichText::new("Suffix: matches at any iteration depth").small().color(ui.visuals().weak_text_color()));
-    ui.label(egui::RichText::new("At Depth: matches only at specific iteration count").small().color(ui.visuals().weak_text_color()));
+    ui.label(t!("path_editor.description"));
+    ui.label(egui::RichText::new(t!("path_editor.suffix_hint").as_ref()).small().color(ui.visuals().weak_text_color()));
+    ui.label(egui::RichText::new(t!("path_editor.at_depth_hint").as_ref()).small().color(ui.visuals().weak_text_color()));
 
     ui.add_space(8.0);
     ui.separator();
 
     // Existing filters
     ui.add_space(4.0);
-    ui.label(egui::RichText::new("Active Filters").strong());
+    ui.label(egui::RichText::new(t!("path_editor.active_filters").as_ref()).strong());
 
     if state.filters.is_empty() {
-        ui.label(egui::RichText::new("No filters defined").italics().color(ui.visuals().weak_text_color()));
+        ui.label(egui::RichText::new(t!("path_editor.no_filters").as_ref()).italics().color(ui.visuals().weak_text_color()));
     } else {
         let mut to_remove = None;
 
@@ -264,14 +272,14 @@ pub fn render_path_editor_content(
 
     // Add new filter section
     ui.add_space(4.0);
-    ui.label(egui::RichText::new("Add New Filter").strong());
+    ui.label(egui::RichText::new(t!("path_editor.add_new_filter").as_ref()).strong());
 
     ui.horizontal(|ui| {
-        ui.label("Type:");
-        if ui.selectable_label(state.new_filter.depth == 0, "Suffix").clicked() {
+        ui.label(t!("path_editor.type"));
+        if ui.selectable_label(state.new_filter.depth == 0, t!("path_editor.suffix").as_ref()).clicked() {
             state.new_filter.depth = 0;
         }
-        if ui.selectable_label(state.new_filter.depth > 0, "At Depth").clicked() {
+        if ui.selectable_label(state.new_filter.depth > 0, t!("path_editor.at_depth").as_ref()).clicked() {
             if state.new_filter.depth == 0 {
                 state.new_filter.depth = 2; // Default depth
             }
@@ -279,17 +287,17 @@ pub fn render_path_editor_content(
     });
 
     ui.horizontal(|ui| {
-        ui.label("Pattern:");
+        ui.label(t!("path_editor.pattern"));
         ui.add(
             egui::TextEdit::singleline(&mut state.new_filter.pattern_text)
                 .desired_width(150.0)
-                .hint_text("e.g., 0,1 or 0,0,1")
+                .hint_text(t!("path_editor.pattern_hint").as_ref())
         );
     });
 
     if state.new_filter.depth > 0 {
         ui.horizontal(|ui| {
-            ui.label("Depth:");
+            ui.label(t!("path_editor.depth"));
             let mut depth_i32 = state.new_filter.depth as i32;
             ui.add(egui::DragValue::new(&mut depth_i32).range(1..=32).speed(0.1));
             state.new_filter.depth = depth_i32.max(1) as u32;
@@ -298,14 +306,13 @@ pub fn render_path_editor_content(
 
     // Help text for pattern format
     ui.add_space(4.0);
-    ui.label(egui::RichText::new(format!(
-        "Transform indices: 0-{} (comma-separated, max 8)",
-        num_transforms.saturating_sub(1).min(15)
-    )).small().color(ui.visuals().weak_text_color()));
+    ui.label(egui::RichText::new(t!("path_editor.transform_indices_hint",
+        max = num_transforms.saturating_sub(1).min(15)
+    ).as_ref()).small().color(ui.visuals().weak_text_color()));
 
     // Validation message
     if !state.new_filter.pattern_text.is_empty() && !state.new_filter.is_valid() {
-        ui.label(egui::RichText::new("⚠ Invalid pattern").color(egui::Color32::YELLOW));
+        ui.label(egui::RichText::new(t!("path_editor.invalid_pattern").as_ref()).color(egui::Color32::YELLOW));
     }
 
     ui.add_space(4.0);
@@ -314,7 +321,7 @@ pub fn render_path_editor_content(
     ui.horizontal(|ui| {
         let can_add = state.new_filter.is_valid() && !state.new_filter.pattern_text.trim().is_empty();
         ui.add_enabled_ui(can_add, |ui| {
-            if ui.button("➕ Add Filter").clicked() {
+            if ui.button(t!("path_editor.add_filter")).clicked() {
                 state.add_new_filter();
             }
         });
@@ -328,7 +335,7 @@ pub fn render_path_editor_content(
     ui.horizontal(|ui| {
         // Apply button (only enabled if dirty)
         ui.add_enabled_ui(state.dirty, |ui| {
-            if ui.button("✓ Apply Filters").clicked() {
+            if ui.button(t!("path_editor.apply_filters")).clicked() {
                 response.filters_changed = Some(state.to_gpu_filters());
                 state.dirty = false;
             }
@@ -336,7 +343,7 @@ pub fn render_path_editor_content(
 
         // Clear all button
         ui.add_enabled_ui(!state.filters.is_empty(), |ui| {
-            if ui.button("Clear All").clicked() {
+            if ui.button(t!("path_editor.clear_all")).clicked() {
                 state.filters.clear();
                 state.dirty = true;
             }
@@ -346,12 +353,12 @@ pub fn render_path_editor_content(
     // Status line
     ui.add_space(4.0);
     let active_count = state.filters.iter().filter(|f| f.enabled && f.is_valid()).count();
-    ui.label(egui::RichText::new(format!(
-        "{} active filter{}{}",
-        active_count,
-        if active_count == 1 { "" } else { "s" },
-        if state.dirty { " (unsaved)" } else { "" }
-    )).small().color(ui.visuals().weak_text_color()));
+    let status_text = if state.dirty {
+        t!("path_editor.status_unsaved", count = active_count).to_string()
+    } else {
+        t!("path_editor.status", count = active_count).to_string()
+    };
+    ui.label(egui::RichText::new(status_text).small().color(ui.visuals().weak_text_color()));
 
     response
 }
