@@ -41,7 +41,18 @@ impl ShaderCache {
         let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
         let active_variations = flame.extract_active_variations();
         let path_features_enabled = false;  // Start with simplified shaders
-        let constants = ShaderConstants::default();
+
+        // Derive constants from actual flame (not defaults) to ensure shader matches initial state
+        // This prevents mismatch when switching between presets with different transform counts
+        let num_transforms = flame.transforms.len().max(1) as u32;  // Ensure at least 1 for safety
+        let constants = ShaderConstants {
+            num_transforms,
+            color_mode: 0,  // Will be updated via ensure_current_full when config loads
+            has_final_transform: flame.final_transform.is_some(),
+            final_transform_index: flame.transforms.len() as u32,
+            inlined_transforms: None,
+            cumulative_weights: None,
+        };
         let render_mode = flame.render_mode;
 
         log::info!(
@@ -103,8 +114,10 @@ impl ShaderCache {
             )
         } else {
             // Interactive mode - no inlining to avoid constant shader rebuilds
+            // Ensure at least 1 transform to prevent shader overflow (NUM_TRANSFORMS - 1u)
+            let num_transforms = config.flame.transforms.len().max(1) as u32;
             ShaderConstants {
-                num_transforms: config.flame.transforms.len() as u32,
+                num_transforms,
                 color_mode: config.color_mode as u32,
                 has_final_transform: config.flame.final_transform.is_some(),
                 final_transform_index: config.flame.transforms.len() as u32,
