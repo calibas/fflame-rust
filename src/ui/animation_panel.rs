@@ -540,13 +540,13 @@ fn render_export_controls(
 
                     // Preset dropdown
                     ui.horizontal(|ui| {
-                        ui.label("Preset:");
+                        ui.label(t!("animation_panel.preset"));
 
                         use crate::animation::export::EncodingPreset;
                         let available_presets = EncodingPreset::available_for(settings.hardware_accel);
 
                         if available_presets.is_empty() {
-                            ui.label("(not supported)");
+                            ui.label(t!("animation_panel.preset_not_supported"));
                         } else {
                             let old_accel = settings.hardware_accel;
 
@@ -575,12 +575,12 @@ fn render_export_controls(
                                 });
                         }
                     });
-                    ui.small("Faster = quick encoding (larger file), Slower = better compression");
+                    ui.small(t!("animation_panel.preset_hint"));
 
                     // Tune dropdown (CPU encoders only)
                     if settings.hardware_accel == HardwareAccel::None {
                         ui.horizontal(|ui| {
-                            ui.label("Tune:");
+                            ui.label(t!("animation_panel.tune"));
 
                             use crate::animation::export::EncodingTune;
                             egui::ComboBox::from_id_salt("tune_combo")
@@ -595,7 +595,7 @@ fn render_export_controls(
                                     }
                                 });
                         });
-                        ui.small("Animation tune recommended for fractal flames");
+                        ui.small(t!("animation_panel.tune_hint"));
                     }
 
                     ui.separator();
