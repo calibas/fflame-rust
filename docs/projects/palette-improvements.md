@@ -97,13 +97,51 @@ The palette stored in `FractalConfig.flame.palette` (or `FractalConfig.palette`)
 - [ ] Consider palette categories/tags
 
 ### Phase 4: Adjustable Palette Length
-**Goal:** Allow palettes with different color counts
+**Goal:** Allow palettes with different color counts (256 to 4096+)
+**Status:** Research Complete
 
-- [ ] Support palette lengths from 256 to 4096+ colors
-- [ ] Update GPU texture creation for variable sizes
-- [ ] Add UI control for palette length
-- [ ] Handle interpolation for different lengths
-- [ ] Consider memory/performance implications
+#### Current Architecture
+The palette system uses a **gradient-based approach**:
+- `Palette` struct stores variable-length color stops (`Vec<ColorStop>`)
+- On render, `generate_texture_data(size)` samples the gradient at N positions
+- GPU receives a **fixed 256×1 Rgba8Unorm texture**
+- Shaders sample using normalized coordinates (0.0-1.0)
+
+#### Hardcoded 256 Locations (5 files)
+
+| File | Lines | Context |
+|------|-------|---------|
+| `src/scene/palette.rs` | 245, 309-313, 341, 347 | `generate_texture_data(256)`, conversion loops |
+| `src/gpu/buffers.rs` | 585, 596, 619-620, 934, 944, 976, 979 | Texture creation, update_palette() |
+| `shaders/tonemap.wgsl` | 560-561 | PathMap: `clamp(t * 255.0, 0.0, 255.0)` |
+| `shaders/core/main_template.wgsl` | 170 | Palette mode sampling |
+| `shaders/core/utilities.wgsl` | 63 | Speed mode sampling |
+
+#### Implementation Tasks
+- [ ] Add `palette_size: u32` field to `FlameBuffers` struct
+- [ ] Add `palette_size` uniform to `TonemapParams` for shaders
+- [ ] Update `FlameBuffers::new()` to accept palette size parameter
+- [ ] Update `update_palette()` to use dynamic size (rotation loop, texture upload)
+- [ ] Update shaders to use `palette_size` uniform for index calculations
+- [ ] Add palette size control to Palette Editor UI
+- [ ] Add `palette_size` field to `FractalConfig` for serialization
+- [ ] Default to 256 for backward compatibility
+- [ ] Test with 512, 1024, 2048, 4096 sizes
+
+#### Memory & Performance (Negligible Impact)
+
+| Size | Texture Memory | Upload Time | Notes |
+|------|----------------|-------------|-------|
+| 256 | 4 KB | <0.1 ms | Current default |
+| 1024 | 16 KB | <0.2 ms | High detail |
+| 4096 | 64 KB | ~1 ms | Max recommended |
+
+GPU texture sampling cost is negligible - caching handles it efficiently.
+
+#### Compatibility Notes
+- **Apophysis:** Fixed 256-color palettes. Import always uses 256, export resamples to 256.
+- **Old configs:** Palettes without `palette_size` default to 256.
+- **Gradients:** Already variable-length, just need to sample at correct size.
 
 ### Phase 5: Palette Stretching/Squeezing
 **Goal:** Transform palette color distribution
