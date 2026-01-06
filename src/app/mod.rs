@@ -165,6 +165,7 @@ use std::sync::{Arc, Mutex};
 use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
 use crate::ui::animation_panel::ExportProgress;
+use crate::ui::PngExportProgress;
 use crate::renderer::FlameRenderer;
 use crate::scene::transforms::Flame;
 use crate::scene::palette::{global_palette_library, PaletteLibrary};
@@ -225,6 +226,9 @@ pub struct App {
 
     // Animation export progress (shared with background export thread)
     pub(super) animation_export_progress: Arc<Mutex<ExportProgress>>,
+
+    // PNG export progress (shared with background export thread)
+    pub(super) png_export_progress: Arc<Mutex<PngExportProgress>>,
 
     // Rendering mode state machine (Normal, Animating, Overwrite)
     pub(super) render_mode: RenderModeFSM,
@@ -300,6 +304,7 @@ impl App {
             export_height,
             use_custom_export_size: false,  // Default to viewport size
             animation_export_progress: Arc::new(Mutex::new(ExportProgress::default())),
+            png_export_progress: Arc::new(Mutex::new(PngExportProgress::default())),
             render_mode: RenderModeFSM::new(),
         };
 
@@ -505,6 +510,7 @@ impl App {
 
         // Get a snapshot of export progress for UI display
         let export_progress = self.animation_export_progress.lock().unwrap().clone();
+        let png_export_progress = self.png_export_progress.lock().unwrap().clone();
 
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
@@ -529,6 +535,7 @@ impl App {
             &mut self.export_height,
             &mut self.use_custom_export_size,
             &export_progress,
+            &png_export_progress,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);

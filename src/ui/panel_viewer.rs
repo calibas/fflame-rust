@@ -91,6 +91,9 @@ pub struct PanelContext<'a> {
     // Path editor state
     pub path_editor_state: &'a mut super::path_editor::PathEditorState,
     pub path_filters_changed: &'a mut Option<Vec<crate::gpu::buffers::GpuPathFilter>>,
+
+    // PNG export progress
+    pub png_export_progress: &'a super::export_panel::PngExportProgress,
 }
 
 /// Viewer for rendering each panel type
@@ -884,6 +887,7 @@ impl<'a> PanelViewer<'a> {
             self.context.use_custom_export_size,
             self.context.config_manager,
             *self.context.fractal_viewport_size,
+            self.context.png_export_progress,
         );
     }
 }

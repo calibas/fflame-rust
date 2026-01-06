@@ -27,6 +27,7 @@ mod view;
 pub mod workspace;
 
 pub use animation_panel::ExportProgress;
+pub use export_panel::PngExportProgress;
 pub use track_editor::TrackEditorState;
 pub use font_loader::{ensure_font_for_locale, initialize_default_fonts};
 pub use menu_context::{MenuActions, MenuState};
@@ -263,6 +264,7 @@ impl EguiLayer {
         export_height: &mut u32,
         use_custom_export_size: &mut bool,
         animation_export_progress: &animation_panel::ExportProgress,
+        png_export_progress: &export_panel::PngExportProgress,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -439,6 +441,9 @@ impl EguiLayer {
                         // Path editor state
                         path_editor_state: &mut self.path_editor_state,
                         path_filters_changed: &mut path_filters_changed,
+
+                        // PNG export progress
+                        png_export_progress,
                     },
                 });
 
