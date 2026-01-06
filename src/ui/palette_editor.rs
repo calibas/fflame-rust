@@ -1,4 +1,5 @@
 use crate::scene::palette::{ColorStop, Palette};
+use rust_i18n::t;
 
 pub struct PaletteEditor {
     pub current_palette: Palette,
@@ -29,7 +30,7 @@ fn render_palette_editor_core_impl(
     palette_load_file: &mut bool,
 ) {
     ui.horizontal(|ui| {
-        ui.label("Palette Name:");
+        ui.label(t!("palette_editor.palette_name"));
         let name_response = ui.text_edit_singleline(&mut palette.name);
 
         if name_response.lost_focus() {
@@ -42,7 +43,7 @@ fn render_palette_editor_core_impl(
     ui.separator();
 
             // Gradient preview
-            ui.label("Gradient Preview:");
+            ui.label(t!("palette_editor.gradient_preview"));
             let preview_height = 40.0;
             let (rect, _response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), preview_height),
@@ -78,19 +79,19 @@ fn render_palette_editor_core_impl(
             // Mode indicator and toggle
             ui.horizontal(|ui| {
                 if palette.locked {
-                    ui.label("Mode: 🔒 Fixed 256-Color");
+                    ui.label(t!("palette_editor.mode_fixed"));
                 } else {
-                    ui.label("Mode: 🎨 Free Gradient");
+                    ui.label(t!("palette_editor.mode_free"));
                 }
 
                 // Toggle button
                 let button_text = if palette.locked {
-                    "Switch to Free Mode"
+                    t!("palette_editor.switch_to_free")
                 } else {
-                    "Switch to Fixed 256-Color Mode"
+                    t!("palette_editor.switch_to_fixed")
                 };
 
-                if ui.button(button_text).clicked() {
+                if ui.button(button_text.as_ref()).clicked() {
                     if palette.locked {
                         // Free mode: just unlock (no data loss, no warning needed)
                         palette.convert_to_free();
@@ -107,7 +108,7 @@ fn render_palette_editor_core_impl(
             ui.separator();
 
             // Color stops list
-            ui.label("Color Stops:");
+            ui.label(t!("palette_editor.color_stops"));
 
             let mut stop_to_remove = None;
             let mut palette_updated = false;
@@ -121,14 +122,14 @@ fn render_palette_editor_core_impl(
                         ui.horizontal(|ui| {
                             let stop = &mut palette.stops[i];
 
-                            ui.label(format!("Stop {}:", i));
+                            ui.label(t!("palette_editor.stop_label", index = i));
 
                             // Position slider - locked in fixed mode
                             let mut pos_int = (stop.position * 255.0) as i32;
                             let slider_response = ui.add_enabled(
                                 !palette.locked,
-                                egui::Slider::new(&mut pos_int, 0..=255).text("Position")
-                            );
+                                egui::Slider::new(&mut pos_int, 0..=255).text(t!("palette_editor.position"))
+                            ).on_hover_text(t!("palette_editor.tooltip_position"));
                             if slider_response.changed() {
                                 stop.position = pos_int as f32 / 255.0;
                                 palette_updated = true;
@@ -141,7 +142,8 @@ fn render_palette_editor_core_impl(
 
                             // Color picker - no preview mode (immediate commits)
                             let mut color = [stop.color[0], stop.color[1], stop.color[2]];
-                            let color_response = ui.color_edit_button_rgb(&mut color);
+                            let color_response = ui.color_edit_button_rgb(&mut color)
+                                .on_hover_text(t!("palette_editor.tooltip_color"));
                             if color_response.changed() {
                                 stop.color = color;
                                 // Immediate commit (no preview mode) since we can't detect popup close
@@ -152,7 +154,10 @@ fn render_palette_editor_core_impl(
                             }
 
                             // Remove button (disabled in fixed mode, keep at least 2 stops)
-                            if stops_len > 2 && !palette.locked && ui.button("🗑").clicked() {
+                            if stops_len > 2 && !palette.locked && ui.button("🗑")
+                                .on_hover_text(t!("palette_editor.tooltip_remove"))
+                                .clicked()
+                            {
                                 stop_to_remove = Some(i);
                             }
                         });
@@ -186,7 +191,7 @@ fn render_palette_editor_core_impl(
             // Add stop button (disabled in fixed mode)
             if ui.add_enabled(
                 !palette.locked,
-                egui::Button::new("➕ Add Color Stop")
+                egui::Button::new(t!("palette_editor.add_color_stop"))
             ).clicked() {
                 let new_position = if palette.stops.is_empty() {
                     0.5
@@ -211,19 +216,19 @@ fn render_palette_editor_core_impl(
             ui.separator();
 
             // Import/Export section
-            ui.collapsing("Import/Export Palette", |ui| {
+            ui.collapsing(t!("palette_editor.import_export"), |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("📋 Export to Clipboard").clicked() {
+                    if ui.button(t!("palette_editor.export_clipboard")).clicked() {
                         *palette_export_json = Some(palette.clone());
                     }
 
-                    if ui.button("💾 Save as .palette").clicked() {
+                    if ui.button(t!("palette_editor.save_as_palette")).clicked() {
                         *palette_save_file = Some(palette.clone());
                     }
                 });
 
                 ui.separator();
-                ui.label("Import from JSON:");
+                ui.label(t!("palette_editor.import_from_json"));
 
                 egui::ScrollArea::vertical()
                     .max_height(150.0)
@@ -232,15 +237,15 @@ fn render_palette_editor_core_impl(
                     });
 
                 ui.horizontal(|ui| {
-                    if ui.button("✅ Import").clicked() && !palette_editor.json_buffer.is_empty() {
+                    if ui.button(t!("palette_editor.import")).clicked() && !palette_editor.json_buffer.is_empty() {
                         *palette_import_json = Some(palette_editor.json_buffer.clone());
                     }
 
-                    if ui.button("🗑 Clear").clicked() {
+                    if ui.button(t!("palette_editor.clear")).clicked() {
                         palette_editor.json_buffer.clear();
                     }
 
-                    if ui.button("📂 Load .palette").clicked() {
+                    if ui.button(t!("palette_editor.load_palette")).clicked() {
                         *palette_load_file = true;
                     }
                 });
@@ -249,7 +254,7 @@ fn render_palette_editor_core_impl(
             ui.separator();
 
             // Note: Apply button removed - all changes now applied live via ConfigManager
-            ui.label("💡 All changes are applied instantly and tracked in undo history.");
+            ui.label(t!("palette_editor.instant_changes"));
 }
 
 pub fn render_fixed_mode_warning(
@@ -259,20 +264,20 @@ pub fn render_fixed_mode_warning(
 ) {
     // Fixed mode warning dialog
     if palette_editor.show_fixed_mode_warning {
-        egui::Window::new("⚠️ Convert to Fixed 256-Color Mode?")
+        egui::Window::new(t!("palette_editor.warning_title"))
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label("This will resample your gradient to exactly 256 color stops.");
-                ui.label("Color positions will be locked at fixed intervals (0/255, 1/255, etc.).");
+                ui.label(t!("palette_editor.warning_resample"));
+                ui.label(t!("palette_editor.warning_locked"));
                 ui.label("");
-                ui.label("You can switch back to Free Mode later without data loss.");
+                ui.label(t!("palette_editor.warning_revert"));
 
                 ui.separator();
 
                 ui.horizontal(|ui| {
-                    if ui.button("✅ Convert to Fixed Mode").clicked() {
+                    if ui.button(t!("palette_editor.convert_confirm")).clicked() {
                         // Get current palette and convert it
                         if let Some(mut palette) = config_manager.active_config().palette.clone() {
                             palette.convert_to_fixed();
@@ -284,7 +289,7 @@ pub fn render_fixed_mode_warning(
                         palette_editor.show_fixed_mode_warning = false;
                     }
 
-                    if ui.button("❌ Cancel").clicked() {
+                    if ui.button(t!("palette_editor.cancel")).clicked() {
                         palette_editor.show_fixed_mode_warning = false;
                     }
                 });
@@ -307,8 +312,8 @@ pub fn render_palette_editor_content(
 ) {
     // Always read from config.palette (single source of truth)
     let Some(config_palette) = &config_manager.active_config().palette else {
-        ui.label("⚠ No palette selected");
-        ui.label("Open the Colors panel and click 'Edit Palette' to create one");
+        ui.label(t!("palette_editor.no_palette"));
+        ui.label(t!("palette_editor.no_palette_hint"));
         return;
     };
 
