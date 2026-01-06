@@ -756,9 +756,9 @@ fn apply_config_value(
 // FFmpeg Pipe-Based Video Export
 // ============================================================================
 
-/// Check if ffmpeg is available on the system
+/// Cached FFmpeg availability check (spawning process every frame is expensive)
 #[cfg(not(target_arch = "wasm32"))]
-pub fn is_ffmpeg_available() -> bool {
+static FFMPEG_AVAILABLE: once_cell::sync::Lazy<bool> = once_cell::sync::Lazy::new(|| {
     std::process::Command::new("ffmpeg")
         .arg("-version")
         .stdout(std::process::Stdio::null())
@@ -766,6 +766,12 @@ pub fn is_ffmpeg_available() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+});
+
+/// Check if ffmpeg is available on the system (cached after first call)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_ffmpeg_available() -> bool {
+    *FFMPEG_AVAILABLE
 }
 
 /// Get ffmpeg version string (if available)
