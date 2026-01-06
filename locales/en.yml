@@ -14,62 +14,78 @@ menu:
   help: "Help"
 
   # File Menu
-  new_flame: "New Flame"
-  load_preset: "Load Preset"
-  open_config: "Open Config..."
-  save_config: "Save Config As..."
+  open: "📂 Open..."
+  save_as: "💾 Save As..."
+  from_preset_library: "📚 From Preset Library..."
+  random_flame: "🎲 Random Flame"
   import_apophysis: "Import Apophysis XML..."
-  export_png: "Export PNG..."
   export_apophysis: "Export Apophysis XML..."
-  recent_files: "Recent Files"
-  quit: "Quit"
+  config_import_export: "📄 Config Import/Export..."
+  export_png: "🖼 Export PNG..."
+  export_png_transparent: "🖼 Export Transparent PNG..."
+  quit: "❌ Quit"
 
   # Edit Menu
-  undo: "Undo"
-  redo: "Redo"
-  preferences: "Preferences..."
+  undo: "⮪ Undo"
+  redo: "⮫ Redo"
+  preferences: "⚙ Preferences..."
 
   # View Menu
   reset_view: "Reset View"
-  fit_to_window: "Fit to Window"
   zoom_in: "Zoom In"
   zoom_out: "Zoom Out"
   mode_2d: "2D Mode"
   mode_3d: "3D Mode"
-  show_grid: "Show Grid"
-
-  # Fractal Menu
-  show_transform_editor: "Show Transform Editor"
-  show_triangle_editor: "Show Triangle Editor"
-  show_palette_editor: "Show Palette Editor"
-  add_transform: "Add Transform"
-  copy_transform: "Copy Transform"
-  paste_transform: "Paste Transform"
-  duplicate_transform: "Duplicate Transform"
-  delete_transform: "Delete Transform"
-  randomize_transform: "Randomize Transform"
-  import_palette: "Import Palette..."
-  export_palette: "Export Palette..."
 
   # Rendering Menu
-  pause_resume: "Pause/Resume"
-  reset_accumulation: "Reset Accumulation"
-  speed: "Speed"
+  pause: "⏸ Pause"
+  resume: "▶ Resume"
+  reset_accumulation: "🔄 Reset Accumulation"
   iterations_per_thread: "Iterations per Thread"
-  benchmark: "Benchmark..."
 
-  # Window Menu
-  beginner_layout: "Beginner Layout"
-  standard_layout: "Standard Layout"
-  advanced_layout: "Advanced Layout"
-  reset_layout: "Reset Layout"
-  save_layout: "Save Layout..."
+  # Window Menu - Panel items
+  window_performance: "📊 Performance"
+  window_rendering: "⚙ Rendering"
+  window_view: "🔍 View"
+  window_transforms: "🔧 Transforms"
+  window_triangle_editor: "📐 Triangle Editor"
+  window_colors: "🎨 Tone Mapping & Colors"
+  window_palette_editor: "🎨 Palette Editor"
+  window_palette_library: "📚 Palette Library"
+  window_preset_library: "📚 Preset Library"
+  window_file_browser: "📂 File Browser"
+  window_config_dialog: "📄 Config Import/Export"
+  window_history: "⮪ Undo/Redo History"
+  window_animation: "🎬 Animation"
+  window_path_editor: "🧪 Path Editor (Experimental)"
+
+  # Window Menu - Workspace layouts
+  workspace_layout: "📐 Workspace Layout"
+  layout_beginner: "Beginner"
+  layout_standard: "Standard"
+  layout_advanced: "Advanced"
+  layout_export: "Export"
 
   # Help Menu
-  documentation: "Documentation"
-  keyboard_shortcuts: "Keyboard Shortcuts"
-  report_bug: "Report Bug..."
-  about: "About..."
+  help_panel: "❓ Help"
+  keyboard_shortcuts: "⌨ Keyboard Shortcuts"
+  report_bug: "🐛 Report Bug..."
+  about: "ℹ About..."
+
+# Help Panel
+help:
+  title: "Help"
+  keyboard_shortcuts_heading: "Keyboard Shortcuts"
+  view_navigation: "View Navigation:"
+  pan_view: "  ⬅⬆⬇➡ - Pan view"
+  zoom_plus_minus: "  + / -      - Zoom in/out"
+  zoom_numpad: "  Numpad +/-  - Zoom in/out"
+  editing: "Editing:"
+  undo_shortcut: "  Ctrl+Z   - Undo"
+  redo_shortcut: "  Ctrl+Y   - Redo"
+  mouse_controls: "Mouse Controls:"
+  drag_pan: "  Drag     - Pan view"
+  wheel_zoom: "  Wheel    - Zoom (toward cursor)"
 
 # Panel Titles
 panels:
