@@ -116,8 +116,7 @@ pub fn render_palette_library(
                 // Handle different load states
                 match &load_state {
                     LoadState::NotLoaded => {
-                        // Pack not loaded - will load when enabled
-                        ui.weak(t!("palette_library.enable_to_load"));
+                        // Nothing to show - pack will load when enabled
                     }
                     LoadState::Loading => {
                         ui.horizontal(|ui| {

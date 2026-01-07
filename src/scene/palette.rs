@@ -551,7 +551,7 @@ impl PaletteLibrary {
             }
         }
 
-        // Load manifest to discover available packs (lazy loading)
+        // Load manifest to discover available packs
         #[cfg(not(target_arch = "wasm32"))]
         {
             match crate::resources::palettes::load_manifest() {
@@ -562,9 +562,33 @@ impl PaletteLibrary {
                         if pack_meta.id == "builtin" {
                             continue;
                         }
+                        let enabled = pack_meta.enabled_by_default;
                         log::info!("  - {} ({} palettes, enabled: {})",
-                            pack_meta.name, pack_meta.item_count, pack_meta.enabled_by_default);
-                        packs.push(PalettePackInfo::from_metadata(pack_meta));
+                            pack_meta.name, pack_meta.item_count, enabled);
+
+                        // If enabled by default, load immediately
+                        if enabled {
+                            let file_path = pack_meta.file.clone();
+                            let full_path = format!("assets/palettes/packs/{}", file_path);
+                            match crate::resources::fetch_json::<PalettePack>(&full_path) {
+                                Ok(pack) => {
+                                    log::info!("Loaded enabled pack: {} ({} palettes)",
+                                        pack.pack_name, pack.palettes.len());
+                                    let mut info = PalettePackInfo::from_metadata(pack_meta);
+                                    info.pack = Some(pack);
+                                    info.load_state = crate::resources::LoadState::Loaded;
+                                    packs.push(info);
+                                }
+                                Err(e) => {
+                                    log::error!("Failed to load enabled pack {}: {}", file_path, e);
+                                    let mut info = PalettePackInfo::from_metadata(pack_meta);
+                                    info.load_state = crate::resources::LoadState::Failed(e.to_string());
+                                    packs.push(info);
+                                }
+                            }
+                        } else {
+                            packs.push(PalettePackInfo::from_metadata(pack_meta));
+                        }
                     }
                 }
                 Err(e) => {
