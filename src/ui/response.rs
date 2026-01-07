@@ -12,12 +12,12 @@ pub struct UiResponse {
     pub random_flame_requested: bool,
 
     // Palette library management (not stored in config directly)
-    pub custom_palette: Option<crate::scene::palette::Palette>,
     pub palette_export_json: Option<crate::scene::palette::Palette>,
     pub palette_save_file: Option<crate::scene::palette::Palette>,
+    pub palette_save_to_library: Option<crate::scene::palette::Palette>,
+    pub palette_delete_from_library: Option<String>,
     pub palette_import_json: Option<String>,
     pub palette_load_file: bool,
-    // pub palette_imported: Option<crate::scene::palette::Palette>,
 
     // Undo/redo (handled by ConfigManager but triggered from UI)
     pub undo_requested: bool,
@@ -34,6 +34,7 @@ pub struct UiResponse {
 
     // Panel open requests
     pub open_palette_editor: bool,
+    pub open_palette_library: bool,
     pub open_config_dialog: bool,
     pub open_triangle_editor: bool,
     pub open_preset_library: bool,
@@ -69,12 +70,12 @@ impl Default for UiResponse {
             config_load_file_requested: false,
             apophysis_import_file_requested: false,
             random_flame_requested: false,
-            custom_palette: None,
             palette_export_json: None,
             palette_save_file: None,
+            palette_save_to_library: None,
+            palette_delete_from_library: None,
             palette_import_json: None,
             palette_load_file: false,
-            // palette_imported: None,
             undo_requested: false,
             redo_requested: false,
             png_export_with_background: false,
@@ -83,6 +84,7 @@ impl Default for UiResponse {
             delete_transform: None,
             clone_transform: None,
             open_palette_editor: false,
+            open_palette_library: false,
             open_config_dialog: false,
             open_triangle_editor: false,
             open_preset_library: false,

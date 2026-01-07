@@ -173,8 +173,8 @@ pub fn render_colors_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     palette_library: &PaletteLibrary,
-    custom_palette: &mut Option<crate::scene::palette::Palette>,
     open_palette_editor: &mut bool,
+    open_palette_library: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
@@ -341,48 +341,48 @@ pub fn render_colors_content(
 
             let current_color_mode = config_manager.active_config().color_mode;
             if matches!(current_color_mode, ColorMode::Palette | ColorMode::Speed) {
-                let palettes = palette_library.palettes();
+                let current_palette_name = config_manager.active_config().palette.name.clone();
 
-                let current_palette = config_manager.active_config().palette.clone();
-                let current_palette_name = current_palette
-                    .as_ref()
-                    .map(|p| p.name.clone())
-                    .unwrap_or_else(|| t!("tonemap.palette_none").to_string());
+                // Build list of palettes from enabled packs
+                let mut available_palettes: Vec<&crate::scene::palette::Palette> = Vec::new();
+                for pack_idx in 0..palette_library.pack_count() {
+                    if palette_library.is_pack_enabled(pack_idx) {
+                        if let Some(pack) = palette_library.get_pack(pack_idx) {
+                            for palette in &pack.palettes {
+                                available_palettes.push(palette);
+                            }
+                        }
+                    }
+                }
 
-                egui::ComboBox::from_id_salt(format!("palette_selector_{}", palettes.len()))
+                egui::ComboBox::from_id_salt("palette_selector")
                     .selected_text(&current_palette_name)
                     .show_ui(ui, |ui| {
                         ui.label(t!("tonemap.palette"));
 
-                        for palette in palettes.iter() {
-                            let is_selected = current_palette.as_ref().map(|p| &p.name) == Some(&palette.name);
+                        // Always show current palette first (may not be in any pack)
+                        let current_in_packs = available_palettes.iter().any(|p| p.name == current_palette_name);
+                        if !current_in_packs {
+                            if ui.selectable_label(true, &current_palette_name).clicked() {
+                                // Already selected, nothing to do
+                            }
+                            ui.separator();
+                        }
+
+                        // Show palettes from enabled packs
+                        for palette in available_palettes.iter() {
+                            let is_selected = current_palette_name == palette.name;
                             if ui.selectable_label(is_selected, &palette.name).clicked() {
-                                let mut palette_copy = palette.clone();
-
-                                if palette.built_in {
-                                    let base_name = &palette.name;
-                                    let mut new_name = format!("{} (Custom)", base_name);
-                                    let mut counter = 2;
-
-                                    while palette_library.palettes().iter().any(|p| p.name == new_name)
-                                        || (current_palette.as_ref().map(|p| &p.name) == Some(&new_name)) {
-                                        new_name = format!("{} (Custom {})", base_name, counter);
-                                        counter += 1;
-                                    }
-
-                                    palette_copy.name = new_name;
-                                }
-
+                                // Set palette directly - create an editable copy
+                                let mut palette_copy = (*palette).clone();
                                 palette_copy.built_in = false;
 
                                 if let Ok(update) = config_manager.update_param(
                                     ConfigPath::Palette,
-                                    palette_copy.clone().into()
+                                    palette_copy.into()
                                 ) {
                                     max_update = max_update.max(update);
                                 }
-
-                                *custom_palette = Some(palette_copy);
                             }
                         }
                     });
@@ -391,38 +391,39 @@ pub fn render_colors_content(
                     if ui.button(t!("tonemap.edit_palette")).clicked() {
                         *open_palette_editor = true;
                     }
-
-                    if ui.button(t!("tonemap.clone_palette")).clicked() {
-                        if let Some(pal) = &current_palette {
-                            let mut cloned_palette = pal.clone();
-                            let base_name = &pal.name;
-                            let mut new_name = format!("{} (Copy)", base_name);
-                            let mut counter = 2;
-
-                            while palette_library.palettes().iter().any(|p| p.name == new_name)
-                                || (current_palette.as_ref().map(|p| &p.name) == Some(&new_name)) {
-                                new_name = format!("{} (Copy {})", base_name, counter);
-                                counter += 1;
-                            }
-
-                            cloned_palette.name = new_name;
-                            cloned_palette.built_in = false;
-
-                            if let Ok(update) = config_manager.update_param(
-                                ConfigPath::Palette,
-                                cloned_palette.clone().into()
-                            ) {
-                                max_update = max_update.max(update);
-                            }
-
-                            *custom_palette = Some(cloned_palette);
-                        }
+                    if ui.button(t!("tonemap.browse_palettes")).clicked() {
+                        *open_palette_library = true;
                     }
                 });
 
                 if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteRotation, 0.0..=1.0, t!("tonemap.palette_rotation").as_ref(), Some(t!("tonemap.tooltip_palette_rotation").as_ref())) {
                     max_update = max_update.max(result.update_type);
                 }
+
+                // Palette squeeze slider (0.1 to 16.0)
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteSqueeze, 0.1..=16.0, t!("tonemap.palette_squeeze").as_ref(), Some(t!("tonemap.tooltip_palette_squeeze").as_ref())) {
+                    max_update = max_update.max(result.update_type);
+                }
+
+                // Palette size slider (256-4096, step by power of 2)
+                ui.horizontal(|ui| {
+                    ui.label(t!("tonemap.palette_size").as_ref());
+                    let current_size = config_manager.active_config().palette_size;
+                    let sizes = [256u32, 512, 1024, 2048, 4096];
+                    egui::ComboBox::from_id_salt("palette_size_combo")
+                        .selected_text(format!("{}", current_size))
+                        .show_ui(ui, |ui| {
+                            for &size in &sizes {
+                                if ui.selectable_label(current_size == size, format!("{}", size)).clicked() {
+                                    if let Err(e) = config_manager.update_param(ConfigPath::PaletteSize, (size as f32).into()) {
+                                        log::error!("Failed to update palette size: {}", e);
+                                    } else {
+                                        max_update = max_update.max(UpdateType::ColorOnly);
+                                    }
+                                }
+                            }
+                        });
+                }).response.on_hover_text(t!("tonemap.tooltip_palette_size").as_ref());
             }
 
             if matches!(current_color_mode, ColorMode::Speed) {

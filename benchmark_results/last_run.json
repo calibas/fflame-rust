@@ -1,113 +1,113 @@
 {
-  "timestamp": "2026-01-06 09:24:13",
+  "timestamp": "2026-01-06 21:45:22",
   "cpu_benchmarks": [
     {
       "name": "affine_transform/affine_2x3_matrix",
-      "mean_ns": 1.2632,
-      "stddev_ns": 0.0027000000000000357,
-      "throughput_ops_sec": 791640278.6573781
+      "mean_ns": 1.2447,
+      "stddev_ns": 0.003950000000000009,
+      "throughput_ops_sec": 803406443.3196754
     },
     {
       "name": "affine_transform/affine_full",
-      "mean_ns": 1.552,
-      "stddev_ns": 0.00385000000000002,
-      "throughput_ops_sec": 644329896.9072164
+      "mean_ns": 1.5245,
+      "stddev_ns": 0.006000000000000005,
+      "throughput_ops_sec": 655952771.4004592
     },
     {
       "name": "point_helpers/r_squared",
-      "mean_ns": 0.6419900000000001,
-      "stddev_ns": 0.0011700000000000159,
-      "throughput_ops_sec": 1557656661.318712
+      "mean_ns": 0.62949,
+      "stddev_ns": 0.0020849999999999797,
+      "throughput_ops_sec": 1588587586.776597
     },
     {
       "name": "point_helpers/r",
-      "mean_ns": 0.73289,
-      "stddev_ns": 0.0015400000000000205,
-      "throughput_ops_sec": 1364461242.4784074
+      "mean_ns": 0.7212200000000001,
+      "stddev_ns": 0.0022599999999999907,
+      "throughput_ops_sec": 1386539474.7788467
     },
     {
       "name": "point_helpers/theta",
-      "mean_ns": 10.044,
-      "stddev_ns": 0.01499999999999968,
-      "throughput_ops_sec": 99561927.51891676
+      "mean_ns": 9.8971,
+      "stddev_ns": 0.03294999999999959,
+      "throughput_ops_sec": 101039698.49753968
     },
     {
       "name": "point_helpers/phi",
-      "mean_ns": 10.748,
-      "stddev_ns": 0.020999999999999908,
-      "throughput_ops_sec": 93040565.68663938
+      "mean_ns": 10.581,
+      "stddev_ns": 0.036000000000000476,
+      "throughput_ops_sec": 94509025.61194594
     },
     {
       "name": "color_blending/palette_position/0",
-      "mean_ns": 0.62591,
-      "stddev_ns": 0.0010749999999999887,
-      "throughput_ops_sec": 1597673786.9661772
+      "mean_ns": 0.6145499999999999,
+      "stddev_ns": 0.002134999999999991,
+      "throughput_ops_sec": 1627206899.3572536
     },
     {
       "name": "color_blending/palette_position/0.5",
-      "mean_ns": 0.62517,
-      "stddev_ns": 0.0011349999999999908,
-      "throughput_ops_sec": 1599564918.342211
+      "mean_ns": 0.6149600000000001,
+      "stddev_ns": 0.00175,
+      "throughput_ops_sec": 1626122024.1966956
     },
     {
       "name": "color_blending/palette_position/1",
-      "mean_ns": 0.6256,
-      "stddev_ns": 0.0010600000000000023,
-      "throughput_ops_sec": 1598465473.1457798
+      "mean_ns": 0.6138600000000001,
+      "stddev_ns": 0.0017400000000000091,
+      "throughput_ops_sec": 1629035936.5327597
     },
     {
       "name": "preset_iteration/single_transform_iter/Julian",
-      "mean_ns": 86.312,
-      "stddev_ns": 0.22350000000000136,
-      "throughput_ops_sec": 11585874.501807397
+      "mean_ns": 84.648,
+      "stddev_ns": 0.39699999999999847,
+      "throughput_ops_sec": 11813628.201493243
     },
     {
       "name": "preset_iteration/single_transform_iter/Simple",
-      "mean_ns": 95.891,
-      "stddev_ns": 0.14800000000000324,
-      "throughput_ops_sec": 10428507.367740454
+      "mean_ns": 94.346,
+      "stddev_ns": 0.28600000000000136,
+      "throughput_ops_sec": 10599283.488436181
     },
     {
       "name": "preset_iteration/single_transform_iter/Spherical",
-      "mean_ns": 52.765,
-      "stddev_ns": 0.10549999999999926,
-      "throughput_ops_sec": 18951956.78953852
+      "mean_ns": 51.875,
+      "stddev_ns": 0.170499999999997,
+      "throughput_ops_sec": 19277108.43373494
     },
     {
       "name": "variation_lookup/hashmap_get",
-      "mean_ns": 15.483,
-      "stddev_ns": 0.04800000000000004,
-      "throughput_ops_sec": 64586966.35019053
+      "mean_ns": 15.069,
+      "stddev_ns": 0.044500000000000206,
+      "throughput_ops_sec": 66361404.20731302
     },
     {
       "name": "variation_lookup/hashmap_iter",
-      "mean_ns": 4.3402,
-      "stddev_ns": 0.008300000000000196,
-      "throughput_ops_sec": 230404128.84198883
+      "mean_ns": 4.2835,
+      "stddev_ns": 0.01639999999999997,
+      "throughput_ops_sec": 233453951.2081242
     },
     {
       "name": "registry_operations/registry_get",
-      "mean_ns": 22.426,
-      "stddev_ns": 0.041499999999999204,
-      "throughput_ops_sec": 44591099.616516545
+      "mean_ns": 20.495,
+      "stddev_ns": 0.06349999999999945,
+      "throughput_ops_sec": 48792388.387411565
     },
     {
       "name": "registry_operations/registry_get_is_some",
-      "mean_ns": 22.445,
-      "stddev_ns": 0.06350000000000122,
-      "throughput_ops_sec": 44553352.63978615
+      "mean_ns": 20.803,
+      "stddev_ns": 0.11899999999999977,
+      "throughput_ops_sec": 48069989.905302115
     },
     {
       "name": "transform_creation/new_transform",
-      "mean_ns": 15.934,
-      "stddev_ns": 0.09900000000000109,
-      "throughput_ops_sec": 62758880.381574
+      "mean_ns": 15.475,
+      "stddev_ns": 0.04550000000000054,
+      "throughput_ops_sec": 64620355.41195477
     },
     {
       "name": "transform_creation/clone_transform",
-      "mean_ns": 184.91,
-      "stddev_ns": 0.3149999999999977,
-      "throughput_ops_sec": 5408036.342004218
+      "mean_ns": 186.03,
+      "stddev_ns": 1.2700000000000102,
+      "throughput_ops_sec": 5375477.073590281
     }
   ],
   "render_benchmarks": [
@@ -117,8 +117,8 @@
       "width": 800,
       "height": 600,
       "total_iterations": 1000341504,
-      "render_time_ms": 1303.0075,
-      "throughput_miter_sec": 767.7173799843823
+      "render_time_ms": 1247.8075,
+      "throughput_miter_sec": 801.6793487777562
     },
     {
       "name": "simple-linear",
@@ -126,8 +126,8 @@
       "width": 800,
       "height": 600,
       "total_iterations": 501219328,
-      "render_time_ms": 888.7375,
-      "throughput_miter_sec": 563.9677947650459
+      "render_time_ms": 779.295,
+      "throughput_miter_sec": 643.1702089709289
     },
     {
       "name": "bubble-3d",
@@ -135,8 +135,8 @@
       "width": 800,
       "height": 600,
       "total_iterations": 1000341504,
-      "render_time_ms": 648.3925,
-      "throughput_miter_sec": 1542.802398238721
+      "render_time_ms": 568.9025,
+      "throughput_miter_sec": 1758.370729606567
     },
     {
       "name": "simple-zcone",
@@ -144,8 +144,8 @@
       "width": 800,
       "height": 600,
       "total_iterations": 501219328,
-      "render_time_ms": 629.44,
-      "throughput_miter_sec": 796.2940518556177
+      "render_time_ms": 601.485,
+      "throughput_miter_sec": 833.3031214411
     },
     {
       "name": "black-curve",
@@ -153,8 +153,8 @@
       "width": 800,
       "height": 600,
       "total_iterations": 1000341504,
-      "render_time_ms": 2331.8575,
-      "throughput_miter_sec": 428.98912304889984
+      "render_time_ms": 2297.9325,
+      "throughput_miter_sec": 435.3224056842401
     },
     {
       "name": "white-curve",
@@ -162,8 +162,8 @@
       "width": 800,
       "height": 600,
       "total_iterations": 1000341504,
-      "render_time_ms": 2327.19,
-      "throughput_miter_sec": 429.84951980714936
+      "render_time_ms": 2300.92,
+      "throughput_miter_sec": 434.7571858213237
     },
     {
       "name": "misc-variations",
@@ -171,8 +171,8 @@
       "width": 800,
       "height": 600,
       "total_iterations": 1000341504,
-      "render_time_ms": 2062.48,
-      "throughput_miter_sec": 485.01876575772854
+      "render_time_ms": 2038.0625,
+      "throughput_miter_sec": 490.82965021926464
     },
     {
       "name": "misc-variations2",
@@ -180,8 +180,8 @@
       "width": 800,
       "height": 600,
       "total_iterations": 1000341504,
-      "render_time_ms": 847.9725,
-      "throughput_miter_sec": 1179.6862563349637
+      "render_time_ms": 786.3975,
+      "throughput_miter_sec": 1272.0558038396612
     }
   ]
 }

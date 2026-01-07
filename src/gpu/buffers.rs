@@ -260,7 +260,8 @@ pub struct TonemapParams {
     pub path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct, 4=Depth, 5=OriginRadial, 6=OriginHorizontal, 7=OriginVertical
     pub burn_in: u32,  // Burn-in iterations (for Depth gradient: start depth)
     pub num_transforms: u32,  // Number of transforms (for path coloring entropy)
-    pub _pad_end: [u32; 4],  // Padding to align struct to 16-byte boundary (128 bytes total)
+    pub palette_size: u32,  // Palette texture size (256-4096), for shader index calculations
+    pub _pad_end: [u32; 3],  // Padding to align struct to 16-byte boundary (128 bytes total)
 }
 
 impl Default for TonemapParams {
@@ -293,7 +294,8 @@ impl Default for TonemapParams {
             path_map_style: 0,  // Prefix mode by default
             burn_in: 20,  // Default burn-in
             num_transforms: 3,  // Default 3 transforms
-            _pad_end: [0, 0, 0, 0],
+            palette_size: 256,  // Default palette size
+            _pad_end: [0, 0, 0],
         }
     }
 }
@@ -378,10 +380,27 @@ pub struct FlameBuffers {
     // Track current dimensions for path buffer recreation
     width: u32,
     height: u32,
+
+    // Track current palette size for dynamic palette texture
+    palette_size: u32,
 }
 
+/// Default palette size (256 colors for backward compatibility)
+pub const DEFAULT_PALETTE_SIZE: u32 = 256;
+
+/// Maximum supported palette size
+pub const MAX_PALETTE_SIZE: u32 = 4096;
+
 impl FlameBuffers {
+    /// Create new FlameBuffers with default palette size (256)
     pub fn new(device: &Device, queue: &Queue, width: u32, height: u32, flame: &Flame) -> Self {
+        Self::with_palette_size(device, queue, width, height, flame, DEFAULT_PALETTE_SIZE)
+    }
+
+    /// Create new FlameBuffers with specified palette size
+    pub fn with_palette_size(device: &Device, queue: &Queue, width: u32, height: u32, flame: &Flame, palette_size: u32) -> Self {
+        // Clamp palette size to valid range
+        let palette_size = palette_size.clamp(DEFAULT_PALETTE_SIZE, MAX_PALETTE_SIZE);
         // Create transform storage buffer sized for MAX_TRANSFORMS
         // This allows loading presets with different numbers of transforms without recreating the buffer
         let buffer_size = (MAX_TRANSFORMS * std::mem::size_of::<GpuTransform>()) as u64;
@@ -579,10 +598,10 @@ impl FlameBuffers {
 
         // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
 
-        // Create palette texture (1D, 256 samples)
+        // Create palette texture (1D, dynamic size: 256-4096 samples)
         // Use Rgba8Unorm for efficient, standard color storage
         let default_palette = Palette::fire(); // Default palette
-        let palette_data = default_palette.generate_texture_data(256);
+        let palette_data = default_palette.generate_texture_data(palette_size as usize);
 
         // Convert f32 [0.0, 1.0] to u8 [0, 255] for Rgba8Unorm
         let palette_data_u8: Vec<u8> = palette_data
@@ -593,7 +612,7 @@ impl FlameBuffers {
         let palette_texture = device.create_texture(&TextureDescriptor {
             label: Some("Palette Texture"),
             size: Extent3d {
-                width: 256,
+                width: palette_size,
                 height: 1,
                 depth_or_array_layers: 1,
             },
@@ -616,11 +635,11 @@ impl FlameBuffers {
             &palette_data_u8,
             TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(256 * 4), // 256 pixels * 4 components * 1 byte
+                bytes_per_row: Some(palette_size * 4), // N pixels * 4 components * 1 byte
                 rows_per_image: None,
             },
             Extent3d {
-                width: 256,
+                width: palette_size,
                 height: 1,
                 depth_or_array_layers: 1,
             },
@@ -722,7 +741,13 @@ impl FlameBuffers {
             current_is_a: true,
             width,
             height,
+            palette_size,
         }
+    }
+
+    /// Get the current palette size
+    pub fn palette_size(&self) -> u32 {
+        self.palette_size
     }
 
     /// Clear all accumulation buffers
@@ -930,31 +955,62 @@ impl FlameBuffers {
     }
 
     /// Update palette texture
-    pub fn update_palette(&self, queue: &Queue, palette: &Palette, palette_rotation: f32) {
-        let palette_data = palette.generate_texture_data(256);
+    /// Uses the palette_size set during FlameBuffers creation
+    ///
+    /// # Arguments
+    /// * `palette_rotation` - Rotation amount (-1.0 to 1.0), shifts palette indices
+    /// * `palette_squeeze` - Squeeze factor: 1.0 = normal, >1 = repeat palette N times, <1 = show only N% of palette
+    pub fn update_palette(&self, queue: &Queue, palette: &Palette, palette_rotation: f32, palette_squeeze: f32) {
+        let size = self.palette_size as usize;
+        let palette_data = palette.generate_texture_data(size);
+
+        // Apply squeeze transformation first
+        // squeeze > 1: palette repeats N times (e.g., 16x means palette repeats 16 times)
+        // squeeze < 1: only shows portion of palette (e.g., 0.1 shows 10% stretched to fill)
+        // Formula: src_t = (dst_t * squeeze) % 1.0
+        let squeezed_data = if palette_squeeze != 1.0 {
+            let mut squeezed = vec![0.0f32; size * 4];
+
+            for i in 0..size {
+                let t = i as f32 / size as f32;
+                let src_t = (t * palette_squeeze).fract(); // fract() handles modulo for floats
+                let src_idx = ((src_t * size as f32) as usize).min(size - 1);
+
+                let dst_base = i * 4;
+                let src_base = src_idx * 4;
+
+                squeezed[dst_base] = palette_data[src_base];
+                squeezed[dst_base + 1] = palette_data[src_base + 1];
+                squeezed[dst_base + 2] = palette_data[src_base + 2];
+                squeezed[dst_base + 3] = palette_data[src_base + 3];
+            }
+            squeezed
+        } else {
+            palette_data
+        };
 
         // Apply palette rotation by shifting indices
         // Rotation range: -1.0 to 1.0 (Apophysis uses -128 to 128, we normalize)
-        // Negative rotation: colors shift left (color at 0 comes from 1, at 1 from 2, ..., at 255 from 0)
-        // Positive rotation: colors shift right (color at 0 comes from 255, at 1 from 0, ..., at 255 from 254)
+        // Negative rotation: colors shift left (color at 0 comes from 1, at 1 from 2, ..., at N-1 from 0)
+        // Positive rotation: colors shift right (color at 0 comes from N-1, at 1 from 0, ..., at N-1 from N-2)
         let rotated_data = if palette_rotation != 0.0 {
-            let rotation_amount = (palette_rotation * 256.0).round() as i32;
-            let mut rotated = vec![0.0f32; 256 * 4];
+            let rotation_amount = (palette_rotation * size as f32).round() as i32;
+            let mut rotated = vec![0.0f32; size * 4];
 
-            for i in 0..256 {
+            for i in 0..size {
                 // Calculate source index with wrapping
-                let src_idx = ((i as i32 + rotation_amount).rem_euclid(256)) as usize;
+                let src_idx = ((i as i32 + rotation_amount).rem_euclid(size as i32)) as usize;
                 let dst_idx = i * 4;
                 let src_base = src_idx * 4;
 
-                rotated[dst_idx] = palette_data[src_base];
-                rotated[dst_idx + 1] = palette_data[src_base + 1];
-                rotated[dst_idx + 2] = palette_data[src_base + 2];
-                rotated[dst_idx + 3] = palette_data[src_base + 3];
+                rotated[dst_idx] = squeezed_data[src_base];
+                rotated[dst_idx + 1] = squeezed_data[src_base + 1];
+                rotated[dst_idx + 2] = squeezed_data[src_base + 2];
+                rotated[dst_idx + 3] = squeezed_data[src_base + 3];
             }
             rotated
         } else {
-            palette_data
+            squeezed_data
         };
 
         // Convert f32 [0.0, 1.0] to u8 [0, 255] for Rgba8Unorm
@@ -973,11 +1029,11 @@ impl FlameBuffers {
             &palette_data_u8,
             TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(256 * 4), // 256 pixels * 4 components * 1 byte
+                bytes_per_row: Some(self.palette_size * 4), // N pixels * 4 components * 1 byte
                 rows_per_image: None,
             },
             Extent3d {
-                width: 256,
+                width: self.palette_size,
                 height: 1,
                 depth_or_array_layers: 1,
             },

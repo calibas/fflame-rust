@@ -756,9 +756,9 @@ fn apply_config_value(
 // FFmpeg Pipe-Based Video Export
 // ============================================================================
 
-/// Check if ffmpeg is available on the system
+/// Cached FFmpeg availability check (spawning process every frame is expensive)
 #[cfg(not(target_arch = "wasm32"))]
-pub fn is_ffmpeg_available() -> bool {
+static FFMPEG_AVAILABLE: once_cell::sync::Lazy<bool> = once_cell::sync::Lazy::new(|| {
     std::process::Command::new("ffmpeg")
         .arg("-version")
         .stdout(std::process::Stdio::null())
@@ -766,6 +766,12 @@ pub fn is_ffmpeg_available() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+});
+
+/// Check if ffmpeg is available on the system (cached after first call)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn is_ffmpeg_available() -> bool {
+    *FFMPEG_AVAILABLE
 }
 
 /// Get ffmpeg version string (if available)
@@ -1353,7 +1359,6 @@ pub async fn export_animation_fast(
     progress: &mut dyn ExportProgressCallback,
 ) -> Result<AnimationExportResult, AnimationExportError> {
     use crate::renderer::compute_kernel::FlameRenderer;
-    use crate::scene::palette::global_palette_library;
     use egui_wgpu::wgpu::{
         self, BufferDescriptor, BufferUsages, CommandEncoderDescriptor,
         Extent3d, MapMode, Origin3d, PollType, TextureAspect,
@@ -1410,9 +1415,6 @@ pub async fn export_animation_fast(
     // Create animation controller
     let mut controller = AnimationController::new();
     controller.load(export_config.animation.clone());
-
-    // Get palette library (use global singleton)
-    let palette_library = global_palette_library().read().unwrap();
 
     // Calculate buffer dimensions
     let bytes_per_pixel = 4u32; // RGBA8
@@ -1496,13 +1498,6 @@ pub async fn export_animation_fast(
         &frame_config.flame,
     );
 
-    let palette = frame_config
-        .palette
-        .as_ref()
-        .or_else(|| palette_library.get(frame_config.palette_index))
-        .ok_or_else(|| AnimationExportError::InvalidConfig("No palette found".to_string()))?
-        .clone();
-
     // Process frames sequentially
     for frame in 0..total_frames {
         if progress.is_cancelled() {
@@ -1520,7 +1515,7 @@ pub async fn export_animation_fast(
         frame_config = export_config.config.clone();
         apply_animation_values(&mut frame_config, &values);
 
-        let current_palette = frame_config.palette.as_ref().unwrap_or(&palette);
+        let current_palette = &frame_config.palette;
         let bg_color = frame_config.background_color;
 
         // Setup and render

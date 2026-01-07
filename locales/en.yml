@@ -302,8 +302,10 @@ tonemap:
   palette: "Palette"
   palette_none: "(None)"
   edit_palette: "🎨 Edit Palette"
-  clone_palette: "📋 Clone"
+  browse_palettes: "📚 Palette Library"
   palette_rotation: "Palette Rotation"
+  palette_squeeze: "Palette Squeeze"
+  palette_size: "Palette Size"
   speed_blend_factor: "Speed Blend Factor"
   background_color: "Background Color"
 
@@ -352,6 +354,8 @@ tonemap:
   tooltip_tracking_first_32: "Store the first 32 iterations, then stop tracking"
   tooltip_tracking_recent_32: "Rolling window of the 32 most recent iterations"
   tooltip_palette_rotation: "Rotate colors around the palette.\n0 = no change, 0.5 = halfway, 1 = full cycle."
+  tooltip_palette_squeeze: "Squeeze or repeat the palette.\n1 = normal, >1 = repeat N times, <1 = show only portion."
+  tooltip_palette_size: "Palette texture resolution.\nHigher values give smoother gradients.\n256 = standard, 4096 = maximum detail."
   tooltip_speed_factor: "Blend between transform colors and speed-based colors.\n0 = pure transform colors, 1 = pure speed coloring."
 
 # History Panel
@@ -403,6 +407,8 @@ history:
     palette: "Palette"
     palette_data: "Palette Data"
     palette_rotation: "Palette Rotation"
+    palette_squeeze: "Palette Squeeze"
+    palette_size: "Palette Size"
     speed_blend_factor: "Speed Blend Factor"
     background_color: "Background Color"
     background_red: "Background Red"
@@ -562,13 +568,21 @@ palette_editor:
   stop_label: "Stop %{index}:"
   position: "Position"
   add_color_stop: "➕ Add Color Stop"
+  palette_library: "Custom Palette Library"
   import_export: "Import/Export Palette"
   export_clipboard: "📋 Export to Clipboard"
   save_as_palette: "💾 Save as .palette"
+  save_to_library: "📚 Save to Library"
+  tooltip_save_to_library: "Save this palette to your Custom library (persists across sessions)"
+  tooltip_overwrite_library: "A palette with this name exists - click to overwrite it"
+  delete_from_library: "🗑 Delete from Library"
+  tooltip_delete_from_library: "Delete this palette from your Custom library"
+  tooltip_delete_not_in_library: "This palette is not in your Custom library"
   import_from_json: "Import from JSON:"
   import: "✅ Import"
   clear: "🗑 Clear"
   load_palette: "📂 Load .palette"
+  open_library: "📚 Open Palette Library"
   no_palette: "⚠ No palette selected"
   no_palette_hint: "Open the Colors panel and click 'Edit Palette' to create one"
 
@@ -580,6 +594,16 @@ palette_editor:
   convert_confirm: "✅ Convert to Fixed Mode"
   cancel: "❌ Cancel"
 
+  # Overwrite confirmation dialog
+  overwrite_title: "⚠️ Overwrite Palette?"
+  overwrite_message: "A palette named '%{name}' already exists in your Custom library. Overwrite it?"
+  overwrite_confirm: "✅ Overwrite"
+
+  # Delete confirmation dialog
+  delete_title: "⚠️ Delete Palette?"
+  delete_message: "Permanently delete '%{name}' from your Custom library?"
+  delete_confirm: "🗑 Delete"
+
   # Tooltips
   tooltip_position: "Position in the gradient (0-255)"
   tooltip_color: "Click to change color"
@@ -588,8 +612,7 @@ palette_editor:
 # Palette Library Panel
 palette_library:
   title: "Palette Library"
-  search: "Search:"
-  search_hint: "Coming soon..."
+  open_editor: "🎨 Open Palette Editor"
   palettes_count: "(%{count} palettes)"
   no_packs: "No palette packs loaded."
   no_packs_hint: "Place .json files in assets/palettes/packs/"
@@ -839,6 +862,8 @@ track_editor:
 
   # Animatable parameter names (Color)
   param_palette_rotation: "Palette Rotation"
+  param_palette_squeeze: "Palette Squeeze"
+  param_palette_size: "Palette Size"
   param_speed_factor: "Speed Factor"
   param_histogram_color_scale: "Histogram Color Scale"
   param_background_r: "Background Red"
@@ -916,6 +941,7 @@ settings:
   pause: "⏸ Pause"
   reset_accumulation: "🔄 Reset Accumulation"
   iterations: "Iterations"
+  max_iterations: "Max Iterations"
   max_iterations_reached: "✅ Max iterations reached"
   progress: "Progress: %{current} / %{max} (%{percent}%)"
   iterations_per_thread: "Iterations per Thread"

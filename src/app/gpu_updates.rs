@@ -81,20 +81,24 @@ impl App {
 
                 // Update palette if needed (also handles color mode changes)
                 if actions.update_palette {
-                    // Get palette from ConfigManager (includes preview mode changes from palette editor)
-                    let palette = update_config
-                        .palette
-                        .as_ref()
-                        .or_else(|| self.palette_library.get(update_config.palette_index));
-
-                    if let Some(palette) = palette {
-                        renderer.update_palette(
+                    // Check if palette texture size needs to change
+                    if renderer.palette_size() != update_config.palette_size {
+                        renderer.set_palette_size(
                             &self.gpu.device,
                             &self.gpu.queue,
-                            palette,
-                            update_config.palette_rotation,
+                            &update_config.flame,
+                            update_config.palette_size,
                         );
                     }
+
+                    // Get palette directly from ConfigManager
+                    renderer.update_palette(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &update_config.palette,
+                        update_config.palette_rotation,
+                        update_config.palette_squeeze,
+                    );
 
                     // Update color mode in GPU params (ColorMode changes trigger update_palette)
                     renderer.set_color_mode(

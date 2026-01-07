@@ -1,23 +1,22 @@
 //! Palette Library panel - browse and manage palette packs
 
 use egui;
-use crate::scene::palette::{PaletteLibrary, Palette};
+use crate::scene::palette::PaletteLibrary;
+use crate::config::{ConfigManager, ConfigPath};
 use rust_i18n::t;
 
 /// Render the Palette Library panel
-/// Returns Some(palette) if user selected a new palette (cloned)
+/// When a palette is selected, it's set directly via ConfigManager
 pub fn render_palette_library(
     ui: &mut egui::Ui,
     library: &mut PaletteLibrary,
-) -> Option<Palette> {
-    let mut selected_palette: Option<Palette> = None;
-
-    // Search box (future feature)
-    ui.horizontal(|ui| {
-        ui.label(t!("palette_library.search"));
-        ui.add_enabled(false, egui::TextEdit::singleline(&mut String::new()).hint_text(t!("palette_library.search_hint")));
-    });
-
+    config_manager: &mut ConfigManager,
+    open_palette_editor: &mut bool,
+) {
+    // Quick access to palette editor
+    if ui.button(t!("palette_library.open_editor")).clicked() {
+        *open_palette_editor = true;
+    }
     ui.separator();
 
     // Scrollable area for pack list
@@ -78,8 +77,16 @@ pub fn render_palette_library(
                                     let preview_height = 20.0;
                                     let preview_width = 200.0;
 
+                                    // Check if this is the Custom pack
+                                    let is_custom_pack = library.custom_pack_index() == Some(pack_idx);
+
                                     // Generate texture ID based on pack and palette index
-                                    let texture_id = egui::Id::new(("palette_preview", pack_idx, palette_idx));
+                                    // For Custom pack: include generation counter to invalidate cache on save/delete
+                                    let texture_id = if is_custom_pack {
+                                        egui::Id::new(("palette_preview", pack_idx, palette_idx, library.generation()))
+                                    } else {
+                                        egui::Id::new(("palette_preview", pack_idx, palette_idx))
+                                    };
 
                                     // Load or get cached texture using egui's memory system
                                     let texture = ui.ctx().data_mut(|data| {
@@ -148,23 +155,14 @@ pub fn render_palette_library(
 
                                     // Handle clicks on either element
                                     if name_response.clicked() || img_response.clicked() {
+                                        // Set palette directly - create an editable copy
                                         let mut palette_copy = palette.clone();
-
-                                        // Always create a custom copy with unique name
-                                        // (Pack palettes have built_in=true, user palettes have built_in=false)
-                                        let base_name = &palette.name;
-                                        let mut new_name = format!("{} (Custom)", base_name);
-                                        let mut counter = 2;
-
-                                        // Ensure unique name
-                                        while library.palettes().iter().any(|p| p.name == new_name) {
-                                            new_name = format!("{} (Custom {})", base_name, counter);
-                                            counter += 1;
-                                        }
-
-                                        palette_copy.name = new_name;
                                         palette_copy.built_in = false;
-                                        selected_palette = Some(palette_copy);
+
+                                        let _ = config_manager.update_param(
+                                            ConfigPath::Palette,
+                                            palette_copy.into()
+                                        );
                                     }
 
                                     ui.end_row();
@@ -183,6 +181,4 @@ pub fn render_palette_library(
             ui.label(t!("palette_library.no_packs_hint"));
         }
     });
-
-    selected_palette
 }
