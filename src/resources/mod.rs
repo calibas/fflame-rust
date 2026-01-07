@@ -7,7 +7,7 @@ mod error;
 mod fetch;
 
 pub use error::FetchError;
-pub use fetch::{fetch_text, FetchHandle, FetchResult, FetchState};
+pub use fetch::{fetch_json, fetch_text, FetchHandle, FetchResult, FetchState};
 
 use serde::{Deserialize, Serialize};
 

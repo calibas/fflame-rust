@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "resource_type": "palettes",
+  "packs": [
+    {
+      "id": "starter",
+      "name": "Starter Pack",
+      "description": "Curated selection of versatile palettes for fractal flames",
+      "file": "starter_pack.json",
+      "item_count": 12,
+      "enabled_by_default": true
+    },
+    {
+      "id": "apophysis1",
+      "name": "Apophysis Classic 1",
+      "description": "Apophysis palettes A-C (175 palettes)",
+      "file": "apophysis1.json",
+      "item_count": 175,
+      "enabled_by_default": false
+    },
+    {
+      "id": "apophysis2",
+      "name": "Apophysis Classic 2",
+      "description": "Apophysis palettes C-L (180 palettes)",
+      "file": "apophysis2.json",
+      "item_count": 180,
+      "enabled_by_default": false
+    },
+    {
+      "id": "apophysis3",
+      "name": "Apophysis Classic 3",
+      "description": "Apophysis palettes L-P (110 palettes)",
+      "file": "apophysis3.json",
+      "item_count": 110,
+      "enabled_by_default": false
+    },
+    {
+      "id": "apophysis4",
+      "name": "Apophysis Classic 4",
+      "description": "Apophysis palettes P-Z (161 palettes)",
+      "file": "apophysis4.json",
+      "item_count": 161,
+      "enabled_by_default": false
+    }
+  ]
+}

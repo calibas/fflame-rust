@@ -237,3 +237,17 @@ pub fn fetch_text(url: &str) -> FetchResult<String> {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm::fetch_text;
+
+/// Fetch and parse JSON from a URL (desktop - synchronous)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> FetchResult<T> {
+    let text = fetch_text(url)?;
+    serde_json::from_str(&text).map_err(FetchError::from)
+}
+
+/// Fetch and parse JSON from a URL (WASM - async)
+#[cfg(target_arch = "wasm32")]
+pub async fn fetch_json<T: serde::de::DeserializeOwned>(url: &str) -> FetchResult<T> {
+    let text = fetch_text(url).await?;
+    serde_json::from_str(&text).map_err(FetchError::from)
+}
