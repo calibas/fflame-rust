@@ -212,13 +212,10 @@ GPU texture sampling cost is negligible - caching handles it efficiently.
 - **Example:** Squeeze = 4.0 with 1024 palette size = 256-color pattern repeated 4 times
 - **Benefit for video:** Combined with palette rotation for smoother color cycling
 
-### Phase 6: Randomize Palette
-**Goal:** Generate random palettes for exploration
+### Phase 6: Randomize Palette → Moved to Random Generator Panel
+**Status:** Deferred - will be implemented as part of the Random Generator Panel project
 
-- [ ] Random palette generation algorithms
-- [ ] Options: completely random, harmonious colors, variations on current
-- [ ] Seed-based generation for reproducibility
-- [ ] "Shuffle" existing colors option
+See [random-generator-panel.md](random-generator-panel.md) for the comprehensive randomization system that includes palette generation.
 
 ## Technical Details
 
