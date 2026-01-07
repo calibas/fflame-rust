@@ -719,11 +719,49 @@ impl PaletteLibrary {
     }
 
     /// Toggle pack enabled state and rebuild palette list
+    /// On desktop: automatically loads pack if enabling and not yet loaded
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_pack_enabled(&mut self, index: usize, enabled: bool) {
         if let Some(info) = self.packs.get_mut(index) {
             info.enabled = enabled;
-            self.rebuild_palette_list();
         }
+
+        // If enabling and not loaded, trigger load
+        if enabled {
+            let needs_load = self.packs.get(index)
+                .map(|info| !info.is_loaded() && !info.is_loading() && info.metadata.is_some())
+                .unwrap_or(false);
+
+            if needs_load {
+                self.start_pack_load(index);
+                return; // start_pack_load calls rebuild_palette_list on success
+            }
+        }
+
+        self.rebuild_palette_list();
+    }
+
+    /// Toggle pack enabled state (WASM version)
+    /// Returns Some(file_path) if pack needs to be fetched, None otherwise
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_pack_enabled(&mut self, index: usize, enabled: bool) -> Option<String> {
+        if let Some(info) = self.packs.get_mut(index) {
+            info.enabled = enabled;
+        }
+
+        // If enabling and not loaded, return file path for async fetch
+        if enabled {
+            let needs_load = self.packs.get(index)
+                .map(|info| !info.is_loaded() && !info.is_loading() && info.metadata.is_some())
+                .unwrap_or(false);
+
+            if needs_load {
+                return self.start_pack_load(index);
+            }
+        }
+
+        self.rebuild_palette_list();
+        None
     }
 
     /// Rebuild the main palette list from packs

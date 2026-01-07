@@ -71,7 +71,16 @@ pub fn render_palette_library(
                     .on_hover_text(t!("palette_library.tooltip_enable_pack"))
                     .changed()
                 {
-                    library.set_pack_enabled(pack_idx, enabled);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        library.set_pack_enabled(pack_idx, enabled);
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        if let Some(file_path) = library.set_pack_enabled(pack_idx, enabled) {
+                            spawn_pack_fetch(ui.ctx().clone(), pack_idx, file_path);
+                        }
+                    }
                 }
             });
 
@@ -107,22 +116,8 @@ pub fn render_palette_library(
                 // Handle different load states
                 match &load_state {
                     LoadState::NotLoaded => {
-                        // Show "click to load" message
-                        if ui.button(t!("palette_library.not_loaded"))
-                            .on_hover_text(t!("palette_library.tooltip_click_to_load"))
-                            .clicked()
-                        {
-                            #[cfg(not(target_arch = "wasm32"))]
-                            {
-                                library.start_pack_load(pack_idx);
-                            }
-                            #[cfg(target_arch = "wasm32")]
-                            {
-                                if let Some(file_path) = library.start_pack_load(pack_idx) {
-                                    spawn_pack_fetch(ui.ctx().clone(), pack_idx, file_path);
-                                }
-                            }
-                        }
+                        // Pack not loaded - will load when enabled
+                        ui.weak(t!("palette_library.enable_to_load"));
                     }
                     LoadState::Loading => {
                         ui.horizontal(|ui| {
@@ -130,23 +125,23 @@ pub fn render_palette_library(
                             ui.label(t!("palette_library.loading"));
                         });
                     }
-                    LoadState::Failed(_error) => {
-                        ui.colored_label(egui::Color32::RED, _error);
+                    LoadState::Failed(error) => {
+                        ui.colored_label(egui::Color32::RED, error);
                         if ui.button(t!("palette_library.retry"))
                             .on_hover_text(t!("palette_library.tooltip_retry"))
                             .clicked()
                         {
-                            // Reset state and retry
+                            // Reset state and retry by toggling enabled
                             if let Some(info) = library.packs_mut().get_mut(pack_idx) {
                                 info.load_state = LoadState::NotLoaded;
                             }
                             #[cfg(not(target_arch = "wasm32"))]
                             {
-                                library.start_pack_load(pack_idx);
+                                library.set_pack_enabled(pack_idx, true);
                             }
                             #[cfg(target_arch = "wasm32")]
                             {
-                                if let Some(file_path) = library.start_pack_load(pack_idx) {
+                                if let Some(file_path) = library.set_pack_enabled(pack_idx, true) {
                                     spawn_pack_fetch(ui.ctx().clone(), pack_idx, file_path);
                                 }
                             }
