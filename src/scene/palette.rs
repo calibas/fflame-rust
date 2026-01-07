@@ -585,23 +585,10 @@ impl PaletteLibrary {
             custom_pack_index: None,
         };
 
-        // Route 1: Add Grayscale (always first)
+        // Add Grayscale as fallback (always first)
         library.add_or_update(Palette::grayscale());
 
-        // Route 2: Load old individual palette files for backward compatibility (desktop only)
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use std::path::Path;
-            let assets_palettes = super::assets::load_palettes_from_dir(
-                Path::new("assets/palettes")
-            );
-            for mut pal in assets_palettes {
-                pal.built_in = true;
-                library.add_or_update(pal);
-            }
-        }
-
-        // Route 3: WASM builds - embed Starter Pack
+        // WASM builds - embed Starter Pack
         #[cfg(target_arch = "wasm32")]
         {
             // Embed starter_pack.json at compile time
@@ -619,26 +606,25 @@ impl PaletteLibrary {
             }
         }
 
-        // Fallback: If still no palettes loaded (shouldn't happen), use hardcoded ones
-        if library.palettes.is_empty() && library.packs.is_empty() {
+        // Fallback: If no packs loaded, use hardcoded palettes
+        if library.packs.is_empty() {
             library.add_or_update(Palette::fire());
             library.add_or_update(Palette::cool());
             library.add_or_update(Palette::rainbow());
             library.add_or_update(Palette::purple_pink());
         }
 
-        // Route 5: Load user's custom palettes from storage
+        // Load user's custom palettes from storage (as a Custom pack)
         library.load_custom_pack();
 
-        // Route 6: Add all enabled pack palettes to the main palette list
-        // This ensures they appear in the Colors panel dropdown
+        // Build flat palette list from enabled packs (for random flame, etc.)
         let enabled_pack_palettes: Vec<_> = library.packs.iter().enumerate()
             .filter(|(pack_idx, _)| library.enabled_packs.get(*pack_idx).copied().unwrap_or(false))
             .flat_map(|(_, pack)| pack.palettes.clone())
             .collect();
 
         for palette in enabled_pack_palettes {
-            let mut pal = palette.clone();
+            let mut pal = palette;
             pal.built_in = true; // Pack palettes are shipped assets
             library.add_or_update(pal);
         }

@@ -1,16 +1,17 @@
 //! Palette Library panel - browse and manage palette packs
 
 use egui;
-use crate::scene::palette::{PaletteLibrary, Palette};
+use crate::scene::palette::PaletteLibrary;
+use crate::config::{ConfigManager, ConfigPath};
 use rust_i18n::t;
 
 /// Render the Palette Library panel
-/// Returns Some(palette) if user selected a new palette (cloned)
+/// When a palette is selected, it's set directly via ConfigManager
 pub fn render_palette_library(
     ui: &mut egui::Ui,
     library: &mut PaletteLibrary,
-) -> Option<Palette> {
-    let mut selected_palette: Option<Palette> = None;
+    config_manager: &mut ConfigManager,
+) {
 
     // Search box (future feature)
     ui.horizontal(|ui| {
@@ -148,23 +149,14 @@ pub fn render_palette_library(
 
                                     // Handle clicks on either element
                                     if name_response.clicked() || img_response.clicked() {
+                                        // Set palette directly - create an editable copy
                                         let mut palette_copy = palette.clone();
-
-                                        // Always create a custom copy with unique name
-                                        // (Pack palettes have built_in=true, user palettes have built_in=false)
-                                        let base_name = &palette.name;
-                                        let mut new_name = format!("{} (Custom)", base_name);
-                                        let mut counter = 2;
-
-                                        // Ensure unique name
-                                        while library.palettes().iter().any(|p| p.name == new_name) {
-                                            new_name = format!("{} (Custom {})", base_name, counter);
-                                            counter += 1;
-                                        }
-
-                                        palette_copy.name = new_name;
                                         palette_copy.built_in = false;
-                                        selected_palette = Some(palette_copy);
+
+                                        let _ = config_manager.update_param(
+                                            ConfigPath::Palette,
+                                            palette_copy.into()
+                                        );
                                     }
 
                                     ui.end_row();
@@ -183,6 +175,4 @@ pub fn render_palette_library(
             ui.label(t!("palette_library.no_packs_hint"));
         }
     });
-
-    selected_palette
 }
