@@ -11,7 +11,14 @@ pub fn render_palette_library(
     ui: &mut egui::Ui,
     library: &mut PaletteLibrary,
     config_manager: &mut ConfigManager,
+    open_palette_editor: &mut bool,
 ) {
+    // Quick access to palette editor
+    if ui.button(t!("palette_library.open_editor")).clicked() {
+        *open_palette_editor = true;
+    }
+    ui.separator();
+
     // Scrollable area for pack list
     egui::ScrollArea::vertical().show(ui, |ui| {
         // Iterate through all packs

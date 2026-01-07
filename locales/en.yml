@@ -582,6 +582,7 @@ palette_editor:
   import: "✅ Import"
   clear: "🗑 Clear"
   load_palette: "📂 Load .palette"
+  open_library: "📚 Open Palette Library"
   no_palette: "⚠ No palette selected"
   no_palette_hint: "Open the Colors panel and click 'Edit Palette' to create one"
 
@@ -611,6 +612,7 @@ palette_editor:
 # Palette Library Panel
 palette_library:
   title: "Palette Library"
+  open_editor: "🎨 Open Palette Editor"
   palettes_count: "(%{count} palettes)"
   no_packs: "No palette packs loaded."
   no_packs_hint: "Place .json files in assets/palettes/packs/"
