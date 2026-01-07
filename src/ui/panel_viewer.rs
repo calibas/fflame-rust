@@ -44,6 +44,7 @@ pub struct PanelContext<'a> {
     pub palette_editor: &'a mut crate::ui::palette_editor::PaletteEditor,
     pub palette_export_json: &'a mut Option<crate::scene::palette::Palette>,
     pub palette_save_file: &'a mut Option<crate::scene::palette::Palette>,
+    pub palette_save_to_library: &'a mut Option<crate::scene::palette::Palette>,
     pub palette_import_json: &'a mut Option<String>,
     pub palette_load_file: &'a mut bool,
 
@@ -208,6 +209,7 @@ impl<'a> PanelViewer<'a> {
             self.context.custom_palette,
             self.context.palette_export_json,
             self.context.palette_save_file,
+            self.context.palette_save_to_library,
             self.context.palette_import_json,
             self.context.palette_load_file,
         );

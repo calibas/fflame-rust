@@ -2,7 +2,7 @@
 
 **Branch:** `feature/palette-improvements`
 **Created:** 2025-01-06
-**Status:** Phase 1, 4, 5 Complete
+**Status:** Phase 1, 2, 4, 5 Complete
 
 ## Overview
 
@@ -77,16 +77,42 @@ The palette stored in `FractalConfig.flame.palette` (or `FractalConfig.palette`)
 - `src/apophysis_xml.rs` - Uses default palette if missing
 - `examples/export_presets.rs`, `test_apophysis_import.rs`
 
-### Phase 2: Save Custom Palettes (Future)
+### Phase 2: Save Custom Palettes ✅ COMPLETE
 **Goal:** Allow users to save modified palettes to registry
+**Status:** Complete
+**Completed:** 2025-01-06
 
-- [ ] Design palette save format (JSON in user data directory)
-- [ ] Implement desktop save/load (filesystem)
-- [ ] Implement WASM save/load (localStorage)
-- [ ] Add "Save to Library" button in Palette Editor
-- [ ] Handle name conflicts (prompt for new name or overwrite)
+#### Implementation Summary
+- Created `src/storage/custom_palettes.rs` with `CustomPaletteLibrary` struct
+- Uses existing storage backend (filesystem on desktop, localStorage on WASM)
+- Custom palettes stored as "Custom" pack (appears first in Palette Library)
+- "Save to Library" button in Palette Editor → Import/Export section
+- Palettes persist across sessions in `custom_palettes.json`
+- Duplicate names allowed (palettes identified by index, not name)
 
-**Deferred:** Requires platform-specific storage code
+#### Files Modified (8 files)
+- `src/storage/custom_palettes.rs` - New file: CustomPaletteLibrary with load/save
+- `src/storage/mod.rs` - Export CustomPaletteLibrary
+- `src/scene/palette.rs` - PaletteLibrary: load_custom_pack(), save_to_custom_library()
+- `src/ui/palette_editor.rs` - "Save to Library" button
+- `src/ui/panel_viewer.rs` - palette_save_to_library parameter
+- `src/ui/response.rs` - palette_save_to_library field in UiResponse
+- `src/ui/mod.rs` - Wire up palette_save_to_library
+- `src/app/ui_handlers.rs` - Handle palette_save_to_library response
+- `locales/en.yml` - Translations for save_to_library
+
+#### Usage
+1. Edit a palette in the Palette Editor
+2. Expand "Import/Export Palette" section
+3. Click "📚 Save to Library"
+4. Palette appears in Custom pack at top of Palette Library
+5. Persists across app restarts
+
+#### Future Enhancements (Not in Minimal)
+- Delete palette from Custom pack
+- Rename palette in library
+- Reorder palettes
+- Export/import entire Custom pack as file
 
 ### Phase 3: Library Organization (Future)
 **Goal:** Better palette browsing and WASM improvements

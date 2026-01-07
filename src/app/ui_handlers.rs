@@ -258,6 +258,18 @@ impl App {
             }
         }
 
+        // Handle palette save to library (persists across sessions)
+        if let Some(ref palette) = ui_response.palette_save_to_library {
+            match self.palette_library.save_to_custom_library(palette.clone()) {
+                Ok(()) => {
+                    log::info!("Palette '{}' saved to Custom library", palette.name);
+                }
+                Err(e) => {
+                    log::error!("Failed to save palette to library: {}", e);
+                }
+            }
+        }
+
         // Handle palette import from JSON
         if let Some(ref json) = ui_response.palette_import_json {
             match serde_json::from_str::<crate::scene::palette::Palette>(json) {
