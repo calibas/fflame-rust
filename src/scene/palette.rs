@@ -771,6 +771,7 @@ impl PaletteLibrary {
     }
 
     /// Save a palette to the Custom library (persists across sessions)
+    /// If a palette with the same name exists, it will be overwritten
     /// Returns Ok(()) on success, Err with message on failure
     pub fn save_to_custom_library(&mut self, palette: Palette) -> Result<(), String> {
         use crate::storage::CustomPaletteLibrary;
@@ -778,26 +779,69 @@ impl PaletteLibrary {
         // Load current custom palettes from storage
         let mut custom_lib = CustomPaletteLibrary::load();
 
-        // Add the new palette
+        // Prepare the palette
         let mut palette = palette;
         palette.built_in = false; // Ensure it's editable
 
-        custom_lib.palettes.push(palette.clone());
+        // Check if this is an overwrite
+        let is_overwrite = custom_lib.has_palette_by_name(&palette.name);
 
-        // Save to storage
-        custom_lib.save().map_err(|e| format!("Failed to save: {}", e))?;
+        // Add (or overwrite) the palette and save
+        custom_lib.add_palette(palette.clone())
+            .map_err(|e| format!("Failed to save: {}", e))?;
 
         // Update the Custom pack in memory
         if let Some(idx) = self.custom_pack_index {
             if let Some(pack) = self.packs.get_mut(idx) {
-                pack.palettes.push(palette);
+                if is_overwrite {
+                    // Find and replace existing palette
+                    let name_lower = palette.name.to_lowercase();
+                    if let Some(pos) = pack.palettes.iter().position(|p| p.name.to_lowercase() == name_lower) {
+                        pack.palettes[pos] = palette;
+                    }
+                } else {
+                    pack.palettes.push(palette);
+                }
             }
         }
 
-        // Rebuild palette list to include the new palette
+        // Rebuild palette list
         self.rebuild_palette_list();
 
         Ok(())
+    }
+
+    /// Check if a palette with the given name exists in the Custom pack
+    pub fn has_custom_palette_named(&self, name: &str) -> bool {
+        use crate::storage::CustomPaletteLibrary;
+        let custom_lib = CustomPaletteLibrary::load();
+        custom_lib.has_palette_by_name(name)
+    }
+
+    /// Delete a palette from the Custom library by name
+    /// Returns Ok(true) if deleted, Ok(false) if not found
+    pub fn delete_from_custom_library(&mut self, name: &str) -> Result<bool, String> {
+        use crate::storage::CustomPaletteLibrary;
+
+        // Load and delete from storage
+        let mut custom_lib = CustomPaletteLibrary::load();
+        let deleted = custom_lib.delete_palette_by_name(name)
+            .map_err(|e| format!("Failed to delete: {}", e))?;
+
+        if deleted {
+            // Update in-memory Custom pack
+            if let Some(idx) = self.custom_pack_index {
+                if let Some(pack) = self.packs.get_mut(idx) {
+                    let name_lower = name.to_lowercase();
+                    pack.palettes.retain(|p| p.name.to_lowercase() != name_lower);
+                }
+            }
+
+            // Rebuild palette list
+            self.rebuild_palette_list();
+        }
+
+        Ok(deleted)
     }
 
     /// Check if a Custom pack exists and has palettes

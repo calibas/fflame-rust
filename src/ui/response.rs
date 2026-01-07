@@ -15,9 +15,9 @@ pub struct UiResponse {
     pub palette_export_json: Option<crate::scene::palette::Palette>,
     pub palette_save_file: Option<crate::scene::palette::Palette>,
     pub palette_save_to_library: Option<crate::scene::palette::Palette>,
+    pub palette_delete_from_library: Option<String>,
     pub palette_import_json: Option<String>,
     pub palette_load_file: bool,
-    // pub palette_imported: Option<crate::scene::palette::Palette>,
 
     // Undo/redo (handled by ConfigManager but triggered from UI)
     pub undo_requested: bool,
@@ -73,9 +73,9 @@ impl Default for UiResponse {
             palette_export_json: None,
             palette_save_file: None,
             palette_save_to_library: None,
+            palette_delete_from_library: None,
             palette_import_json: None,
             palette_load_file: false,
-            // palette_imported: None,
             undo_requested: false,
             redo_requested: false,
             png_export_with_background: false,
