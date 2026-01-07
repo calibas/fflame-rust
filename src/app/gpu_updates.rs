@@ -81,6 +81,16 @@ impl App {
 
                 // Update palette if needed (also handles color mode changes)
                 if actions.update_palette {
+                    // Check if palette texture size needs to change
+                    if renderer.palette_size() != update_config.palette_size {
+                        renderer.set_palette_size(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            &update_config.flame,
+                            update_config.palette_size,
+                        );
+                    }
+
                     // Get palette directly from ConfigManager
                     renderer.update_palette(
                         &self.gpu.device,
