@@ -191,28 +191,8 @@ impl App {
         }
     }
 
-    /// Handle custom palette from editor or library
+    /// Handle palette operations (export, import, save)
     fn handle_palette_operations(&mut self, ui_response: &UiResponse) {
-        // Handle custom palette from editor or library
-        if let Some(ref custom_pal) = ui_response.custom_palette {
-            // Add or update palette in library (prevents duplicates)
-            let _palette_index = self.palette_library.add_or_update(custom_pal.clone());
-
-            // Apply the palette to the config via ConfigManager
-            if let Ok(update) = self.config_manager.update_param(
-                crate::config::ConfigPath::Palette,
-                crate::config::ConfigValue::Palette(custom_pal.clone()),
-            ) {
-                // Update renderer if needed (ColorOnly or IterationReset)
-                if matches!(update, crate::config::UpdateType::ColorOnly | crate::config::UpdateType::IterationReset) {
-                    let config = self.config_manager.active_config();
-                    if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &custom_pal, config.palette_rotation, config.palette_squeeze);
-                    }
-                }
-            }
-        }
-
         // Handle palette export to clipboard
         if let Some(ref palette) = ui_response.palette_export_json {
             if let Ok(json) = serde_json::to_string_pretty(palette) {

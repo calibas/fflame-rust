@@ -12,7 +12,6 @@ pub struct UiResponse {
     pub random_flame_requested: bool,
 
     // Palette library management (not stored in config directly)
-    pub custom_palette: Option<crate::scene::palette::Palette>,
     pub palette_export_json: Option<crate::scene::palette::Palette>,
     pub palette_save_file: Option<crate::scene::palette::Palette>,
     pub palette_save_to_library: Option<crate::scene::palette::Palette>,
@@ -70,7 +69,6 @@ impl Default for UiResponse {
             config_load_file_requested: false,
             apophysis_import_file_requested: false,
             random_flame_requested: false,
-            custom_palette: None,
             palette_export_json: None,
             palette_save_file: None,
             palette_save_to_library: None,

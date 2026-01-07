@@ -284,7 +284,6 @@ impl EguiLayer {
         let mut random_flame_requested = false;
 
         // Palette library management
-        let mut custom_palette = None;
         let mut palette_export_json = None;
         let mut palette_save_file = None;
         let mut palette_save_to_library = None;
@@ -391,7 +390,6 @@ impl EguiLayer {
                         export_width,
                         export_height,
                         use_custom_export_size,
-                        custom_palette: &mut custom_palette,
                         palette_editor: &mut self.palette_editor,
                         palette_export_json: &mut palette_export_json,
                         palette_save_file: &mut palette_save_file,
@@ -590,7 +588,6 @@ impl EguiLayer {
             config_load_file_requested: config_load_file,
             apophysis_import_file_requested: apophysis_import_file,
             random_flame_requested,
-            custom_palette,
             palette_export_json,
             palette_save_file,
             palette_save_to_library,
