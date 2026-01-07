@@ -618,7 +618,6 @@ palette_library:
   no_packs_hint: "Place .json files in assets/palettes/packs/"
 
   # Load states
-  enable_to_load: "Enable to load this pack"
   loading: "Loading..."
   load_failed: "Failed to load"
   retry: "Retry"
