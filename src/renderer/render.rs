@@ -157,15 +157,16 @@ pub async fn render(
         target
     );
 
-    // Create renderer
+    // Create renderer with config's palette size
     let surface_format = TextureFormat::Rgba8Unorm;
-    let mut renderer = FlameRenderer::new(
+    let mut renderer = FlameRenderer::with_palette_size(
         device,
         queue,
         surface_format,
         job.width,
         job.height,
         &job.config.flame,
+        job.config.palette_size,
     );
 
     // Get palette directly from config (palette is always present)

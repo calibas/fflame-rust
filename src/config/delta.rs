@@ -49,6 +49,7 @@ pub enum ConfigPath {
     PaletteIndex,
     Palette, // Embedded palette data (custom palettes)
     PaletteRotation,
+    PaletteSize, // Palette texture resolution (256-4096)
     SpeedFactor,
     BackgroundColor,
     BackgroundColorR, // Separate R component for animation
@@ -171,6 +172,7 @@ impl Display for ConfigPath {
             ConfigPath::PaletteIndex => write!(f, "Palette"),
             ConfigPath::Palette => write!(f, "Palette Data"),
             ConfigPath::PaletteRotation => write!(f, "Palette Rotation"),
+            ConfigPath::PaletteSize => write!(f, "Palette Size"),
             ConfigPath::SpeedFactor => write!(f, "Speed Blend Factor"),
             ConfigPath::BackgroundColor => write!(f, "Background Color"),
             ConfigPath::BackgroundColorR => write!(f, "Background Red"),
@@ -328,6 +330,7 @@ impl ConfigPath {
             ConfigPath::PaletteIndex => I18nKey::simple("history.param.palette"),
             ConfigPath::Palette => I18nKey::simple("history.param.palette_data"),
             ConfigPath::PaletteRotation => I18nKey::simple("history.param.palette_rotation"),
+            ConfigPath::PaletteSize => I18nKey::simple("history.param.palette_size"),
             ConfigPath::SpeedFactor => I18nKey::simple("history.param.speed_blend_factor"),
             ConfigPath::BackgroundColor => I18nKey::simple("history.param.background_color"),
             ConfigPath::BackgroundColorR => I18nKey::simple("history.param.background_red"),
@@ -883,6 +886,7 @@ impl ConfigPath {
             | ConfigPath::PaletteIndex
             | ConfigPath::Palette
             | ConfigPath::PaletteRotation
+            | ConfigPath::PaletteSize
             | ConfigPath::SpeedFactor
             // PathMapStyle affects color computation in compute shader, needs accumulation reset
             | ConfigPath::PathMapStyle => UpdateType::ColorOnly,
@@ -973,6 +977,7 @@ impl ConfigPath {
             ConfigPath::PaletteIndex => "PaletteIndex".to_string(),
             ConfigPath::Palette => "Palette".to_string(),
             ConfigPath::PaletteRotation => "PaletteRotation".to_string(),
+            ConfigPath::PaletteSize => "PaletteSize".to_string(),
             ConfigPath::SpeedFactor => "SpeedFactor".to_string(),
             ConfigPath::BackgroundColor => "BackgroundColor".to_string(),
             ConfigPath::BackgroundColorR => "BackgroundColorR".to_string(),
@@ -1074,6 +1079,7 @@ impl ConfigPath {
             "PaletteIndex" => return Some(ConfigPath::PaletteIndex),
             "Palette" => return Some(ConfigPath::Palette),
             "PaletteRotation" => return Some(ConfigPath::PaletteRotation),
+            "PaletteSize" => return Some(ConfigPath::PaletteSize),
             "SpeedFactor" => return Some(ConfigPath::SpeedFactor),
             "BackgroundColor" => return Some(ConfigPath::BackgroundColor),
             "BackgroundColorR" => return Some(ConfigPath::BackgroundColorR),
@@ -1242,6 +1248,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::AlphaBlendHigh
         | ConfigPath::DensityScale
         | ConfigPath::PaletteRotation
+        | ConfigPath::PaletteSize
         | ConfigPath::SpeedFactor
         | ConfigPath::BackgroundColorR
         | ConfigPath::BackgroundColorG

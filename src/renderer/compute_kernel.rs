@@ -151,6 +151,7 @@ pub struct FlameRenderer {
 }
 
 impl FlameRenderer {
+    /// Create new FlameRenderer with default palette size (256)
     pub fn new(
         device: &Device,
         queue: &Queue,
@@ -159,8 +160,21 @@ impl FlameRenderer {
         height: u32,
         flame: &Flame,
     ) -> Self {
+        Self::with_palette_size(device, queue, surface_format, width, height, flame, crate::gpu::buffers::DEFAULT_PALETTE_SIZE)
+    }
+
+    /// Create new FlameRenderer with specified palette size
+    pub fn with_palette_size(
+        device: &Device,
+        queue: &Queue,
+        surface_format: TextureFormat,
+        width: u32,
+        height: u32,
+        flame: &Flame,
+        palette_size: u32,
+    ) -> Self {
         let pipelines = FlamePipelines::new(device, surface_format, flame);
-        let buffers = FlameBuffers::new(device, queue, width, height, flame);
+        let buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
 
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
         let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
@@ -683,7 +697,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0, 0],
+            palette_size: self.buffers.palette_size(),
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -877,7 +892,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0, 0],
+            palette_size: self.buffers.palette_size(),
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -942,7 +958,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0, 0],
+            palette_size: self.buffers.palette_size(),
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -1042,7 +1059,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0, 0],
+            palette_size: self.buffers.palette_size(),
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
