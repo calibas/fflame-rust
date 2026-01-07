@@ -956,9 +956,38 @@ impl FlameBuffers {
 
     /// Update palette texture
     /// Uses the palette_size set during FlameBuffers creation
-    pub fn update_palette(&self, queue: &Queue, palette: &Palette, palette_rotation: f32) {
+    ///
+    /// # Arguments
+    /// * `palette_rotation` - Rotation amount (-1.0 to 1.0), shifts palette indices
+    /// * `palette_squeeze` - Squeeze factor: 1.0 = normal, >1 = repeat palette N times, <1 = show only N% of palette
+    pub fn update_palette(&self, queue: &Queue, palette: &Palette, palette_rotation: f32, palette_squeeze: f32) {
         let size = self.palette_size as usize;
         let palette_data = palette.generate_texture_data(size);
+
+        // Apply squeeze transformation first
+        // squeeze > 1: palette repeats N times (e.g., 16x means palette repeats 16 times)
+        // squeeze < 1: only shows portion of palette (e.g., 0.1 shows 10% stretched to fill)
+        // Formula: src_t = (dst_t * squeeze) % 1.0
+        let squeezed_data = if palette_squeeze != 1.0 {
+            let mut squeezed = vec![0.0f32; size * 4];
+
+            for i in 0..size {
+                let t = i as f32 / size as f32;
+                let src_t = (t * palette_squeeze).fract(); // fract() handles modulo for floats
+                let src_idx = ((src_t * size as f32) as usize).min(size - 1);
+
+                let dst_base = i * 4;
+                let src_base = src_idx * 4;
+
+                squeezed[dst_base] = palette_data[src_base];
+                squeezed[dst_base + 1] = palette_data[src_base + 1];
+                squeezed[dst_base + 2] = palette_data[src_base + 2];
+                squeezed[dst_base + 3] = palette_data[src_base + 3];
+            }
+            squeezed
+        } else {
+            palette_data
+        };
 
         // Apply palette rotation by shifting indices
         // Rotation range: -1.0 to 1.0 (Apophysis uses -128 to 128, we normalize)
@@ -974,14 +1003,14 @@ impl FlameBuffers {
                 let dst_idx = i * 4;
                 let src_base = src_idx * 4;
 
-                rotated[dst_idx] = palette_data[src_base];
-                rotated[dst_idx + 1] = palette_data[src_base + 1];
-                rotated[dst_idx + 2] = palette_data[src_base + 2];
-                rotated[dst_idx + 3] = palette_data[src_base + 3];
+                rotated[dst_idx] = squeezed_data[src_base];
+                rotated[dst_idx + 1] = squeezed_data[src_base + 1];
+                rotated[dst_idx + 2] = squeezed_data[src_base + 2];
+                rotated[dst_idx + 3] = squeezed_data[src_base + 3];
             }
             rotated
         } else {
-            palette_data
+            squeezed_data
         };
 
         // Convert f32 [0.0, 1.0] to u8 [0, 255] for Rgba8Unorm

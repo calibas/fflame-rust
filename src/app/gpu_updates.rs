@@ -87,6 +87,7 @@ impl App {
                         &self.gpu.queue,
                         &update_config.palette,
                         update_config.palette_rotation,
+                        update_config.palette_squeeze,
                     );
 
                     // Update color mode in GPU params (ColorMode changes trigger update_palette)

@@ -207,7 +207,7 @@ impl App {
                 if matches!(update, crate::config::UpdateType::ColorOnly | crate::config::UpdateType::IterationReset) {
                     let config = self.config_manager.active_config();
                     if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &custom_pal, config.palette_rotation);
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &custom_pal, config.palette_rotation, config.palette_squeeze);
                     }
                 }
             }
@@ -298,7 +298,7 @@ impl App {
                     // Update renderer
                     let config = self.config_manager.active_config();
                     if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation);
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation, config.palette_squeeze);
                     }
                 }
                 Err(e) => {
@@ -334,7 +334,7 @@ impl App {
                                     // Update renderer
                                     let config = self.config_manager.active_config();
                                     if let Some(ref mut renderer) = self.flame_renderer {
-                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation);
+                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation, config.palette_squeeze);
                                     }
 
                                     println!("Palette loaded from: {}", path.display());

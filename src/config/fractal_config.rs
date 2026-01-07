@@ -74,6 +74,9 @@ pub struct FractalConfig {
     /// Palette texture size: 256-4096, higher values give smoother gradients
     #[serde(default = "default_palette_size")]
     pub palette_size: u32,
+    /// Palette squeeze: 1.0 = no change, >1 = repeat palette N times, <1 = show only N% of palette
+    #[serde(default = "default_palette_squeeze")]
+    pub palette_squeeze: f32,
     #[serde(default)]
     pub background_color: [f32; 3],
 
@@ -180,6 +183,10 @@ fn default_palette_size() -> u32 {
     super::defaults::DEFAULT_PALETTE_SIZE
 }
 
+fn default_palette_squeeze() -> f32 {
+    super::defaults::DEFAULT_PALETTE_SQUEEZE
+}
+
 fn default_palette() -> Palette {
     Palette::fire()
 }
@@ -242,6 +249,7 @@ impl Default for FractalConfig {
             palette: default_palette(),
             palette_rotation: default_palette_rotation(),
             palette_size: default_palette_size(),
+            palette_squeeze: default_palette_squeeze(),
             background_color: [0.0, 0.0, 0.0],
             tonemap_mode: ToneMapMode::default(),
             tonemap_curve: ToneCurve::default(),
@@ -316,6 +324,7 @@ impl FractalConfig {
         // Always include palette in output (it's required)
         if config.palette_rotation == defaults.palette_rotation { obj.remove("palette_rotation"); }
         if config.palette_size == defaults.palette_size { obj.remove("palette_size"); }
+        if config.palette_squeeze == defaults.palette_squeeze { obj.remove("palette_squeeze"); }
         if config.background_color == defaults.background_color { obj.remove("background_color"); }
 
         // Tone mapping settings

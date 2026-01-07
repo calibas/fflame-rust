@@ -304,6 +304,7 @@ tonemap:
   edit_palette: "🎨 Edit Palette"
   clone_palette: "📋 Clone"
   palette_rotation: "Palette Rotation"
+  palette_squeeze: "Palette Squeeze"
   palette_size: "Palette Size"
   speed_blend_factor: "Speed Blend Factor"
   background_color: "Background Color"
@@ -353,6 +354,7 @@ tonemap:
   tooltip_tracking_first_32: "Store the first 32 iterations, then stop tracking"
   tooltip_tracking_recent_32: "Rolling window of the 32 most recent iterations"
   tooltip_palette_rotation: "Rotate colors around the palette.\n0 = no change, 0.5 = halfway, 1 = full cycle."
+  tooltip_palette_squeeze: "Squeeze or repeat the palette.\n1 = normal, >1 = repeat N times, <1 = show only portion."
   tooltip_palette_size: "Palette texture resolution.\nHigher values give smoother gradients.\n256 = standard, 4096 = maximum detail."
   tooltip_speed_factor: "Blend between transform colors and speed-based colors.\n0 = pure transform colors, 1 = pure speed coloring."
 
@@ -405,6 +407,7 @@ history:
     palette: "Palette"
     palette_data: "Palette Data"
     palette_rotation: "Palette Rotation"
+    palette_squeeze: "Palette Squeeze"
     palette_size: "Palette Size"
     speed_blend_factor: "Speed Blend Factor"
     background_color: "Background Color"
@@ -842,6 +845,7 @@ track_editor:
 
   # Animatable parameter names (Color)
   param_palette_rotation: "Palette Rotation"
+  param_palette_squeeze: "Palette Squeeze"
   param_palette_size: "Palette Size"
   param_speed_factor: "Speed Factor"
   param_histogram_color_scale: "Histogram Color Scale"
