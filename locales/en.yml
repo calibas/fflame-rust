@@ -596,8 +596,6 @@ palette_editor:
 # Palette Library Panel
 palette_library:
   title: "Palette Library"
-  search: "Search:"
-  search_hint: "Coming soon..."
   palettes_count: "(%{count} palettes)"
   no_packs: "No palette packs loaded."
   no_packs_hint: "Place .json files in assets/palettes/packs/"
