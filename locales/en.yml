@@ -302,7 +302,7 @@ tonemap:
   palette: "Palette"
   palette_none: "(None)"
   edit_palette: "🎨 Edit Palette"
-  clone_palette: "📋 Clone"
+  browse_palettes: "📚 Browse Palettes"
   palette_rotation: "Palette Rotation"
   palette_squeeze: "Palette Squeeze"
   palette_size: "Palette Size"

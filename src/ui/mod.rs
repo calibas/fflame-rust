@@ -301,6 +301,7 @@ impl EguiLayer {
 
         // Panel open requests
         let mut open_palette_editor = false;
+        let mut open_palette_library = false;
         let mut open_config_dialog = false;
         let mut open_triangle_editor = false;
         let mut open_preset_library = false;
@@ -380,6 +381,7 @@ impl EguiLayer {
                         undo_requested: &mut undo_requested,
                         redo_requested: &mut redo_requested,
                         open_palette_editor: &mut open_palette_editor,
+                        open_palette_library: &mut open_palette_library,
                         open_triangle_editor: &mut open_triangle_editor,
                         open_preset_library: &mut open_preset_library,
 
@@ -601,6 +603,7 @@ impl EguiLayer {
             delete_transform,
             clone_transform,
             open_palette_editor,
+            open_palette_library,
             open_config_dialog,
             open_triangle_editor,
             open_preset_library,

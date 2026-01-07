@@ -30,6 +30,7 @@ pub struct PanelContext<'a> {
     pub undo_requested: &'a mut bool,
     pub redo_requested: &'a mut bool,
     pub open_palette_editor: &'a mut bool,
+    pub open_palette_library: &'a mut bool,
     pub open_triangle_editor: &'a mut bool,
     pub open_preset_library: &'a mut bool,
 
@@ -195,6 +196,7 @@ impl<'a> PanelViewer<'a> {
             self.context.config_manager,
             self.context.palette_library,
             self.context.open_palette_editor,
+            self.context.open_palette_library,
         );
     }
 

@@ -34,6 +34,7 @@ pub struct UiResponse {
 
     // Panel open requests
     pub open_palette_editor: bool,
+    pub open_palette_library: bool,
     pub open_config_dialog: bool,
     pub open_triangle_editor: bool,
     pub open_preset_library: bool,
@@ -83,6 +84,7 @@ impl Default for UiResponse {
             delete_transform: None,
             clone_transform: None,
             open_palette_editor: false,
+            open_palette_library: false,
             open_config_dialog: false,
             open_triangle_editor: false,
             open_preset_library: false,
