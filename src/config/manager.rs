@@ -778,15 +778,17 @@ impl ConfigManager {
             ConfigPath::PathMapStyle => Ok(config.path_map_style.into()),
             ConfigPath::PathCaptureMode => Ok(config.path_capture_mode.into()),
             ConfigPath::PathTrackingMode => Ok(config.path_tracking_mode.into()),
-            ConfigPath::PaletteIndex => Ok((config.palette_index as u32).into()),
+            ConfigPath::PaletteIndex => {
+                // PaletteIndex is deprecated - return 0 for backward compatibility
+                Ok(0u32.into())
+            }
             ConfigPath::Palette => {
-                // Return embedded palette if it exists, otherwise None
-                match &config.palette {
-                    Some(pal) => Ok(ConfigValue::Palette(pal.clone())),
-                    None => Err(ConfigError::TypeMismatch), // No embedded palette
-                }
+                // Return the palette directly (always present)
+                Ok(ConfigValue::Palette(config.palette.clone()))
             }
             ConfigPath::PaletteRotation => Ok(config.palette_rotation.into()),
+            ConfigPath::PaletteSize => Ok((config.palette_size as f32).into()),
+            ConfigPath::PaletteSqueeze => Ok(config.palette_squeeze.into()),
             ConfigPath::SpeedFactor => Ok(config.speed_factor.into()),
             ConfigPath::BackgroundColor => Ok(config.background_color.into()),
             ConfigPath::BackgroundColorR => Ok(config.background_color[0].into()),
@@ -1106,10 +1108,8 @@ impl ConfigManager {
                 self.current.path_tracking_mode = value.try_into()?;
             }
             ConfigPath::PaletteIndex => {
-                let idx: u32 = value.try_into()?;
-                self.current.palette_index = idx as usize;
-                // Clear embedded palette when selecting from library
-                self.current.palette = None;
+                // PaletteIndex is deprecated - ignore updates
+                log::warn!("Attempted to set deprecated PaletteIndex - use Palette instead");
             }
             ConfigPath::Palette => {
                 if let ConfigValue::Palette(mut palette) = value {
@@ -1120,12 +1120,20 @@ impl ConfigManager {
                         palette.built_in = false;
                     }
 
-                    // Update embedded palette data
-                    self.current.palette = Some(palette);
+                    // Update palette data
+                    self.current.palette = palette;
                 }
             }
             ConfigPath::PaletteRotation => {
                 self.current.palette_rotation = value.try_into()?;
+            }
+            ConfigPath::PaletteSize => {
+                let v: f32 = value.try_into()?;
+                self.current.palette_size = (v as u32).clamp(256, 4096);
+            }
+            ConfigPath::PaletteSqueeze => {
+                let v: f32 = value.try_into()?;
+                self.current.palette_squeeze = v.clamp(0.1, 16.0);
             }
             ConfigPath::SpeedFactor => {
                 self.current.speed_factor = value.try_into()?;

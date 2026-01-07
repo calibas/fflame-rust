@@ -7,7 +7,6 @@ use egui_wgpu::wgpu::*;
 use egui_wgpu::wgpu::util::DeviceExt;
 use crate::config::FractalConfig;
 use crate::gpu::buffers::{GpuParams, GpuTransform, AccumulateParams, TonemapParams};
-use crate::scene::palette::Palette;
 use crate::scene::transforms::RenderMode;
 use crate::shader_builder_v2::ShaderBuilder;
 use crate::variations::global_registry;
@@ -244,8 +243,8 @@ impl TiledRenderer {
             mapped_at_creation: false,
         });
 
-        // Create palette texture
-        let palette = config.palette.clone().unwrap_or_else(Palette::fire);
+        // Create palette texture (palette is always present)
+        let palette = &config.palette;
         let palette_data = palette.generate_texture_data(256);
         // Convert f32 to u8
         let palette_data_u8: Vec<u8> = palette_data
@@ -1027,7 +1026,8 @@ impl TiledRenderer {
             path_map_style: config.path_map_style as u32,
             burn_in: 20, // Default burn-in for export
             num_transforms: config.flame.transforms.len() as u32,
-            _pad_end: [0, 0, 0, 0],
+            palette_size: config.palette_size,
+            _pad_end: [0, 0, 0],
         };
         self.queue.write_buffer(&self.tonemap_params_buffer, 0, bytemuck::bytes_of(&tonemap_params));
 

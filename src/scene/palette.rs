@@ -524,6 +524,10 @@ pub struct PaletteLibrary {
     packs: Vec<PalettePack>,
     /// Runtime enabled state for each pack
     enabled_packs: Vec<bool>,
+    /// Index of the Custom pack (user-saved palettes)
+    custom_pack_index: Option<usize>,
+    /// Generation counter - increments when custom library is modified (for cache invalidation)
+    generation: u32,
 }
 
 impl Default for PaletteLibrary {
@@ -580,25 +584,14 @@ impl PaletteLibrary {
             palettes: Vec::new(),
             packs,
             enabled_packs,
+            custom_pack_index: None,
+            generation: 0,
         };
 
-        // Route 1: Add Grayscale (always first)
+        // Add Grayscale as fallback (always first)
         library.add_or_update(Palette::grayscale());
 
-        // Route 2: Load old individual palette files for backward compatibility (desktop only)
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            use std::path::Path;
-            let assets_palettes = super::assets::load_palettes_from_dir(
-                Path::new("assets/palettes")
-            );
-            for mut pal in assets_palettes {
-                pal.built_in = true;
-                library.add_or_update(pal);
-            }
-        }
-
-        // Route 3: WASM builds - embed Starter Pack
+        // WASM builds - embed Starter Pack
         #[cfg(target_arch = "wasm32")]
         {
             // Embed starter_pack.json at compile time
@@ -616,23 +609,25 @@ impl PaletteLibrary {
             }
         }
 
-        // Fallback: If still no palettes loaded (shouldn't happen), use hardcoded ones
-        if library.palettes.is_empty() && library.packs.is_empty() {
+        // Fallback: If no packs loaded, use hardcoded palettes
+        if library.packs.is_empty() {
             library.add_or_update(Palette::fire());
             library.add_or_update(Palette::cool());
             library.add_or_update(Palette::rainbow());
             library.add_or_update(Palette::purple_pink());
         }
 
-        // Route 4: Add all enabled pack palettes to the main palette list
-        // This ensures they appear in the Colors panel dropdown
+        // Load user's custom palettes from storage (as a Custom pack)
+        library.load_custom_pack();
+
+        // Build flat palette list from enabled packs (for random flame, etc.)
         let enabled_pack_palettes: Vec<_> = library.packs.iter().enumerate()
             .filter(|(pack_idx, _)| library.enabled_packs.get(*pack_idx).copied().unwrap_or(false))
             .flat_map(|(_, pack)| pack.palettes.clone())
             .collect();
 
         for palette in enabled_pack_palettes {
-            let mut pal = palette.clone();
+            let mut pal = palette;
             pal.built_in = true; // Pack palettes are shipped assets
             library.add_or_update(pal);
         }
@@ -725,16 +720,155 @@ impl PaletteLibrary {
 
         // Add all enabled pack palettes (use add_or_update to prevent duplicates)
         // Collect first to avoid borrow checker issues
-        let palettes_to_add: Vec<Palette> = self.packs.iter().enumerate()
+        // Include pack index to know if it's the Custom pack
+        let palettes_to_add: Vec<(usize, Palette)> = self.packs.iter().enumerate()
             .filter(|(pack_idx, _)| self.enabled_packs.get(*pack_idx).copied().unwrap_or(false))
-            .flat_map(|(_, pack)| pack.palettes.clone())
+            .flat_map(|(pack_idx, pack)| pack.palettes.iter().map(move |p| (pack_idx, p.clone())))
             .collect();
 
-        for palette in palettes_to_add {
+        for (pack_idx, palette) in palettes_to_add {
             let mut pal = palette;
-            pal.built_in = true; // Pack palettes are shipped assets
+            // Custom pack palettes are user-saved, not built-in
+            pal.built_in = self.custom_pack_index != Some(pack_idx);
             self.add_or_update(pal);
         }
+    }
+
+    // ===== CUSTOM PALETTE METHODS =====
+
+    /// Load custom palettes from storage and create the Custom pack
+    fn load_custom_pack(&mut self) {
+        use crate::storage::CustomPaletteLibrary;
+
+        let custom_lib = CustomPaletteLibrary::load();
+
+        if !custom_lib.is_empty() {
+            // Create the Custom pack
+            let custom_pack = PalettePack {
+                pack_name: "Custom".to_string(),
+                description: "Your saved palettes".to_string(),
+                enabled_by_default: true,
+                palettes: custom_lib.palettes,
+            };
+
+            // Add as first pack (so it appears at the top)
+            self.packs.insert(0, custom_pack);
+            self.enabled_packs.insert(0, true);
+            self.custom_pack_index = Some(0);
+
+            // Adjust other pack indices aren't affected since we track by index
+            log::info!("Loaded Custom pack with {} palette(s)", self.packs[0].palettes.len());
+        } else {
+            // No custom palettes yet - create empty Custom pack
+            let custom_pack = PalettePack {
+                pack_name: "Custom".to_string(),
+                description: "Your saved palettes".to_string(),
+                enabled_by_default: true,
+                palettes: Vec::new(),
+            };
+
+            self.packs.insert(0, custom_pack);
+            self.enabled_packs.insert(0, true);
+            self.custom_pack_index = Some(0);
+        }
+    }
+
+    /// Save a palette to the Custom library (persists across sessions)
+    /// If a palette with the same name exists, it will be overwritten
+    /// Returns Ok(()) on success, Err with message on failure
+    pub fn save_to_custom_library(&mut self, palette: Palette) -> Result<(), String> {
+        use crate::storage::CustomPaletteLibrary;
+
+        // Load current custom palettes from storage
+        let mut custom_lib = CustomPaletteLibrary::load();
+
+        // Prepare the palette
+        let mut palette = palette;
+        palette.built_in = false; // Ensure it's editable
+
+        // Check if this is an overwrite
+        let is_overwrite = custom_lib.has_palette_by_name(&palette.name);
+
+        // Add (or overwrite) the palette and save
+        custom_lib.add_palette(palette.clone())
+            .map_err(|e| format!("Failed to save: {}", e))?;
+
+        // Update the Custom pack in memory
+        if let Some(idx) = self.custom_pack_index {
+            if let Some(pack) = self.packs.get_mut(idx) {
+                if is_overwrite {
+                    // Find and replace existing palette
+                    let name_lower = palette.name.to_lowercase();
+                    if let Some(pos) = pack.palettes.iter().position(|p| p.name.to_lowercase() == name_lower) {
+                        pack.palettes[pos] = palette;
+                    }
+                } else {
+                    pack.palettes.push(palette);
+                }
+            }
+        }
+
+        // Rebuild palette list
+        self.rebuild_palette_list();
+
+        // Increment generation for cache invalidation
+        self.generation = self.generation.wrapping_add(1);
+
+        Ok(())
+    }
+
+    /// Check if a palette with the given name exists in the Custom pack
+    pub fn has_custom_palette_named(&self, name: &str) -> bool {
+        use crate::storage::CustomPaletteLibrary;
+        let custom_lib = CustomPaletteLibrary::load();
+        custom_lib.has_palette_by_name(name)
+    }
+
+    /// Delete a palette from the Custom library by name
+    /// Returns Ok(true) if deleted, Ok(false) if not found
+    pub fn delete_from_custom_library(&mut self, name: &str) -> Result<bool, String> {
+        use crate::storage::CustomPaletteLibrary;
+
+        // Load and delete from storage
+        let mut custom_lib = CustomPaletteLibrary::load();
+        let deleted = custom_lib.delete_palette_by_name(name)
+            .map_err(|e| format!("Failed to delete: {}", e))?;
+
+        if deleted {
+            // Update in-memory Custom pack
+            if let Some(idx) = self.custom_pack_index {
+                if let Some(pack) = self.packs.get_mut(idx) {
+                    let name_lower = name.to_lowercase();
+                    pack.palettes.retain(|p| p.name.to_lowercase() != name_lower);
+                }
+            }
+
+            // Rebuild palette list
+            self.rebuild_palette_list();
+
+            // Increment generation for cache invalidation
+            self.generation = self.generation.wrapping_add(1);
+        }
+
+        Ok(deleted)
+    }
+
+    /// Check if a Custom pack exists and has palettes
+    pub fn has_custom_palettes(&self) -> bool {
+        self.custom_pack_index
+            .and_then(|idx| self.packs.get(idx))
+            .map(|pack| !pack.palettes.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Get the index of the Custom pack (if it exists)
+    pub fn custom_pack_index(&self) -> Option<usize> {
+        self.custom_pack_index
+    }
+
+    /// Get generation counter (for cache invalidation)
+    pub fn generation(&self) -> u32 {
+        self.generation
     }
 
     /// Generate preview image for a palette

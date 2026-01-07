@@ -151,6 +151,7 @@ pub struct FlameRenderer {
 }
 
 impl FlameRenderer {
+    /// Create new FlameRenderer with default palette size (256)
     pub fn new(
         device: &Device,
         queue: &Queue,
@@ -159,8 +160,21 @@ impl FlameRenderer {
         height: u32,
         flame: &Flame,
     ) -> Self {
+        Self::with_palette_size(device, queue, surface_format, width, height, flame, crate::gpu::buffers::DEFAULT_PALETTE_SIZE)
+    }
+
+    /// Create new FlameRenderer with specified palette size
+    pub fn with_palette_size(
+        device: &Device,
+        queue: &Queue,
+        surface_format: TextureFormat,
+        width: u32,
+        height: u32,
+        flame: &Flame,
+        palette_size: u32,
+    ) -> Self {
         let pipelines = FlamePipelines::new(device, surface_format, flame);
-        let buffers = FlameBuffers::new(device, queue, width, height, flame);
+        let buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
 
         let compute_bind_group = pipelines.create_compute_bind_group(device, &buffers);
         let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
@@ -240,8 +254,9 @@ impl FlameRenderer {
         self.num_transforms = flame.transforms.len() as u32;
         self.has_final_transform = flame.final_transform.is_some();
 
-        // Recreate buffers with new size
-        self.buffers = FlameBuffers::new(device, queue, width, height, flame);
+        // Recreate buffers with new size (preserve palette_size)
+        let palette_size = self.buffers.palette_size();
+        self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
 
         // Recreate bind groups
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
@@ -524,8 +539,8 @@ impl FlameRenderer {
         self.histogram_color_scale = config.histogram_color_scale;
         self.burn_in = burn_in;
 
-        // 5. Update palette with hue rotation
-        self.buffers.update_palette(queue, palette, config.palette_rotation);
+        // 5. Update palette with rotation and squeeze
+        self.buffers.update_palette(queue, palette, config.palette_rotation, config.palette_squeeze);
 
         // Note: scale_buffer removed - scale is now in params.histogram_color_scale
 
@@ -683,7 +698,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0, 0],
+            palette_size: self.buffers.palette_size(),
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -877,7 +893,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0, 0],
+            palette_size: self.buffers.palette_size(),
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -942,7 +959,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0, 0],
+            palette_size: self.buffers.palette_size(),
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -1042,7 +1060,8 @@ impl FlameRenderer {
             path_map_style: self.path_map_style as u32,
             burn_in: self.burn_in,
             num_transforms: self.num_transforms,
-            _pad_end: [0, 0, 0, 0],
+            palette_size: self.buffers.palette_size(),
+            _pad_end: [0, 0, 0],
         };
         self.buffers.update_tonemap_params(queue, &params);
     }
@@ -1053,10 +1072,41 @@ impl FlameRenderer {
     }
 
     /// Update palette texture
-    pub fn update_palette(&mut self, device: &Device, queue: &Queue, palette: &Palette, hue_rotation: f32) {
-        self.buffers.update_palette(queue, palette, hue_rotation);
+    pub fn update_palette(&mut self, device: &Device, queue: &Queue, palette: &Palette, palette_rotation: f32, palette_squeeze: f32) {
+        self.buffers.update_palette(queue, palette, palette_rotation, palette_squeeze);
         // Recreate compute bind group to ensure palette texture is bound
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+    }
+
+    /// Change palette texture size (requires recreating buffers)
+    /// Returns true if size actually changed
+    pub fn set_palette_size(&mut self, device: &Device, queue: &Queue, flame: &Flame, new_size: u32) -> bool {
+        let current_size = self.buffers.palette_size();
+        if current_size == new_size {
+            return false;
+        }
+
+        // Recreate buffers with new palette size (preserves viewport dimensions)
+        self.buffers = FlameBuffers::with_palette_size(
+            device,
+            queue,
+            self.width,
+            self.height,
+            flame,
+            new_size,
+        );
+
+        // Recreate all bind groups
+        self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+        self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
+
+        true
+    }
+
+    /// Get current palette texture size
+    pub fn palette_size(&self) -> u32 {
+        self.buffers.palette_size()
     }
 
     /// Set color mode

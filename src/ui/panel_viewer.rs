@@ -30,6 +30,7 @@ pub struct PanelContext<'a> {
     pub undo_requested: &'a mut bool,
     pub redo_requested: &'a mut bool,
     pub open_palette_editor: &'a mut bool,
+    pub open_palette_library: &'a mut bool,
     pub open_triangle_editor: &'a mut bool,
     pub open_preset_library: &'a mut bool,
 
@@ -40,10 +41,11 @@ pub struct PanelContext<'a> {
     pub export_width: &'a mut u32,
     pub export_height: &'a mut u32,
     pub use_custom_export_size: &'a mut bool,
-    pub custom_palette: &'a mut Option<crate::scene::palette::Palette>,
     pub palette_editor: &'a mut crate::ui::palette_editor::PaletteEditor,
     pub palette_export_json: &'a mut Option<crate::scene::palette::Palette>,
     pub palette_save_file: &'a mut Option<crate::scene::palette::Palette>,
+    pub palette_save_to_library: &'a mut Option<crate::scene::palette::Palette>,
+    pub palette_delete_from_library: &'a mut Option<String>,
     pub palette_import_json: &'a mut Option<String>,
     pub palette_load_file: &'a mut bool,
 
@@ -194,34 +196,38 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.config_manager,
             self.context.palette_library,
-            self.context.custom_palette,
             self.context.open_palette_editor,
+            self.context.open_palette_library,
         );
     }
 
     /// Render Palette Editor panel (palette editing)
     fn render_palette_editor_panel(&mut self, ui: &mut egui::Ui) {
+        // Capture palette_library reference for the closure
+        let palette_library = &self.context.palette_library;
         super::palette_editor::render_palette_editor_content(
             ui,
             self.context.palette_editor,
             self.context.config_manager,
-            self.context.custom_palette,
             self.context.palette_export_json,
             self.context.palette_save_file,
+            self.context.palette_save_to_library,
+            self.context.palette_delete_from_library,
             self.context.palette_import_json,
             self.context.palette_load_file,
+            self.context.open_palette_library,
+            |name| palette_library.has_custom_palette_named(name),
         );
     }
 
     /// Render Palette Library panel (browse and manage palette packs)
     fn render_palette_library_panel(&mut self, ui: &mut egui::Ui) {
-        if let Some(selected_palette) = super::palette_library::render_palette_library(
+        super::palette_library::render_palette_library(
             ui,
             self.context.palette_library,
-        ) {
-            // Update custom palette (will be applied to config via ConfigManager)
-            *self.context.custom_palette = Some(selected_palette);
-        }
+            self.context.config_manager,
+            self.context.open_palette_editor,
+        );
     }
 
     /// Render the View panel (zoom, pan, rotation)

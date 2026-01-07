@@ -268,6 +268,11 @@ assets/
 
 ## Future Enhancements
 
+- **Random Palette Generation**: Generate random palettes alongside flames
+  - Completely random colors
+  - Harmonious/complementary color schemes
+  - Variations on current palette
+  - Seed-based for reproducibility
 - **Symmetry Options**: Generate flames with rotational/reflective symmetry
 - **Style Transfer**: Use an existing flame as a "template" for randomization ranges
 - **Genetic Algorithm**: Evolve fractals by selecting favorites from batches

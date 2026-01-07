@@ -36,11 +36,11 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        if let Some(ref palette) = config.palette {
-            println!("\n  Palette: {} colors", palette.stops.len());
-            println!("    First color: {:?}", palette.stops[0].color);
-            println!("    Last color: {:?}", palette.stops.last().unwrap().color);
-        }
+        // Palette is always present
+        let palette = &config.palette;
+        println!("\n  Palette: {} colors", palette.stops.len());
+        println!("    First color: {:?}", palette.stops[0].color);
+        println!("    Last color: {:?}", palette.stops.last().unwrap().color);
 
         println!();
     }

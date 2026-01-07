@@ -284,9 +284,10 @@ impl EguiLayer {
         let mut random_flame_requested = false;
 
         // Palette library management
-        let mut custom_palette = None;
         let mut palette_export_json = None;
         let mut palette_save_file = None;
+        let mut palette_save_to_library = None;
+        let mut palette_delete_from_library = None;
         let mut palette_import_json = None;
         let mut palette_load_file = false;
 
@@ -301,6 +302,7 @@ impl EguiLayer {
 
         // Panel open requests
         let mut open_palette_editor = false;
+        let mut open_palette_library = false;
         let mut open_config_dialog = false;
         let mut open_triangle_editor = false;
         let mut open_preset_library = false;
@@ -380,6 +382,7 @@ impl EguiLayer {
                         undo_requested: &mut undo_requested,
                         redo_requested: &mut redo_requested,
                         open_palette_editor: &mut open_palette_editor,
+                        open_palette_library: &mut open_palette_library,
                         open_triangle_editor: &mut open_triangle_editor,
                         open_preset_library: &mut open_preset_library,
 
@@ -390,10 +393,11 @@ impl EguiLayer {
                         export_width,
                         export_height,
                         use_custom_export_size,
-                        custom_palette: &mut custom_palette,
                         palette_editor: &mut self.palette_editor,
                         palette_export_json: &mut palette_export_json,
                         palette_save_file: &mut palette_save_file,
+                        palette_save_to_library: &mut palette_save_to_library,
+                        palette_delete_from_library: &mut palette_delete_from_library,
                         palette_import_json: &mut palette_import_json,
                         palette_load_file: &mut palette_load_file,
 
@@ -447,11 +451,13 @@ impl EguiLayer {
                     },
                 });
 
-            // Show palette editor warning dialog (for fixed 256-color mode conversion)
-            palette_editor::render_fixed_mode_warning(
+            // Show palette editor dialogs (fixed mode warning, overwrite/delete confirmations)
+            palette_editor::render_palette_dialogs(
                 ctx,
                 &mut self.palette_editor,
                 config_manager,
+                &mut palette_save_to_library,
+                &mut palette_delete_from_library,
             );
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
@@ -588,9 +594,10 @@ impl EguiLayer {
             config_load_file_requested: config_load_file,
             apophysis_import_file_requested: apophysis_import_file,
             random_flame_requested,
-            custom_palette,
             palette_export_json,
             palette_save_file,
+            palette_save_to_library,
+            palette_delete_from_library,
             palette_import_json,
             palette_load_file,
             undo_requested,
@@ -601,6 +608,7 @@ impl EguiLayer {
             delete_transform,
             clone_transform,
             open_palette_editor,
+            open_palette_library,
             open_config_dialog,
             open_triangle_editor,
             open_preset_library,

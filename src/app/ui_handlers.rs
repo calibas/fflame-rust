@@ -180,7 +180,7 @@ impl App {
             if self.palette_library.len() > 0 {
                 let palette_idx = rand::random::<usize>() % self.palette_library.len();
                 if let Some(palette) = self.palette_library.get(palette_idx) {
-                    new_config.palette = Some(palette.clone());
+                    new_config.palette = palette.clone();
                 }
             }
 
@@ -191,28 +191,8 @@ impl App {
         }
     }
 
-    /// Handle custom palette from editor or library
+    /// Handle palette operations (export, import, save)
     fn handle_palette_operations(&mut self, ui_response: &UiResponse) {
-        // Handle custom palette from editor or library
-        if let Some(ref custom_pal) = ui_response.custom_palette {
-            // Add or update palette in library (prevents duplicates)
-            let _palette_index = self.palette_library.add_or_update(custom_pal.clone());
-
-            // Apply the palette to the config via ConfigManager
-            if let Ok(update) = self.config_manager.update_param(
-                crate::config::ConfigPath::Palette,
-                crate::config::ConfigValue::Palette(custom_pal.clone()),
-            ) {
-                // Update renderer if needed (ColorOnly or IterationReset)
-                if matches!(update, crate::config::UpdateType::ColorOnly | crate::config::UpdateType::IterationReset) {
-                    let config = self.config_manager.active_config();
-                    if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &custom_pal, config.palette_rotation);
-                    }
-                }
-            }
-        }
-
         // Handle palette export to clipboard
         if let Some(ref palette) = ui_response.palette_export_json {
             if let Ok(json) = serde_json::to_string_pretty(palette) {
@@ -258,6 +238,33 @@ impl App {
             }
         }
 
+        // Handle palette save to library (persists across sessions)
+        if let Some(ref palette) = ui_response.palette_save_to_library {
+            match self.palette_library.save_to_custom_library(palette.clone()) {
+                Ok(()) => {
+                    log::info!("Palette '{}' saved to Custom library", palette.name);
+                }
+                Err(e) => {
+                    log::error!("Failed to save palette to library: {}", e);
+                }
+            }
+        }
+
+        // Handle palette delete from library
+        if let Some(ref name) = ui_response.palette_delete_from_library {
+            match self.palette_library.delete_from_custom_library(name) {
+                Ok(true) => {
+                    log::info!("Palette '{}' deleted from Custom library", name);
+                }
+                Ok(false) => {
+                    log::warn!("Palette '{}' not found in Custom library", name);
+                }
+                Err(e) => {
+                    log::error!("Failed to delete palette from library: {}", e);
+                }
+            }
+        }
+
         // Handle palette import from JSON
         if let Some(ref json) = ui_response.palette_import_json {
             match serde_json::from_str::<crate::scene::palette::Palette>(json) {
@@ -298,7 +305,7 @@ impl App {
                     // Update renderer
                     let config = self.config_manager.active_config();
                     if let Some(ref mut renderer) = self.flame_renderer {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation);
+                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation, config.palette_squeeze);
                     }
                 }
                 Err(e) => {
@@ -334,7 +341,7 @@ impl App {
                                     // Update renderer
                                     let config = self.config_manager.active_config();
                                     if let Some(ref mut renderer) = self.flame_renderer {
-                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation);
+                                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, &palette, config.palette_rotation, config.palette_squeeze);
                                     }
 
                                     println!("Palette loaded from: {}", path.display());
@@ -534,6 +541,10 @@ impl App {
         if ui_response.open_palette_editor {
             use crate::ui::workspace::PanelType;
             self.workspace.open_floating_panel(PanelType::PaletteEditor);
+        }
+        if ui_response.open_palette_library {
+            use crate::ui::workspace::PanelType;
+            self.workspace.open_floating_panel(PanelType::PaletteLibrary);
         }
         if ui_response.open_config_dialog {
             use crate::ui::workspace::PanelType;

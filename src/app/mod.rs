@@ -256,13 +256,14 @@ impl App {
 
         let flame = initial_config.flame.clone();
 
-        let flame_renderer = FlameRenderer::new(
+        let flame_renderer = FlameRenderer::with_palette_size(
             &gpu.device,
             &gpu.queue,
             gpu.config.format,
             gpu.size.width,
             gpu.size.height,
             &flame,
+            initial_config.palette_size,
         );
 
         // ConfigManager loads SystemSettings automatically
@@ -466,16 +467,6 @@ impl App {
             return Ok(());
         }
 
-        // Skip ALL rendering during video export to eliminate GPU contention
-        // Export uses a separate GPU device but still competes for driver resources
-        // This prevents "Render error: Other" spam and gives export full GPU bandwidth
-        let is_video_exporting = self.animation_export_progress.lock()
-            .map(|p| p.is_exporting)
-            .unwrap_or(false);
-        if is_video_exporting {
-            return Ok(());  // UI still receives events (can cancel), just doesn't render
-        }
-
         let render_start = Instant::now();
 
         // Calculate delta time BEFORE updating last_frame_time (for animation)
@@ -572,11 +563,7 @@ impl App {
                     self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
 
                     // Restore palette and color mode after buffer recreation
-                    let palette = resize_config.palette.as_ref()
-                        .or_else(|| self.palette_library.get(resize_config.palette_index));
-                    if let Some(palette) = palette {
-                        renderer.update_palette(&self.gpu.device, &self.gpu.queue, palette, resize_config.palette_rotation);
-                    }
+                    renderer.update_palette(&self.gpu.device, &self.gpu.queue, &resize_config.palette, resize_config.palette_rotation, resize_config.palette_squeeze);
                     renderer.set_color_mode(&self.gpu.queue, resize_config.color_mode, self.config_manager.system_settings().iterations_per_thread, self.config_manager.system_settings().burn_in,
                         resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
@@ -734,12 +721,7 @@ impl App {
                         label: Some("WASM Custom Export Encoder"),
                     });
 
-                    let palette = export_config.palette.as_ref()
-                        .or_else(|| self.palette_library.get(export_config.palette_index))
-                        .cloned()
-                        .unwrap_or_default();
-
-                    temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &export_config, &palette, iterations_per_thread, 20); // burn_in - use default for WASM export
+                    temp_renderer.load_config(&self.gpu.device, &mut encoder, &self.gpu.queue, &export_config, &export_config.palette, iterations_per_thread, 20); // burn_in - use default for WASM export
                     self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
                     // Render frames until we reach max_iterations
@@ -1066,12 +1048,15 @@ impl App {
 
             // Check if we should continue iterating
             // During animation playback, always iterate (ignore max_iterations limit)
-            // Skip GPU work during video export to avoid GPU contention (separate device in background thread)
+            // Skip GPU work during video/PNG export to avoid GPU contention (separate device in background thread)
             let is_video_exporting = self.animation_export_progress.lock()
                 .map(|p| p.is_exporting)
                 .unwrap_or(false);
+            let is_png_exporting = self.png_export_progress.lock()
+                .map(|p| p.is_exporting)
+                .unwrap_or(false);
             let max_iterations = Some(final_config.max_iterations);
-            let should_iterate = !self.paused && !is_video_exporting && (
+            let should_iterate = !self.paused && !is_video_exporting && !is_png_exporting && (
                 is_controller_playing ||
                 max_iterations.map_or(true, |max| renderer.total_iterations() < max)
             );

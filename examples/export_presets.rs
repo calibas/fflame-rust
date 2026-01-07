@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Use Default and override only the flame
         let mut config = FractalConfig::default();
         config.flame = flame;
-        config.palette_index = 1;
+        // Default includes Fire palette
 
         let filename = format!("assets/presets/{}.fflame", config.flame.name.to_lowercase().replace(" ", "_"));
         let json = serde_json::to_string_pretty(&config)?;
