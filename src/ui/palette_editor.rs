@@ -5,6 +5,10 @@ pub struct PaletteEditor {
     pub current_palette: Palette,
     pub json_buffer: String,
     pub show_fixed_mode_warning: bool,
+    /// Local buffer for name editing (prevents frame-by-frame overwrites)
+    pub name_buffer: String,
+    /// Whether the name field is currently being edited
+    pub name_editing: bool,
 }
 
 impl PaletteEditor {
@@ -13,6 +17,8 @@ impl PaletteEditor {
             current_palette: Palette::fire(),
             json_buffer: String::new(),
             show_fixed_mode_warning: false,
+            name_buffer: String::new(),
+            name_editing: false,
         }
     }
 }
@@ -31,13 +37,29 @@ fn render_palette_editor_core_impl(
 ) {
     ui.horizontal(|ui| {
         ui.label(t!("palette_editor.palette_name"));
-        let name_response = ui.text_edit_singleline(&mut palette.name);
+
+        // Sync buffer from config when not editing
+        if !palette_editor.name_editing {
+            palette_editor.name_buffer = palette.name.clone();
+        }
+
+        let name_response = ui.text_edit_singleline(&mut palette_editor.name_buffer);
+
+        // Track editing state
+        if name_response.gained_focus() {
+            palette_editor.name_editing = true;
+        }
 
         if name_response.lost_focus() {
-            let _ = config_manager.update_param(
-                crate::config::ConfigPath::Palette,
-                palette.clone().into(),
-            );
+            palette_editor.name_editing = false;
+            // Commit the name change
+            if palette_editor.name_buffer != palette.name {
+                palette.name = palette_editor.name_buffer.clone();
+                let _ = config_manager.update_param(
+                    crate::config::ConfigPath::Palette,
+                    palette.clone().into(),
+                );
+            }
         }
     });
     ui.separator();
