@@ -5,9 +5,11 @@
 
 mod error;
 mod fetch;
+pub mod palettes;
 
 pub use error::FetchError;
 pub use fetch::{fetch_json, fetch_text, FetchHandle, FetchResult, FetchState};
+pub use palettes::PalettePackInfo;
 
 use serde::{Deserialize, Serialize};
 
