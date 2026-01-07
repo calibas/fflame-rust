@@ -250,6 +250,21 @@ impl App {
             }
         }
 
+        // Handle palette delete from library
+        if let Some(ref name) = ui_response.palette_delete_from_library {
+            match self.palette_library.delete_from_custom_library(name) {
+                Ok(true) => {
+                    log::info!("Palette '{}' deleted from Custom library", name);
+                }
+                Ok(false) => {
+                    log::warn!("Palette '{}' not found in Custom library", name);
+                }
+                Err(e) => {
+                    log::error!("Failed to delete palette from library: {}", e);
+                }
+            }
+        }
+
         // Handle palette import from JSON
         if let Some(ref json) = ui_response.palette_import_json {
             match serde_json::from_str::<crate::scene::palette::Palette>(json) {

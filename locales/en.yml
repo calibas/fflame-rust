@@ -573,6 +573,10 @@ palette_editor:
   save_as_palette: "💾 Save as .palette"
   save_to_library: "📚 Save to Library"
   tooltip_save_to_library: "Save this palette to your Custom library (persists across sessions)"
+  tooltip_overwrite_library: "A palette with this name exists - click to overwrite it"
+  delete_from_library: "🗑 Delete from Library"
+  tooltip_delete_from_library: "Delete this palette from your Custom library"
+  tooltip_delete_not_in_library: "This palette is not in your Custom library"
   import_from_json: "Import from JSON:"
   import: "✅ Import"
   clear: "🗑 Clear"
@@ -587,6 +591,16 @@ palette_editor:
   warning_revert: "You can switch back to Free Mode later without data loss."
   convert_confirm: "✅ Convert to Fixed Mode"
   cancel: "❌ Cancel"
+
+  # Overwrite confirmation dialog
+  overwrite_title: "⚠️ Overwrite Palette?"
+  overwrite_message: "A palette named '%{name}' already exists in your Custom library. Overwrite it?"
+  overwrite_confirm: "✅ Overwrite"
+
+  # Delete confirmation dialog
+  delete_title: "⚠️ Delete Palette?"
+  delete_message: "Permanently delete '%{name}' from your Custom library?"
+  delete_confirm: "🗑 Delete"
 
   # Tooltips
   tooltip_position: "Position in the gradient (0-255)"

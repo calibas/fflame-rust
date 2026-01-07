@@ -85,11 +85,43 @@ impl CustomPaletteLibrary {
     }
 
     /// Add a palette to the library and save
+    /// If a palette with the same name exists, it will be overwritten
     pub fn add_palette(&mut self, palette: Palette) -> Result<(), super::backend::StorageError> {
         let mut palette = palette;
         palette.built_in = false; // Ensure it's editable
-        self.palettes.push(palette);
+
+        // Check for existing palette with same name (case-insensitive)
+        if let Some(idx) = self.find_palette_index_by_name(&palette.name) {
+            // Overwrite existing
+            self.palettes[idx] = palette;
+        } else {
+            // Add new
+            self.palettes.push(palette);
+        }
         self.save()
+    }
+
+    /// Check if a palette with the given name exists (case-insensitive)
+    pub fn has_palette_by_name(&self, name: &str) -> bool {
+        self.find_palette_index_by_name(name).is_some()
+    }
+
+    /// Find palette index by name (case-insensitive)
+    fn find_palette_index_by_name(&self, name: &str) -> Option<usize> {
+        let name_lower = name.to_lowercase();
+        self.palettes.iter().position(|p| p.name.to_lowercase() == name_lower)
+    }
+
+    /// Delete a palette by name (case-insensitive)
+    /// Returns true if a palette was deleted, false if not found
+    pub fn delete_palette_by_name(&mut self, name: &str) -> Result<bool, super::backend::StorageError> {
+        if let Some(idx) = self.find_palette_index_by_name(name) {
+            self.palettes.remove(idx);
+            self.save()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Check if library is empty

@@ -287,6 +287,7 @@ impl EguiLayer {
         let mut palette_export_json = None;
         let mut palette_save_file = None;
         let mut palette_save_to_library = None;
+        let mut palette_delete_from_library = None;
         let mut palette_import_json = None;
         let mut palette_load_file = false;
 
@@ -396,6 +397,7 @@ impl EguiLayer {
                         palette_export_json: &mut palette_export_json,
                         palette_save_file: &mut palette_save_file,
                         palette_save_to_library: &mut palette_save_to_library,
+                        palette_delete_from_library: &mut palette_delete_from_library,
                         palette_import_json: &mut palette_import_json,
                         palette_load_file: &mut palette_load_file,
 
@@ -449,11 +451,13 @@ impl EguiLayer {
                     },
                 });
 
-            // Show palette editor warning dialog (for fixed 256-color mode conversion)
-            palette_editor::render_fixed_mode_warning(
+            // Show palette editor dialogs (fixed mode warning, overwrite/delete confirmations)
+            palette_editor::render_palette_dialogs(
                 ctx,
                 &mut self.palette_editor,
                 config_manager,
+                &mut palette_save_to_library,
+                &mut palette_delete_from_library,
             );
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
@@ -593,6 +597,7 @@ impl EguiLayer {
             palette_export_json,
             palette_save_file,
             palette_save_to_library,
+            palette_delete_from_library,
             palette_import_json,
             palette_load_file,
             undo_requested,

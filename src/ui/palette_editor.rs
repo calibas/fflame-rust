@@ -9,6 +9,14 @@ pub struct PaletteEditor {
     pub name_buffer: String,
     /// Whether the name field is currently being edited
     pub name_editing: bool,
+    /// Show overwrite confirmation dialog
+    pub show_overwrite_confirmation: bool,
+    /// Show delete confirmation dialog
+    pub show_delete_confirmation: bool,
+    /// Palette pending save (for confirmation dialog)
+    pub pending_save_palette: Option<Palette>,
+    /// Palette name pending delete (for confirmation dialog)
+    pub pending_delete_name: Option<String>,
 }
 
 impl PaletteEditor {
@@ -19,6 +27,10 @@ impl PaletteEditor {
             show_fixed_mode_warning: false,
             name_buffer: String::new(),
             name_editing: false,
+            show_overwrite_confirmation: false,
+            show_delete_confirmation: false,
+            pending_save_palette: None,
+            pending_delete_name: None,
         }
     }
 }
@@ -32,8 +44,10 @@ fn render_palette_editor_core_impl(
     palette_export_json: &mut Option<Palette>,
     palette_save_file: &mut Option<Palette>,
     palette_save_to_library: &mut Option<Palette>,
+    palette_delete_from_library: &mut Option<String>,
     palette_import_json: &mut Option<String>,
     palette_load_file: &mut bool,
+    has_custom_palette_named: impl Fn(&str) -> bool,
 ) {
     ui.horizontal(|ui| {
         ui.label(t!("palette_editor.palette_name"));
@@ -249,13 +263,45 @@ fn render_palette_editor_core_impl(
                     }
                 });
 
+                // Check if palette exists in custom library
+                let exists_in_library = has_custom_palette_named(&palette.name);
+
                 // Save to Library button
-                if ui.button(t!("palette_editor.save_to_library"))
-                    .on_hover_text(t!("palette_editor.tooltip_save_to_library"))
+                ui.horizontal(|ui| {
+                    if ui.button(t!("palette_editor.save_to_library"))
+                        .on_hover_text(if exists_in_library {
+                            t!("palette_editor.tooltip_overwrite_library")
+                        } else {
+                            t!("palette_editor.tooltip_save_to_library")
+                        })
+                        .clicked()
+                    {
+                        if exists_in_library {
+                            // Show overwrite confirmation
+                            palette_editor.pending_save_palette = Some(palette.clone());
+                            palette_editor.show_overwrite_confirmation = true;
+                        } else {
+                            // Save directly
+                            *palette_save_to_library = Some(palette.clone());
+                        }
+                    }
+
+                    // Delete from Library button (disabled if not in library)
+                    if ui.add_enabled(
+                        exists_in_library,
+                        egui::Button::new(t!("palette_editor.delete_from_library"))
+                    )
+                    .on_hover_text(if exists_in_library {
+                        t!("palette_editor.tooltip_delete_from_library")
+                    } else {
+                        t!("palette_editor.tooltip_delete_not_in_library")
+                    })
                     .clicked()
-                {
-                    *palette_save_to_library = Some(palette.clone());
-                }
+                    {
+                        palette_editor.pending_delete_name = Some(palette.name.clone());
+                        palette_editor.show_delete_confirmation = true;
+                    }
+                });
 
                 ui.separator();
                 ui.label(t!("palette_editor.import_from_json"));
@@ -285,10 +331,12 @@ fn render_palette_editor_core_impl(
 
 }
 
-pub fn render_fixed_mode_warning(
+pub fn render_palette_dialogs(
     ctx: &egui::Context,
     palette_editor: &mut PaletteEditor,
     config_manager: &mut crate::config::ConfigManager,
+    palette_save_to_library: &mut Option<Palette>,
+    palette_delete_from_library: &mut Option<String>,
 ) {
     // Fixed mode warning dialog
     if palette_editor.show_fixed_mode_warning {
@@ -322,6 +370,70 @@ pub fn render_fixed_mode_warning(
                 });
             });
     }
+
+    // Overwrite confirmation dialog
+    if palette_editor.show_overwrite_confirmation {
+        let palette_name = palette_editor.pending_save_palette
+            .as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_default();
+
+        egui::Window::new(t!("palette_editor.overwrite_title"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(t!("palette_editor.overwrite_message", name = palette_name));
+
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    if ui.button(t!("palette_editor.overwrite_confirm")).clicked() {
+                        if let Some(palette) = palette_editor.pending_save_palette.take() {
+                            *palette_save_to_library = Some(palette);
+                        }
+                        palette_editor.show_overwrite_confirmation = false;
+                    }
+
+                    if ui.button(t!("palette_editor.cancel")).clicked() {
+                        palette_editor.pending_save_palette = None;
+                        palette_editor.show_overwrite_confirmation = false;
+                    }
+                });
+            });
+    }
+
+    // Delete confirmation dialog
+    if palette_editor.show_delete_confirmation {
+        let palette_name = palette_editor.pending_delete_name
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
+
+        egui::Window::new(t!("palette_editor.delete_title"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label(t!("palette_editor.delete_message", name = palette_name));
+
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    if ui.button(t!("palette_editor.delete_confirm")).clicked() {
+                        if let Some(name) = palette_editor.pending_delete_name.take() {
+                            *palette_delete_from_library = Some(name);
+                        }
+                        palette_editor.show_delete_confirmation = false;
+                    }
+
+                    if ui.button(t!("palette_editor.cancel")).clicked() {
+                        palette_editor.pending_delete_name = None;
+                        palette_editor.show_delete_confirmation = false;
+                    }
+                });
+            });
+    }
 }
 
 /// Render the Palette Editor panel content (palette editing)
@@ -334,8 +446,10 @@ pub fn render_palette_editor_content(
     palette_export_json: &mut Option<Palette>,
     palette_save_file: &mut Option<Palette>,
     palette_save_to_library: &mut Option<Palette>,
+    palette_delete_from_library: &mut Option<String>,
     palette_import_json: &mut Option<String>,
     palette_load_file: &mut bool,
+    has_custom_palette_named: impl Fn(&str) -> bool,
 ) {
     // Always read from config.palette (single source of truth)
     // Palette is always present - work on a mutable copy for this frame
@@ -349,10 +463,11 @@ pub fn render_palette_editor_content(
         palette_export_json,
         palette_save_file,
         palette_save_to_library,
+        palette_delete_from_library,
         palette_import_json,
         palette_load_file,
+        has_custom_palette_named,
     );
 
-    // Note: The warning dialog can't be shown in panel mode (needs Window)
-    // It will only appear when using the floating window mode
+    // Note: The dialogs are rendered separately via render_palette_dialogs()
 }

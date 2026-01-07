@@ -45,6 +45,7 @@ pub struct PanelContext<'a> {
     pub palette_export_json: &'a mut Option<crate::scene::palette::Palette>,
     pub palette_save_file: &'a mut Option<crate::scene::palette::Palette>,
     pub palette_save_to_library: &'a mut Option<crate::scene::palette::Palette>,
+    pub palette_delete_from_library: &'a mut Option<String>,
     pub palette_import_json: &'a mut Option<String>,
     pub palette_load_file: &'a mut bool,
 
@@ -202,6 +203,8 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Palette Editor panel (palette editing)
     fn render_palette_editor_panel(&mut self, ui: &mut egui::Ui) {
+        // Capture palette_library reference for the closure
+        let palette_library = &self.context.palette_library;
         super::palette_editor::render_palette_editor_content(
             ui,
             self.context.palette_editor,
@@ -209,8 +212,10 @@ impl<'a> PanelViewer<'a> {
             self.context.palette_export_json,
             self.context.palette_save_file,
             self.context.palette_save_to_library,
+            self.context.palette_delete_from_library,
             self.context.palette_import_json,
             self.context.palette_load_file,
+            |name| palette_library.has_custom_palette_named(name),
         );
     }
 
