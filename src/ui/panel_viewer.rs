@@ -215,6 +215,7 @@ impl<'a> PanelViewer<'a> {
             self.context.palette_delete_from_library,
             self.context.palette_import_json,
             self.context.palette_load_file,
+            self.context.open_palette_library,
             |name| palette_library.has_custom_palette_named(name),
         );
     }
@@ -225,6 +226,7 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.palette_library,
             self.context.config_manager,
+            self.context.open_palette_editor,
         );
     }
 

@@ -47,6 +47,7 @@ fn render_palette_editor_core_impl(
     palette_delete_from_library: &mut Option<String>,
     palette_import_json: &mut Option<String>,
     palette_load_file: &mut bool,
+    open_palette_library: &mut bool,
     has_custom_palette_named: impl Fn(&str) -> bool,
 ) {
     ui.horizontal(|ui| {
@@ -293,6 +294,10 @@ fn render_palette_editor_core_impl(
                 }
             });
 
+            if ui.button(t!("palette_editor.open_library")).clicked() {
+                *open_palette_library = true;
+            }
+
             ui.separator();
 
             // Import/Export section
@@ -453,6 +458,7 @@ pub fn render_palette_editor_content(
     palette_delete_from_library: &mut Option<String>,
     palette_import_json: &mut Option<String>,
     palette_load_file: &mut bool,
+    open_palette_library: &mut bool,
     has_custom_palette_named: impl Fn(&str) -> bool,
 ) {
     // Always read from config.palette (single source of truth)
@@ -470,6 +476,7 @@ pub fn render_palette_editor_content(
         palette_delete_from_library,
         palette_import_json,
         palette_load_file,
+        open_palette_library,
         has_custom_palette_named,
     );
 
