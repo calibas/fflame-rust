@@ -21,6 +21,7 @@ pub mod i18n;
 pub mod animation;
 pub mod storage;
 pub mod export;
+pub mod resources;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
 mod shader_builder_v2;
 mod shader_cache;
