@@ -96,37 +96,45 @@ The palette stored in `FractalConfig.flame.palette` (or `FractalConfig.palette`)
 - [ ] Better WASM palette loading (currently limited)
 - [ ] Consider palette categories/tags
 
-### Phase 4: Adjustable Palette Length
+### Phase 4: Adjustable Palette Length ✅ COMPLETE
 **Goal:** Allow palettes with different color counts (256 to 4096+)
-**Status:** Research Complete
+**Status:** Complete
+**Completed:** 2025-01-06
 
-#### Current Architecture
+#### Implementation Summary
+- Added `palette_size: u32` field to `FlameBuffers`, `TonemapParams`, and `FractalConfig`
+- Updated `FlameBuffers::with_palette_size()` to create texture at specified size
+- Updated `update_palette()` to use dynamic size for rotation loop and texture upload
+- Updated `shaders/tonemap.wgsl` to use `palette_size` uniform for PathMap index calculations
+- Added UI dropdown in Tone Mapping panel (256, 512, 1024, 2048, 4096)
+- Added `ConfigPath::PaletteSize` to delta system for undo/redo support
+- `FlameRenderer::with_palette_size()` accepts palette size parameter
+- Unified render API uses config's palette_size for headless exports
+
+#### Files Modified (10 files)
+- `src/gpu/buffers.rs` - FlameBuffers palette_size field, dynamic texture creation
+- `src/renderer/compute_kernel.rs` - FlameRenderer::with_palette_size()
+- `src/renderer/render.rs` - Use config.palette_size in unified render API
+- `src/config/fractal_config.rs` - palette_size field with serde defaults
+- `src/config/defaults.rs` - DEFAULT_PALETTE_SIZE constant
+- `src/config/delta.rs` - ConfigPath::PaletteSize variant
+- `src/config/manager.rs` - PaletteSize getter/setter
+- `src/ui/tone_mapping.rs` - Palette Size dropdown UI
+- `shaders/tonemap.wgsl` - palette_size uniform in TonemapParams
+- `locales/en.yml` - Translations for palette_size
+
+#### Usage Notes
+- **Interactive App:** Palette size changes take effect on app restart or config reload
+  (texture must be recreated with new size)
+- **Headless Export:** Uses config.palette_size directly when creating renderer
+- **Backward Compatibility:** Defaults to 256, old configs without palette_size work correctly
+
+#### Previous Architecture Notes (for reference)
 The palette system uses a **gradient-based approach**:
 - `Palette` struct stores variable-length color stops (`Vec<ColorStop>`)
 - On render, `generate_texture_data(size)` samples the gradient at N positions
-- GPU receives a **fixed 256×1 Rgba8Unorm texture**
+- GPU receives a **dynamic Nx1 Rgba8Unorm texture** (N = palette_size)
 - Shaders sample using normalized coordinates (0.0-1.0)
-
-#### Hardcoded 256 Locations (5 files)
-
-| File | Lines | Context |
-|------|-------|---------|
-| `src/scene/palette.rs` | 245, 309-313, 341, 347 | `generate_texture_data(256)`, conversion loops |
-| `src/gpu/buffers.rs` | 585, 596, 619-620, 934, 944, 976, 979 | Texture creation, update_palette() |
-| `shaders/tonemap.wgsl` | 560-561 | PathMap: `clamp(t * 255.0, 0.0, 255.0)` |
-| `shaders/core/main_template.wgsl` | 170 | Palette mode sampling |
-| `shaders/core/utilities.wgsl` | 63 | Speed mode sampling |
-
-#### Implementation Tasks
-- [ ] Add `palette_size: u32` field to `FlameBuffers` struct
-- [ ] Add `palette_size` uniform to `TonemapParams` for shaders
-- [ ] Update `FlameBuffers::new()` to accept palette size parameter
-- [ ] Update `update_palette()` to use dynamic size (rotation loop, texture upload)
-- [ ] Update shaders to use `palette_size` uniform for index calculations
-- [ ] Add palette size control to Palette Editor UI
-- [ ] Add `palette_size` field to `FractalConfig` for serialization
-- [ ] Default to 256 for backward compatibility
-- [ ] Test with 512, 1024, 2048, 4096 sizes
 
 #### Memory & Performance (Negligible Impact)
 

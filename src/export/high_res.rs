@@ -1018,7 +1018,8 @@ impl HighResExporter {
             path_map_style: config.path_map_style as u32,
             burn_in: 20, // Default burn-in for export
             num_transforms: config.flame.transforms.len() as u32,
-            _pad_end: [0, 0, 0, 0],
+            palette_size: config.palette_size,
+            _pad_end: [0, 0, 0],
         };
 
         self.queue.write_buffer(

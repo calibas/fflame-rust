@@ -420,6 +420,26 @@ pub fn render_colors_content(
                 if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteRotation, 0.0..=1.0, t!("tonemap.palette_rotation").as_ref(), Some(t!("tonemap.tooltip_palette_rotation").as_ref())) {
                     max_update = max_update.max(result.update_type);
                 }
+
+                // Palette size slider (256-4096, step by power of 2)
+                ui.horizontal(|ui| {
+                    ui.label(t!("tonemap.palette_size").as_ref());
+                    let current_size = config_manager.active_config().palette_size;
+                    let sizes = [256u32, 512, 1024, 2048, 4096];
+                    egui::ComboBox::from_id_salt("palette_size_combo")
+                        .selected_text(format!("{}", current_size))
+                        .show_ui(ui, |ui| {
+                            for &size in &sizes {
+                                if ui.selectable_label(current_size == size, format!("{}", size)).clicked() {
+                                    if let Err(e) = config_manager.update_param(ConfigPath::PaletteSize, (size as f32).into()) {
+                                        log::error!("Failed to update palette size: {}", e);
+                                    } else {
+                                        max_update = max_update.max(UpdateType::ColorOnly);
+                                    }
+                                }
+                            }
+                        });
+                }).response.on_hover_text(t!("tonemap.tooltip_palette_size").as_ref());
             }
 
             if matches!(current_color_mode, ColorMode::Speed) {

@@ -405,6 +405,7 @@ impl PresetLibrary {
                     target_iterations_per_pixel: 0,
                     alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,
                     alpha_blend_high: crate::config::defaults::DEFAULT_ALPHA_BLEND_HIGH,
+                    palette_size: crate::config::defaults::DEFAULT_PALETTE_SIZE,
                 }
             },
             Self::flame_to_config_with_palette(create_simple_flame(), &palette_library),
@@ -453,6 +454,7 @@ impl PresetLibrary {
                     target_iterations_per_pixel: 0,
                     alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,
                     alpha_blend_high: crate::config::defaults::DEFAULT_ALPHA_BLEND_HIGH,
+                    palette_size: crate::config::defaults::DEFAULT_PALETTE_SIZE,
                 }
             },
         ];
@@ -516,6 +518,7 @@ impl PresetLibrary {
             target_iterations_per_pixel: 0,
             alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,
             alpha_blend_high: crate::config::defaults::DEFAULT_ALPHA_BLEND_HIGH,
+            palette_size: crate::config::defaults::DEFAULT_PALETTE_SIZE,
         }
     }
 

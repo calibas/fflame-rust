@@ -33,10 +33,10 @@ struct TonemapParams {
     path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=PrefixDistinct, 3=SuffixDistinct, 4=Depth, 5=OriginRadial, 6=OriginHorizontal, 7=OriginVertical
     burn_in: u32,  // Burn-in iterations (for Depth gradient: start depth)
     num_transforms: u32,  // Number of transforms (for path coloring entropy)
+    palette_size: u32,  // Palette texture size (256-4096), for shader index calculations
     _pad0: u32,  // Padding to 16-byte boundary
     _pad1: u32,
     _pad2: u32,
-    _pad3: u32,
 }
 
 // Path storage entry (matches compute shader PathEntry)
@@ -556,8 +556,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                 }
 
                 // Load palette texture at position t
-                // Palette is 256x1 texture - use textureLoad to avoid uniform control flow requirement
-                let palette_idx = u32(clamp(t * 255.0, 0.0, 255.0));
+                // Palette is Nx1 texture (N = palette_size) - use textureLoad to avoid uniform control flow requirement
+                let max_idx = f32(tonemap_params.palette_size - 1u);
+                let palette_idx = u32(clamp(t * max_idx, 0.0, max_idx));
                 fractal_color = textureLoad(palette_texture, vec2<i32>(i32(palette_idx), 0), 0).rgb;
             }
         }
