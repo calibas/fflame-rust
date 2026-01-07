@@ -254,8 +254,9 @@ impl FlameRenderer {
         self.num_transforms = flame.transforms.len() as u32;
         self.has_final_transform = flame.final_transform.is_some();
 
-        // Recreate buffers with new size
-        self.buffers = FlameBuffers::new(device, queue, width, height, flame);
+        // Recreate buffers with new size (preserve palette_size)
+        let palette_size = self.buffers.palette_size();
+        self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
 
         // Recreate bind groups
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
@@ -1075,6 +1076,37 @@ impl FlameRenderer {
         self.buffers.update_palette(queue, palette, palette_rotation, palette_squeeze);
         // Recreate compute bind group to ensure palette texture is bound
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+    }
+
+    /// Change palette texture size (requires recreating buffers)
+    /// Returns true if size actually changed
+    pub fn set_palette_size(&mut self, device: &Device, queue: &Queue, flame: &Flame, new_size: u32) -> bool {
+        let current_size = self.buffers.palette_size();
+        if current_size == new_size {
+            return false;
+        }
+
+        // Recreate buffers with new palette size (preserves viewport dimensions)
+        self.buffers = FlameBuffers::with_palette_size(
+            device,
+            queue,
+            self.width,
+            self.height,
+            flame,
+            new_size,
+        );
+
+        // Recreate all bind groups
+        self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
+        self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
+
+        true
+    }
+
+    /// Get current palette texture size
+    pub fn palette_size(&self) -> u32 {
+        self.buffers.palette_size()
     }
 
     /// Set color mode

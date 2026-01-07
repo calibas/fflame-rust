@@ -256,13 +256,14 @@ impl App {
 
         let flame = initial_config.flame.clone();
 
-        let flame_renderer = FlameRenderer::new(
+        let flame_renderer = FlameRenderer::with_palette_size(
             &gpu.device,
             &gpu.queue,
             gpu.config.format,
             gpu.size.width,
             gpu.size.height,
             &flame,
+            initial_config.palette_size,
         );
 
         // ConfigManager loads SystemSettings automatically
