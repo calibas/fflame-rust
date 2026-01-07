@@ -617,9 +617,17 @@ palette_library:
   no_packs: "No palette packs loaded."
   no_packs_hint: "Place .json files in assets/palettes/packs/"
 
+  # Load states
+  not_loaded: "Click to load"
+  loading: "Loading..."
+  load_failed: "Failed to load"
+  retry: "Retry"
+
   # Tooltips
   tooltip_enable_pack: "Enable or disable this palette pack"
   tooltip_select_palette: "Click to use this palette (creates an editable copy)"
+  tooltip_click_to_load: "Click to download this palette pack"
+  tooltip_retry: "Click to try loading again"
 
 # Preset Library Panel
 preset_library:

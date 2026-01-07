@@ -551,46 +551,73 @@ impl PaletteLibrary {
             }
         }
 
+        // Load manifest to discover available packs (lazy loading)
         #[cfg(not(target_arch = "wasm32"))]
         {
-            use std::fs;
-            use std::path::Path;
-
-            // Load palette packs from filesystem (skip builtin.json, already embedded)
-            let packs_dir = Path::new("assets/palettes/packs");
-            if packs_dir.exists() {
-                if let Ok(entries) = fs::read_dir(packs_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-
-                        // Skip manifest and builtin (already loaded)
-                        if filename == "manifest.json" || filename == "builtin.json" {
+            match crate::resources::palettes::load_manifest() {
+                Ok(manifest) => {
+                    log::info!("Loaded palette manifest with {} packs", manifest.packs.len());
+                    for pack_meta in manifest.packs {
+                        // Skip builtin - already loaded embedded version
+                        if pack_meta.id == "builtin" {
                             continue;
                         }
+                        log::info!("  - {} ({} palettes, enabled: {})",
+                            pack_meta.name, pack_meta.item_count, pack_meta.enabled_by_default);
+                        packs.push(PalettePackInfo::from_metadata(pack_meta));
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to load palette manifest: {}", e);
+                    log::info!("Falling back to filesystem scan...");
 
-                        if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                            match fs::read_to_string(&path) {
-                                Ok(content) => {
-                                    match serde_json::from_str::<PalettePack>(&content) {
-                                        Ok(pack) => {
-                                            log::info!("Loaded palette pack: {} ({} palettes)",
-                                                pack.pack_name, pack.palettes.len());
-                                            packs.push(PalettePackInfo::from_pack(pack, false));
+                    // Fallback: scan filesystem directly
+                    use std::fs;
+                    use std::path::Path;
+
+                    let packs_dir = Path::new("assets/palettes/packs");
+                    if packs_dir.exists() {
+                        if let Ok(entries) = fs::read_dir(packs_dir) {
+                            for entry in entries.flatten() {
+                                let path = entry.path();
+                                let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+
+                                // Skip manifest and builtin (already loaded)
+                                if filename == "manifest.json" || filename == "builtin.json" {
+                                    continue;
+                                }
+
+                                if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                                    match fs::read_to_string(&path) {
+                                        Ok(content) => {
+                                            match serde_json::from_str::<PalettePack>(&content) {
+                                                Ok(pack) => {
+                                                    log::info!("Loaded palette pack: {} ({} palettes)",
+                                                        pack.pack_name, pack.palettes.len());
+                                                    packs.push(PalettePackInfo::from_pack(pack, false));
+                                                }
+                                                Err(e) => {
+                                                    log::error!("Failed to parse palette pack {:?}: {}", path, e);
+                                                }
+                                            }
                                         }
                                         Err(e) => {
-                                            log::error!("Failed to parse palette pack {:?}: {}", path, e);
+                                            log::error!("Failed to read palette pack {:?}: {}", path, e);
                                         }
                                     }
-                                }
-                                Err(e) => {
-                                    log::error!("Failed to read palette pack {:?}: {}", path, e);
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+
+        // WASM: Only use embedded builtin pack, manifest packs loaded on-demand
+        #[cfg(target_arch = "wasm32")]
+        {
+            // TODO: Could spawn async manifest fetch here for future enhancement
+            log::info!("WASM: Using embedded builtin pack only, other packs loaded on demand");
         }
 
         // Create library instance with empty palette list
@@ -679,6 +706,11 @@ impl PaletteLibrary {
     /// Get pack info at index (includes load state)
     pub fn get_pack_info(&self, index: usize) -> Option<&crate::resources::PalettePackInfo> {
         self.packs.get(index)
+    }
+
+    /// Get mutable access to packs (for retry state reset)
+    pub fn packs_mut(&mut self) -> &mut Vec<crate::resources::PalettePackInfo> {
+        &mut self.packs
     }
 
     /// Check if pack is enabled
@@ -857,6 +889,121 @@ impl PaletteLibrary {
     /// Get generation counter (for cache invalidation)
     pub fn generation(&self) -> u32 {
         self.generation
+    }
+
+    // ===== PACK LOADING METHODS =====
+
+    /// Start loading a pack by index (desktop - synchronous)
+    ///
+    /// Returns true if pack was loaded successfully, false if already loaded or failed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn start_pack_load(&mut self, pack_idx: usize) -> bool {
+        use crate::resources::LoadState;
+
+        let info = match self.packs.get_mut(pack_idx) {
+            Some(info) => info,
+            None => return false,
+        };
+
+        // Skip if already loaded or loading
+        if info.is_loaded() || info.is_loading() {
+            return false;
+        }
+
+        // Get file path from metadata
+        let file_path = match &info.metadata {
+            Some(meta) => meta.file.clone(),
+            None => {
+                log::warn!("Cannot load pack {}: no metadata", pack_idx);
+                return false;
+            }
+        };
+
+        // Mark as loading
+        info.load_state = LoadState::Loading;
+
+        // Synchronous load on desktop
+        log::info!("Loading palette pack: {}", file_path);
+        match crate::resources::palettes::load_pack(&file_path) {
+            Ok(pack) => {
+                log::info!("Loaded pack {} with {} palettes", pack.pack_name, pack.palettes.len());
+                if let Some(info) = self.packs.get_mut(pack_idx) {
+                    info.pack = Some(pack);
+                    info.load_state = LoadState::Loaded;
+                }
+                // Rebuild palette list if pack is enabled
+                if self.packs.get(pack_idx).map(|i| i.enabled).unwrap_or(false) {
+                    self.rebuild_palette_list();
+                }
+                true
+            }
+            Err(e) => {
+                log::error!("Failed to load pack {}: {}", file_path, e);
+                if let Some(info) = self.packs.get_mut(pack_idx) {
+                    info.load_state = LoadState::Failed(e.to_string());
+                }
+                false
+            }
+        }
+    }
+
+    /// Start loading a pack by index (WASM - marks as loading, returns file path for async fetch)
+    ///
+    /// Returns Some(file_path) if pack should be fetched, None if already loaded or no metadata.
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_pack_load(&mut self, pack_idx: usize) -> Option<String> {
+        use crate::resources::LoadState;
+
+        let info = match self.packs.get_mut(pack_idx) {
+            Some(info) => info,
+            None => return None,
+        };
+
+        // Skip if already loaded or loading
+        if info.is_loaded() || info.is_loading() {
+            return None;
+        }
+
+        // Get file path from metadata
+        let file_path = match &info.metadata {
+            Some(meta) => meta.file.clone(),
+            None => {
+                log::warn!("Cannot load pack {}: no metadata", pack_idx);
+                return None;
+            }
+        };
+
+        // Mark as loading
+        info.load_state = LoadState::Loading;
+        log::info!("Starting fetch for palette pack: {}", file_path);
+
+        Some(file_path)
+    }
+
+    /// Set pack as loaded (for async completion on WASM)
+    pub fn set_pack_loaded(&mut self, pack_idx: usize, pack: PalettePack) {
+        use crate::resources::LoadState;
+
+        if let Some(info) = self.packs.get_mut(pack_idx) {
+            log::info!("Pack {} loaded with {} palettes", pack.pack_name, pack.palettes.len());
+            info.pack = Some(pack);
+            info.load_state = LoadState::Loaded;
+
+            // Rebuild palette list if pack is enabled
+            if info.enabled {
+                self.rebuild_palette_list();
+            }
+        }
+    }
+
+    /// Set pack as failed (for async completion on WASM)
+    pub fn set_pack_failed(&mut self, pack_idx: usize, error: String) {
+        use crate::resources::LoadState;
+
+        if let Some(info) = self.packs.get_mut(pack_idx) {
+            log::error!("Pack {} failed to load: {}", info.name(), error);
+            info.load_state = LoadState::Failed(error);
+        }
     }
 
     /// Generate preview image for a palette
