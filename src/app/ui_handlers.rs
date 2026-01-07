@@ -527,6 +527,10 @@ impl App {
             use crate::ui::workspace::PanelType;
             self.workspace.open_floating_panel(PanelType::PaletteEditor);
         }
+        if ui_response.open_palette_library {
+            use crate::ui::workspace::PanelType;
+            self.workspace.open_floating_panel(PanelType::PaletteLibrary);
+        }
         if ui_response.open_config_dialog {
             use crate::ui::workspace::PanelType;
             self.workspace.open_floating_panel(PanelType::ConfigDialog);

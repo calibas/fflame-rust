@@ -174,6 +174,7 @@ pub fn render_colors_content(
     config_manager: &mut ConfigManager,
     palette_library: &PaletteLibrary,
     open_palette_editor: &mut bool,
+    open_palette_library: &mut bool,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
@@ -340,9 +341,7 @@ pub fn render_colors_content(
 
             let current_color_mode = config_manager.active_config().color_mode;
             if matches!(current_color_mode, ColorMode::Palette | ColorMode::Speed) {
-                // Clone palette to avoid borrow checker issues with closures
-                let current_palette = config_manager.active_config().palette.clone();
-                let current_palette_name = current_palette.name.clone();
+                let current_palette_name = config_manager.active_config().palette.name.clone();
 
                 // Build list of palettes from enabled packs
                 let mut available_palettes: Vec<&crate::scene::palette::Palette> = Vec::new();
@@ -392,30 +391,8 @@ pub fn render_colors_content(
                     if ui.button(t!("tonemap.edit_palette")).clicked() {
                         *open_palette_editor = true;
                     }
-
-                    if ui.button(t!("tonemap.clone_palette")).clicked() {
-                        // Clone current palette with new name
-                        let mut cloned_palette = current_palette.clone();
-                        let base_name = &current_palette.name;
-                        let mut new_name = format!("{} (Copy)", base_name);
-                        let mut counter = 2;
-
-                        // Ensure unique name among available palettes
-                        while available_palettes.iter().any(|p| p.name == new_name)
-                            || current_palette_name == new_name {
-                            new_name = format!("{} (Copy {})", base_name, counter);
-                            counter += 1;
-                        }
-
-                        cloned_palette.name = new_name;
-                        cloned_palette.built_in = false;
-
-                        if let Ok(update) = config_manager.update_param(
-                            ConfigPath::Palette,
-                            cloned_palette.into()
-                        ) {
-                            max_update = max_update.max(update);
-                        }
+                    if ui.button(t!("tonemap.browse_palettes")).clicked() {
+                        *open_palette_library = true;
                     }
                 });
 
