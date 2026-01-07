@@ -12,15 +12,6 @@ pub fn render_palette_library(
     library: &mut PaletteLibrary,
     config_manager: &mut ConfigManager,
 ) {
-
-    // Search box (future feature)
-    ui.horizontal(|ui| {
-        ui.label(t!("palette_library.search"));
-        ui.add_enabled(false, egui::TextEdit::singleline(&mut String::new()).hint_text(t!("palette_library.search_hint")));
-    });
-
-    ui.separator();
-
     // Scrollable area for pack list
     egui::ScrollArea::vertical().show(ui, |ui| {
         // Iterate through all packs
