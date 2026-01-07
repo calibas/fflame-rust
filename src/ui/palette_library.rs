@@ -70,8 +70,16 @@ pub fn render_palette_library(
                                     let preview_height = 20.0;
                                     let preview_width = 200.0;
 
+                                    // Check if this is the Custom pack
+                                    let is_custom_pack = library.custom_pack_index() == Some(pack_idx);
+
                                     // Generate texture ID based on pack and palette index
-                                    let texture_id = egui::Id::new(("palette_preview", pack_idx, palette_idx));
+                                    // For Custom pack: include generation counter to invalidate cache on save/delete
+                                    let texture_id = if is_custom_pack {
+                                        egui::Id::new(("palette_preview", pack_idx, palette_idx, library.generation()))
+                                    } else {
+                                        egui::Id::new(("palette_preview", pack_idx, palette_idx))
+                                    };
 
                                     // Load or get cached texture using egui's memory system
                                     let texture = ui.ctx().data_mut(|data| {
