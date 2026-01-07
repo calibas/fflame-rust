@@ -421,6 +421,11 @@ pub fn render_colors_content(
                     max_update = max_update.max(result.update_type);
                 }
 
+                // Palette squeeze slider (0.1 to 16.0)
+                if let Ok(result) = ui.lazy_slider(config_manager, ConfigPath::PaletteSqueeze, 0.1..=16.0, t!("tonemap.palette_squeeze").as_ref(), Some(t!("tonemap.tooltip_palette_squeeze").as_ref())) {
+                    max_update = max_update.max(result.update_type);
+                }
+
                 // Palette size slider (256-4096, step by power of 2)
                 ui.horizontal(|ui| {
                     ui.label(t!("tonemap.palette_size").as_ref());

@@ -538,8 +538,8 @@ impl FlameRenderer {
         self.histogram_color_scale = config.histogram_color_scale;
         self.burn_in = burn_in;
 
-        // 5. Update palette with hue rotation
-        self.buffers.update_palette(queue, palette, config.palette_rotation);
+        // 5. Update palette with rotation and squeeze
+        self.buffers.update_palette(queue, palette, config.palette_rotation, config.palette_squeeze);
 
         // Note: scale_buffer removed - scale is now in params.histogram_color_scale
 
@@ -1071,8 +1071,8 @@ impl FlameRenderer {
     }
 
     /// Update palette texture
-    pub fn update_palette(&mut self, device: &Device, queue: &Queue, palette: &Palette, hue_rotation: f32) {
-        self.buffers.update_palette(queue, palette, hue_rotation);
+    pub fn update_palette(&mut self, device: &Device, queue: &Queue, palette: &Palette, palette_rotation: f32, palette_squeeze: f32) {
+        self.buffers.update_palette(queue, palette, palette_rotation, palette_squeeze);
         // Recreate compute bind group to ensure palette texture is bound
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
     }

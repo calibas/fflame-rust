@@ -290,6 +290,7 @@ fn parse_flame_element(
         alpha_blend_low: crate::config::defaults::DEFAULT_ALPHA_BLEND_LOW,
         alpha_blend_high: crate::config::defaults::DEFAULT_ALPHA_BLEND_HIGH,
         palette_size: crate::config::defaults::DEFAULT_PALETTE_SIZE,
+        palette_squeeze: crate::config::defaults::DEFAULT_PALETTE_SQUEEZE,
     })
 }
 

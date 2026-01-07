@@ -2,7 +2,7 @@
 
 **Branch:** `feature/palette-improvements`
 **Created:** 2025-01-06
-**Status:** Phase 1 Complete
+**Status:** Phase 1, 4, 5 Complete
 
 ## Overview
 
@@ -151,13 +151,40 @@ GPU texture sampling cost is negligible - caching handles it efficiently.
 - **Old configs:** Palettes without `palette_size` default to 256.
 - **Gradients:** Already variable-length, just need to sample at correct size.
 
-### Phase 5: Palette Stretching/Squeezing
+### Phase 5: Palette Squeeze ✅ COMPLETE
 **Goal:** Transform palette color distribution
+**Status:** Complete
+**Completed:** 2025-01-06
 
-- [ ] Add stretch/squeeze controls to Palette Editor
-- [ ] Implement non-linear remapping of color positions
-- [ ] Preview changes in real-time
-- [ ] Apply changes to palette stops
+#### Implementation Summary
+- Added `palette_squeeze: f32` field to `FractalConfig` (default 1.0)
+- Squeeze transformation applied in `update_palette()` before GPU upload
+- **Squeeze > 1** (e.g., 16): Palette repeats N times across the texture
+- **Squeeze < 1** (e.g., 0.1): Only 10% of palette shown, stretched to fill
+- Formula: `src_t = (dst_t * squeeze) % 1.0`
+- Order of operations: Squeeze first, then rotation
+- No shader changes required - all processing done on CPU before texture upload
+
+#### Files Modified (12 files)
+- `src/config/defaults.rs` - DEFAULT_PALETTE_SQUEEZE constant
+- `src/config/fractal_config.rs` - palette_squeeze field with serde defaults
+- `src/config/delta.rs` - ConfigPath::PaletteSqueeze variant
+- `src/config/manager.rs` - PaletteSqueeze getter/setter (clamped 0.1-16.0)
+- `src/gpu/buffers.rs` - update_palette() applies squeeze transformation
+- `src/renderer/compute_kernel.rs` - FlameRenderer::update_palette() wrapper
+- `src/app/gpu_updates.rs` - Pass palette_squeeze parameter
+- `src/app/ui_handlers.rs` - Pass palette_squeeze parameter (3 locations)
+- `src/app/mod.rs` - Pass palette_squeeze on resize
+- `src/ui/tone_mapping.rs` - Palette Squeeze slider (0.1 to 16.0)
+- `src/scene/presets.rs` - Added palette_squeeze to FractalConfig constructors
+- `src/apophysis_xml.rs` - Added palette_squeeze to FractalConfig constructor
+- `locales/en.yml` - Translations for palette_squeeze
+
+#### Usage
+- **Slider range:** 0.1 to 16.0
+- **Default:** 1.0 (no change)
+- **Example:** Squeeze = 4.0 with 1024 palette size = 256-color pattern repeated 4 times
+- **Benefit for video:** Combined with palette rotation for smoother color cycling
 
 ### Phase 6: Randomize Palette
 **Goal:** Generate random palettes for exploration
