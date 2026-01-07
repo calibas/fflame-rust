@@ -287,6 +287,7 @@ impl EguiLayer {
         let mut custom_palette = None;
         let mut palette_export_json = None;
         let mut palette_save_file = None;
+        let mut palette_save_to_library = None;
         let mut palette_import_json = None;
         let mut palette_load_file = false;
 
@@ -394,6 +395,7 @@ impl EguiLayer {
                         palette_editor: &mut self.palette_editor,
                         palette_export_json: &mut palette_export_json,
                         palette_save_file: &mut palette_save_file,
+                        palette_save_to_library: &mut palette_save_to_library,
                         palette_import_json: &mut palette_import_json,
                         palette_load_file: &mut palette_load_file,
 
@@ -591,6 +593,7 @@ impl EguiLayer {
             custom_palette,
             palette_export_json,
             palette_save_file,
+            palette_save_to_library,
             palette_import_json,
             palette_load_file,
             undo_requested,

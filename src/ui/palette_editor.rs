@@ -26,6 +26,7 @@ fn render_palette_editor_core_impl(
     _custom_palette: &mut Option<Palette>,
     palette_export_json: &mut Option<Palette>,
     palette_save_file: &mut Option<Palette>,
+    palette_save_to_library: &mut Option<Palette>,
     palette_import_json: &mut Option<String>,
     palette_load_file: &mut bool,
 ) {
@@ -227,6 +228,14 @@ fn render_palette_editor_core_impl(
                     }
                 });
 
+                // Save to Library button
+                if ui.button(t!("palette_editor.save_to_library"))
+                    .on_hover_text(t!("palette_editor.tooltip_save_to_library"))
+                    .clicked()
+                {
+                    *palette_save_to_library = Some(palette.clone());
+                }
+
                 ui.separator();
                 ui.label(t!("palette_editor.import_from_json"));
 
@@ -304,6 +313,7 @@ pub fn render_palette_editor_content(
     custom_palette: &mut Option<Palette>,
     palette_export_json: &mut Option<Palette>,
     palette_save_file: &mut Option<Palette>,
+    palette_save_to_library: &mut Option<Palette>,
     palette_import_json: &mut Option<String>,
     palette_load_file: &mut bool,
 ) {
@@ -319,6 +329,7 @@ pub fn render_palette_editor_content(
         custom_palette,
         palette_export_json,
         palette_save_file,
+        palette_save_to_library,
         palette_import_json,
         palette_load_file,
     );

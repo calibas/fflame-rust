@@ -571,6 +571,8 @@ palette_editor:
   import_export: "Import/Export Palette"
   export_clipboard: "📋 Export to Clipboard"
   save_as_palette: "💾 Save as .palette"
+  save_to_library: "📚 Save to Library"
+  tooltip_save_to_library: "Save this palette to your Custom library (persists across sessions)"
   import_from_json: "Import from JSON:"
   import: "✅ Import"
   clear: "🗑 Clear"

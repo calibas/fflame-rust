@@ -13,9 +13,11 @@
 //! - WASM (Browser): localStorage for small data, IndexedDB for large data
 
 pub mod backend;
+pub mod custom_palettes;
 pub mod settings;
 pub mod thumbnail_cache;
 
 pub use backend::{StorageError, StorageResult};
+pub use custom_palettes::CustomPaletteLibrary;
 pub use settings::SystemSettings;
 pub use thumbnail_cache::{ThumbnailCache, GalleryItem, TextureCache};
