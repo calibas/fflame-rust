@@ -526,6 +526,8 @@ pub struct PaletteLibrary {
     enabled_packs: Vec<bool>,
     /// Index of the Custom pack (user-saved palettes)
     custom_pack_index: Option<usize>,
+    /// Generation counter - increments when custom library is modified (for cache invalidation)
+    generation: u32,
 }
 
 impl Default for PaletteLibrary {
@@ -583,6 +585,7 @@ impl PaletteLibrary {
             packs,
             enabled_packs,
             custom_pack_index: None,
+            generation: 0,
         };
 
         // Add Grayscale as fallback (always first)
@@ -808,6 +811,9 @@ impl PaletteLibrary {
         // Rebuild palette list
         self.rebuild_palette_list();
 
+        // Increment generation for cache invalidation
+        self.generation = self.generation.wrapping_add(1);
+
         Ok(())
     }
 
@@ -839,6 +845,9 @@ impl PaletteLibrary {
 
             // Rebuild palette list
             self.rebuild_palette_list();
+
+            // Increment generation for cache invalidation
+            self.generation = self.generation.wrapping_add(1);
         }
 
         Ok(deleted)
@@ -850,6 +859,16 @@ impl PaletteLibrary {
             .and_then(|idx| self.packs.get(idx))
             .map(|pack| !pack.palettes.is_empty())
             .unwrap_or(false)
+    }
+
+    /// Get the index of the Custom pack (if it exists)
+    pub fn custom_pack_index(&self) -> Option<usize> {
+        self.custom_pack_index
+    }
+
+    /// Get generation counter (for cache invalidation)
+    pub fn generation(&self) -> u32 {
+        self.generation
     }
 
     /// Generate preview image for a palette

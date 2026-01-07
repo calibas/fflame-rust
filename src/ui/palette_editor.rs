@@ -251,57 +251,65 @@ fn render_palette_editor_core_impl(
 
             ui.separator();
 
+            ui.label(t!("palette_editor.palette_library"));
+
+            // Check if palette exists in custom library
+            let exists_in_library = has_custom_palette_named(&palette.name);
+
+             // Save to Library button
+            ui.horizontal(|ui| {
+                if ui.button(t!("palette_editor.save_to_library"))
+                    .on_hover_text(if exists_in_library {
+                        t!("palette_editor.tooltip_overwrite_library")
+                    } else {
+                        t!("palette_editor.tooltip_save_to_library")
+                    })
+                    .clicked()
+                {
+                    if exists_in_library {
+                        // Show overwrite confirmation
+                        palette_editor.pending_save_palette = Some(palette.clone());
+                        palette_editor.show_overwrite_confirmation = true;
+                    } else {
+                        // Save directly
+                        *palette_save_to_library = Some(palette.clone());
+                    }
+                }
+
+                // Delete from Library button (disabled if not in library)
+                if ui.add_enabled(
+                    exists_in_library,
+                    egui::Button::new(t!("palette_editor.delete_from_library"))
+                )
+                .on_hover_text(if exists_in_library {
+                    t!("palette_editor.tooltip_delete_from_library")
+                } else {
+                    t!("palette_editor.tooltip_delete_not_in_library")
+                })
+                .clicked()
+                {
+                    palette_editor.pending_delete_name = Some(palette.name.clone());
+                    palette_editor.show_delete_confirmation = true;
+                }
+            });
+
+            ui.separator();
+
             // Import/Export section
             ui.collapsing(t!("palette_editor.import_export"), |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button(t!("palette_editor.export_clipboard")).clicked() {
-                        *palette_export_json = Some(palette.clone());
-                    }
-
                     if ui.button(t!("palette_editor.save_as_palette")).clicked() {
                         *palette_save_file = Some(palette.clone());
                     }
-                });
 
-                // Check if palette exists in custom library
-                let exists_in_library = has_custom_palette_named(&palette.name);
-
-                // Save to Library button
-                ui.horizontal(|ui| {
-                    if ui.button(t!("palette_editor.save_to_library"))
-                        .on_hover_text(if exists_in_library {
-                            t!("palette_editor.tooltip_overwrite_library")
-                        } else {
-                            t!("palette_editor.tooltip_save_to_library")
-                        })
-                        .clicked()
-                    {
-                        if exists_in_library {
-                            // Show overwrite confirmation
-                            palette_editor.pending_save_palette = Some(palette.clone());
-                            palette_editor.show_overwrite_confirmation = true;
-                        } else {
-                            // Save directly
-                            *palette_save_to_library = Some(palette.clone());
-                        }
-                    }
-
-                    // Delete from Library button (disabled if not in library)
-                    if ui.add_enabled(
-                        exists_in_library,
-                        egui::Button::new(t!("palette_editor.delete_from_library"))
-                    )
-                    .on_hover_text(if exists_in_library {
-                        t!("palette_editor.tooltip_delete_from_library")
-                    } else {
-                        t!("palette_editor.tooltip_delete_not_in_library")
-                    })
-                    .clicked()
-                    {
-                        palette_editor.pending_delete_name = Some(palette.name.clone());
-                        palette_editor.show_delete_confirmation = true;
+                    if ui.button(t!("palette_editor.load_palette")).clicked() {
+                        *palette_load_file = true;
                     }
                 });
+
+                if ui.button(t!("palette_editor.export_clipboard")).clicked() {
+                    *palette_export_json = Some(palette.clone());
+                }
 
                 ui.separator();
                 ui.label(t!("palette_editor.import_from_json"));
@@ -319,10 +327,6 @@ fn render_palette_editor_core_impl(
 
                     if ui.button(t!("palette_editor.clear")).clicked() {
                         palette_editor.json_buffer.clear();
-                    }
-
-                    if ui.button(t!("palette_editor.load_palette")).clicked() {
-                        *palette_load_file = true;
                     }
                 });
             });
