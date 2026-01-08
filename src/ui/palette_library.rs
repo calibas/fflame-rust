@@ -42,6 +42,22 @@ pub fn render_palette_library(
     #[cfg(target_arch = "wasm32")]
     library.sync_from_global();
 
+    // WASM: Auto-load enabled packs that haven't been loaded yet (e.g., on startup)
+    #[cfg(target_arch = "wasm32")]
+    {
+        for pack_idx in 0..library.pack_count() {
+            let needs_auto_load = library.get_pack_info(pack_idx)
+                .map(|info| info.enabled && !info.is_loaded() && !info.is_loading() && info.metadata.is_some())
+                .unwrap_or(false);
+
+            if needs_auto_load {
+                if let Some(file_path) = library.start_pack_load(pack_idx) {
+                    spawn_pack_fetch(ui.ctx().clone(), pack_idx, file_path);
+                }
+            }
+        }
+    }
+
     // Quick access to palette editor
     if ui.button(t!("palette_library.open_editor")).clicked() {
         *open_palette_editor = true;
@@ -101,7 +117,6 @@ pub fn render_palette_library(
                 match &load_state {
                     LoadState::NotLoaded => {
                         ui.weak(format!("({} palettes)", palette_count));
-                        ui.weak(t!("palette_library.not_loaded"));
                     }
                     LoadState::Loading => {
                         ui.spinner();
