@@ -38,6 +38,10 @@ pub fn render_palette_library(
     config_manager: &mut ConfigManager,
     open_palette_editor: &mut bool,
 ) {
+    // WASM: Sync from global singleton (async fetches update global, not local)
+    #[cfg(target_arch = "wasm32")]
+    library.sync_from_global();
+
     // Quick access to palette editor
     if ui.button(t!("palette_library.open_editor")).clicked() {
         *open_palette_editor = true;

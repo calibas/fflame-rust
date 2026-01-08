@@ -637,11 +637,26 @@ impl PaletteLibrary {
             }
         }
 
-        // WASM: Only use embedded builtin pack, manifest packs loaded on-demand
+        // WASM: Use embedded manifest to discover packs (content fetched on-demand)
         #[cfg(target_arch = "wasm32")]
         {
-            // TODO: Could spawn async manifest fetch here for future enhancement
-            log::info!("WASM: Using embedded builtin pack only, other packs loaded on demand");
+            match crate::resources::palettes::load_embedded_manifest() {
+                Ok(manifest) => {
+                    log::info!("WASM: Loaded embedded manifest with {} packs", manifest.packs.len());
+                    for pack_meta in manifest.packs {
+                        // Skip builtin - already loaded embedded version
+                        if pack_meta.id == "builtin" {
+                            continue;
+                        }
+                        log::info!("  - {} ({} palettes, enabled: {})",
+                            pack_meta.name, pack_meta.item_count, pack_meta.enabled_by_default);
+                        packs.push(PalettePackInfo::from_metadata(pack_meta));
+                    }
+                }
+                Err(e) => {
+                    log::error!("WASM: Failed to parse embedded manifest: {}", e);
+                }
+            }
         }
 
         // Create library instance with empty palette list
@@ -769,8 +784,16 @@ impl PaletteLibrary {
     /// Returns Some(file_path) if pack needs to be fetched, None otherwise
     #[cfg(target_arch = "wasm32")]
     pub fn set_pack_enabled(&mut self, index: usize, enabled: bool) -> Option<String> {
+        // Update local instance
         if let Some(info) = self.packs.get_mut(index) {
             info.enabled = enabled;
+        }
+
+        // Also update global instance (so async completion knows pack is enabled)
+        if let Ok(mut global) = global_palette_library().write() {
+            if let Some(info) = global.packs.get_mut(index) {
+                info.enabled = enabled;
+            }
         }
 
         // If enabling and not loaded, return file path for async fetch
@@ -1035,8 +1058,16 @@ impl PaletteLibrary {
             }
         };
 
-        // Mark as loading
+        // Mark as loading (local instance)
         info.load_state = LoadState::Loading;
+
+        // Also mark global as loading (so sync_from_global doesn't reset state)
+        if let Ok(mut global) = global_palette_library().write() {
+            if let Some(global_info) = global.packs.get_mut(pack_idx) {
+                global_info.load_state = LoadState::Loading;
+            }
+        }
+
         log::info!("Starting fetch for palette pack: {}", file_path);
 
         Some(file_path)
@@ -1065,6 +1096,32 @@ impl PaletteLibrary {
         if let Some(info) = self.packs.get_mut(pack_idx) {
             log::error!("Pack {} failed to load: {}", info.name(), error);
             info.load_state = LoadState::Failed(error);
+        }
+    }
+
+    /// Sync pack states from global singleton (WASM only)
+    ///
+    /// On WASM, async fetches update the global singleton, but the UI may hold
+    /// a separate instance. This method syncs pack load states and content.
+    #[cfg(target_arch = "wasm32")]
+    pub fn sync_from_global(&mut self) {
+        if let Ok(global) = global_palette_library().read() {
+            // Sync each pack's state
+            for (idx, global_info) in global.packs.iter().enumerate() {
+                if let Some(local_info) = self.packs.get_mut(idx) {
+                    // Only sync if states differ
+                    if local_info.load_state != global_info.load_state {
+                        local_info.load_state = global_info.load_state.clone();
+                        local_info.pack = global_info.pack.clone();
+                        local_info.enabled = global_info.enabled;
+                    }
+                }
+            }
+            // Sync palette list if generation changed
+            if self.generation != global.generation {
+                self.palettes = global.palettes.clone();
+                self.generation = global.generation;
+            }
         }
     }
 
