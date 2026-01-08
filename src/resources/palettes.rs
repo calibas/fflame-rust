@@ -11,6 +11,9 @@ pub const MANIFEST_PATH: &str = "assets/palettes/packs/manifest.json";
 /// Built-in pack (embedded at compile time for offline fallback)
 pub const BUILTIN_PACK_JSON: &str = include_str!("../../assets/palettes/packs/builtin.json");
 
+/// Manifest (embedded at compile time for WASM pack discovery)
+pub const MANIFEST_JSON: &str = include_str!("../../assets/palettes/packs/manifest.json");
+
 /// A palette pack with load state tracking
 #[derive(Clone)]
 pub struct PalettePackInfo {
@@ -121,6 +124,11 @@ pub async fn load_manifest() -> Result<ResourceManifest, FetchError> {
 /// Load the embedded built-in pack
 pub fn load_builtin_pack() -> Result<PalettePack, FetchError> {
     serde_json::from_str(BUILTIN_PACK_JSON).map_err(FetchError::from)
+}
+
+/// Load the embedded manifest (for WASM - synchronous from compile-time embedded string)
+pub fn load_embedded_manifest() -> Result<ResourceManifest, FetchError> {
+    serde_json::from_str(MANIFEST_JSON).map_err(FetchError::from)
 }
 
 /// Load a palette pack from its file path (desktop - synchronous)

@@ -11,6 +11,11 @@ echo Generating JavaScript bindings...
 wasm-bindgen --out-dir ./pkg --target web ./target/wasm32-unknown-unknown/release/fractal_flame_wgpu.wasm
 if %errorlevel% neq 0 exit /b %errorlevel%
 
+REM Copy assets for runtime loading
+echo Copying assets...
+if not exist "pkg\assets\palettes\packs" mkdir "pkg\assets\palettes\packs"
+xcopy /Y /Q "assets\palettes\packs\*.json" "pkg\assets\palettes\packs\" >nul 2>&1
+
 echo.
 echo Build complete! Output in ./pkg
 echo.

@@ -22,6 +22,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Copy assets for runtime loading
+echo "Copying assets..."
+mkdir -p pkg/assets/palettes/packs
+cp assets/palettes/packs/*.json pkg/assets/palettes/packs/
+
 echo ""
 echo "✅ Build complete! Output in ./pkg"
 echo ""
