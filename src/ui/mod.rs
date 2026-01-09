@@ -14,6 +14,7 @@ mod panel_viewer;
 mod path_editor;
 mod performance;
 pub mod preset_library;
+mod random_generator;
 mod response;
 mod settings;
 mod tone_mapping;
@@ -94,6 +95,10 @@ pub struct EguiLayer {
 
     // Path editor state
     path_editor_state: path_editor::PathEditorState,
+
+    // Random generator panel state
+    random_generator_panel: Option<random_generator::RandomGeneratorPanel>,
+    generated_flame: Option<crate::scene::transforms::Flame>,
 }
 
 impl EguiLayer {
@@ -139,6 +144,8 @@ impl EguiLayer {
             path_click_info: None,
             close_path_overlay: false,
             path_editor_state: path_editor::PathEditorState::new(),
+            random_generator_panel: None,
+            generated_flame: None,
         }
     }
 
@@ -448,6 +455,10 @@ impl EguiLayer {
 
                         // PNG export progress
                         png_export_progress,
+
+                        // Random generator panel state
+                        random_generator_panel: &mut self.random_generator_panel,
+                        generated_flame: &mut self.generated_flame,
                     },
                 });
 
@@ -586,6 +597,9 @@ impl EguiLayer {
         // Take selected preset config (reset to None after returning)
         let selected_preset_config = self.selected_preset_config.take();
 
+        // Take generated flame from random generator panel
+        let generated_flame = self.generated_flame.take();
+
         UiResponse {
             config_export_requested: config_export_json,
             config_import_requested: config_import_json,
@@ -618,6 +632,7 @@ impl EguiLayer {
             animation_export_requested,
             animation_seek_changed,
             path_filters_changed,
+            generated_flame,
         }
     }
 

@@ -96,6 +96,10 @@ pub struct PanelContext<'a> {
 
     // PNG export progress
     pub png_export_progress: &'a super::export_panel::PngExportProgress,
+
+    // Random generator panel state
+    pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
+    pub generated_flame: &'a mut Option<crate::scene::transforms::Flame>,
 }
 
 /// Viewer for rendering each panel type
@@ -162,6 +166,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::Export => {
                 self.render_export_panel(ui);
+            }
+            PanelType::RandomGenerator => {
+                self.render_random_generator_panel(ui);
             }
         }
     }
@@ -895,5 +902,34 @@ impl<'a> PanelViewer<'a> {
             *self.context.fractal_viewport_size,
             self.context.png_export_progress,
         );
+    }
+
+    /// Render Random Generator panel (generate random flames with settings)
+    fn render_random_generator_panel(&mut self, ui: &mut egui::Ui) {
+        // Initialize panel if not already created
+        if self.context.random_generator_panel.is_none() {
+            *self.context.random_generator_panel = Some(super::random_generator::RandomGeneratorPanel::new());
+        }
+
+        if let Some(panel) = self.context.random_generator_panel.as_mut() {
+            let response = panel.render(ui);
+
+            // Handle generate single request
+            if response.generate_single {
+                let flame = crate::scene::randomize::generate_random_flame_with_settings(&panel.settings);
+                *self.context.generated_flame = Some(flame);
+            }
+
+            // Handle generate batch request
+            if response.generate_batch {
+                let flames = crate::scene::randomize::generate_batch(&panel.settings);
+                log::info!("Generated batch of {} flames", flames.len());
+                // TODO: Open gallery with batch results
+                // For now, just load the first one
+                if let Some(flame) = flames.into_iter().next() {
+                    *self.context.generated_flame = Some(flame);
+                }
+            }
+        }
     }
 }
