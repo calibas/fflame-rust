@@ -216,6 +216,12 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::PathEditor);
                 }
 
+                // Random Generator panel
+                let random_generator_open = workspace.panel_exists(super::workspace::PanelType::RandomGenerator);
+                if ui.selectable_label(random_generator_open, t!("menu.window_random_generator").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator);
+                }
+
                 ui.separator();
                 ui.menu_button(t!("menu.workspace_layout"), |ui| {
                     let current = workspace.current_layout;

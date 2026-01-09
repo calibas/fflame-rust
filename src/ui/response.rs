@@ -59,6 +59,9 @@ pub struct UiResponse {
 
     // Path filters changed (applies to renderer, not config)
     pub path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>>,
+
+    // Generated flame from random generator panel
+    pub generated_flame: Option<crate::scene::transforms::Flame>,
 }
 
 impl Default for UiResponse {
@@ -95,6 +98,7 @@ impl Default for UiResponse {
             animation_export_requested: None,
             animation_seek_changed: false,
             path_filters_changed: None,
+            generated_flame: None,
         }
     }
 }
