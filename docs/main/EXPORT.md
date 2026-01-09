@@ -649,29 +649,6 @@ pub fn read_png_metadata(path: &std::path::Path) -> Result<PngMetadata, Box<dyn 
 
 **Location:** [src/renderer/compute_kernel.rs](../../src/renderer/compute_kernel.rs)
 
-**Issue:** WASM has strict lifetime requirements for async operations.
-
-**Solution:** Use `unsafe` lifetime extension (safe in practice):
-
-```rust
-#[cfg(target_arch = "wasm32")]
-{
-    // WASM requires 'static lifetime for async block
-    // Safe because GPU resources live for program lifetime
-    let buffer_slice_static: &'static [u8] = unsafe {
-        std::mem::transmute(buffer_slice.get_mapped_range().as_ref())
-    };
-
-    // Use buffer_slice_static in wasm_bindgen_futures::spawn_local
-    // ...
-}
-```
-
-**Why safe:**
-- GPU device, queue, and buffers live for entire program lifetime
-- WASM single-threaded execution model
-- No concurrent access possible
-- Resources never dropped until program exit
 
 **WASM-specific behavior:**
 - File dialogs use browser native APIs (via `rfd` crate)

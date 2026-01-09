@@ -151,7 +151,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
   - Opaque export uses standard tonemap shader path
 - ✅ GPU readback via buffer mapping
 - ✅ Desktop: Full PNG export with file dialog (uses `pollster::block_on`)
-- ✅ WASM: Full PNG export with async file dialog (uses `wasm_bindgen_futures::spawn_local` with `unsafe` lifetime extension)
+- ✅ WASM: Full PNG export with async file dialog (uses `wasm_bindgen_futures::spawn_local`)
 
 **Missing:**
 - ❌ Tiled rendering for high-resolution export
@@ -280,7 +280,6 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 - No multi-resolution progressive rendering
 - No per-pixel sample count tracking
 - No adaptive sampling or denoising
-- WASM PNG export uses `unsafe` lifetime extension (safe in practice as GPU resources live for program lifetime)
 
 ---
 

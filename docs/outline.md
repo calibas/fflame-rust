@@ -335,7 +335,7 @@ Implemented in `ui/mod.rs` using egui (floating windows):
 - ✅ Automatic BGRA ↔ RGBA conversion for format compatibility
 - ✅ Vertical flip (GPU textures are upside down)
 - ✅ Desktop: blocking export with file dialog
-- ✅ WASM: async export with `spawn_local` and `unsafe` lifetime extension
+- ✅ WASM: async export with `spawn_local` lifetime extension
 
 **Not Implemented (from outline):**
 - ❌ Tiled high-resolution rendering (would allow 4K+ exports)
