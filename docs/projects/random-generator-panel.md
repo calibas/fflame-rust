@@ -61,6 +61,14 @@ A dedicated panel for generating random fractal flames with full control over th
 │    □ Distribute colors evenly              │
 │    □ Random palette from library           │
 │                                             │
+│  ▼ Symmetry ─────────────────────────────────│
+│    Type: [None ▼]                          │
+│      • None                                │
+│      • Bilateral (Horizontal)              │
+│      • Bilateral (Vertical)                │
+│      • Rotational...  Order: [3 ▼]         │
+│      • Dihedral...    Order: [3 ▼]         │
+│                                             │
 │  ▼ 3D Options (optional) ──────────────────│
 │    □ Enable 3D mode                        │
 │    □ Include 3D variations                 │
@@ -124,6 +132,9 @@ pub struct RandomGeneratorSettings {
     pub distribute_colors_evenly: bool,
     pub random_palette: bool,
 
+    // Symmetry options
+    pub symmetry: SymmetryType,
+
     // 3D options
     pub enable_3d: bool,
     pub include_3d_variations: bool,
@@ -133,6 +144,21 @@ pub struct RandomGeneratorSettings {
     // Batch options
     pub batch_count: usize,
     pub seed: Option<u64>,
+}
+
+/// Symmetry type for generated flames
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SymmetryType {
+    #[default]
+    None,
+    /// Mirror across Y axis (flip X). Adds 1 transform with A=-1.
+    BilateralHorizontal,
+    /// Mirror across X axis (flip Y). Adds 1 transform with D=-1.
+    BilateralVertical,
+    /// N-fold rotational symmetry. Adds N-1 transforms rotated by k×(360°/N).
+    Rotational(u8),
+    /// Dihedral symmetry (rotation + reflection). Adds N transforms total.
+    Dihedral(u8),
 }
 
 impl Default for RandomGeneratorSettings {
@@ -159,6 +185,7 @@ impl Default for RandomGeneratorSettings {
             weight_max: 1.5,
             distribute_colors_evenly: true,
             random_palette: true,
+            symmetry: SymmetryType::None,
             enable_3d: false,
             include_3d_variations: false,
             perspective_min: 0.0,
@@ -169,6 +196,45 @@ impl Default for RandomGeneratorSettings {
     }
 }
 ```
+
+---
+
+## Symmetry Transform Generation
+
+Symmetry transforms are added **after** the random transforms. They all use:
+- Variation: Linear only (weight 1.0)
+- Transform weight: 1.0
+- Colors: Distributed evenly from 0.0 to 1.0 among symmetry transforms only
+
+### Bilateral (Horizontal) - Mirror across Y axis
+Adds 1 transform:
+```
+A = -1, B = 0, C = 0, D = 1, E = 0, F = 0
+```
+
+### Bilateral (Vertical) - Mirror across X axis
+Adds 1 transform:
+```
+A = 1, B = 0, C = 0, D = -1, E = 0, F = 0
+```
+
+### Rotational (N) - N-fold rotational symmetry
+Adds N-1 transforms, each rotated by k × (360°/N) for k = 1 to N-1:
+```
+angle = k × (360° / N)
+A = cos(angle), B = -sin(angle), C = sin(angle), D = cos(angle), E = 0, F = 0
+```
+
+Example for 3-fold:
+- Transform 1: 120° → A=-0.5, B=-0.866, C=0.866, D=-0.5
+- Transform 2: 240° → A=-0.5, B=0.866, C=-0.866, D=-0.5
+
+### Dihedral (N) - Rotation + Reflection
+Adds N transforms total:
+1. First: Bilateral (Horizontal) transform
+2. Then: N-1 Rotational transforms
+
+This creates the mathematical dihedral group D_n with n rotations and n reflections.
 
 ---
 
@@ -273,7 +339,6 @@ assets/
   - Harmonious/complementary color schemes
   - Variations on current palette
   - Seed-based for reproducibility
-- **Symmetry Options**: Generate flames with rotational/reflective symmetry
 - **Style Transfer**: Use an existing flame as a "template" for randomization ranges
 - **Genetic Algorithm**: Evolve fractals by selecting favorites from batches
 - **Parameter Locking**: Lock specific parameters while randomizing others
