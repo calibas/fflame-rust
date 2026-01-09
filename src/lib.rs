@@ -284,7 +284,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             window
         };
 
-        App::run(event_loop, window).await
+        App::run(event_loop, std::sync::Arc::new(window)).await
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -296,6 +296,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         #[allow(deprecated)]
         let window = event_loop.create_window(attributes)?;
 
-        App::run(event_loop, window).await
+        App::run(event_loop, std::sync::Arc::new(window)).await
     }
 }

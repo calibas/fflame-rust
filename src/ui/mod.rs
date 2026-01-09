@@ -503,13 +503,12 @@ impl EguiLayer {
                 timestamp_writes: None,
             });
 
-            // SAFETY: egui-wgpu's render method has an overly restrictive 'static lifetime.
-            // This transmute is safe because we immediately drop the render pass after calling render.
-            let rpass_static: &mut egui_wgpu::wgpu::RenderPass<'static> =
-                unsafe { std::mem::transmute(&mut rpass) };
+            // forget_lifetime() converts RenderPass<'a> to RenderPass<'static>
+            // This is the official wgpu API for satisfying egui-wgpu's 'static requirement
+            let mut rpass = rpass.forget_lifetime();
 
             self.renderer
-                .render(rpass_static, &tris, &screen_descriptor);
+                .render(&mut rpass, &tris, &screen_descriptor);
         } // Render pass is dropped here
 
         for id in &full_output.textures_delta.free {

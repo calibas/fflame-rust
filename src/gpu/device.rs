@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use winit::window::Window;
 use egui_wgpu::wgpu::*;
 
@@ -12,7 +13,7 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    pub async fn new(window: &Window) -> anyhow::Result<Self> {
+    pub async fn new(window: Arc<Window>) -> anyhow::Result<Self> {
         let size = window.inner_size();
 
         // WASM fallback: ensure we have valid dimensions
@@ -42,15 +43,11 @@ impl GpuContext {
             ..Default::default()
         });
 
-        // SAFETY: We're extending the lifetime of the surface to 'static.
-        // This is safe because the window will outlive the GpuContext in our usage.
-        // The window is moved into the event loop closure and won't be dropped
-        // until the application exits.
+        // Using Arc<Window> gives the surface a 'static lifetime safely
         log::info!("Creating surface from window...");
 
         #[cfg(target_arch = "wasm32")]
         let surface: Surface<'static> = {
-            use wasm_bindgen::JsCast;
             use winit::platform::web::WindowExtWebSys;
 
             // Get the canvas element directly (bypasses winit's canvas handling)
@@ -64,22 +61,19 @@ impl GpuContext {
                 .map_err(|e| anyhow::anyhow!("Failed to create surface from canvas: {:?}", e))?;
 
             log::info!("✓ Surface created successfully from canvas");
-            unsafe { std::mem::transmute(surface) }
+            surface
         };
 
         #[cfg(not(target_arch = "wasm32"))]
         let surface: Surface<'static> = {
-            let surface_result = instance.create_surface(window);
-            match surface_result {
-                Ok(s) => {
-                    log::info!("✓ Surface created successfully");
-                    unsafe { std::mem::transmute(s) }
-                }
-                Err(e) => {
+            // Arc<Window> implements Into<SurfaceTarget<'static>>, giving us Surface<'static>
+            let surface = instance.create_surface(window.clone())
+                .map_err(|e| {
                     log::error!("Failed to create surface: {:?}", e);
-                    return Err(anyhow::anyhow!("Surface creation failed: {:?}", e));
-                }
-            }
+                    anyhow::anyhow!("Surface creation failed: {:?}", e)
+                })?;
+            log::info!("✓ Surface created successfully");
+            surface
         };
 
         // Try to get adapter with high performance preference first
