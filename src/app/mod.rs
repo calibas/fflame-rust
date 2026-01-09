@@ -804,13 +804,12 @@ impl App {
                     let temp_renderer = Box::new(temp_renderer);
                     let speed_factor = export_config.speed_factor;
 
-                    // SAFETY: Device and Queue live for program lifetime.
-                    // temp_renderer is moved into the async task and will be dropped there.
-                    let device: &'static egui_wgpu::wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
-                    let queue: &'static egui_wgpu::wgpu::Queue = unsafe { std::mem::transmute(&self.gpu.queue) };
+                    // Clone Arc handles for the async task
+                    let device = self.gpu.device.clone();
+                    let queue = self.gpu.queue.clone();
 
                     spawn_local(async move {
-                        match temp_renderer.read_fractal_pixels(device, queue, transparent, background_color).await {
+                        match temp_renderer.read_fractal_pixels(&device, &queue, transparent, background_color).await {
                             Ok((width, height, rgba_data)) => {
                                 let metadata = crate::png_metadata::PngMetadata::from_app_state(
                                     width,
@@ -872,8 +871,8 @@ impl App {
                     renderer.copy_fractal_to_buffer(&mut copy_encoder, &staging_buffer, padded_bytes_per_row);
                     self.gpu.queue.submit(std::iter::once(copy_encoder.finish()));
 
-                    // Now spawn async task to wait for buffer map and save file
-                    let device: &'static egui_wgpu::wgpu::Device = unsafe { std::mem::transmute(&self.gpu.device) };
+                    // Clone Arc handle for the async task
+                    let device = self.gpu.device.clone();
 
                     spawn_local(async move {
                         // Map the staging buffer (this is the async part)

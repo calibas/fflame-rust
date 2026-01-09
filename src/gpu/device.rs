@@ -6,8 +6,8 @@ pub struct GpuContext {
     #[allow(dead_code)]
     pub instance: Instance,
     pub surface: Surface<'static>,
-    pub device: Device,
-    pub queue: Queue,
+    pub device: Arc<Device>,
+    pub queue: Arc<Queue>,
     pub config: SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
 }
@@ -228,8 +228,8 @@ impl GpuContext {
         Ok(Self {
             instance,
             surface,
-            device,
-            queue,
+            device: Arc::new(device),
+            queue: Arc::new(queue),
             config,
             size,
         })
