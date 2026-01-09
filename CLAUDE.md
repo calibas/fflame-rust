@@ -828,7 +828,6 @@ Thread-safe atomic color accumulation using u32 histogram buffer:
 
 ## Known Issues
 - Julia variation uses CPU `rand::random()` which doesn't work on GPU (needs RNG passed in)
-- WASM PNG export uses `unsafe` lifetime extension (safe in practice, GPU resources live for program lifetime)
 - No error handling for invalid .fflame or .palette file imports
 - Transparent PNG export reads from accumulation buffer (Rgba16Float) and applies tone mapping on CPU
   - This is necessary because tonemap shader blends RGB with background before alpha is applied
