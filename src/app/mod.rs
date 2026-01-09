@@ -234,8 +234,8 @@ pub struct App {
     pub(super) render_mode: RenderModeFSM,
 }
 impl App {
-    pub async fn run(event_loop: EventLoop<()>, window: Window) -> Result<(), Box<dyn std::error::Error>> {
-        let gpu = GpuContext::new(&window).await.expect("GPU init failed");
+    pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
+        let gpu = GpuContext::new(window.clone()).await.expect("GPU init failed");
         let egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
         // Use global preset library singleton
