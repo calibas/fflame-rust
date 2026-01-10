@@ -4,6 +4,7 @@ mod export_panel;
 pub mod file_browser;
 mod font_loader;
 mod formatting;
+pub mod fractal_browser;
 pub mod fractal_gallery;
 mod help;
 mod menu_bar;
@@ -100,6 +101,9 @@ pub struct EguiLayer {
     random_generator_panel: Option<random_generator::RandomGeneratorPanel>,
     generated_flame: Option<crate::scene::transforms::Flame>,
     generated_batch: Option<Vec<crate::config::FractalConfig>>,
+
+    // Fractal browser panel state
+    fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
 }
 
 impl EguiLayer {
@@ -148,6 +152,7 @@ impl EguiLayer {
             random_generator_panel: None,
             generated_flame: None,
             generated_batch: None,
+            fractal_browser_panel: None,
         }
     }
 
@@ -462,6 +467,9 @@ impl EguiLayer {
                         random_generator_panel: &mut self.random_generator_panel,
                         generated_flame: &mut self.generated_flame,
                         generated_batch: &mut self.generated_batch,
+
+                        // Fractal browser panel state
+                        fractal_browser_panel: &mut self.fractal_browser_panel,
                     },
                 });
 

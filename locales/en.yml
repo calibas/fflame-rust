@@ -706,6 +706,15 @@ file_browser:
   error_parse_failed: "Failed to parse JSON: %{error}"
   error_no_configs_provided: "No configurations provided"
 
+# Fractal Browser Panel (unified presets/batch/files browser)
+browser:
+  title: "Fractal Browser"
+  tab_presets: "Presets"
+  tab_batch: "Batch"
+  tab_files: "Files"
+  batch_empty_title: "No batch results"
+  batch_empty_hint: "Use the Random Generator to create a batch of flames"
+
 # Config Import/Export Dialog
 config_dialog:
   title: "Config Import/Export"
