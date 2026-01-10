@@ -128,7 +128,7 @@ random_generator:
   # Variations section
   per_transform: "Per Transform:"
   weight_range: "Weight Range:"
-  always_include_linear: "Always include Linear"
+  always_include_linear: "Linear on First Transform"
   enabled_variations: "Enabled Variations:"
   select_all: "All"
   select_none: "None"

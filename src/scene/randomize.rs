@@ -114,7 +114,7 @@ impl Default for RandomGeneratorSettings {
             variations_per_transform_max: 3,
             variation_weight_min: 0.2,
             variation_weight_max: 1.0,
-            always_include_linear: true,
+            always_include_linear: false,
             enabled_variations: default_variations(),
             scale_min: 0.3,
             scale_max: 1.5,
