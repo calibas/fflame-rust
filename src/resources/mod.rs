@@ -6,10 +6,12 @@
 mod error;
 mod fetch;
 pub mod palettes;
+pub mod presets;
 
 pub use error::FetchError;
 pub use fetch::{fetch_json, fetch_text, FetchHandle, FetchResult, FetchState};
 pub use palettes::PalettePackInfo;
+pub use presets::{create_default_preset, load_presets_with_fallback};
 
 use serde::{Deserialize, Serialize};
 
