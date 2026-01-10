@@ -182,6 +182,12 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::PaletteLibrary);
                 }
 
+                let fractal_browser_open = workspace.panel_exists(super::workspace::PanelType::FractalBrowser);
+                if ui.selectable_label(fractal_browser_open, t!("menu.window_fractal_browser").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::FractalBrowser);
+                }
+
+                // Legacy panels (kept for transition, will be removed in Phase 5)
                 let preset_library_open = workspace.panel_exists(super::workspace::PanelType::PresetLibrary);
                 if ui.selectable_label(preset_library_open, t!("menu.window_preset_library").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::PresetLibrary);

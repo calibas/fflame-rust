@@ -51,6 +51,7 @@ menu:
   window_colors: "🎨 Tone Mapping & Colors"
   window_palette_editor: "🎨 Palette Editor"
   window_palette_library: "📚 Palette Library"
+  window_fractal_browser: "📂 Fractal Browser"
   window_preset_library: "📚 Preset Library"
   window_file_browser: "📂 File Browser"
   window_config_dialog: "📄 Config Import/Export"
