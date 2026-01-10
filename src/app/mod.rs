@@ -1191,6 +1191,26 @@ impl App {
             &self.gpu.queue,
         );
 
+        // Generate thumbnails for fractal browser (unified panel)
+        // Desktop: Blocking generation, one per frame
+        // WASM: Async generation via spawn_local
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.egui_layer.fractal_browser_needs_thumbnails() {
+            self.egui_layer.generate_fractal_browser_thumbnail(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &self.palette_library,
+            );
+            // Request immediate repaint to continue generation next frame
+            window.request_redraw();
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        self.egui_layer.start_fractal_browser_thumbnails(
+            &self.gpu.device,
+            &self.gpu.queue,
+        );
+
         // Handle PathMap mode: query path at clicked pixel or close overlay
         #[cfg(not(target_arch = "wasm32"))]
         {
