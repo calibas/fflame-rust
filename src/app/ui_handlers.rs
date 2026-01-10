@@ -217,14 +217,14 @@ impl App {
         // Configs are already self-contained with palettes embedded
         if let Some(ref configs) = ui_response.generated_batch {
             if !configs.is_empty() {
-                log::info!("Loading {} generated flames into File Browser", configs.len());
+                log::info!("Loading {} generated flames into Fractal Browser", configs.len());
 
-                // Load all configs into File Browser (they already have palettes embedded)
-                self.egui_layer.load_configs_into_browser(configs.clone(), "Random Batch");
+                // Load all configs into Fractal Browser (they already have palettes embedded)
+                self.egui_layer.load_batch_into_fractal_browser(configs.clone());
 
-                // Open the File Browser panel
+                // Open the Fractal Browser panel (auto-switches to Batch tab)
                 use crate::ui::workspace::PanelType;
-                self.workspace.open_floating_panel(PanelType::FileBrowser);
+                self.workspace.open_floating_panel(PanelType::FractalBrowser);
             }
         }
     }
@@ -542,7 +542,7 @@ impl App {
             }
         }
 
-        // Handle file browser open request
+        // Handle file browser open request (loads into FractalBrowser Files tab)
         if ui_response.file_browser_open_requested {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -551,7 +551,10 @@ impl App {
                     .add_filter("Fractal Flame Config", &["fflame"])
                     .pick_file()
                 {
-                    self.egui_layer.load_file_into_browser(path);
+                    self.egui_layer.load_file_into_fractal_browser(path);
+                    // Open the Fractal Browser panel (auto-switches to Files tab)
+                    use crate::ui::workspace::PanelType;
+                    self.workspace.open_floating_panel(PanelType::FractalBrowser);
                 }
             }
 
@@ -681,20 +684,11 @@ impl App {
             if let Some(json) = self.egui_layer.ctx.data_mut(|data| {
                 data.remove_temp::<String>(egui::Id::new("pending_file_browser_json_raw"))
             }) {
-                // Load the JSON into the file browser panel
-                match FractalConfig::from_json_multi(&json) {
-                    Ok(configs) => {
-                        if configs.is_empty() {
-                            log::error!("File contains no configurations");
-                        } else {
-                            log::info!("Loaded {} config(s) from file", configs.len());
-                            self.egui_layer.load_configs_into_browser(configs, "file");
-                        }
-                    }
-                    Err(e) => {
-                        log::error!("Failed to parse config JSON: {}", e);
-                    }
-                }
+                // Load the JSON into the Fractal Browser panel (Files tab)
+                self.egui_layer.load_json_into_fractal_browser(&json, "file");
+                // Open the Fractal Browser panel
+                use crate::ui::workspace::PanelType;
+                self.workspace.open_floating_panel(PanelType::FractalBrowser);
             }
         }
     }

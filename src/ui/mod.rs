@@ -729,6 +729,51 @@ impl EguiLayer {
         }
     }
 
+    /// Check if fractal browser panel needs thumbnail generation
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn fractal_browser_needs_thumbnails(&self) -> bool {
+        if let Some(ref panel) = self.fractal_browser_panel {
+            panel.is_generating()
+        } else {
+            false
+        }
+    }
+
+    /// Generate one thumbnail for the fractal browser (call once per frame)
+    /// Returns true if generation is complete
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn generate_fractal_browser_thumbnail(
+        &mut self,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+        palette_library: &crate::scene::palette::PaletteLibrary,
+    ) -> bool {
+        if let Some(ref mut panel) = self.fractal_browser_panel {
+            // Get which tab/config needs generation
+            if let Some((tab, _config)) = panel.next_pending_config() {
+                panel.generate_one_thumbnail(tab, &self.ctx, |config| {
+                    crate::renderer::render_thumbnail(device, queue, config, palette_library)
+                })
+            } else {
+                true // Nothing to generate
+            }
+        } else {
+            true // No panel, nothing to generate
+        }
+    }
+
+    /// WASM: Start async thumbnail generation for fractal browser
+    #[cfg(target_arch = "wasm32")]
+    pub fn start_fractal_browser_thumbnails(
+        &mut self,
+        device: &egui_wgpu::wgpu::Device,
+        queue: &egui_wgpu::wgpu::Queue,
+    ) {
+        if let Some(ref mut panel) = self.fractal_browser_panel {
+            panel.start_async_thumbnails(device, queue);
+        }
+    }
+
     /// Load a file into the file browser panel
     pub fn load_file_into_browser(&mut self, path: std::path::PathBuf) {
         // Initialize panel if not already created
@@ -756,5 +801,41 @@ impl EguiLayer {
     /// Open the File Browser panel in the workspace
     pub fn open_file_browser_panel(&self, workspace: &mut workspace::Workspace) {
         workspace.open_floating_panel(workspace::PanelType::FileBrowser);
+    }
+
+    /// Load batch results into the unified Fractal Browser panel
+    pub fn load_batch_into_fractal_browser(&mut self, configs: Vec<crate::config::FractalConfig>) {
+        // Initialize panel if not already created
+        if self.fractal_browser_panel.is_none() {
+            self.fractal_browser_panel = Some(fractal_browser::FractalBrowserPanel::new());
+        }
+
+        if let Some(ref mut panel) = self.fractal_browser_panel {
+            panel.load_batch(configs);
+        }
+    }
+
+    /// Load file contents into the unified Fractal Browser panel
+    pub fn load_file_into_fractal_browser(&mut self, path: std::path::PathBuf) {
+        // Initialize panel if not already created
+        if self.fractal_browser_panel.is_none() {
+            self.fractal_browser_panel = Some(fractal_browser::FractalBrowserPanel::new());
+        }
+
+        if let Some(ref mut panel) = self.fractal_browser_panel {
+            panel.load_file(path);
+        }
+    }
+
+    /// Load JSON configs into the unified Fractal Browser panel
+    pub fn load_json_into_fractal_browser(&mut self, json: &str, source_name: &str) {
+        // Initialize panel if not already created
+        if self.fractal_browser_panel.is_none() {
+            self.fractal_browser_panel = Some(fractal_browser::FractalBrowserPanel::new());
+        }
+
+        if let Some(ref mut panel) = self.fractal_browser_panel {
+            panel.load_json(json, source_name);
+        }
     }
 }
