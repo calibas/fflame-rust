@@ -138,7 +138,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 - ✅ Keyboard +/- for zoom
 
 **Missing from outline:**
-- ❌ Randomize button with seeded generation
+- ✅ Random Generator panel with configurable generation (PR #40, 2026-01-10)
 - ❌ Async high-res export progress UI
 
 ### Export & High-Resolution Rendering (Section 8) ⚠️
@@ -262,9 +262,6 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 
 ## ❌ MISSING / TODO
 
-### High Priority
-- [ ] **Randomize button** - No random flame generation
-
 ### Medium Priority
 - [ ] **Transform clone/duplicate** - No UI for this
 - [ ] **EXR/HDR export** - Only PNG supported
@@ -293,7 +290,7 @@ Implemented in [src/renderer/compute_kernel.rs](src/renderer/compute_kernel.rs)
 | GPU Pipelines | ✅ 100% | All working with profiling support |
 | Shaders | ✅ 100% | All 4 shaders complete (2D/3D trajectory, accumulate, tonemap) |
 | CPU Orchestration | ✅ 100% | Progressive rendering working |
-| UI Panels | ✅ 90% | Missing preset browser, randomize |
+| UI Panels | ✅ 100% | All panels complete including Preset Library and Random Generator |
 | Viewport Interaction | ✅ 100% | Mouse + keyboard working |
 | Import/Export | ✅ 75% | Config ✅, Palette ✅, PNG ✅, High-res ❌, EXR ❌ |
 | Testing | ✅ 95% | Unit ✅, Regression ✅, Benchmarks ✅, Visual ⚠️ |
@@ -325,6 +322,8 @@ These features were added beyond the original outline:
 15. **3D Rendering** ([shaders/trajectory_3d.wgsl](shaders/trajectory_3d.wgsl)) - Full pseudo-3D with camera rotation (24 variations)
 16. **Preset System** ([assets/presets/](assets/presets/)) - Auto-loading from filesystem
 17. **Asset System** ([src/scene/assets.rs](src/scene/assets.rs)) - Palette and preset auto-loading
+18. **HTTP Resource System** ([src/resources/](src/resources/)) - Cross-platform fetch for palettes with lazy loading (PR #39)
+19. **Random Generator Panel** ([src/ui/random_generator.rs](src/ui/random_generator.rs)) - Configurable flame generation with symmetry, batch mode (PR #40)
 
 ---
 
@@ -343,7 +342,14 @@ Scene
 ├── src/scene/mod.rs               - Scene module exports
 ├── src/scene/transforms.rs        - Transform + Variation logic
 ├── src/scene/presets.rs           - Built-in presets
-└── src/scene/palette.rs           - Palette + color modes
+├── src/scene/palette.rs           - Palette + color modes
+└── src/scene/randomize.rs         - Random flame generation (PR #40)
+
+Resources
+├── src/resources/mod.rs           - Core types, LoadState, PalettePackInfo
+├── src/resources/fetch.rs         - Platform-specific HTTP/filesystem fetch
+├── src/resources/palettes.rs      - Palette pack loading with manifest
+└── src/resources/error.rs         - FetchError type
 
 GPU
 ├── src/gpu/mod.rs                 - GPU module exports
@@ -357,6 +363,7 @@ Renderer
 
 UI
 ├── src/ui/mod.rs                  - Egui layer + all UI panels
+├── src/ui/random_generator.rs     - Random Generator panel (PR #40)
 └── src/ui/panels.rs               - (empty/unused)
 
 Shaders

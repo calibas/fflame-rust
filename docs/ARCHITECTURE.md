@@ -110,6 +110,11 @@ fractal_flame_wgpu/
 │   │   │                       - Jump to any config state
 │   │   │                       - ConfigManager integration
 │   │   │
+│   │   ├── random_generator.rs Random Generator panel (Added PR #40)
+│   │   │                       - Configurable flame generation settings
+│   │   │                       - Symmetry options (bilateral, rotational, dihedral)
+│   │   │                       - Batch generation with File Browser integration
+│   │   │
 │   │   ├── menu_bar.rs         Top menu bar
 │   │   │                       - File, Edit, View, Fractal, Rendering, Window, Help
 │   │   │                       - Keyboard shortcuts documented
@@ -157,6 +162,12 @@ fractal_flame_wgpu/
 │       │                       - ColorStop gradient system
 │       │                       - Palette with interpolation
 │       │                       - PaletteLibrary (auto-loads from assets/)
+│       │
+│       ├── randomize.rs        Random flame generation (Extended PR #40)
+│       │                       - RandomGeneratorSettings struct
+│       │                       - SymmetryType enum (None/Bilateral/Rotational/Dihedral)
+│       │                       - generate_random_flame_with_settings()
+│       │                       - generate_batch() for exploration
 │       │
 │       └── variations/         Variation system
 │           ├── mod.rs          VariationRegistry (global singleton)
@@ -246,6 +257,17 @@ fractal_flame_wgpu/
 │   │                           - Desktop: JSON files in user data directory
 │   │                           - WASM: browser localStorage
 │   │                           - StorageBackend trait for platform abstraction
+│   │
+│   ├── resources/              HTTP resource fetching (Added PR #39)
+│   │   ├── mod.rs              Core types (LoadState, PalettePackInfo, ResourceManifest)
+│   │   ├── fetch.rs            Platform-specific fetch
+│   │   │                       - Desktop: filesystem read
+│   │   │                       - WASM: fetch API with async/await
+│   │   ├── palettes.rs         Palette pack loading with manifest
+│   │   │                       - Lazy loading of large packs (701 Apophysis palettes)
+│   │   │                       - Auto-load enabled packs on startup
+│   │   └── error.rs            FetchError type for cross-platform errors
+│   │
 │   └── png_metadata.rs         PNG metadata embedding, tEXt chunks
 │
 ├── Profiling & Version Tracking
