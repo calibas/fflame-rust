@@ -55,8 +55,16 @@
     - `settings.rs` - SystemSettings struct (device-specific settings)
     - `backend.rs` - Cross-platform storage (filesystem + localStorage)
     - `thumbnail_cache.rs` - **Thumbnail cache for preset gallery** (Added 2025-11-24)
+    - `custom_palettes.rs` - User-saved palettes in Custom pack
     - Persists VSync, target FPS, iterations per thread, export defaults
     - Desktop: User data directory, WASM: browser localStorage
+  - `src/resources/` - **HTTP resource fetching system** (Added 2026-01-08, PR #39)
+    - `mod.rs` - Core types (`LoadState`, `PalettePackInfo`, `ResourceManifest`)
+    - `fetch.rs` - Platform-specific fetch (native HTTP/filesystem, WASM fetch API)
+    - `palettes.rs` - Palette pack loading with manifest-based lazy loading
+    - `error.rs` - `FetchError` type for cross-platform error handling
+    - Enables on-demand loading of large palette packs (701 Apophysis palettes)
+    - WASM: Async fetch from same-origin, Desktop: Filesystem read
   - `src/renderer/compute_kernel.rs` - GPU rendering orchestration
   - `src/renderer/render.rs` - **Unified render API** (Added 2025-12-24) - Single entry point for all headless rendering
   - `src/renderer/thumbnail.rs` - **Thumbnail rendering** (Added 2025-11-24)
@@ -64,6 +72,11 @@
     - `high_res.rs` - CPU histogram + GPU tonemap for any resolution
     - `mod.rs` - `needs_cpu_export()` threshold check
   - `src/scene/transforms.rs` - Flame algorithm (CPU + GPU)
+  - `src/scene/randomize.rs` - **Random flame generation** (Extended 2026-01-09, PR #40)
+    - `RandomGeneratorSettings` - Configurable generation parameters
+    - `SymmetryType` - None, Bilateral, Rotational, Dihedral symmetry
+    - `generate_random_flame_with_settings()` - Settings-based generation
+    - `generate_batch()` - Batch generation for exploration
   - `src/ui/` - **Dockable panel UI system** (Migrated to egui_dock 2025-11-13)
     - `mod.rs` - Main UI coordinator, docking integration
     - `workspace.rs` - Docking layout management and panel organization
@@ -76,6 +89,7 @@
     - `palette_library.rs` - **Palette Library panel** (Added 2025-11-18)
     - `preset_library.rs` - **Preset Library panel** (Added 2025-11-24)
     - `fractal_gallery.rs` - **Reusable gallery widget** (Added 2025-11-24)
+    - `random_generator.rs` - **Random Generator panel** (Added 2026-01-09, PR #40)
     - `undo_history.rs` - Visual undo history browser panel
     - `menu_bar.rs` - Top menu bar (File, Edit, View, etc.)
   - `src/i18n.rs` - **Internationalization support** (Added 2025-11-13)
@@ -260,10 +274,6 @@
 - **Full WASM support** for web builds (100% complete including PNG export)
 - GPU buffers use **std430 layout** (storage buffers) and **std140 layout** (uniform buffers) for cross-platform compatibility
 - **WASM shader compatibility:** Use `textureLoad()` instead of `textureSample()` inside non-uniform control flow (browser WebGPU strictly enforces WGSL spec, desktop drivers are lenient)
-
-### Current Limitations
-- No transform clone/duplicate button
-- No randomize button
 
 ### Build Commands
 ```bash
@@ -898,7 +908,6 @@ cargo build --target aarch64-linux-android
 Features that could be added in future development (see [docs/STATUS.md](docs/STATUS.md) for detailed priority breakdown):
 
 ### High Priority
-- **Randomize button** - Generate random flames with seeded generation for exploration
 - **Async export progress UI** - Currently export blocks the UI during rendering
 - **Depth effects for 3D mode** - Optional visual enhancements:
   - Depth-based coloring (Z → color heat map)
@@ -907,27 +916,16 @@ Features that could be added in future development (see [docs/STATUS.md](docs/ST
   - Depth buffer visualization
 
 ### Medium Priority
-- **Final transform support** - Code exists but no UI controls (post-processing transform applied after all iterations)
-- **Transform clone/duplicate** - UI button to duplicate existing transforms
 - **EXR/HDR export** - High dynamic range output formats for compositing
-- **Visual regression tests** - Automated testing with image checksums
-- **Performance profiling/optimization** - Systematic GPU profiling and tuning
 - **More 3D variations** - Additional depth-manipulating variations (curl_3d, splits_3d, etc.)
 
 ### Low Priority / Future Expansions
-- **CLI interface** - Headless rendering from command line (clap already in deps)
-- **Headless export example** - Render without window for batch processing
-- **Animation system** - Keyframe timeline, transform morphing, parameter interpolation
-- **CUDA backend** - NVIDIA-specific acceleration (desktop only)
 - **Layered compositing** - Multiple flames blended together
 - **Adaptive sampling** - Focus iterations on high-detail areas
 - **Denoising** - AI or traditional denoising for faster convergence
 
 ### Nice to Have
 - ~~**Preset browser UI**~~ ✅ Implemented 2025-11-24 - See [PRESET-BROWSER.md](docs/main/PRESET-BROWSER.md)
-- **Palette library management** - Save/organize custom palettes permanently
-- **Transform presets** - Save/load individual transform configurations
 - **Batch export** - Render multiple configurations automatically
-- **Video export** - Animate parameters over time and render to video
 
 See [docs/outline.md](docs/outline.md) Section 14 for more ambitious future expansion ideas.
