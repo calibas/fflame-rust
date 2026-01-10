@@ -26,6 +26,8 @@ pub enum PanelType {
     PresetLibrary,
     /// File browser (load .fflame files with thumbnail preview)
     FileBrowser,
+    /// Unified fractal browser (presets + batch + files in tabs)
+    FractalBrowser,
     /// Camera/navigation (zoom, pan, rotation, 3D camera)
     View,
     /// Performance/quality (iterations, accumulation, speed)
@@ -59,6 +61,7 @@ impl std::fmt::Display for PanelType {
             PanelType::PaletteLibrary => t!("panels.palette_library"),
             PanelType::PresetLibrary => t!("panels.preset_library"),
             PanelType::FileBrowser => t!("panels.file_browser"),
+            PanelType::FractalBrowser => t!("browser.title"),
             PanelType::View => t!("panels.view"),
             PanelType::Rendering => t!("panels.rendering"),
             PanelType::History => t!("panels.history"),

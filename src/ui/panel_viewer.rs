@@ -101,6 +101,9 @@ pub struct PanelContext<'a> {
     pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
     pub generated_flame: &'a mut Option<crate::scene::transforms::Flame>,
     pub generated_batch: &'a mut Option<Vec<crate::config::FractalConfig>>,
+
+    // Fractal browser panel state (unified presets/batch/files)
+    pub fractal_browser_panel: &'a mut Option<super::fractal_browser::FractalBrowserPanel>,
 }
 
 /// Viewer for rendering each panel type
@@ -161,6 +164,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::FileBrowser => {
                 self.render_file_browser_panel(ui);
+            }
+            PanelType::FractalBrowser => {
+                self.render_fractal_browser_panel(ui);
             }
             PanelType::PathEditor => {
                 self.render_path_editor_panel(ui);
@@ -955,6 +961,28 @@ impl<'a> PanelViewer<'a> {
                     .collect();
 
                 *self.context.generated_batch = Some(configs);
+            }
+        }
+    }
+
+    /// Render Fractal Browser panel (unified presets/batch/files)
+    fn render_fractal_browser_panel(&mut self, ui: &mut egui::Ui) {
+        // Initialize panel if not already created
+        if self.context.fractal_browser_panel.is_none() {
+            *self.context.fractal_browser_panel = Some(super::fractal_browser::FractalBrowserPanel::new());
+        }
+
+        if let Some(panel) = self.context.fractal_browser_panel.as_mut() {
+            let response = panel.render(ui);
+
+            // Handle file open request from Files tab
+            if panel.take_open_file_request() {
+                *self.context.file_browser_open_requested = true;
+            }
+
+            // Handle selection (load the config)
+            if let Some(config) = response.selected {
+                *self.context.selected_preset_config = Some(config);
             }
         }
     }
