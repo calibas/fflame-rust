@@ -921,9 +921,12 @@ impl PaletteLibrary {
 
     /// Check if a palette with the given name exists in the Custom pack
     pub fn has_custom_palette_named(&self, name: &str) -> bool {
-        use crate::storage::CustomPaletteLibrary;
-        let custom_lib = CustomPaletteLibrary::load();
-        custom_lib.has_palette_by_name(name)
+        let name_lower = name.to_lowercase();
+        self.custom_pack_index
+            .and_then(|idx| self.packs.get(idx))
+            .and_then(|info| info.pack.as_ref())
+            .map(|pack| pack.palettes.iter().any(|p| p.name.to_lowercase() == name_lower))
+            .unwrap_or(false)
     }
 
     /// Delete a palette from the Custom library by name
