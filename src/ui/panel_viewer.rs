@@ -100,6 +100,7 @@ pub struct PanelContext<'a> {
     // Random generator panel state
     pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
     pub generated_flame: &'a mut Option<crate::scene::transforms::Flame>,
+    pub generated_batch: &'a mut Option<Vec<crate::config::FractalConfig>>,
 }
 
 /// Viewer for rendering each panel type
@@ -920,15 +921,40 @@ impl<'a> PanelViewer<'a> {
                 *self.context.generated_flame = Some(flame);
             }
 
-            // Handle generate batch request
+            // Handle generate batch request - create configs with palettes, open File Browser
             if response.generate_batch {
                 let flames = crate::scene::randomize::generate_batch(&panel.settings);
                 log::info!("Generated batch of {} flames", flames.len());
-                // TODO: Open gallery with batch results
-                // For now, just load the first one
-                if let Some(flame) = flames.into_iter().next() {
-                    *self.context.generated_flame = Some(flame);
-                }
+
+                // Convert flames to FractalConfigs with palettes
+                let use_random_palette = panel.settings.random_palette;
+                let palette_count = self.context.palette_library.len();
+
+                let configs: Vec<crate::config::FractalConfig> = flames
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, flame)| {
+                        let mut config = crate::config::FractalConfig::default();
+                        config.flame = flame;
+                        config.flame.name = format!("Random {}", i + 1);
+
+                        // Assign palette - configs must be self-contained
+                        if use_random_palette && palette_count > 0 {
+                            // Pick a random palette from the library
+                            let idx = rand::random::<usize>() % palette_count;
+                            if let Some(palette) = self.context.palette_library.get(idx) {
+                                config.palette = palette.clone();
+                            }
+                        } else {
+                            // Use current palette from config manager
+                            config.palette = self.context.config_manager.active_config().palette.clone();
+                        }
+
+                        config
+                    })
+                    .collect();
+
+                *self.context.generated_batch = Some(configs);
             }
         }
     }

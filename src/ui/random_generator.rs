@@ -1,6 +1,7 @@
 //! Random Generator panel
 //!
 //! Panel for generating random fractal flames with configurable parameters.
+//! Batch results are displayed in the File Browser panel.
 
 use egui;
 use rust_i18n::t;
@@ -30,7 +31,7 @@ impl Default for RandomGeneratorPanel {
 pub struct RandomGeneratorResponse {
     /// Generate a single random flame
     pub generate_single: bool,
-    /// Generate a batch of random flames
+    /// Generate a batch of random flames (opens in File Browser)
     pub generate_batch: bool,
 }
 

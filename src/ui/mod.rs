@@ -99,6 +99,7 @@ pub struct EguiLayer {
     // Random generator panel state
     random_generator_panel: Option<random_generator::RandomGeneratorPanel>,
     generated_flame: Option<crate::scene::transforms::Flame>,
+    generated_batch: Option<Vec<crate::config::FractalConfig>>,
 }
 
 impl EguiLayer {
@@ -146,6 +147,7 @@ impl EguiLayer {
             path_editor_state: path_editor::PathEditorState::new(),
             random_generator_panel: None,
             generated_flame: None,
+            generated_batch: None,
         }
     }
 
@@ -459,6 +461,7 @@ impl EguiLayer {
                         // Random generator panel state
                         random_generator_panel: &mut self.random_generator_panel,
                         generated_flame: &mut self.generated_flame,
+                        generated_batch: &mut self.generated_batch,
                     },
                 });
 
@@ -599,6 +602,7 @@ impl EguiLayer {
 
         // Take generated flame from random generator panel
         let generated_flame = self.generated_flame.take();
+        let generated_batch = self.generated_batch.take();
 
         UiResponse {
             config_export_requested: config_export_json,
@@ -633,6 +637,7 @@ impl EguiLayer {
             animation_seek_changed,
             path_filters_changed,
             generated_flame,
+            generated_batch,
         }
     }
 

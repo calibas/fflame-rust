@@ -192,7 +192,7 @@ impl App {
         }
     }
 
-    /// Handle generated flame from Random Generator panel
+    /// Handle generated flame from Random Generator panel (single)
     fn handle_generated_flame(&mut self, ui_response: &UiResponse) {
         if let Some(ref flame) = ui_response.generated_flame {
             // Create a new config with the generated flame
@@ -210,6 +210,21 @@ impl App {
             // Load the generated config with undo support
             if let Err(e) = self.load_config_with_undo(new_config, "history.action.random_flame".to_string()) {
                 eprintln!("Failed to load generated flame: {}", e);
+            }
+        }
+
+        // Handle generated batch from Random Generator panel
+        // Configs are already self-contained with palettes embedded
+        if let Some(ref configs) = ui_response.generated_batch {
+            if !configs.is_empty() {
+                log::info!("Loading {} generated flames into File Browser", configs.len());
+
+                // Load all configs into File Browser (they already have palettes embedded)
+                self.egui_layer.load_configs_into_browser(configs.clone(), "Random Batch");
+
+                // Open the File Browser panel
+                use crate::ui::workspace::PanelType;
+                self.workspace.open_floating_panel(PanelType::FileBrowser);
             }
         }
     }
