@@ -57,6 +57,7 @@ menu:
   window_history: "⮪ Undo/Redo History"
   window_animation: "🎬 Animation"
   window_path_editor: "🧪 Path Editor (Experimental)"
+  window_random_generator: "🎲 Random Generator"
 
   # Window Menu - Workspace layouts
   workspace_layout: "📐 Workspace Layout"
@@ -105,8 +106,66 @@ panels:
   config_dialog: "Config Import/Export"
   path_editor: "Path Editor"
   export: "Export"
+  random_generator: "Random Generator"
   settings: "Settings"
   tone_mapping: "Tone Mapping"
+
+# Random Generator Panel
+random_generator:
+  # Section headers
+  transforms: "Transforms"
+  variations: "Variations"
+  affine: "Affine Parameters"
+  color_weight: "Color & Weight"
+  symmetry: "Symmetry"
+  3d_options: "3D Options"
+
+  # Transforms section
+  count: "Count:"
+  to: "to"
+  include_final_transform: "Include Final Transform"
+
+  # Variations section
+  per_transform: "Per Transform:"
+  weight_range: "Weight Range:"
+  always_include_linear: "Linear on First Transform"
+  enabled_variations: "Enabled Variations:"
+  select_all: "All"
+  select_none: "None"
+  select_2d: "2D Only"
+
+  # Affine section
+  scale: "Scale:"
+  shear: "Shear:"
+  translate: "Translate:"
+  allow_negative_scale: "Allow Negative Scale (flips)"
+
+  # Color & Weight section
+  transform_weight: "Transform Weight:"
+  distribute_colors_evenly: "Distribute colors evenly"
+  random_palette: "Random palette from library"
+
+  # Symmetry section
+  symmetry_type: "Type:"
+  symmetry_none: "None"
+  symmetry_bilateral_h: "Bilateral (Horizontal)"
+  symmetry_bilateral_v: "Bilateral (Vertical)"
+  symmetry_rotational: "Rotational"
+  symmetry_dihedral: "Dihedral"
+  symmetry_order: "Order:"
+  symmetry_transforms_added: "Adds %{count} symmetry transform(s)"
+
+  # 3D section
+  enable_3d: "Enable 3D mode"
+  include_3d_variations: "Include 3D variations"
+  perspective: "Perspective:"
+
+  # Generate buttons
+  generate_single: "🎲 Generate Single"
+  generate_batch: "📦 Generate Batch"
+  batch_count: "Batch Count:"
+  seed: "Seed:"
+  randomize_seed: "Randomize seed"
 
 # Export Panel
 export:

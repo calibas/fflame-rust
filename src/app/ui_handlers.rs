@@ -22,6 +22,7 @@ impl App {
         self.handle_config_operations(ui_response);
         self.handle_transform_operations(ui_response);
         self.handle_random_flame(ui_response);
+        self.handle_generated_flame(ui_response);
         self.handle_palette_operations(ui_response);
         self.handle_file_operations(ui_response);
         self.handle_undo_redo(ui_response);
@@ -187,6 +188,43 @@ impl App {
             // Load the random config with undo support
             if let Err(e) = self.load_config_with_undo(new_config, "history.action.random_flame".to_string()) {
                 eprintln!("Failed to load random flame: {}", e);
+            }
+        }
+    }
+
+    /// Handle generated flame from Random Generator panel (single)
+    fn handle_generated_flame(&mut self, ui_response: &UiResponse) {
+        if let Some(ref flame) = ui_response.generated_flame {
+            // Create a new config with the generated flame
+            let mut new_config = FractalConfig::default();
+            new_config.flame = flame.clone();
+
+            // Use a random palette from the library
+            if self.palette_library.len() > 0 {
+                let palette_idx = rand::random::<usize>() % self.palette_library.len();
+                if let Some(palette) = self.palette_library.get(palette_idx) {
+                    new_config.palette = palette.clone();
+                }
+            }
+
+            // Load the generated config with undo support
+            if let Err(e) = self.load_config_with_undo(new_config, "history.action.random_flame".to_string()) {
+                eprintln!("Failed to load generated flame: {}", e);
+            }
+        }
+
+        // Handle generated batch from Random Generator panel
+        // Configs are already self-contained with palettes embedded
+        if let Some(ref configs) = ui_response.generated_batch {
+            if !configs.is_empty() {
+                log::info!("Loading {} generated flames into File Browser", configs.len());
+
+                // Load all configs into File Browser (they already have palettes embedded)
+                self.egui_layer.load_configs_into_browser(configs.clone(), "Random Batch");
+
+                // Open the File Browser panel
+                use crate::ui::workspace::PanelType;
+                self.workspace.open_floating_panel(PanelType::FileBrowser);
             }
         }
     }

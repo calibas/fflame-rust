@@ -96,6 +96,11 @@ pub struct PanelContext<'a> {
 
     // PNG export progress
     pub png_export_progress: &'a super::export_panel::PngExportProgress,
+
+    // Random generator panel state
+    pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
+    pub generated_flame: &'a mut Option<crate::scene::transforms::Flame>,
+    pub generated_batch: &'a mut Option<Vec<crate::config::FractalConfig>>,
 }
 
 /// Viewer for rendering each panel type
@@ -162,6 +167,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::Export => {
                 self.render_export_panel(ui);
+            }
+            PanelType::RandomGenerator => {
+                self.render_random_generator_panel(ui);
             }
         }
     }
@@ -895,5 +903,59 @@ impl<'a> PanelViewer<'a> {
             *self.context.fractal_viewport_size,
             self.context.png_export_progress,
         );
+    }
+
+    /// Render Random Generator panel (generate random flames with settings)
+    fn render_random_generator_panel(&mut self, ui: &mut egui::Ui) {
+        // Initialize panel if not already created
+        if self.context.random_generator_panel.is_none() {
+            *self.context.random_generator_panel = Some(super::random_generator::RandomGeneratorPanel::new());
+        }
+
+        if let Some(panel) = self.context.random_generator_panel.as_mut() {
+            let response = panel.render(ui);
+
+            // Handle generate single request
+            if response.generate_single {
+                let flame = crate::scene::randomize::generate_random_flame_with_settings(&panel.settings);
+                *self.context.generated_flame = Some(flame);
+            }
+
+            // Handle generate batch request - create configs with palettes, open File Browser
+            if response.generate_batch {
+                let flames = crate::scene::randomize::generate_batch(&panel.settings);
+                log::info!("Generated batch of {} flames", flames.len());
+
+                // Convert flames to FractalConfigs with palettes
+                let use_random_palette = panel.settings.random_palette;
+                let palette_count = self.context.palette_library.len();
+
+                let configs: Vec<crate::config::FractalConfig> = flames
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, flame)| {
+                        let mut config = crate::config::FractalConfig::default();
+                        config.flame = flame;
+                        config.flame.name = format!("Random {}", i + 1);
+
+                        // Assign palette - configs must be self-contained
+                        if use_random_palette && palette_count > 0 {
+                            // Pick a random palette from the library
+                            let idx = rand::random::<usize>() % palette_count;
+                            if let Some(palette) = self.context.palette_library.get(idx) {
+                                config.palette = palette.clone();
+                            }
+                        } else {
+                            // Use current palette from config manager
+                            config.palette = self.context.config_manager.active_config().palette.clone();
+                        }
+
+                        config
+                    })
+                    .collect();
+
+                *self.context.generated_batch = Some(configs);
+            }
+        }
     }
 }

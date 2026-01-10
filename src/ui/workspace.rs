@@ -44,6 +44,8 @@ pub enum PanelType {
     PathEditor,
     /// PNG Export panel
     Export,
+    /// Random generator panel (generate random flames with settings)
+    RandomGenerator,
 }
 
 impl std::fmt::Display for PanelType {
@@ -66,6 +68,7 @@ impl std::fmt::Display for PanelType {
             PanelType::ConfigDialog => t!("panels.config_dialog"),
             PanelType::PathEditor => t!("panels.path_editor"),
             PanelType::Export => t!("panels.export"),
+            PanelType::RandomGenerator => t!("panels.random_generator"),
         };
         write!(f, "{}", title)
     }
