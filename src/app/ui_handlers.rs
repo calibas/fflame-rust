@@ -446,10 +446,10 @@ impl App {
                                     .and_then(|n| n.to_str())
                                     .unwrap_or("file")
                                     .to_string();
-                                println!("Found {} configs in {}, loading first and opening File Browser", configs.len(), filename);
+                                println!("Found {} configs in {}, loading first and opening Fractal Browser", configs.len(), filename);
 
-                                // Load all configs into File Browser
-                                self.egui_layer.load_configs_into_browser(configs.clone(), &filename);
+                                // Load all configs into Fractal Browser (Files tab)
+                                self.egui_layer.load_file_into_fractal_browser(path.clone());
 
                                 // Load the first config
                                 let first_config = configs.into_iter().next().unwrap();
@@ -457,9 +457,9 @@ impl App {
                                     eprintln!("Failed to load config: {}", e);
                                 }
 
-                                // Open the File Browser panel
+                                // Open the Fractal Browser panel
                                 use crate::ui::workspace::PanelType;
-                                self.workspace.open_floating_panel(PanelType::FileBrowser);
+                                self.workspace.open_floating_panel(PanelType::FractalBrowser);
                             }
                         }
                         Err(e) => {
@@ -501,15 +501,15 @@ impl App {
                                             println!("Imported Apophysis flame from: {}", path.display());
                                         }
                                     } else {
-                                        // Multiple flames: load first one and open File Browser
+                                        // Multiple flames: load first one and open Fractal Browser
                                         let filename = path.file_name()
                                             .and_then(|n| n.to_str())
                                             .unwrap_or("file")
                                             .to_string();
-                                        println!("Found {} flames in {}, loading first and opening File Browser", configs.len(), filename);
+                                        println!("Found {} flames in {}, loading first and opening Fractal Browser", configs.len(), filename);
 
-                                        // Load all configs into File Browser
-                                        self.egui_layer.load_configs_into_browser(configs.clone(), &filename);
+                                        // Load all configs into Fractal Browser (Files tab)
+                                        self.egui_layer.load_batch_into_fractal_browser(configs.clone());
 
                                         // Load the first config
                                         let first_config = configs.into_iter().next().unwrap();
@@ -517,9 +517,9 @@ impl App {
                                             eprintln!("Failed to import flame: {}", e);
                                         }
 
-                                        // Open the File Browser panel
+                                        // Open the Fractal Browser panel
                                         use crate::ui::workspace::PanelType;
-                                        self.workspace.open_floating_panel(PanelType::FileBrowser);
+                                        self.workspace.open_floating_panel(PanelType::FractalBrowser);
                                     }
                                 }
                                 Err(e) => {
@@ -597,7 +597,7 @@ impl App {
         }
         if ui_response.open_preset_library {
             use crate::ui::workspace::PanelType;
-            self.workspace.open_floating_panel(PanelType::PresetLibrary);
+            self.workspace.open_floating_panel(PanelType::FractalBrowser);
         }
     }
 

@@ -1151,46 +1151,6 @@ impl App {
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
-        // Generate thumbnails for preset library
-        // Desktop: Blocking generation, one per frame
-        // WASM: Async generation via spawn_local
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.egui_layer.preset_library_needs_thumbnails() {
-            self.egui_layer.generate_preset_thumbnail(
-                &self.gpu.device,
-                &self.gpu.queue,
-                &self.palette_library,
-            );
-            // Request immediate repaint to continue generation next frame
-            window.request_redraw();
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        self.egui_layer.start_preset_library_thumbnails(
-            &self.gpu.device,
-            &self.gpu.queue,
-        );
-
-        // Generate thumbnails for file browser
-        // Desktop: Blocking generation, one per frame
-        // WASM: Async generation via spawn_local
-        #[cfg(not(target_arch = "wasm32"))]
-        if self.egui_layer.file_browser_needs_thumbnails() {
-            self.egui_layer.generate_file_browser_thumbnail(
-                &self.gpu.device,
-                &self.gpu.queue,
-                &self.palette_library,
-            );
-            // Request immediate repaint to continue generation next frame
-            window.request_redraw();
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        self.egui_layer.start_file_browser_thumbnails(
-            &self.gpu.device,
-            &self.gpu.queue,
-        );
-
         // Generate thumbnails for fractal browser (unified panel)
         // Desktop: Blocking generation, one per frame
         // WASM: Async generation via spawn_local

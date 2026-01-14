@@ -711,9 +711,9 @@ file_browser:
 browser:
   title: "Fractal Browser"
   tab_presets: "Presets"
-  tab_batch: "Batch"
+  tab_batch: "Random"
   tab_files: "Files"
-  batch_empty_title: "No batch results"
+  batch_empty_title: "No random batch results"
   batch_empty_hint: "Use the Random Generator to create a batch of flames"
 
 # Config Import/Export Dialog
