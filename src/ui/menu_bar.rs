@@ -22,9 +22,9 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                // Preset Library
+                // Fractal Browser (presets, batch results, files)
                 if ui.button(t!("menu.from_preset_library")).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PresetLibrary);
+                    workspace.open_floating_panel(super::workspace::PanelType::FractalBrowser);
                 }
 
                 if ui.button(t!("menu.random_flame")).clicked() {
@@ -185,17 +185,6 @@ pub fn render_menu_bar(
                 let fractal_browser_open = workspace.panel_exists(super::workspace::PanelType::FractalBrowser);
                 if ui.selectable_label(fractal_browser_open, t!("menu.window_fractal_browser").as_ref()).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::FractalBrowser);
-                }
-
-                // Legacy panels (kept for transition, will be removed in Phase 5)
-                let preset_library_open = workspace.panel_exists(super::workspace::PanelType::PresetLibrary);
-                if ui.selectable_label(preset_library_open, t!("menu.window_preset_library").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PresetLibrary);
-                }
-
-                let file_browser_open = workspace.panel_exists(super::workspace::PanelType::FileBrowser);
-                if ui.selectable_label(file_browser_open, t!("menu.window_file_browser").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::FileBrowser);
                 }
 
                 // Config Import/Export opens as floating window in docking system

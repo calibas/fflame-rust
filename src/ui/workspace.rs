@@ -22,10 +22,6 @@ pub enum PanelType {
     PaletteEditor,
     /// Palette library (browse and manage palette packs)
     PaletteLibrary,
-    /// Preset library (browse and select presets with thumbnails)
-    PresetLibrary,
-    /// File browser (load .fflame files with thumbnail preview)
-    FileBrowser,
     /// Unified fractal browser (presets + batch + files in tabs)
     FractalBrowser,
     /// Camera/navigation (zoom, pan, rotation, 3D camera)
@@ -59,8 +55,6 @@ impl std::fmt::Display for PanelType {
             PanelType::Colors => t!("panels.colors"),
             PanelType::PaletteEditor => t!("panels.palette_editor"),
             PanelType::PaletteLibrary => t!("panels.palette_library"),
-            PanelType::PresetLibrary => t!("panels.preset_library"),
-            PanelType::FileBrowser => t!("panels.file_browser"),
             PanelType::FractalBrowser => t!("browser.title"),
             PanelType::View => t!("panels.view"),
             PanelType::Rendering => t!("panels.rendering"),
