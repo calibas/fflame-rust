@@ -21,6 +21,7 @@ impl App {
     pub(super) fn handle_ui_responses(&mut self, ui_response: &UiResponse) {
         self.handle_config_operations(ui_response);
         self.handle_transform_operations(ui_response);
+        self.handle_new_flame(ui_response);
         self.handle_random_flame(ui_response);
         self.handle_generated_flame(ui_response);
         self.handle_palette_operations(ui_response);
@@ -164,6 +165,19 @@ impl App {
                     // Update app state from config
                     self.flame = self.config_manager.active_config().flame.clone();
                 }
+            }
+        }
+    }
+
+    /// Handle new flame creation (reset to default)
+    fn handle_new_flame(&mut self, ui_response: &UiResponse) {
+        if ui_response.new_flame_requested {
+            // Create a proper default config with one identity transform + linear variation
+            let new_config = crate::resources::create_default_preset();
+
+            // Load the default config with undo support
+            if let Err(e) = self.load_config_with_undo(new_config, "history.action.new_flame".to_string()) {
+                eprintln!("Failed to create new flame: {}", e);
             }
         }
     }
