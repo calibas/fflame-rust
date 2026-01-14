@@ -12,6 +12,10 @@ pub fn render_menu_bar(
         egui::MenuBar::new().ui(ui, |ui| {
             // File Menu
             ui.menu_button(t!("menu.file"), |ui| {
+                if ui.button(t!("menu.new")).clicked() {
+                    menu_actions.file.new_flame = true;
+                }
+
                 if ui.button(t!("menu.open")).clicked() {
                     menu_actions.file.load_config = true;
                 }
@@ -22,15 +26,19 @@ pub fn render_menu_bar(
 
                 ui.separator();
 
-                // Preset Library
+                // Fractal Browser (presets, batch results, files)
                 if ui.button(t!("menu.from_preset_library")).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PresetLibrary);
+                    workspace.open_floating_panel(super::workspace::PanelType::FractalBrowser);
                 }
 
                 if ui.button(t!("menu.random_flame")).clicked() {
                     menu_actions.file.random_flame = true;
                 }
-                
+
+                if ui.button(t!("menu.random_batch")).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator);
+                }
+
                 ui.separator();
 
                 if ui.button(t!("menu.export")).clicked() {
@@ -182,14 +190,9 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::PaletteLibrary);
                 }
 
-                let preset_library_open = workspace.panel_exists(super::workspace::PanelType::PresetLibrary);
-                if ui.selectable_label(preset_library_open, t!("menu.window_preset_library").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PresetLibrary);
-                }
-
-                let file_browser_open = workspace.panel_exists(super::workspace::PanelType::FileBrowser);
-                if ui.selectable_label(file_browser_open, t!("menu.window_file_browser").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::FileBrowser);
+                let fractal_browser_open = workspace.panel_exists(super::workspace::PanelType::FractalBrowser);
+                if ui.selectable_label(fractal_browser_open, t!("menu.window_fractal_browser").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::FractalBrowser);
                 }
 
                 // Config Import/Export opens as floating window in docking system
