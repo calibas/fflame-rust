@@ -66,12 +66,10 @@ pub struct PanelContext<'a> {
     pub apophysis_import_file: &'a mut bool,
     pub open_config_dialog: &'a mut bool,
 
-    // Preset library panel state
-    pub preset_library_panel: &'a mut Option<super::preset_library::PresetLibraryPanel>,
+    // Selected preset config (from any browser)
     pub selected_preset_config: &'a mut Option<crate::config::FractalConfig>,
 
-    // File browser panel state
-    pub file_browser_panel: &'a mut Option<super::file_browser::FileBrowserPanel>,
+    // File browser open request (shared by FractalBrowser)
     pub file_browser_open_requested: &'a mut bool,
 
     // Animation export settings
@@ -101,6 +99,9 @@ pub struct PanelContext<'a> {
     pub random_generator_panel: &'a mut Option<super::random_generator::RandomGeneratorPanel>,
     pub generated_flame: &'a mut Option<crate::scene::transforms::Flame>,
     pub generated_batch: &'a mut Option<Vec<crate::config::FractalConfig>>,
+
+    // Fractal browser panel state (unified presets/batch/files)
+    pub fractal_browser_panel: &'a mut Option<super::fractal_browser::FractalBrowserPanel>,
 }
 
 /// Viewer for rendering each panel type
@@ -156,11 +157,8 @@ impl<'a> TabViewer for PanelViewer<'a> {
             PanelType::ConfigDialog => {
                 self.render_config_dialog_panel(ui);
             }
-            PanelType::PresetLibrary => {
-                self.render_preset_library_panel(ui);
-            }
-            PanelType::FileBrowser => {
-                self.render_file_browser_panel(ui);
+            PanelType::FractalBrowser => {
+                self.render_fractal_browser_panel(ui);
             }
             PanelType::PathEditor => {
                 self.render_path_editor_panel(ui);
@@ -834,47 +832,6 @@ impl<'a> PanelViewer<'a> {
             });
     }
 
-    /// Render Preset Library panel (browse and select presets with thumbnails)
-    fn render_preset_library_panel(&mut self, ui: &mut egui::Ui) {
-        // Initialize panel if not already created
-        if self.context.preset_library_panel.is_none() {
-            *self.context.preset_library_panel = Some(
-                super::preset_library::PresetLibraryPanel::new(self.context.preset_library)
-            );
-        }
-
-        if let Some(panel) = self.context.preset_library_panel.as_mut() {
-            let response = panel.render(ui);
-
-            // Handle selection
-            if let Some(config) = response.selected {
-                *self.context.selected_preset_config = Some(config);
-            }
-        }
-    }
-
-    /// Render File Browser panel (browse and load .fflame files)
-    fn render_file_browser_panel(&mut self, ui: &mut egui::Ui) {
-        // Initialize panel if not already created
-        if self.context.file_browser_panel.is_none() {
-            *self.context.file_browser_panel = Some(super::file_browser::FileBrowserPanel::new());
-        }
-
-        if let Some(panel) = self.context.file_browser_panel.as_mut() {
-            let response = panel.render(ui);
-
-            // Handle file open request
-            if panel.take_open_file_request() {
-                *self.context.file_browser_open_requested = true;
-            }
-
-            // Handle selection (load the config)
-            if let Some(config) = response.selected {
-                *self.context.selected_preset_config = Some(config);
-            }
-        }
-    }
-
     /// Render Path Editor panel (manage path filters)
     fn render_path_editor_panel(&mut self, ui: &mut egui::Ui) {
         let num_transforms = self.context.flame.transforms.len();
@@ -955,6 +912,28 @@ impl<'a> PanelViewer<'a> {
                     .collect();
 
                 *self.context.generated_batch = Some(configs);
+            }
+        }
+    }
+
+    /// Render Fractal Browser panel (unified presets/batch/files)
+    fn render_fractal_browser_panel(&mut self, ui: &mut egui::Ui) {
+        // Initialize panel if not already created
+        if self.context.fractal_browser_panel.is_none() {
+            *self.context.fractal_browser_panel = Some(super::fractal_browser::FractalBrowserPanel::new());
+        }
+
+        if let Some(panel) = self.context.fractal_browser_panel.as_mut() {
+            let response = panel.render(ui);
+
+            // Handle file open request from Files tab
+            if panel.take_open_file_request() {
+                *self.context.file_browser_open_requested = true;
+            }
+
+            // Handle selection (load the config)
+            if let Some(config) = response.selected {
+                *self.context.selected_preset_config = Some(config);
             }
         }
     }

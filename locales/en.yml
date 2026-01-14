@@ -14,10 +14,12 @@ menu:
   help: "Help"
 
   # File Menu
+  new: "📄 New"
   open: "📂 Open..."
   save_as: "💾 Save As..."
   from_preset_library: "📚 From Preset Library..."
   random_flame: "🎲 Random Flame"
+  random_batch: "🎲 Random Batch..."
   import_apophysis: "Import Apophysis XML..."
   export_apophysis: "Export Apophysis XML..."
   config_import_export: "📄 Config Import/Export..."
@@ -51,6 +53,7 @@ menu:
   window_colors: "🎨 Tone Mapping & Colors"
   window_palette_editor: "🎨 Palette Editor"
   window_palette_library: "📚 Palette Library"
+  window_fractal_browser: "📂 Fractal Browser"
   window_preset_library: "📚 Preset Library"
   window_file_browser: "📂 File Browser"
   window_config_dialog: "📄 Config Import/Export"
@@ -539,6 +542,7 @@ history:
     import_config: "Import Config"
     load_config: "Load Config"
     load_preset: "Load Preset"
+    new_flame: "New Flame"
     random_flame: "Random Flame"
     import_apophysis: "Import Apophysis Flame"
     load_animation_config: "Load Animation Config"
@@ -705,6 +709,15 @@ file_browser:
   error_no_configs_json: "JSON contains no configurations"
   error_parse_failed: "Failed to parse JSON: %{error}"
   error_no_configs_provided: "No configurations provided"
+
+# Fractal Browser Panel (unified presets/batch/files browser)
+browser:
+  title: "Fractal Browser"
+  tab_presets: "Presets"
+  tab_batch: "Random"
+  tab_files: "Files"
+  batch_empty_title: "No random batch results"
+  batch_empty_hint: "Use the Random Generator to create a batch of flames"
 
 # Config Import/Export Dialog
 config_dialog:
