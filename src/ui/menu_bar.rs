@@ -12,6 +12,10 @@ pub fn render_menu_bar(
         egui::MenuBar::new().ui(ui, |ui| {
             // File Menu
             ui.menu_button(t!("menu.file"), |ui| {
+                if ui.button(t!("menu.new")).clicked() {
+                    menu_actions.file.new_flame = true;
+                }
+
                 if ui.button(t!("menu.open")).clicked() {
                     menu_actions.file.load_config = true;
                 }
@@ -30,7 +34,11 @@ pub fn render_menu_bar(
                 if ui.button(t!("menu.random_flame")).clicked() {
                     menu_actions.file.random_flame = true;
                 }
-                
+
+                if ui.button(t!("menu.random_batch")).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator);
+                }
+
                 ui.separator();
 
                 if ui.button(t!("menu.export")).clicked() {

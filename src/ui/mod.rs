@@ -287,6 +287,7 @@ impl EguiLayer {
         let mut config_save_file = false;
         let mut config_load_file = false;
         let mut apophysis_import_file = false;
+        let mut new_flame_requested = false;
         let mut random_flame_requested = false;
 
         // Palette library management
@@ -566,6 +567,7 @@ impl EguiLayer {
         config_load_file |= menu_actions.file.load_config;
         config_save_file |= menu_actions.file.save_config;
         apophysis_import_file |= menu_actions.file.import_apophysis;
+        new_flame_requested |= menu_actions.file.new_flame;
         random_flame_requested |= menu_actions.file.random_flame;
         if menu_actions.file.export_png {
             png_export_with_background = true;
@@ -608,6 +610,7 @@ impl EguiLayer {
             config_save_file_requested: config_save_file,
             config_load_file_requested: config_load_file,
             apophysis_import_file_requested: apophysis_import_file,
+            new_flame_requested,
             random_flame_requested,
             palette_export_json,
             palette_save_file,
