@@ -102,6 +102,9 @@ pub struct PanelContext<'a> {
 
     // Fractal browser panel state (unified presets/batch/files)
     pub fractal_browser_panel: &'a mut Option<super::fractal_browser::FractalBrowserPanel>,
+
+    // Histogram for density visualization (levels now in ConfigManager)
+    pub density_histogram: &'a crate::renderer::DensityHistogram,
 }
 
 /// Viewer for rendering each panel type
@@ -204,6 +207,7 @@ impl<'a> PanelViewer<'a> {
             self.context.palette_library,
             self.context.open_palette_editor,
             self.context.open_palette_library,
+            self.context.density_histogram,
         );
     }
 

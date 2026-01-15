@@ -6,6 +6,7 @@ mod formatting;
 pub mod fractal_browser;
 pub mod fractal_gallery;
 mod help;
+pub mod histogram;
 mod menu_bar;
 mod menu_context;
 mod palette_editor;
@@ -28,6 +29,7 @@ pub mod workspace;
 
 pub use animation_panel::ExportProgress;
 pub use export_panel::PngExportProgress;
+pub use histogram::LevelsState;
 pub use track_editor::TrackEditorState;
 pub use font_loader::{ensure_font_for_locale, initialize_default_fonts};
 pub use menu_context::{MenuActions, MenuState};
@@ -98,6 +100,9 @@ pub struct EguiLayer {
 
     // Fractal browser panel state
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
+
+    // Histogram for density visualization (levels now in ConfigManager)
+    density_histogram: crate::renderer::DensityHistogram,
 }
 
 impl EguiLayer {
@@ -145,6 +150,7 @@ impl EguiLayer {
             generated_flame: None,
             generated_batch: None,
             fractal_browser_panel: None,
+            density_histogram: crate::renderer::DensityHistogram::default(),
         }
     }
 
@@ -461,6 +467,9 @@ impl EguiLayer {
 
                         // Fractal browser panel state
                         fractal_browser_panel: &mut self.fractal_browser_panel,
+
+                        // Histogram for density visualization (levels now in ConfigManager)
+                        density_histogram: &self.density_histogram,
                     },
                 });
 
@@ -721,5 +730,16 @@ impl EguiLayer {
         if let Some(ref mut panel) = self.fractal_browser_panel {
             panel.load_json(json, source_name);
         }
+    }
+
+    /// Update the density histogram from computed data
+    pub fn update_histogram(&mut self, histogram: crate::renderer::DensityHistogram) {
+        self.density_histogram = histogram;
+        // Note: Auto-levels is a one-shot button in render_levels_controls_managed
+    }
+
+    /// Get a reference to the density histogram
+    pub fn density_histogram(&self) -> &crate::renderer::DensityHistogram {
+        &self.density_histogram
     }
 }

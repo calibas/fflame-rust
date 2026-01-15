@@ -261,7 +261,10 @@ pub struct TonemapParams {
     pub burn_in: u32,  // Burn-in iterations (for Depth gradient: start depth)
     pub num_transforms: u32,  // Number of transforms (for path coloring entropy)
     pub palette_size: u32,  // Palette texture size (256-4096), for shader index calculations
-    pub _pad_end: [u32; 3],  // Padding to align struct to 16-byte boundary (128 bytes total)
+    // Levels controls (histogram-based density remapping)
+    pub levels_low: f32,  // Density below this becomes fully transparent/background
+    pub levels_high: f32,  // Density above this becomes fully opaque
+    pub levels_gamma: f32,  // Gamma/midpoint for density curve (1.0 = linear)
 }
 
 impl Default for TonemapParams {
@@ -295,7 +298,9 @@ impl Default for TonemapParams {
             burn_in: 20,  // Default burn-in
             num_transforms: 3,  // Default 3 transforms
             palette_size: 256,  // Default palette size
-            _pad_end: [0, 0, 0],
+            levels_low: 0.0,  // No low clipping by default
+            levels_high: 1000.0,  // High value (will be auto-set from histogram)
+            levels_gamma: 1.0,  // Linear (no gamma adjustment)
         }
     }
 }
