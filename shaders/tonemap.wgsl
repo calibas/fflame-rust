@@ -34,9 +34,11 @@ struct TonemapParams {
     burn_in: u32,  // Burn-in iterations (for Depth gradient: start depth)
     num_transforms: u32,  // Number of transforms (for path coloring entropy)
     palette_size: u32,  // Palette texture size (256-4096), for shader index calculations
-    _pad0: u32,  // Padding to 16-byte boundary
-    _pad1: u32,
-    _pad2: u32,
+    // Levels controls (histogram-based density remapping)
+    // Note: density = background/transparent, NOT black/dark!
+    levels_low: f32,  // Density below this becomes fully transparent/background
+    levels_high: f32,  // Density above this becomes fully opaque
+    levels_gamma: f32,  // Gamma for density curve (1.0 = linear)
 }
 
 // Path storage entry (matches compute shader PathEntry)
@@ -262,6 +264,33 @@ fn brightness_scale(count: f32) -> f32 {
         let log10_value = log(1.0 + tonemap_params.white_level * count * k2) / log(10.0);
         return (k1 * log10_value) / (tonemap_params.white_level * count);
     }
+}
+
+// Helper function: Apply Levels transformation to density
+// Maps density from [levels_low, levels_high] range to [0, 1] with gamma adjustment
+// Note: This affects transparency/opacity, NOT brightness!
+// - Low density → background color (transparent)
+// - High density → fractal color (opaque)
+fn apply_levels(density: f32) -> f32 {
+    // Get levels parameters
+    let low = tonemap_params.levels_low;
+    let high = tonemap_params.levels_high;
+    let gamma = tonemap_params.levels_gamma;
+
+    // Avoid division by zero
+    if (high <= low) {
+        return select(0.0, 1.0, density > low);
+    }
+
+    // Remap density from [low, high] to [0, 1]
+    let normalized = (density - low) / (high - low);
+    let clamped = clamp(normalized, 0.0, 1.0);
+
+    // Apply gamma curve (gamma=1.0 is linear, <1.0 compresses toward opaque, >1.0 compresses toward transparent)
+    if (gamma != 1.0 && gamma > 0.0) {
+        return pow(clamped, gamma);
+    }
+    return clamped;
 }
 
 // Helper function: Convert RGB to HSV
@@ -564,21 +593,30 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // ===== STAGE 3F: Background Blending =====
-    // We need an alpha curve that:
-    // 1. Rises quickly at low densities (avoids dark halos at edges)
-    // 2. Preserves variation in mid-range (maintains detail)
+    // ===== STAGE 3F: Levels and Background Blending =====
     //
-    // Strategy: Blend between gamma-corrected alpha (good edges) and linear (good detail)
-    // At low density: use mostly gamma alpha (fast rise, no halos)
-    // At high density: use mostly linear alpha (preserves detail)
-    // Adjustable via alpha_blend_low and alpha_blend_high sliders
+    // Apply Levels transformation to density for opacity control
+    // Note: Levels affect OPACITY, not color brightness!
+    // - levels_low: density below this becomes fully transparent (shows background)
+    // - levels_high: density above this becomes fully opaque (shows fractal color)
+    // - levels_gamma: curve adjustment between the two thresholds
+    //
+    // When levels are at defaults (low=0, high=1000, gamma=1), this has minimal effect
+    // and the original alpha blending behavior is preserved.
+    let leveled_opacity = apply_levels(bucket_count);
+
+    // Original alpha blending strategy (kept for backward compatibility):
+    // Blend between gamma-corrected alpha (good edges) and linear (good detail)
     let linear_alpha = clamp(bucket_count * 0.01 * tonemap_params.density_scale, 0.0, 1.0);
     let gamma_alpha = clamp(alpha, 0.0, 1.0);
-
-    // Blend factor controlled by sliders: transition from gamma to linear alpha
     let blend_t = smoothstep(tonemap_params.alpha_blend_low, tonemap_params.alpha_blend_high, gamma_alpha);
-    let fractal_alpha = mix(gamma_alpha, linear_alpha, blend_t);
+    let base_alpha = mix(gamma_alpha, linear_alpha, blend_t);
+
+    // Combine levels with the original alpha calculation
+    // When levels are at defaults, leveled_opacity ≈ 1.0 for any non-zero density,
+    // so the original alpha is preserved. When levels are adjusted, they provide
+    // direct control over which density ranges appear transparent vs opaque.
+    let fractal_alpha = min(base_alpha, leveled_opacity);
 
     // Transparent mode: output fractal color with alpha for PNG export
     // Normal mode: composite with background color for display
