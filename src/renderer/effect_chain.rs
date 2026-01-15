@@ -7,15 +7,17 @@
 use std::collections::HashMap;
 use egui_wgpu::wgpu;
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
+    BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingResource, BindingType, BlendState, Buffer, BufferBindingType,
     BufferDescriptor, BufferUsages, Color, ColorTargetState, ColorWrites, CommandEncoder,
-    Device, Extent3d, FilterMode, FragmentState, LoadOp, MultisampleState, Operations,
-    PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment,
-    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, Sampler, SamplerBindingType,
-    SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, Texture,
+    CommandEncoderDescriptor, Device, Extent3d, FilterMode, FragmentState, LoadOp,
+    MultisampleState, MapMode, Operations, Origin3d, PipelineLayoutDescriptor, PollType,
+    PrimitiveState, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
+    RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor,
+    ShaderModuleDescriptor, ShaderSource, ShaderStages, StoreOp, Texture, TextureAspect,
     TextureDescriptor, TextureDimension, TextureFormat, TextureSampleType, TextureUsages,
-    TextureView, TextureViewDescriptor, TextureViewDimension, VertexState,
+    TextureView, TextureViewDescriptor, TextureViewDimension, TexelCopyBufferInfo,
+    TexelCopyBufferLayout, TexelCopyTextureInfo, VertexState, COPY_BYTES_PER_ROW_ALIGNMENT,
 };
 
 use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
@@ -41,7 +43,8 @@ struct EffectParams {
 
 /// A compiled effect pipeline ready for execution
 struct CompiledEffect {
-    /// Name of the effect
+    /// Name of the effect (kept for debugging)
+    #[allow(dead_code)]
     name: String,
     /// Render pipeline for this effect
     pipeline: RenderPipeline,
@@ -73,7 +76,7 @@ impl PingPongTextures {
                 sample_count: 1,
                 dimension: TextureDimension::D2,
                 format,
-                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
                 view_formats: &[],
             })
         };
@@ -113,6 +116,15 @@ impl PingPongTextures {
     /// Swap read and write textures
     fn swap(&mut self) {
         self.read_index = 1 - self.read_index;
+    }
+
+    /// Get the current read texture (for copying)
+    fn read_texture(&self) -> &Texture {
+        if self.read_index == 0 {
+            &self.texture_a
+        } else {
+            &self.texture_b
+        }
     }
 }
 
@@ -170,7 +182,7 @@ impl EffectChainRunner {
     }
 
     /// Resize textures if dimensions changed
-    pub fn resize(&mut self, device: &Device, width: u32, height: u32) {
+    pub fn resize(&mut self, _device: &Device, width: u32, height: u32) {
         if self.width != width || self.height != height {
             self.width = width;
             self.height = height;
@@ -479,98 +491,6 @@ impl EffectChainRunner {
         self.color_textures.as_ref().map(|t| t.read_view())
     }
 
-    /// Run a single effect (static helper to avoid borrow issues)
-    fn run_single_effect_impl(
-        device: &Device,
-        queue: &Queue,
-        encoder: &mut CommandEncoder,
-        effect_name: &str,
-        effect: &EffectInstance,
-        textures: &mut PingPongTextures,
-        compiled_effects: &HashMap<String, CompiledEffect>,
-        params_buffer: &Buffer,
-        sampler: &Sampler,
-        width: u32,
-        height: u32,
-        time: f32,
-    ) {
-        let compiled = match compiled_effects.get(effect_name) {
-            Some(c) => c,
-            None => {
-                log::warn!("Effect {} not compiled, skipping", effect_name);
-                return;
-            }
-        };
-        log::debug!("Executing effect: {} ({}x{})", effect_name, width, height);
-
-        // Update params buffer
-        let mut params = EffectParams {
-            params: [[0.0; 4]; 4],
-            width,
-            height,
-            time,
-            _padding: 0.0,
-        };
-
-        // Fill in effect parameters (packed into vec4s)
-        let registry = global_effect_registry();
-        if let Some(info) = registry.get(effect_name) {
-            for (i, param_def) in info.parameters.iter().enumerate() {
-                if i < MAX_EFFECT_PARAMS {
-                    params.params[i / 4][i % 4] = effect.get_param(&param_def.name);
-                }
-            }
-        }
-
-        queue.write_buffer(params_buffer, 0, bytemuck::bytes_of(&params));
-
-        // Create bind group for this pass
-        let bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some(&format!("{} Bind Group", effect_name)),
-            layout: &compiled.bind_group_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::TextureView(textures.read_view()),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Sampler(sampler),
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: params_buffer.as_entire_binding(),
-                },
-            ],
-        });
-
-        // Run the effect
-        {
-            let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some(&format!("{} Pass", effect_name)),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: textures.write_view(),
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(Color::BLACK),
-                        store: StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
-
-            render_pass.set_pipeline(&compiled.pipeline);
-            render_pass.set_bind_group(0, &bind_group, &[]);
-            render_pass.draw(0..3, 0..1); // Fullscreen triangle
-        }
-
-        // Swap ping-pong textures
-        textures.swap();
-    }
-
     /// Run a single effect with explicit input/output views
     fn run_single_effect_with_input(
         device: &Device,
@@ -659,5 +579,97 @@ impl EffectChainRunner {
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.draw(0..3, 0..1); // Fullscreen triangle
         }
+    }
+
+    /// Set time directly (for static exports where time should be 0)
+    pub fn set_time(&mut self, time: f32) {
+        self.time = time;
+    }
+
+    /// Read pixels from the color effect output texture
+    /// Returns (width, height, rgba_data)
+    pub async fn read_color_output_pixels(
+        &self,
+        device: &Device,
+        queue: &Queue,
+    ) -> Result<(u32, u32, Vec<u8>), String> {
+        let textures = self.color_textures.as_ref()
+            .ok_or_else(|| "No color effect output available".to_string())?;
+
+        // Wait for any pending rendering to complete
+        let sync_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Effect Read Sync"),
+        });
+        queue.submit(std::iter::once(sync_encoder.finish()));
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+        // Create staging buffer
+        let bytes_per_pixel = 4; // RGBA8
+        let unpadded_bytes_per_row = self.width * bytes_per_pixel;
+        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * self.height) as u64;
+
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Effect Read Buffer"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Copy texture to buffer
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Effect Read Encoder"),
+        });
+        encoder.copy_texture_to_buffer(
+            TexelCopyTextureInfo {
+                texture: textures.read_texture(),
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit(std::iter::once(encoder.finish()));
+
+        // Map buffer and read data
+        let buffer_slice = buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+
+        let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+        rx.await
+            .map_err(|_| "Failed to receive map result".to_string())?
+            .map_err(|e| format!("Failed to map buffer: {:?}", e))?;
+
+        // Extract pixel data (removing row padding)
+        let data = buffer_slice.get_mapped_range();
+        let mut rgba_data = Vec::with_capacity((self.width * self.height * 4) as usize);
+
+        for row in 0..self.height {
+            let row_start = (row * padded_bytes_per_row) as usize;
+            let row_end = row_start + (self.width * bytes_per_pixel) as usize;
+            rgba_data.extend_from_slice(&data[row_start..row_end]);
+        }
+
+        drop(data);
+        buffer.unmap();
+
+        Ok((self.width, self.height, rgba_data))
     }
 }
