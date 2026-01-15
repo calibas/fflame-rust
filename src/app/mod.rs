@@ -235,6 +235,9 @@ pub struct App {
 
     // Histogram computation (computed periodically, not every frame)
     pub(super) histogram_frame_counter: u32,
+
+    // Post-processing effect chain
+    pub(super) effect_chain: crate::renderer::effect_chain::EffectChainRunner,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -279,6 +282,13 @@ impl App {
         let export_width = config_manager.system_settings().default_export_width;
         let export_height = config_manager.system_settings().default_export_height;
 
+        // Create effect chain for post-processing effects
+        let effect_chain = crate::renderer::effect_chain::EffectChainRunner::new(
+            &gpu.device,
+            gpu.size.width,
+            gpu.size.height,
+        );
+
         let mut app = Self {
             config_manager,
             gpu,
@@ -311,6 +321,7 @@ impl App {
             png_export_progress: Arc::new(Mutex::new(PngExportProgress::default())),
             render_mode: RenderModeFSM::new(),
             histogram_frame_counter: 0,
+            effect_chain,
         };
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
@@ -480,6 +491,9 @@ impl App {
 
         self.last_frame_time = Some(render_start);
 
+        // Update effect chain time for animated effects
+        self.effect_chain.update_time(delta_time as f32);
+
         // ============================================================================
         // NEW FRAME ORDER (Fixed race conditions):
         // 1. Render UI (reads current state, shows previous frame's fractal)
@@ -565,6 +579,9 @@ impl App {
                         &self.flame, self.config_manager.system_settings().iterations_per_thread, resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
                     self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
+
+                    // Resize effect chain textures
+                    self.effect_chain.resize(&self.gpu.device, viewport_size.0, viewport_size.1);
 
                     // Restore palette and color mode after buffer recreation
                     renderer.update_palette(&self.gpu.device, &self.gpu.queue, &resize_config.palette, resize_config.palette_rotation, resize_config.palette_squeeze);
@@ -1149,6 +1166,27 @@ impl App {
             renderer.tonemap_pass(&mut render_encoder);
 
             self.metrics.record_tonemap_time(t_tonemap.elapsed().as_secs_f64() * 1000.0);
+
+            // Run color effects (after tonemap)
+            let effects_ran = self.effect_chain.run_color_effects(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut render_encoder,
+                renderer.get_fractal_texture_view(),
+                &final_config.color_effects,
+            );
+
+            // If effects ran, re-register the effect output texture with egui
+            if effects_ran {
+                if let Some(output_view) = self.effect_chain.get_color_output() {
+                    self.egui_layer.register_fractal_texture(
+                        &self.gpu.device,
+                        output_view,
+                        renderer.width,
+                        renderer.height,
+                    );
+                }
+            }
         }
 
         // Submit rendering commands

@@ -395,18 +395,19 @@ impl EffectChainRunner {
 
     /// Run color effects chain
     ///
-    /// Takes the tonemap output texture as input and writes back to the same texture.
+    /// Takes the tonemap output texture as input. First effect reads from input_view,
+    /// subsequent effects ping-pong between internal textures. Returns true if effects were run.
     pub fn run_color_effects(
         &mut self,
         device: &Device,
         queue: &Queue,
         encoder: &mut CommandEncoder,
-        _output_view: &TextureView,
+        input_view: &TextureView,
         effects: &[EffectInstance],
-    ) {
+    ) -> bool {
         let enabled_effects: Vec<_> = effects.iter().filter(|e| e.enabled).collect();
         if enabled_effects.is_empty() {
-            return;
+            return false;
         }
 
         // First, ensure all effects are compiled (before taking texture borrow)
@@ -420,15 +421,25 @@ impl EffectChainRunner {
 
         // Now run effects
         if let Some(textures) = self.color_textures.as_mut() {
-            // Note: copy_texture_to_view is a placeholder - input/output texture handling TBD
-            for effect in enabled_effects {
-                Self::run_single_effect_impl(
+            // Reset read index so first write goes to texture A
+            textures.read_index = 1; // So write_view() returns A
+
+            for (i, effect) in enabled_effects.iter().enumerate() {
+                // First effect reads from input texture, subsequent effects read from ping-pong
+                let read_view = if i == 0 {
+                    input_view
+                } else {
+                    textures.read_view()
+                };
+
+                Self::run_single_effect_with_input(
                     device,
                     queue,
                     encoder,
                     &effect.effect_type,
                     effect,
-                    textures,
+                    read_view,
+                    textures.write_view(),
                     &self.compiled_effects,
                     &self.params_buffer,
                     &self.sampler,
@@ -436,8 +447,13 @@ impl EffectChainRunner {
                     height,
                     time,
                 );
+
+                // Swap ping-pong textures for next effect
+                textures.swap();
             }
+            return true;
         }
+        false
     }
 
     /// Get the output texture view from color effects (if any were run)
@@ -531,5 +547,91 @@ impl EffectChainRunner {
 
         // Swap ping-pong textures
         textures.swap();
+    }
+
+    /// Run a single effect with explicit input/output views
+    fn run_single_effect_with_input(
+        device: &Device,
+        queue: &Queue,
+        encoder: &mut CommandEncoder,
+        effect_name: &str,
+        effect: &EffectInstance,
+        input_view: &TextureView,
+        output_view: &TextureView,
+        compiled_effects: &HashMap<String, CompiledEffect>,
+        params_buffer: &Buffer,
+        sampler: &Sampler,
+        width: u32,
+        height: u32,
+        time: f32,
+    ) {
+        let compiled = match compiled_effects.get(effect_name) {
+            Some(c) => c,
+            None => return,
+        };
+
+        // Update params buffer
+        let mut params = EffectParams {
+            params: [0.0; MAX_EFFECT_PARAMS],
+            width,
+            height,
+            time,
+            _padding: 0.0,
+        };
+
+        // Fill in effect parameters
+        let registry = global_effect_registry();
+        if let Some(info) = registry.get(effect_name) {
+            for (i, param_def) in info.parameters.iter().enumerate() {
+                if i < MAX_EFFECT_PARAMS {
+                    params.params[i] = effect.get_param(&param_def.name);
+                }
+            }
+        }
+
+        queue.write_buffer(params_buffer, 0, bytemuck::bytes_of(&params));
+
+        // Create bind group for this pass
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some(&format!("{} Bind Group", effect_name)),
+            layout: &compiled.bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(input_view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Sampler(sampler),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: params_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        // Run the effect
+        {
+            let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some(&format!("{} Pass", effect_name)),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: output_view,
+                    resolve_target: None,
+                    ops: Operations {
+                        load: LoadOp::Clear(Color::BLACK),
+                        store: StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+
+            render_pass.set_pipeline(&compiled.pipeline);
+            render_pass.set_bind_group(0, &bind_group, &[]);
+            render_pass.draw(0..3, 0..1); // Fullscreen triangle
+        }
     }
 }
