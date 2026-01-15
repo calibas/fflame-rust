@@ -776,7 +776,6 @@ impl ConfigManager {
             ConfigPath::LevelsLow => Ok(config.levels_low.into()),
             ConfigPath::LevelsHigh => Ok(config.levels_high.into()),
             ConfigPath::LevelsGamma => Ok(config.levels_gamma.into()),
-            ConfigPath::LevelsAuto => Ok(config.levels_auto.into()),
 
             // Color
             ConfigPath::ColorMode => Ok(config.color_mode.into()),
@@ -1107,9 +1106,6 @@ impl ConfigManager {
             }
             ConfigPath::LevelsGamma => {
                 self.current.levels_gamma = value.try_into()?;
-            }
-            ConfigPath::LevelsAuto => {
-                self.current.levels_auto = value.try_into()?;
             }
 
             // Color

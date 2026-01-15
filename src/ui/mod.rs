@@ -735,8 +735,7 @@ impl EguiLayer {
     /// Update the density histogram from computed data
     pub fn update_histogram(&mut self, histogram: crate::renderer::DensityHistogram) {
         self.density_histogram = histogram;
-        // Note: Auto-levels updates now handled in render_levels_controls_managed
-        // via ConfigManager when levels_auto is enabled
+        // Note: Auto-levels is a one-shot button in render_levels_controls_managed
     }
 
     /// Get a reference to the density histogram
