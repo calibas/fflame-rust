@@ -172,6 +172,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             PanelType::RandomGenerator => {
                 self.render_random_generator_panel(ui);
             }
+            PanelType::Effects => {
+                self.render_effects_panel(ui);
+            }
         }
     }
 }
@@ -940,5 +943,13 @@ impl<'a> PanelViewer<'a> {
                 *self.context.selected_preset_config = Some(config);
             }
         }
+    }
+
+    /// Render Effects panel (post-processing color and density effects)
+    fn render_effects_panel(&mut self, ui: &mut egui::Ui) {
+        super::effects_panel::render_effects_panel(
+            ui,
+            self.context.config_manager,
+        );
     }
 }

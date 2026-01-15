@@ -110,6 +110,7 @@ panels:
   path_editor: "Path Editor"
   export: "Export"
   random_generator: "Random Generator"
+  effects: "Effects"
   settings: "Settings"
   tone_mapping: "Tone Mapping"
 
