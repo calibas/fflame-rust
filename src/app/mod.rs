@@ -232,6 +232,9 @@ pub struct App {
 
     // Rendering mode state machine (Normal, Animating, Overwrite)
     pub(super) render_mode: RenderModeFSM,
+
+    // Histogram computation (computed periodically, not every frame)
+    pub(super) histogram_frame_counter: u32,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -307,6 +310,7 @@ impl App {
             animation_export_progress: Arc::new(Mutex::new(ExportProgress::default())),
             png_export_progress: Arc::new(Mutex::new(PngExportProgress::default())),
             render_mode: RenderModeFSM::new(),
+            histogram_frame_counter: 0,
         };
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
@@ -576,7 +580,8 @@ impl App {
                     renderer.update_tonemap(&self.gpu.queue, resize_config.tonemap_mode, resize_config.use_curve, resize_config.exposure, resize_config.gamma,
                         resize_config.gamma_threshold, resize_config.brightness, resize_config.vibrancy, resize_config.saturation, resize_config.hue_shift,
                         resize_config.alpha_blend_low, resize_config.alpha_blend_high,
-                        viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, self.config_manager.system_settings().iterations_per_thread, 1, false);
+                        viewport_size.0, viewport_size.1, renderer.total_iterations(), resize_config.max_iterations, resize_config.zoom, self.config_manager.system_settings().iterations_per_thread, 1, false,
+                        resize_config.levels_low, resize_config.levels_high, resize_config.levels_gamma);
                     renderer.update_curve_lut(&self.gpu.queue, &resize_config.tonemap_curve);
 
                     // Re-register texture with egui after resize (new texture view created)
@@ -1137,7 +1142,8 @@ impl App {
                 final_config.vibrancy, final_config.saturation, final_config.hue_shift,
                 final_config.alpha_blend_low, final_config.alpha_blend_high,
                 renderer.width, renderer.height, renderer.total_iterations(), final_config.max_iterations, final_config.zoom,
-                self.config_manager.system_settings().iterations_per_thread, batch_size_for_tonemap, is_live_preview);
+                self.config_manager.system_settings().iterations_per_thread, batch_size_for_tonemap, is_live_preview,
+                final_config.levels_low, final_config.levels_high, final_config.levels_gamma);
 
             // Render to internal fractal texture
             renderer.tonemap_pass(&mut render_encoder);
@@ -1150,6 +1156,34 @@ impl App {
 
         self.gpu.queue.submit(std::iter::once(render_encoder.finish()));
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
+
+        // Update density histogram for Levels controls (every ~30 frames)
+        // Only on desktop - WASM would need async handling
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.histogram_frame_counter += 1;
+            if self.histogram_frame_counter >= 30 {
+                self.histogram_frame_counter = 0;
+
+                if let Some(ref renderer) = self.flame_renderer {
+                    let texture = renderer.accumulation_texture();
+                    match pollster::block_on(crate::renderer::compute_histogram_async(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        texture,
+                        renderer.width,
+                        renderer.height,
+                    )) {
+                        Ok(histogram) => {
+                            self.egui_layer.update_histogram(histogram);
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to compute histogram: {}", e);
+                        }
+                    }
+                }
+            }
+        }
 
         // Generate thumbnails for fractal browser (unified panel)
         // Desktop: Blocking generation, one per frame

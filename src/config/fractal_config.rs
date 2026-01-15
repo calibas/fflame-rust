@@ -122,6 +122,20 @@ pub struct FractalConfig {
     #[serde(default = "default_alpha_blend_high")]
     pub alpha_blend_high: f32,
 
+    /// Levels: density threshold for background/transparency
+    /// Pixels with density below this become fully transparent (show background)
+    #[serde(default)]
+    pub levels_low: f32,
+
+    /// Levels: density threshold for full opacity
+    /// Pixels with density above this become fully opaque (show fractal color)
+    #[serde(default = "default_levels_high")]
+    pub levels_high: f32,
+
+    /// Levels: gamma/midpoint for density curve (1.0 = linear)
+    #[serde(default = "default_levels_gamma")]
+    pub levels_gamma: f32,
+
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default)]
     pub deterministic_rng: bool,
@@ -173,6 +187,14 @@ fn default_alpha_blend_low() -> f32 {
 
 fn default_alpha_blend_high() -> f32 {
     super::defaults::DEFAULT_ALPHA_BLEND_HIGH
+}
+
+fn default_levels_high() -> f32 {
+    1000.0  // High value, will be auto-set from histogram
+}
+
+fn default_levels_gamma() -> f32 {
+    1.0  // Linear (no gamma adjustment)
 }
 
 fn default_palette_rotation() -> f32 {
@@ -263,6 +285,9 @@ impl Default for FractalConfig {
             hue_shift: default_hue_shift(),
             alpha_blend_low: default_alpha_blend_low(),
             alpha_blend_high: default_alpha_blend_high(),
+            levels_low: 0.0,
+            levels_high: default_levels_high(),
+            levels_gamma: default_levels_gamma(),
             deterministic_rng: false,
         }
     }
