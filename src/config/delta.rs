@@ -44,7 +44,6 @@ pub enum ConfigPath {
     LevelsLow,
     LevelsHigh,
     LevelsGamma,
-    LevelsAuto,
 
     // ===== Color (no iteration reset, just color buffer update) =====
     ColorMode,
@@ -172,7 +171,6 @@ impl Display for ConfigPath {
             ConfigPath::LevelsLow => write!(f, "Levels Low"),
             ConfigPath::LevelsHigh => write!(f, "Levels High"),
             ConfigPath::LevelsGamma => write!(f, "Levels Gamma"),
-            ConfigPath::LevelsAuto => write!(f, "Levels Auto"),
 
             // Color
             ConfigPath::ColorMode => write!(f, "Color Mode"),
@@ -335,7 +333,6 @@ impl ConfigPath {
             ConfigPath::LevelsLow => I18nKey::simple("history.param.levels_low"),
             ConfigPath::LevelsHigh => I18nKey::simple("history.param.levels_high"),
             ConfigPath::LevelsGamma => I18nKey::simple("history.param.levels_gamma"),
-            ConfigPath::LevelsAuto => I18nKey::simple("history.param.levels_auto"),
 
             // Color
             ConfigPath::ColorMode => I18nKey::simple("history.param.color_mode"),
@@ -898,8 +895,7 @@ impl ConfigPath {
             | ConfigPath::BackgroundColorB
             | ConfigPath::LevelsLow
             | ConfigPath::LevelsHigh
-            | ConfigPath::LevelsGamma
-            | ConfigPath::LevelsAuto => UpdateType::ToneMappingOnly,
+            | ConfigPath::LevelsGamma => UpdateType::ToneMappingOnly,
 
             // Color parameters - re-run accumulation with new colors
             ConfigPath::ColorMode
@@ -992,7 +988,6 @@ impl ConfigPath {
             ConfigPath::LevelsLow => "LevelsLow".to_string(),
             ConfigPath::LevelsHigh => "LevelsHigh".to_string(),
             ConfigPath::LevelsGamma => "LevelsGamma".to_string(),
-            ConfigPath::LevelsAuto => "LevelsAuto".to_string(),
 
             // Color
             ConfigPath::ColorMode => "ColorMode".to_string(),
@@ -1339,8 +1334,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
         | ConfigPath::FinalTransformEnabled
-        | ConfigPath::SystemVsyncEnabled
-        | ConfigPath::LevelsAuto => {
+        | ConfigPath::SystemVsyncEnabled => {
             json.as_bool().map(ConfigValue::Bool)
         }
 

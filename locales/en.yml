@@ -474,7 +474,6 @@ history:
     levels_low: "Levels Low"
     levels_high: "Levels High"
     levels_gamma: "Levels Gamma"
-    levels_auto: "Levels Auto"
 
     # Color
     color_mode: "Color Mode"

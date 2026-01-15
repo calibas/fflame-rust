@@ -136,10 +136,6 @@ pub struct FractalConfig {
     #[serde(default = "default_levels_gamma")]
     pub levels_gamma: f32,
 
-    /// Levels: auto-levels enabled (uses histogram percentiles)
-    #[serde(default)]
-    pub levels_auto: bool,
-
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default)]
     pub deterministic_rng: bool,
@@ -292,7 +288,6 @@ impl Default for FractalConfig {
             levels_low: 0.0,
             levels_high: default_levels_high(),
             levels_gamma: default_levels_gamma(),
-            levels_auto: false,
             deterministic_rng: false,
         }
     }

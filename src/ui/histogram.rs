@@ -385,20 +385,17 @@ pub fn render_levels_controls_managed(
     let config = config_manager.active_config();
 
     // Read current values from config
-    let auto_enabled = config.levels_auto;
     let levels_low = config.levels_low;
     let levels_high = config.levels_high;
     let levels_gamma = config.levels_gamma;
 
     ui.horizontal(|ui| {
         ui.label(t!("levels.title"));
-        let mut temp_auto = auto_enabled;
-        if ui.checkbox(&mut temp_auto, t!("levels.auto")).changed() {
-            if let Ok(update) = config_manager.update_param(ConfigPath::LevelsAuto, temp_auto.into()) {
-                max_update = max_update.max(update);
-            }
-            // If auto was just enabled, update low/high from histogram
-            if temp_auto && histogram.valid {
+
+        // Auto button - one-shot apply histogram percentiles
+        ui.add_enabled_ui(histogram.valid, |ui| {
+            if ui.button(t!("levels.auto")).clicked() {
+                // Set low to 1st percentile, high to 99th percentile
                 if let Ok(update) = config_manager.update_param(
                     ConfigPath::LevelsLow,
                     histogram.percentile_1.into()
@@ -412,36 +409,34 @@ pub fn render_levels_controls_managed(
                     max_update = max_update.max(update);
                 }
             }
+        });
+    });
+
+    // Low threshold slider (density threshold for background)
+    ui.horizontal(|ui| {
+        ui.label(t!("levels.low"));
+        let range = 0.0..=histogram.max_density.max(100.0);
+        let mut temp_low = levels_low;
+        if ui.add(egui::Slider::new(&mut temp_low, range).logarithmic(true)).changed() {
+            if let Ok(update) = config_manager.update_param(ConfigPath::LevelsLow, temp_low.into()) {
+                max_update = max_update.max(update);
+            }
         }
     });
 
-    ui.add_enabled_ui(!auto_enabled, |ui| {
-        // Low threshold slider (density threshold for background)
-        ui.horizontal(|ui| {
-            ui.label(t!("levels.low"));
-            let range = 0.0..=histogram.max_density.max(100.0);
-            let mut temp_low = levels_low;
-            if ui.add(egui::Slider::new(&mut temp_low, range).logarithmic(true)).changed() {
-                if let Ok(update) = config_manager.update_param(ConfigPath::LevelsLow, temp_low.into()) {
-                    max_update = max_update.max(update);
-                }
+    // High threshold slider (density threshold for full opacity)
+    ui.horizontal(|ui| {
+        ui.label(t!("levels.high"));
+        let range = 0.0..=histogram.max_density.max(100.0);
+        let mut temp_high = levels_high;
+        if ui.add(egui::Slider::new(&mut temp_high, range).logarithmic(true)).changed() {
+            if let Ok(update) = config_manager.update_param(ConfigPath::LevelsHigh, temp_high.into()) {
+                max_update = max_update.max(update);
             }
-        });
-
-        // High threshold slider (density threshold for full opacity)
-        ui.horizontal(|ui| {
-            ui.label(t!("levels.high"));
-            let range = 0.0..=histogram.max_density.max(100.0);
-            let mut temp_high = levels_high;
-            if ui.add(egui::Slider::new(&mut temp_high, range).logarithmic(true)).changed() {
-                if let Ok(update) = config_manager.update_param(ConfigPath::LevelsHigh, temp_high.into()) {
-                    max_update = max_update.max(update);
-                }
-            }
-        });
+        }
     });
 
-    // Gamma slider (always enabled) - controls the density-to-opacity curve
+    // Gamma slider - controls the density-to-opacity curve
     ui.horizontal(|ui| {
         ui.label(t!("levels.gamma"));
         let mut temp_gamma = levels_gamma;
@@ -451,31 +446,6 @@ pub fn render_levels_controls_managed(
             }
         }
     });
-
-    // Auto-update levels from histogram when auto mode is enabled
-    if auto_enabled && histogram.valid {
-        let current_low = config_manager.active_config().levels_low;
-        let current_high = config_manager.active_config().levels_high;
-
-        // Only update if values are significantly different (avoid constant updates)
-        let threshold = 0.01;
-        if (current_low - histogram.percentile_1).abs() > threshold {
-            if let Ok(update) = config_manager.update_param(
-                ConfigPath::LevelsLow,
-                histogram.percentile_1.into()
-            ) {
-                max_update = max_update.max(update);
-            }
-        }
-        if (current_high - histogram.percentile_99).abs() > threshold {
-            if let Ok(update) = config_manager.update_param(
-                ConfigPath::LevelsHigh,
-                histogram.percentile_99.into()
-            ) {
-                max_update = max_update.max(update);
-            }
-        }
-    }
 
     max_update
 }
