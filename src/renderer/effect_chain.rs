@@ -350,13 +350,14 @@ impl EffectChainRunner {
         device: &Device,
         queue: &Queue,
         encoder: &mut CommandEncoder,
-        _input_view: &TextureView,
+        input_view: &TextureView,
         effects: &[EffectInstance],
     ) -> bool {
         let enabled_effects: Vec<_> = effects.iter().filter(|e| e.enabled).collect();
         if enabled_effects.is_empty() {
             return false;
         }
+        log::info!("Running {} density effects", enabled_effects.len());
 
         // First, ensure all effects are compiled (before taking texture borrow)
         self.compile_effects(device, effects, EffectCategory::Density);
@@ -369,15 +370,25 @@ impl EffectChainRunner {
 
         // Now run effects
         if let Some(textures) = self.density_textures.as_mut() {
-            // Note: copy_texture_to_view is a placeholder - input texture handling TBD
-            for effect in enabled_effects {
-                Self::run_single_effect_impl(
+            // Reset read index so first write goes to texture A
+            textures.read_index = 1; // So write_view() returns A
+
+            for (i, effect) in enabled_effects.iter().enumerate() {
+                // First effect reads from input texture (accumulation), subsequent effects read from ping-pong
+                let read_view = if i == 0 {
+                    input_view
+                } else {
+                    textures.read_view()
+                };
+
+                Self::run_single_effect_with_input(
                     device,
                     queue,
                     encoder,
                     &effect.effect_type,
                     effect,
-                    textures,
+                    read_view,
+                    textures.write_view(),
                     &self.compiled_effects,
                     &self.params_buffer,
                     &self.sampler,
@@ -385,6 +396,9 @@ impl EffectChainRunner {
                     height,
                     time,
                 );
+
+                // Swap ping-pong textures for next effect
+                textures.swap();
             }
             return true;
         }
