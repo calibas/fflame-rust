@@ -181,20 +181,6 @@ pub fn render_colors_content(
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
 
-    // Section 0: Density Histogram with Levels controls
-    egui::CollapsingHeader::new(t!("tonemap.histogram"))
-        .default_open(true)
-        .show(ui, |ui| {
-            // Render histogram visualization with levels markers from config
-            let _response = render_histogram_with_config(ui, histogram, config_manager);
-
-            ui.add_space(12.0); // Space for triangle markers
-
-            // Render levels controls using ConfigManager
-            let levels_update = render_levels_controls_managed(ui, config_manager, histogram);
-            max_update = max_update.max(levels_update);
-        });
-
     // Section 1: Tone Mapping
     egui::CollapsingHeader::new(t!("tonemap.title"))
         .default_open(true)
@@ -315,7 +301,21 @@ pub fn render_colors_content(
             });
         });
 
-    // Section 3: Color & Appearance
+    // Section 3: Density Histogram with Levels controls
+    egui::CollapsingHeader::new(t!("tonemap.histogram"))
+        .default_open(false)
+        .show(ui, |ui| {
+            // Render histogram visualization with levels markers from config
+            let _response = render_histogram_with_config(ui, histogram, config_manager);
+
+            ui.add_space(12.0); // Space for triangle markers
+
+            // Render levels controls using ConfigManager
+            let levels_update = render_levels_controls_managed(ui, config_manager, histogram);
+            max_update = max_update.max(levels_update);
+        });
+
+    // Section 4: Color & Appearance
     egui::CollapsingHeader::new(t!("tonemap.color_appearance"))
         .default_open(true)
         .show(ui, |ui| {
