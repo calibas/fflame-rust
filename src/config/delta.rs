@@ -40,6 +40,11 @@ pub enum ConfigPath {
     TonemapMode,
     TonemapCurve,
     UseCurve,
+    // Levels controls (density-to-opacity mapping)
+    LevelsLow,
+    LevelsHigh,
+    LevelsGamma,
+    LevelsAuto,
 
     // ===== Color (no iteration reset, just color buffer update) =====
     ColorMode,
@@ -164,6 +169,10 @@ impl Display for ConfigPath {
             ConfigPath::TonemapMode => write!(f, "Tonemap Mode"),
             ConfigPath::TonemapCurve => write!(f, "Tone Curve"),
             ConfigPath::UseCurve => write!(f, "Use Tone Curve"),
+            ConfigPath::LevelsLow => write!(f, "Levels Low"),
+            ConfigPath::LevelsHigh => write!(f, "Levels High"),
+            ConfigPath::LevelsGamma => write!(f, "Levels Gamma"),
+            ConfigPath::LevelsAuto => write!(f, "Levels Auto"),
 
             // Color
             ConfigPath::ColorMode => write!(f, "Color Mode"),
@@ -323,6 +332,10 @@ impl ConfigPath {
             ConfigPath::TonemapMode => I18nKey::simple("history.param.tonemap_mode"),
             ConfigPath::TonemapCurve => I18nKey::simple("history.param.tone_curve"),
             ConfigPath::UseCurve => I18nKey::simple("history.param.use_tone_curve"),
+            ConfigPath::LevelsLow => I18nKey::simple("history.param.levels_low"),
+            ConfigPath::LevelsHigh => I18nKey::simple("history.param.levels_high"),
+            ConfigPath::LevelsGamma => I18nKey::simple("history.param.levels_gamma"),
+            ConfigPath::LevelsAuto => I18nKey::simple("history.param.levels_auto"),
 
             // Color
             ConfigPath::ColorMode => I18nKey::simple("history.param.color_mode"),
@@ -882,7 +895,11 @@ impl ConfigPath {
             | ConfigPath::BackgroundColor
             | ConfigPath::BackgroundColorR
             | ConfigPath::BackgroundColorG
-            | ConfigPath::BackgroundColorB => UpdateType::ToneMappingOnly,
+            | ConfigPath::BackgroundColorB
+            | ConfigPath::LevelsLow
+            | ConfigPath::LevelsHigh
+            | ConfigPath::LevelsGamma
+            | ConfigPath::LevelsAuto => UpdateType::ToneMappingOnly,
 
             // Color parameters - re-run accumulation with new colors
             ConfigPath::ColorMode
@@ -972,6 +989,10 @@ impl ConfigPath {
             ConfigPath::TonemapMode => "TonemapMode".to_string(),
             ConfigPath::TonemapCurve => "TonemapCurve".to_string(),
             ConfigPath::UseCurve => "UseCurve".to_string(),
+            ConfigPath::LevelsLow => "LevelsLow".to_string(),
+            ConfigPath::LevelsHigh => "LevelsHigh".to_string(),
+            ConfigPath::LevelsGamma => "LevelsGamma".to_string(),
+            ConfigPath::LevelsAuto => "LevelsAuto".to_string(),
 
             // Color
             ConfigPath::ColorMode => "ColorMode".to_string(),
@@ -1281,7 +1302,10 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::FinalTransformOriginY
         | ConfigPath::FinalTransformRotation
         | ConfigPath::FinalTransformScale
-        | ConfigPath::SystemTargetFps => {
+        | ConfigPath::SystemTargetFps
+        | ConfigPath::LevelsLow
+        | ConfigPath::LevelsHigh
+        | ConfigPath::LevelsGamma => {
             json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
 
@@ -1315,7 +1339,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
         | ConfigPath::FinalTransformEnabled
-        | ConfigPath::SystemVsyncEnabled => {
+        | ConfigPath::SystemVsyncEnabled
+        | ConfigPath::LevelsAuto => {
             json.as_bool().map(ConfigValue::Bool)
         }
 

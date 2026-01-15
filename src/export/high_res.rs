@@ -1019,7 +1019,10 @@ impl HighResExporter {
             burn_in: 20, // Default burn-in for export
             num_transforms: config.flame.transforms.len() as u32,
             palette_size: config.palette_size,
-            _pad_end: [0, 0, 0],
+            // Levels defaults for export (no histogram-based adjustment)
+            levels_low: 0.0,
+            levels_high: 1000.0,
+            levels_gamma: 1.0,
         };
 
         self.queue.write_buffer(

@@ -318,8 +318,17 @@ rendering:
   reset: "Reset"
   export: "Export PNG..."
 
+# Levels (Density-to-opacity mapping)
+levels:
+  title: "Levels"
+  auto: "Auto"
+  low: "Low:"
+  high: "High:"
+  gamma: "Gamma:"
+
 # Tone Mapping
 tonemap:
+  histogram: "Density Histogram"
   title: "Tone Mapping"
   mode: "Tone Map Mode"
   mode_linear: "Linear"
@@ -460,6 +469,12 @@ history:
     tonemap_mode: "Tonemap Mode"
     tone_curve: "Tone Curve"
     use_tone_curve: "Use Tone Curve"
+
+    # Levels (density-to-opacity mapping)
+    levels_low: "Levels Low"
+    levels_high: "Levels High"
+    levels_gamma: "Levels Gamma"
+    levels_auto: "Levels Auto"
 
     # Color
     color_mode: "Color Mode"
