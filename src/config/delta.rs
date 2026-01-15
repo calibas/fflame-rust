@@ -332,7 +332,7 @@ impl ConfigPath {
             ConfigPath::UseCurve => I18nKey::simple("history.param.use_tone_curve"),
             ConfigPath::LevelsLow => I18nKey::simple("history.param.levels_low"),
             ConfigPath::LevelsHigh => I18nKey::simple("history.param.levels_high"),
-            ConfigPath::LevelsGamma => I18nKey::simple("history.param.levels_gamma"),
+            ConfigPath::LevelsGamma => I18nKey::simple("history.param.levels_midtones"),
 
             // Color
             ConfigPath::ColorMode => I18nKey::simple("history.param.color_mode"),

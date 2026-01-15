@@ -436,9 +436,9 @@ pub fn render_levels_controls_managed(
         }
     });
 
-    // Gamma slider - controls the density-to-opacity curve
+    // Midtones slider - controls the density-to-opacity curve
     ui.horizontal(|ui| {
-        ui.label(t!("levels.gamma"));
+        ui.label(t!("levels.midtones"));
         let mut temp_gamma = levels_gamma;
         if ui.add(egui::Slider::new(&mut temp_gamma, 0.1..=10.0).logarithmic(true)).changed() {
             if let Ok(update) = config_manager.update_param(ConfigPath::LevelsGamma, temp_gamma.into()) {
