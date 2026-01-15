@@ -170,7 +170,7 @@ impl Display for ConfigPath {
             ConfigPath::UseCurve => write!(f, "Use Tone Curve"),
             ConfigPath::LevelsLow => write!(f, "Levels Low"),
             ConfigPath::LevelsHigh => write!(f, "Levels High"),
-            ConfigPath::LevelsGamma => write!(f, "Levels Gamma"),
+            ConfigPath::LevelsGamma => write!(f, "Levels Midtones"),
 
             // Color
             ConfigPath::ColorMode => write!(f, "Color Mode"),
@@ -664,9 +664,10 @@ impl ConfigDelta {
         }
     }
 
-    /// Human-readable description
+    /// Human-readable description using i18n key
+    /// Returns just the i18n key - UI should translate via translate_description()
     pub fn description(&self) -> String {
-        format!("{}: {} → {}", self.path, self.old_value, self.new_value)
+        self.path.to_i18n_key().key.to_string()
     }
 }
 
