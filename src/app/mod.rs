@@ -1176,8 +1176,26 @@ impl App {
                 self.config_manager.system_settings().iterations_per_thread, batch_size_for_tonemap, is_live_preview,
                 final_config.levels_low, final_config.levels_high, final_config.levels_gamma);
 
-            // Render to internal fractal texture
-            renderer.tonemap_pass(&mut render_encoder);
+            // Run density effects (before tonemap, on HDR accumulation data)
+            let density_effects_ran = self.effect_chain.run_density_effects(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut render_encoder,
+                renderer.get_accumulation_view(),
+                &final_config.density_effects,
+            );
+
+            // Render to internal fractal texture with tone mapping
+            // If density effects ran, use their output; otherwise use accumulation directly
+            if density_effects_ran {
+                if let Some(density_output) = self.effect_chain.get_density_output() {
+                    renderer.tonemap_pass_with_input(&self.gpu.device, &mut render_encoder, density_output);
+                } else {
+                    renderer.tonemap_pass(&mut render_encoder);
+                }
+            } else {
+                renderer.tonemap_pass(&mut render_encoder);
+            }
 
             self.metrics.record_tonemap_time(t_tonemap.elapsed().as_secs_f64() * 1000.0);
 
