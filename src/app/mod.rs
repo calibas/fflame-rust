@@ -491,8 +491,11 @@ impl App {
 
         self.last_frame_time = Some(render_start);
 
-        // Update effect chain time for animated effects
-        self.effect_chain.update_time(delta_time as f32);
+        // Update effect chain time for animated effects (only during animation playback)
+        // Static previews use time=0 so effects like hue_cycle don't constantly animate
+        if self.animation_controller.is_playing() {
+            self.effect_chain.update_time(delta_time as f32);
+        }
 
         // ============================================================================
         // NEW FRAME ORDER (Fixed race conditions):
