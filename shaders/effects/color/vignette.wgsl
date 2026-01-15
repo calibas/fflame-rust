@@ -7,11 +7,18 @@
 //   params[2] = softness (0-1): How gradual the falloff is
 
 struct EffectParams {
-    params: array<f32, 16>,
+    // Parameters packed into vec4s for uniform buffer alignment
+    // Access as: params[i/4][i%4] or use helper below
+    params: array<vec4<f32>, 4>,
     width: u32,
     height: u32,
     time: f32,
     _padding: f32,
+}
+
+// Helper to get parameter by index
+fn get_param(index: u32) -> f32 {
+    return effect_params.params[index / 4u][index % 4u];
 }
 
 struct VertexOutput {
@@ -45,9 +52,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let color = textureSample(input_texture, input_sampler, input.uv);
 
     // Get parameters
-    let intensity = effect_params.params[0];
-    let radius = effect_params.params[1];
-    let softness = effect_params.params[2];
+    let intensity = get_param(0u);
+    let radius = get_param(1u);
+    let softness = get_param(2u);
 
     // Calculate distance from center (accounting for aspect ratio)
     let aspect = f32(effect_params.width) / f32(effect_params.height);

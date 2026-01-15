@@ -24,11 +24,12 @@ use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
 const MAX_EFFECT_PARAMS: usize = 16;
 
 /// GPU uniform buffer for effect parameters
+/// Uses [[f32; 4]; 4] layout to match WGSL array<vec4<f32>, 4> for uniform alignment
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EffectParams {
-    /// Effect parameters (up to 16 floats)
-    params: [f32; MAX_EFFECT_PARAMS],
+    /// Effect parameters (up to 16 floats, packed as 4 vec4s for alignment)
+    params: [[f32; 4]; 4],
     /// Texture dimensions
     width: u32,
     height: u32,
@@ -210,8 +211,10 @@ impl EffectChainRunner {
     /// Compile an effect shader if not already compiled
     fn ensure_effect_compiled(&mut self, device: &Device, effect_name: &str, category: EffectCategory) {
         if self.compiled_effects.contains_key(effect_name) {
+            log::debug!("Effect {} already compiled", effect_name);
             return;
         }
+        log::info!("Compiling effect shader: {}", effect_name);
 
         let registry = global_effect_registry();
         let effect_info = match registry.get(effect_name) {
@@ -409,6 +412,7 @@ impl EffectChainRunner {
         if enabled_effects.is_empty() {
             return false;
         }
+        log::info!("Running {} color effects", enabled_effects.len());
 
         // First, ensure all effects are compiled (before taking texture borrow)
         self.compile_effects(device, effects, EffectCategory::Color);
@@ -478,24 +482,28 @@ impl EffectChainRunner {
     ) {
         let compiled = match compiled_effects.get(effect_name) {
             Some(c) => c,
-            None => return,
+            None => {
+                log::warn!("Effect {} not compiled, skipping", effect_name);
+                return;
+            }
         };
+        log::debug!("Executing effect: {} ({}x{})", effect_name, width, height);
 
         // Update params buffer
         let mut params = EffectParams {
-            params: [0.0; MAX_EFFECT_PARAMS],
+            params: [[0.0; 4]; 4],
             width,
             height,
             time,
             _padding: 0.0,
         };
 
-        // Fill in effect parameters
+        // Fill in effect parameters (packed into vec4s)
         let registry = global_effect_registry();
         if let Some(info) = registry.get(effect_name) {
             for (i, param_def) in info.parameters.iter().enumerate() {
                 if i < MAX_EFFECT_PARAMS {
-                    params.params[i] = effect.get_param(&param_def.name);
+                    params.params[i / 4][i % 4] = effect.get_param(&param_def.name);
                 }
             }
         }
@@ -567,24 +575,28 @@ impl EffectChainRunner {
     ) {
         let compiled = match compiled_effects.get(effect_name) {
             Some(c) => c,
-            None => return,
+            None => {
+                log::warn!("Effect {} not compiled, skipping", effect_name);
+                return;
+            }
         };
+        log::debug!("Executing effect: {} ({}x{})", effect_name, width, height);
 
         // Update params buffer
         let mut params = EffectParams {
-            params: [0.0; MAX_EFFECT_PARAMS],
+            params: [[0.0; 4]; 4],
             width,
             height,
             time,
             _padding: 0.0,
         };
 
-        // Fill in effect parameters
+        // Fill in effect parameters (packed into vec4s)
         let registry = global_effect_registry();
         if let Some(info) = registry.get(effect_name) {
             for (i, param_def) in info.parameters.iter().enumerate() {
                 if i < MAX_EFFECT_PARAMS {
-                    params.params[i] = effect.get_param(&param_def.name);
+                    params.params[i / 4][i % 4] = effect.get_param(&param_def.name);
                 }
             }
         }

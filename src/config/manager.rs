@@ -522,6 +522,38 @@ impl ConfigManager {
                     }
                     return Ok(UpdateType::IterationReset);
                 }
+
+                crate::config::SnapshotData::AddColorEffect { index, .. } => {
+                    log::debug!("  Undoing add color effect at index {}", index);
+                    if *index < self.current.color_effects.len() {
+                        self.current.color_effects.remove(*index);
+                    }
+                    return Ok(UpdateType::ToneMappingOnly);
+                }
+
+                crate::config::SnapshotData::DeleteColorEffect { index, effect } => {
+                    log::debug!("  Undoing delete color effect (re-insert at index {})", index);
+                    if *index <= self.current.color_effects.len() {
+                        self.current.color_effects.insert(*index, effect.clone());
+                    }
+                    return Ok(UpdateType::ToneMappingOnly);
+                }
+
+                crate::config::SnapshotData::AddDensityEffect { index, .. } => {
+                    log::debug!("  Undoing add density effect at index {}", index);
+                    if *index < self.current.density_effects.len() {
+                        self.current.density_effects.remove(*index);
+                    }
+                    return Ok(UpdateType::ToneMappingOnly);
+                }
+
+                crate::config::SnapshotData::DeleteDensityEffect { index, effect } => {
+                    log::debug!("  Undoing delete density effect (re-insert at index {})", index);
+                    if *index <= self.current.density_effects.len() {
+                        self.current.density_effects.insert(*index, effect.clone());
+                    }
+                    return Ok(UpdateType::ToneMappingOnly);
+                }
             }
         }
 
@@ -597,6 +629,42 @@ impl ConfigManager {
                     }
                     self.position += 1;
                     return Ok(UpdateType::IterationReset);
+                }
+
+                crate::config::SnapshotData::AddColorEffect { index, effect } => {
+                    log::debug!("  Redoing add color effect at index {}", index);
+                    if *index <= self.current.color_effects.len() {
+                        self.current.color_effects.insert(*index, effect.clone());
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::ToneMappingOnly);
+                }
+
+                crate::config::SnapshotData::DeleteColorEffect { index, .. } => {
+                    log::debug!("  Redoing delete color effect (remove at index {})", index);
+                    if *index < self.current.color_effects.len() {
+                        self.current.color_effects.remove(*index);
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::ToneMappingOnly);
+                }
+
+                crate::config::SnapshotData::AddDensityEffect { index, effect } => {
+                    log::debug!("  Redoing add density effect at index {}", index);
+                    if *index <= self.current.density_effects.len() {
+                        self.current.density_effects.insert(*index, effect.clone());
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::ToneMappingOnly);
+                }
+
+                crate::config::SnapshotData::DeleteDensityEffect { index, .. } => {
+                    log::debug!("  Redoing delete density effect (remove at index {})", index);
+                    if *index < self.current.density_effects.len() {
+                        self.current.density_effects.remove(*index);
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::ToneMappingOnly);
                 }
             }
         }
@@ -1032,6 +1100,14 @@ impl ConfigManager {
                     .get(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(effect.get_param(param).into())
+            }
+
+            // Add/Remove operations don't have a "get" value
+            ConfigPath::AddColorEffect { .. }
+            | ConfigPath::RemoveColorEffect { .. }
+            | ConfigPath::AddDensityEffect { .. }
+            | ConfigPath::RemoveDensityEffect { .. } => {
+                Err(ConfigError::InvalidOperation)
             }
 
             // System Settings - These should NOT be called via get_value (they're not in FractalConfig)
@@ -1497,6 +1573,28 @@ impl ConfigManager {
                 effect.set_param(param, value.try_into()?);
             }
 
+            // Add/Remove effect operations
+            ConfigPath::AddColorEffect { effect_type } => {
+                use crate::effects::EffectInstance;
+                self.current.color_effects.push(EffectInstance::new(effect_type));
+            }
+            ConfigPath::RemoveColorEffect { index } => {
+                if *index >= self.current.color_effects.len() {
+                    return Err(ConfigError::InvalidIndex);
+                }
+                self.current.color_effects.remove(*index);
+            }
+            ConfigPath::AddDensityEffect { effect_type } => {
+                use crate::effects::EffectInstance;
+                self.current.density_effects.push(EffectInstance::new(effect_type));
+            }
+            ConfigPath::RemoveDensityEffect { index } => {
+                if *index >= self.current.density_effects.len() {
+                    return Err(ConfigError::InvalidIndex);
+                }
+                self.current.density_effects.remove(*index);
+            }
+
             // System Settings - These should NOT be called via apply_value (they're not in FractalConfig)
             // Use config_manager.update_system_setting() instead
             ConfigPath::SystemIterationsPerThread
@@ -1690,6 +1788,47 @@ impl ConfigManager {
                 }
                 crate::config::SnapshotData::FullConfig { after, .. } => {
                     self.current = (**after).clone();
+                }
+                crate::config::SnapshotData::AddColorEffect { index, effect } => {
+                    if *index <= self.current.color_effects.len() {
+                        self.current.color_effects.insert(*index, effect.clone());
+                    } else {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                    // Record in history and return early with correct update type
+                    self.push_undo(change);
+                    self.record_action(UpdateType::ToneMappingOnly);
+                    return Ok(());
+                }
+                crate::config::SnapshotData::DeleteColorEffect { index, .. } => {
+                    if *index < self.current.color_effects.len() {
+                        self.current.color_effects.remove(*index);
+                    } else {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                    self.push_undo(change);
+                    self.record_action(UpdateType::ToneMappingOnly);
+                    return Ok(());
+                }
+                crate::config::SnapshotData::AddDensityEffect { index, effect } => {
+                    if *index <= self.current.density_effects.len() {
+                        self.current.density_effects.insert(*index, effect.clone());
+                    } else {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                    self.push_undo(change);
+                    self.record_action(UpdateType::ToneMappingOnly);
+                    return Ok(());
+                }
+                crate::config::SnapshotData::DeleteDensityEffect { index, .. } => {
+                    if *index < self.current.density_effects.len() {
+                        self.current.density_effects.remove(*index);
+                    } else {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                    self.push_undo(change);
+                    self.record_action(UpdateType::ToneMappingOnly);
+                    return Ok(());
                 }
             }
         } else {

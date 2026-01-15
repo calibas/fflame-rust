@@ -61,6 +61,7 @@ menu:
   window_animation: "🎬 Animation"
   window_path_editor: "🧪 Path Editor (Experimental)"
   window_random_generator: "🎲 Random Generator"
+  window_effects: "✨ Effects"
 
   # Window Menu - Workspace layouts
   workspace_layout: "📐 Workspace Layout"
