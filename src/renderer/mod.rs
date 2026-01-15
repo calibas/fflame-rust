@@ -1,4 +1,5 @@
 pub mod compute_kernel;
+pub mod effect_chain;
 pub mod histogram;
 pub mod render;
 pub mod thumbnail;
