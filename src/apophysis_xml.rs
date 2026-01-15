@@ -295,6 +295,9 @@ fn parse_flame_element(
         levels_low: 0.0,
         levels_high: 1000.0,
         levels_gamma: 1.0,
+        // Effects - empty by default (zero cost)
+        density_effects: Vec::new(),
+        color_effects: Vec::new(),
     })
 }
 
