@@ -475,6 +475,12 @@ history:
     levels_high: "Levels High"
     levels_midtones: "Levels Midtones"
 
+    # Effects (post-processing)
+    density_effect_enabled: "Density Effect %{index} → Enabled"
+    density_effect_param: "Density Effect %{index} → %{param}"
+    color_effect_enabled: "Color Effect %{index} → Enabled"
+    color_effect_param: "Color Effect %{index} → %{param}"
+
     # Color
     color_mode: "Color Mode"
     pathmap_style: "PathMap Style"

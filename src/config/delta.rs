@@ -119,6 +119,16 @@ pub enum ConfigPath {
     RenderMode,
     PerspectiveStrength,
 
+    // ===== Effects (post-processing, no iteration reset needed) =====
+    /// Enable/disable a density effect
+    DensityEffectEnabled { index: usize },
+    /// Parameter value for a density effect
+    DensityEffectParam { index: usize, param: String },
+    /// Enable/disable a color effect
+    ColorEffectEnabled { index: usize },
+    /// Parameter value for a color effect
+    ColorEffectParam { index: usize, param: String },
+
     // ===== System Settings (device-specific, not tracked for undo) =====
     SystemIterationsPerThread,
     SystemBurnIn,
@@ -261,6 +271,20 @@ impl Display for ConfigPath {
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
             ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
+
+            // Effects
+            ConfigPath::DensityEffectEnabled { index } => {
+                write!(f, "Density Effect {} → Enabled", index + 1)
+            }
+            ConfigPath::DensityEffectParam { index, param } => {
+                write!(f, "Density Effect {} → {}", index + 1, param)
+            }
+            ConfigPath::ColorEffectEnabled { index } => {
+                write!(f, "Color Effect {} → Enabled", index + 1)
+            }
+            ConfigPath::ColorEffectParam { index, param } => {
+                write!(f, "Color Effect {} → {}", index + 1, param)
+            }
 
             // System Settings
             ConfigPath::SystemIterationsPerThread => write!(f, "System: Iterations Per Thread"),
@@ -440,6 +464,30 @@ impl ConfigPath {
             // Flame
             ConfigPath::RenderMode => I18nKey::simple("history.param.render_mode"),
             ConfigPath::PerspectiveStrength => I18nKey::simple("history.param.perspective_strength"),
+
+            // Effects
+            ConfigPath::DensityEffectEnabled { index } => I18nKey::with_params(
+                "history.param.density_effect_enabled",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::DensityEffectParam { index, param } => I18nKey::with_params(
+                "history.param.density_effect_param",
+                vec![
+                    ("index", (index + 1).to_string()),
+                    ("param", param.clone()),
+                ],
+            ),
+            ConfigPath::ColorEffectEnabled { index } => I18nKey::with_params(
+                "history.param.color_effect_enabled",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::ColorEffectParam { index, param } => I18nKey::with_params(
+                "history.param.color_effect_param",
+                vec![
+                    ("index", (index + 1).to_string()),
+                    ("param", param.clone()),
+                ],
+            ),
 
             // System Settings
             ConfigPath::SystemIterationsPerThread => I18nKey::simple("history.param.system_iterations_per_thread"),
@@ -947,6 +995,12 @@ impl ConfigPath {
             | ConfigPath::MaxIterations
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
 
+            // Effects (post-processing, just need tonemap re-run)
+            ConfigPath::DensityEffectEnabled { .. }
+            | ConfigPath::DensityEffectParam { .. }
+            | ConfigPath::ColorEffectEnabled { .. }
+            | ConfigPath::ColorEffectParam { .. } => UpdateType::ToneMappingOnly,
+
             // System Settings
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
             ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps => UpdateType::ViewOnly,
@@ -1053,6 +1107,12 @@ impl ConfigPath {
             // Flame
             ConfigPath::RenderMode => "RenderMode".to_string(),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
+
+            // Effects
+            ConfigPath::DensityEffectEnabled { index } => format!("DensityEffect.{}.Enabled", index),
+            ConfigPath::DensityEffectParam { index, param } => format!("DensityEffect.{}.{}", index, param),
+            ConfigPath::ColorEffectEnabled { index } => format!("ColorEffect.{}.Enabled", index),
+            ConfigPath::ColorEffectParam { index, param } => format!("ColorEffect.{}.{}", index, param),
 
             // System Settings (not typically animated, but included for completeness)
             ConfigPath::SystemIterationsPerThread => "System.IterationsPerThread".to_string(),
@@ -1200,6 +1260,27 @@ impl ConfigPath {
                 "ExportHeight" => return Some(ConfigPath::SystemExportHeight),
                 "Language" => return Some(ConfigPath::SystemLanguage),
                 _ => {}
+            }
+        }
+
+        // Effect paths: DensityEffect.{index}.{Enabled|param} or ColorEffect.{index}.{Enabled|param}
+        if parts.len() == 3 && parts[0] == "DensityEffect" {
+            if let Ok(index) = parts[1].parse::<usize>() {
+                if parts[2] == "Enabled" {
+                    return Some(ConfigPath::DensityEffectEnabled { index });
+                } else {
+                    return Some(ConfigPath::DensityEffectParam { index, param: parts[2].to_string() });
+                }
+            }
+        }
+
+        if parts.len() == 3 && parts[0] == "ColorEffect" {
+            if let Ok(index) = parts[1].parse::<usize>() {
+                if parts[2] == "Enabled" {
+                    return Some(ConfigPath::ColorEffectEnabled { index });
+                } else {
+                    return Some(ConfigPath::ColorEffectParam { index, param: parts[2].to_string() });
+                }
             }
         }
 
@@ -1440,6 +1521,18 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             } else {
                 None
             }
+        }
+
+        // Effect enabled flags (bool)
+        ConfigPath::DensityEffectEnabled { .. }
+        | ConfigPath::ColorEffectEnabled { .. } => {
+            json.as_bool().map(ConfigValue::Bool)
+        }
+
+        // Effect parameters (float)
+        ConfigPath::DensityEffectParam { .. }
+        | ConfigPath::ColorEffectParam { .. } => {
+            json.as_f64().map(|f| ConfigValue::Float(f as f32))
         }
 
         // Complex types not supported for animation (yet)

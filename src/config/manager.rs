@@ -1004,6 +1004,36 @@ impl ConfigManager {
             ConfigPath::RenderMode => Ok(config.flame.render_mode.into()),
             ConfigPath::PerspectiveStrength => Ok(config.flame.perspective_strength.into()),
 
+            // Effects
+            ConfigPath::DensityEffectEnabled { index } => {
+                let effect = config
+                    .density_effects
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(effect.enabled.into())
+            }
+            ConfigPath::DensityEffectParam { index, param } => {
+                let effect = config
+                    .density_effects
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(effect.get_param(param).into())
+            }
+            ConfigPath::ColorEffectEnabled { index } => {
+                let effect = config
+                    .color_effects
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(effect.enabled.into())
+            }
+            ConfigPath::ColorEffectParam { index, param } => {
+                let effect = config
+                    .color_effects
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(effect.get_param(param).into())
+            }
+
             // System Settings - These should NOT be called via get_value (they're not in FractalConfig)
             // Use config_manager.system_settings() instead
             ConfigPath::SystemIterationsPerThread
@@ -1431,6 +1461,40 @@ impl ConfigManager {
             }
             ConfigPath::PerspectiveStrength => {
                 self.current.flame.perspective_strength = value.try_into()?;
+            }
+
+            // Effects
+            ConfigPath::DensityEffectEnabled { index } => {
+                let effect = self
+                    .current
+                    .density_effects
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                effect.enabled = value.try_into()?;
+            }
+            ConfigPath::DensityEffectParam { index, param } => {
+                let effect = self
+                    .current
+                    .density_effects
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                effect.set_param(param, value.try_into()?);
+            }
+            ConfigPath::ColorEffectEnabled { index } => {
+                let effect = self
+                    .current
+                    .color_effects
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                effect.enabled = value.try_into()?;
+            }
+            ConfigPath::ColorEffectParam { index, param } => {
+                let effect = self
+                    .current
+                    .color_effects
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                effect.set_param(param, value.try_into()?);
             }
 
             // System Settings - These should NOT be called via apply_value (they're not in FractalConfig)

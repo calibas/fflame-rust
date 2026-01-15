@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::scene::transforms::Flame;
 use crate::scene::palette::{ColorMode, Palette, PathCaptureMode, PathMapStyle, PathTrackingMode};
 use crate::scene::tonemap::{ToneMapMode, ToneCurve};
+use crate::effects::EffectInstance;
 
 /// Current config format version
 pub const CURRENT_CONFIG_VERSION: u32 = 1;
@@ -135,6 +136,16 @@ pub struct FractalConfig {
     /// Levels: gamma/midpoint for density curve (1.0 = linear)
     #[serde(default = "default_levels_gamma")]
     pub levels_gamma: f32,
+
+    /// Density effects chain (run before tonemap, have access to density in alpha)
+    /// Empty = no effect passes, zero cost
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub density_effects: Vec<EffectInstance>,
+
+    /// Color effects chain (run after tonemap, operate on final RGB)
+    /// Empty = no effect passes, zero cost
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub color_effects: Vec<EffectInstance>,
 
     /// Optional: Deterministic RNG for reproducible renders
     #[serde(default)]
@@ -288,6 +299,8 @@ impl Default for FractalConfig {
             levels_low: 0.0,
             levels_high: default_levels_high(),
             levels_gamma: default_levels_gamma(),
+            density_effects: Vec::new(),
+            color_effects: Vec::new(),
             deterministic_rng: false,
         }
     }
