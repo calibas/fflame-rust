@@ -1237,9 +1237,10 @@ impl App {
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
         // Update density histogram for Levels controls (every ~30 frames)
+        // Skip during animation playback to avoid frame drops from blocking GPU readback
         // Only on desktop - WASM would need async handling
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        if !self.animation_controller.is_playing() {
             self.histogram_frame_counter += 1;
             if self.histogram_frame_counter >= 30 {
                 self.histogram_frame_counter = 0;
