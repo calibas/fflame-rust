@@ -12,8 +12,7 @@ struct EffectParams {
     params: array<vec4<f32>, 4>,
     width: u32,
     height: u32,
-    time: f32,
-    _padding: f32,
+    _padding: vec2<f32>,
 }
 
 // Helper to get parameter by index

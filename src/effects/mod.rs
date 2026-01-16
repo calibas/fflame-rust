@@ -264,7 +264,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
         ],
     });
 
-    // Film Grain - animated noise overlay
+    // Film Grain - per-pixel random noise
     registry.register(EffectInfo {
         name: "film_grain".to_string(),
         display_name: "Film Grain".to_string(),
@@ -280,12 +280,12 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 max_value: Some(1.0),
             },
             EffectParameter {
-                name: "size".to_string(),
-                display_name: "Grain Size".to_string(),
+                name: "seed".to_string(),
+                display_name: "Seed".to_string(),
                 param_type: ParamType::Float,
-                default_value: 1.0,
-                min_value: Some(0.5),
-                max_value: Some(4.0),
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1000.0),
             },
         ],
     });
@@ -316,27 +316,19 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
         ],
     });
 
-    // Hue Cycle - psychedelic hue rotation
+    // Hue Shift - static hue rotation (animate via keyframes)
     registry.register(EffectInfo {
-        name: "hue_cycle".to_string(),
-        display_name: "Hue Cycle".to_string(),
+        name: "hue_shift".to_string(),
+        display_name: "Hue Shift".to_string(),
         category: EffectCategory::Color,
         shader_path: "effects/color/hue_cycle.wgsl".to_string(),
         parameters: vec![
             EffectParameter {
                 name: "offset".to_string(),
-                display_name: "Offset".to_string(),
+                display_name: "Hue Offset".to_string(),
                 param_type: ParamType::Angle,
                 default_value: 0.0,
                 min_value: Some(0.0),
-                max_value: Some(360.0),
-            },
-            EffectParameter {
-                name: "speed".to_string(),
-                display_name: "Speed (deg/s)".to_string(),
-                param_type: ParamType::Float,
-                default_value: 30.0,
-                min_value: Some(-360.0),
                 max_value: Some(360.0),
             },
         ],
