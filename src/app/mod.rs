@@ -1179,6 +1179,9 @@ impl App {
                 self.config_manager.system_settings().iterations_per_thread, batch_size_for_tonemap, is_live_preview,
                 final_config.levels_low, final_config.levels_high, final_config.levels_gamma);
 
+            // Reset effect slot counter for this frame (allows multiple effects with unique params)
+            self.effect_chain.reset_slots();
+
             // Run density effects (before tonemap, on HDR accumulation data)
             let density_effects_ran = self.effect_chain.run_density_effects(
                 &self.gpu.device,

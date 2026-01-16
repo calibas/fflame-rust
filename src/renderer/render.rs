@@ -303,6 +303,9 @@ pub async fn render(
         label: Some("Final Tonemap"),
     });
 
+    // Reset effect slot counter (allows multiple effects with unique params in same submit)
+    effect_chain.reset_slots();
+
     if has_density_effects {
         let density_ran = effect_chain.run_density_effects(
             device,
