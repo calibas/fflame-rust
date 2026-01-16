@@ -747,4 +747,60 @@ impl EffectChainRunner {
 
         Ok((self.width, self.height, rgba_data))
     }
+
+    /// Check if there's a color output texture available
+    pub fn has_color_output(&self) -> bool {
+        self.color_textures.is_some()
+    }
+
+    /// Create a staging buffer for reading color effect output (for WASM async export)
+    /// Returns (buffer, padded_bytes_per_row)
+    pub fn create_color_staging_buffer(&self, device: &Device) -> (Buffer, u32) {
+        let bytes_per_pixel = 4u32; // RGBA8
+        let unpadded_bytes_per_row = self.width * bytes_per_pixel;
+        let align = COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row = ((unpadded_bytes_per_row + align - 1) / align) * align;
+        let buffer_size = (padded_bytes_per_row * self.height) as u64;
+
+        let buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Effect Color Staging Buffer"),
+            size: buffer_size,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        (buffer, padded_bytes_per_row)
+    }
+
+    /// Copy color effect output texture to a staging buffer (for WASM async export)
+    pub fn copy_color_to_buffer(&self, encoder: &mut CommandEncoder, buffer: &Buffer, padded_bytes_per_row: u32) {
+        if let Some(textures) = self.color_textures.as_ref() {
+            encoder.copy_texture_to_buffer(
+                TexelCopyTextureInfo {
+                    texture: textures.read_texture(),
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                TexelCopyBufferInfo {
+                    buffer,
+                    layout: TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(padded_bytes_per_row),
+                        rows_per_image: Some(self.height),
+                    },
+                },
+                Extent3d {
+                    width: self.width,
+                    height: self.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    }
+
+    /// Get the dimensions of the effect chain
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
 }
