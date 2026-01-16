@@ -82,18 +82,23 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Gaussian blur with adaptive radius
-    // Using a 9x9 kernel for quality
+    // Use stepped sampling for large radii to maintain O(1) sample count
+    // Max ~81 samples (9x9) regardless of radius - GPU bilinear filtering smooths between steps
     var color_sum = vec4<f32>(0.0);
     var weight_sum: f32 = 0.0;
     let sigma = radius / 2.0;
-    let kernel_size = i32(ceil(radius));
 
-    for (var y: i32 = -kernel_size; y <= kernel_size; y++) {
-        for (var x: i32 = -kernel_size; x <= kernel_size; x++) {
-            let offset = vec2<f32>(f32(x), f32(y)) * pixel_size;
-            let dist = length(vec2<f32>(f32(x), f32(y)));
+    // Cap kernel iterations to 9x9 max, step size scales with radius
+    let max_steps = 4;  // -4 to +4 = 9 steps per axis = 81 samples max
+    let step_size = max(1.0, radius / f32(max_steps));
+
+    for (var yi: i32 = -max_steps; yi <= max_steps; yi++) {
+        for (var xi: i32 = -max_steps; xi <= max_steps; xi++) {
+            let sample_offset = vec2<f32>(f32(xi), f32(yi)) * step_size;
+            let dist = length(sample_offset);
 
             if (dist <= radius) {
+                let offset = sample_offset * pixel_size;
                 let weight = gaussian(dist, sigma);
                 let sample_color = textureSample(input_texture, input_sampler, input.uv + offset);
                 color_sum += sample_color * weight;
