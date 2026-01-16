@@ -25,6 +25,13 @@ use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
 /// Maximum number of effect parameters per effect
 const MAX_EFFECT_PARAMS: usize = 16;
 
+/// Maximum number of effect slots in the shared params buffer
+/// Supports up to 32 effects running in a single frame
+const MAX_EFFECT_SLOTS: usize = 32;
+
+/// Alignment for uniform buffer dynamic offsets (256 bytes is typical minimum)
+const UNIFORM_BUFFER_OFFSET_ALIGNMENT: u64 = 256;
+
 /// GPU uniform buffer for effect parameters
 /// Uses [[f32; 4]; 4] layout to match WGSL array<vec4<f32>, 4> for uniform alignment
 #[repr(C)]
@@ -136,8 +143,12 @@ pub struct EffectChainRunner {
     density_textures: Option<PingPongTextures>,
     /// Ping-pong textures for color effects (Rgba8Unorm)
     color_textures: Option<PingPongTextures>,
-    /// Uniform buffer for effect parameters
+    /// Shared params buffer with indexed slots for all effects
+    /// Each effect writes to slot_index * UNIFORM_BUFFER_OFFSET_ALIGNMENT
+    /// This allows multiple effects to have different params in a single submit
     params_buffer: Buffer,
+    /// Current slot index for params buffer (reset each frame)
+    current_slot: usize,
     /// Linear sampler for texture sampling
     sampler: Sampler,
     /// Current texture dimensions
@@ -150,9 +161,13 @@ pub struct EffectChainRunner {
 impl EffectChainRunner {
     /// Create a new effect chain runner
     pub fn new(device: &Device, width: u32, height: u32) -> Self {
+        // Single shared params buffer with slots for all effects
+        // Each slot is aligned to UNIFORM_BUFFER_OFFSET_ALIGNMENT (256 bytes)
+        // This allows multiple effects to have independent params in a single submit
+        let buffer_size = MAX_EFFECT_SLOTS as u64 * UNIFORM_BUFFER_OFFSET_ALIGNMENT;
         let params_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Effect Params Buffer"),
-            size: std::mem::size_of::<EffectParams>() as u64,
+            label: Some("Effect Params Buffer (Indexed)"),
+            size: buffer_size,
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -169,6 +184,7 @@ impl EffectChainRunner {
             density_textures: None,
             color_textures: None,
             params_buffer,
+            current_slot: 0,
             sampler,
             width,
             height,
@@ -179,6 +195,23 @@ impl EffectChainRunner {
     /// Update time for animated effects
     pub fn update_time(&mut self, delta_seconds: f32) {
         self.time += delta_seconds;
+    }
+
+    /// Reset slot counter for new frame
+    /// Call this at the start of each frame before running effects
+    pub fn reset_slots(&mut self) {
+        self.current_slot = 0;
+    }
+
+    /// Allocate a slot and return its buffer offset
+    fn allocate_slot(&mut self) -> u64 {
+        let slot = self.current_slot;
+        self.current_slot += 1;
+        if self.current_slot > MAX_EFFECT_SLOTS {
+            log::warn!("Effect slot overflow! Max {} effects per frame", MAX_EFFECT_SLOTS);
+            self.current_slot = MAX_EFFECT_SLOTS; // Clamp to avoid panic
+        }
+        slot as u64 * UNIFORM_BUFFER_OFFSET_ALIGNMENT
     }
 
     /// Resize textures if dimensions changed
@@ -375,6 +408,9 @@ impl EffectChainRunner {
         self.compile_effects(device, effects, EffectCategory::Density);
         self.ensure_textures(device, EffectCategory::Density);
 
+        // Pre-allocate slots for all effects (before borrowing textures)
+        let slot_offsets: Vec<u64> = enabled_effects.iter().map(|_| self.allocate_slot()).collect();
+
         // Extract data needed for effect execution
         let width = self.width;
         let height = self.height;
@@ -403,6 +439,7 @@ impl EffectChainRunner {
                     textures.write_view(),
                     &self.compiled_effects,
                     &self.params_buffer,
+                    slot_offsets[i],
                     &self.sampler,
                     width,
                     height,
@@ -444,6 +481,9 @@ impl EffectChainRunner {
         self.compile_effects(device, effects, EffectCategory::Color);
         self.ensure_textures(device, EffectCategory::Color);
 
+        // Pre-allocate slots for all effects (before borrowing textures)
+        let slot_offsets: Vec<u64> = enabled_effects.iter().map(|_| self.allocate_slot()).collect();
+
         // Extract data needed for effect execution
         let width = self.width;
         let height = self.height;
@@ -472,6 +512,7 @@ impl EffectChainRunner {
                     textures.write_view(),
                     &self.compiled_effects,
                     &self.params_buffer,
+                    slot_offsets[i],
                     &self.sampler,
                     width,
                     height,
@@ -492,6 +533,9 @@ impl EffectChainRunner {
     }
 
     /// Run a single effect with explicit input/output views
+    ///
+    /// `buffer_offset` is the byte offset into the shared params buffer for this effect's slot.
+    /// Each effect gets a unique slot to avoid parameter overwrites in the same command buffer.
     fn run_single_effect_with_input(
         device: &Device,
         queue: &Queue,
@@ -502,6 +546,7 @@ impl EffectChainRunner {
         output_view: &TextureView,
         compiled_effects: &HashMap<String, CompiledEffect>,
         params_buffer: &Buffer,
+        buffer_offset: u64,
         sampler: &Sampler,
         width: u32,
         height: u32,
@@ -514,9 +559,9 @@ impl EffectChainRunner {
                 return;
             }
         };
-        log::debug!("Executing effect: {} ({}x{})", effect_name, width, height);
+        log::debug!("Executing effect: {} ({}x{}) at slot offset {}", effect_name, width, height, buffer_offset);
 
-        // Update params buffer
+        // Update params buffer at the allocated slot offset
         let mut params = EffectParams {
             params: [[0.0; 4]; 4],
             width,
@@ -535,9 +580,11 @@ impl EffectChainRunner {
             }
         }
 
-        queue.write_buffer(params_buffer, 0, bytemuck::bytes_of(&params));
+        // Write to this effect's slot in the shared buffer
+        queue.write_buffer(params_buffer, buffer_offset, bytemuck::bytes_of(&params));
 
-        // Create bind group for this pass
+        // Create bind group with buffer slice at this slot's offset
+        use wgpu::BufferBinding;
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some(&format!("{} Bind Group", effect_name)),
             layout: &compiled.bind_group_layout,
@@ -552,7 +599,11 @@ impl EffectChainRunner {
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: params_buffer.as_entire_binding(),
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: params_buffer,
+                        offset: buffer_offset,
+                        size: Some(std::num::NonZeroU64::new(std::mem::size_of::<EffectParams>() as u64).unwrap()),
+                    }),
                 },
             ],
         });
