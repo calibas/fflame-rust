@@ -30,10 +30,6 @@ pub struct RenderJob<'a> {
 
     /// Transparent background (for PNG export)
     pub transparent: bool,
-
-    /// Time for animated effects (in seconds)
-    /// None = static render (effects at time=0), Some(t) = animation frame at time t
-    pub effect_time: Option<f32>,
 }
 
 impl<'a> RenderJob<'a> {
@@ -47,7 +43,6 @@ impl<'a> RenderJob<'a> {
             iterations_per_thread: 256,
             burn_in: 20,
             transparent: false,
-            effect_time: None, // Static render (time=0)
         }
     }
 
@@ -72,13 +67,6 @@ impl<'a> RenderJob<'a> {
     /// Set transparent mode
     pub fn with_transparent(mut self, transparent: bool) -> Self {
         self.transparent = transparent;
-        self
-    }
-
-    /// Set effect time for animated effects (animation export)
-    /// For static exports, leave unset (defaults to time=0)
-    pub fn with_effect_time(mut self, time: f32) -> Self {
-        self.effect_time = Some(time);
         self
     }
 }
@@ -284,9 +272,6 @@ pub async fn render(
 
     // Create effect chain runner for post-processing effects
     let mut effect_chain = EffectChainRunner::new(device, job.width, job.height);
-
-    // Set effect time: 0.0 for static exports, or provided time for animation
-    effect_chain.set_time(job.effect_time.unwrap_or(0.0));
 
     // Check for enabled effects
     let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);

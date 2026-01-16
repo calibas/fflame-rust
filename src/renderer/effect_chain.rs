@@ -34,6 +34,7 @@ const UNIFORM_BUFFER_OFFSET_ALIGNMENT: u64 = 256;
 
 /// GPU uniform buffer for effect parameters
 /// Uses [[f32; 4]; 4] layout to match WGSL array<vec4<f32>, 4> for uniform alignment
+/// Total size: 80 bytes (params=64 + width=4 + height=4 + padding=8 for 16-byte alignment)
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct EffectParams {
@@ -42,10 +43,8 @@ struct EffectParams {
     /// Texture dimensions
     width: u32,
     height: u32,
-    /// Time for animated effects (in seconds)
-    time: f32,
-    /// Padding for alignment
-    _padding: f32,
+    /// Padding to align struct to 16 bytes (WGSL uniform buffer requirement)
+    _padding: [f32; 2],
 }
 
 /// A compiled effect pipeline ready for execution
@@ -154,8 +153,6 @@ pub struct EffectChainRunner {
     /// Current texture dimensions
     width: u32,
     height: u32,
-    /// Time accumulator for animated effects
-    time: f32,
 }
 
 impl EffectChainRunner {
@@ -188,13 +185,7 @@ impl EffectChainRunner {
             sampler,
             width,
             height,
-            time: 0.0,
         }
-    }
-
-    /// Update time for animated effects
-    pub fn update_time(&mut self, delta_seconds: f32) {
-        self.time += delta_seconds;
     }
 
     /// Reset slot counter for new frame
@@ -414,7 +405,6 @@ impl EffectChainRunner {
         // Extract data needed for effect execution
         let width = self.width;
         let height = self.height;
-        let time = self.time;
 
         // Now run effects
         if let Some(textures) = self.density_textures.as_mut() {
@@ -443,7 +433,6 @@ impl EffectChainRunner {
                     &self.sampler,
                     width,
                     height,
-                    time,
                 );
 
                 // Swap ping-pong textures for next effect
@@ -487,7 +476,6 @@ impl EffectChainRunner {
         // Extract data needed for effect execution
         let width = self.width;
         let height = self.height;
-        let time = self.time;
 
         // Now run effects
         if let Some(textures) = self.color_textures.as_mut() {
@@ -516,7 +504,6 @@ impl EffectChainRunner {
                     &self.sampler,
                     width,
                     height,
-                    time,
                 );
 
                 // Swap ping-pong textures for next effect
@@ -550,7 +537,6 @@ impl EffectChainRunner {
         sampler: &Sampler,
         width: u32,
         height: u32,
-        time: f32,
     ) {
         let compiled = match compiled_effects.get(effect_name) {
             Some(c) => c,
@@ -566,8 +552,7 @@ impl EffectChainRunner {
             params: [[0.0; 4]; 4],
             width,
             height,
-            time,
-            _padding: 0.0,
+            _padding: [0.0; 2],
         };
 
         // Fill in effect parameters (packed into vec4s)
@@ -630,11 +615,6 @@ impl EffectChainRunner {
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.draw(0..3, 0..1); // Fullscreen triangle
         }
-    }
-
-    /// Set time directly (for static exports where time should be 0)
-    pub fn set_time(&mut self, time: f32) {
-        self.time = time;
     }
 
     /// Read pixels from the color effect output texture

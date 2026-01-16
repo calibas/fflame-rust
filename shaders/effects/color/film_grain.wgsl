@@ -1,9 +1,9 @@
 // Film Grain Effect
 //
-// Adds animated noise overlay for a filmic look.
+// Adds per-pixel random noise for a filmic look.
 // Parameters:
 //   params[0] = intensity (0-1): How much grain to add
-//   params[1] = size (0.5-4): Grain size multiplier
+//   params[1] = seed (0-1000): Random seed for variation between frames
 
 struct EffectParams {
     // Parameters packed into vec4s for uniform buffer alignment
@@ -11,8 +11,7 @@ struct EffectParams {
     params: array<vec4<f32>, 4>,
     width: u32,
     height: u32,
-    time: f32,
-    _padding: f32,
+    _padding: vec2<f32>,
 }
 
 // Helper to get parameter by index
@@ -45,28 +44,13 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return output;
 }
 
-// Hash function for noise generation
-fn hash(p: vec2<f32>) -> f32 {
-    let p3 = fract(vec3<f32>(p.x, p.y, p.x) * 0.13);
-    let dot_val = dot(p3, vec3<f32>(p3.y + 19.19, p3.z + 19.19, p3.x + 19.19));
-    return fract(dot_val);
-}
-
-// Smooth noise
-fn noise(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-
-    // Cubic interpolation
-    let u = f * f * (3.0 - 2.0 * f);
-
-    // Four corners
-    let a = hash(i + vec2<f32>(0.0, 0.0));
-    let b = hash(i + vec2<f32>(1.0, 0.0));
-    let c = hash(i + vec2<f32>(0.0, 1.0));
-    let d = hash(i + vec2<f32>(1.0, 1.0));
-
-    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+// High-quality per-pixel hash (no interpolation - true grain look)
+fn hash_pixel(pixel: vec2<f32>, seed: f32) -> f32 {
+    // Use pixel coordinates + seed for unique noise per pixel
+    let p = pixel + vec2<f32>(seed * 127.1, seed * 311.7);
+    var h = dot(p, vec2<f32>(127.1, 311.7));
+    h = fract(sin(h) * 43758.5453);
+    return h;
 }
 
 @fragment
@@ -76,21 +60,17 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Get parameters
     let intensity = get_param(0u);
-    let size = get_param(1u);
+    let seed = get_param(1u);
 
-    // Calculate noise coordinates with time animation
-    let noise_scale = vec2<f32>(f32(effect_params.width), f32(effect_params.height)) / size;
-    let noise_coord = input.uv * noise_scale + effect_params.time * 10.0;
+    // Get pixel coordinates for per-pixel noise
+    let pixel = input.uv * vec2<f32>(f32(effect_params.width), f32(effect_params.height));
 
-    // Multi-octave noise for more organic grain
-    var grain = noise(noise_coord);
-    grain += noise(noise_coord * 2.0) * 0.5;
-    grain += noise(noise_coord * 4.0) * 0.25;
-    grain = grain / 1.75; // Normalize
+    // Generate per-pixel random noise (no interpolation = true grain)
+    let grain = hash_pixel(pixel, seed);
 
-    // Center around 0 and apply intensity
-    grain = (grain - 0.5) * 2.0 * intensity;
+    // Center around 0 (-0.5 to +0.5) and apply intensity
+    let noise_value = (grain - 0.5) * intensity;
 
     // Apply grain (additive blending, preserve alpha)
-    return vec4<f32>(color.rgb + vec3<f32>(grain), color.a);
+    return vec4<f32>(color.rgb + vec3<f32>(noise_value), color.a);
 }

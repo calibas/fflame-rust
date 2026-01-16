@@ -1,9 +1,9 @@
-// Hue Cycle Effect
+// Hue Shift Effect
 //
-// Rotates the hue of all colors, optionally animated over time.
+// Rotates the hue of all colors by a fixed amount.
+// Animation system can keyframe the offset parameter for animated rotation.
 // Parameters:
-//   params[0] = offset (0-360): Static hue rotation in degrees
-//   params[1] = speed (-360 to 360): Rotation speed in degrees per second
+//   params[0] = offset (0-360): Hue rotation in degrees
 
 struct EffectParams {
     // Parameters packed into vec4s for uniform buffer alignment
@@ -11,8 +11,7 @@ struct EffectParams {
     params: array<vec4<f32>, 4>,
     width: u32,
     height: u32,
-    time: f32,
-    _padding: f32,
+    _padding: vec2<f32>,
 }
 
 // Helper to get parameter by index
@@ -108,12 +107,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // Sample input texture
     let color = textureSample(input_texture, input_sampler, input.uv);
 
-    // Get parameters
-    let offset = get_param(0u);     // degrees
-    let speed = get_param(1u);      // degrees per second
+    // Get hue offset in degrees
+    let offset = get_param(0u);
 
-    // Calculate total hue rotation
-    let rotation = (offset + speed * effect_params.time) / 360.0;
+    // Convert degrees to 0-1 range for hue rotation
+    let rotation = offset / 360.0;
 
     // Convert to HSV, rotate hue, convert back
     var hsv = rgb_to_hsv(color.rgb);
