@@ -745,6 +745,30 @@ fn apply_config_value(
             }
         }
 
+        // Density effect parameters
+        (ConfigPath::DensityEffectEnabled { index }, ConfigValue::Bool(v)) => {
+            if let Some(effect) = config.density_effects.get_mut(*index) {
+                effect.enabled = *v;
+            }
+        }
+        (ConfigPath::DensityEffectParam { index, param }, ConfigValue::Float(v)) => {
+            if let Some(effect) = config.density_effects.get_mut(*index) {
+                effect.params.insert(param.clone(), *v);
+            }
+        }
+
+        // Color effect parameters
+        (ConfigPath::ColorEffectEnabled { index }, ConfigValue::Bool(v)) => {
+            if let Some(effect) = config.color_effects.get_mut(*index) {
+                effect.enabled = *v;
+            }
+        }
+        (ConfigPath::ColorEffectParam { index, param }, ConfigValue::Float(v)) => {
+            if let Some(effect) = config.color_effects.get_mut(*index) {
+                effect.params.insert(param.clone(), *v);
+            }
+        }
+
         // Other parameters can be added as needed
         _ => {
             log::debug!("Unhandled animation path: {:?}", path);
@@ -1543,34 +1567,73 @@ pub async fn export_animation_fast(
         )
         .await;
 
-        // Tonemap and copy to staging buffer
+        // Tonemap
         let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Tonemap and Copy"),
+            label: Some("Tonemap"),
         });
         renderer.tonemap_pass(&mut tonemap_encoder);
-
-        tonemap_encoder.copy_texture_to_buffer(
-            TexelCopyTextureInfo {
-                texture: renderer.fractal_texture(),
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            TexelCopyBufferInfo {
-                buffer: &staging_buffer,
-                layout: TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_bytes_per_row),
-                    rows_per_image: Some(export_config.height),
-                },
-            },
-            Extent3d {
-                width: export_config.width,
-                height: export_config.height,
-                depth_or_array_layers: 1,
-            },
-        );
         queue.submit(std::iter::once(tonemap_encoder.finish()));
+
+        // Run color effects if enabled
+        let has_color_effects = crate::renderer::effect_chain::EffectChainRunner::has_enabled_effects(&frame_config.color_effects);
+        let mut effect_chain: Option<crate::renderer::effect_chain::EffectChainRunner> = None;
+        let color_effects_ran = if has_color_effects {
+            let mut chain = crate::renderer::effect_chain::EffectChainRunner::new(
+                &device, export_config.width, export_config.height);
+
+            let mut effect_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Color Effects"),
+            });
+
+            chain.reset_slots();
+            let ran = chain.run_color_effects(
+                &device,
+                &queue,
+                &mut effect_encoder,
+                renderer.get_fractal_texture_view(),
+                &frame_config.color_effects,
+            );
+
+            queue.submit(std::iter::once(effect_encoder.finish()));
+            effect_chain = Some(chain);
+            ran
+        } else {
+            false
+        };
+
+        // Copy to staging buffer - from effect chain output if effects ran, otherwise from renderer
+        let mut copy_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Copy to Staging"),
+        });
+
+        if color_effects_ran {
+            if let Some(ref chain) = effect_chain {
+                chain.copy_color_to_buffer(&mut copy_encoder, &staging_buffer, padded_bytes_per_row);
+            }
+        } else {
+            copy_encoder.copy_texture_to_buffer(
+                TexelCopyTextureInfo {
+                    texture: renderer.fractal_texture(),
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
+                },
+                TexelCopyBufferInfo {
+                    buffer: &staging_buffer,
+                    layout: TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(padded_bytes_per_row),
+                        rows_per_image: Some(export_config.height),
+                    },
+                },
+                Extent3d {
+                    width: export_config.width,
+                    height: export_config.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        queue.submit(std::iter::once(copy_encoder.finish()));
         timing_stats.render_time_ms += render_start.elapsed().as_secs_f64() * 1000.0;
 
         // Map and read buffer
