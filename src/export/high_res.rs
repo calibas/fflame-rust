@@ -15,6 +15,7 @@ use rayon::prelude::*;
 
 use crate::config::FractalConfig;
 use crate::gpu::buffers::{GpuParams, GpuTransform, GpuVariationParams, TonemapParams};
+use crate::renderer::effect_chain::EffectChainRunner;
 use crate::scene::tonemap::ToneCurve;
 use crate::scene::transforms::RenderMode;
 use crate::shader_builder_v2::ShaderBuilder;
@@ -1085,7 +1086,7 @@ impl HighResExporter {
             ],
         });
 
-        // Create output texture
+        // Create output texture (needs TEXTURE_BINDING for color effects input)
         let output_texture = self.device.create_texture(&TextureDescriptor {
             label: Some("Export Output Texture"),
             size: Extent3d {
@@ -1097,7 +1098,7 @@ impl HighResExporter {
             sample_count: 1,
             dimension: TextureDimension::D2,
             format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
+            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC | TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let output_view = output_texture.create_view(&TextureViewDescriptor::default());
@@ -1129,7 +1130,47 @@ impl HighResExporter {
             render_pass.draw(0..3, 0..1); // Fullscreen triangle
         }
 
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        // ===== Step 5.5: Run color effects (if enabled) =====
+        let has_color_effects = EffectChainRunner::has_enabled_effects(&config.color_effects);
+        let mut effect_chain: Option<EffectChainRunner> = None;
+        let color_effects_ran = if has_color_effects {
+            log::info!("High-res export: Running {} color effect(s)",
+                config.color_effects.iter().filter(|e| e.enabled).count());
+
+            let mut chain = EffectChainRunner::new(&self.device, self.width, self.height);
+
+            let mut effect_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("Export Color Effects Encoder"),
+            });
+
+            chain.reset_slots();
+            let ran = chain.run_color_effects(
+                &self.device,
+                &self.queue,
+                &mut effect_encoder,
+                &output_view,
+                &config.color_effects,
+            );
+
+            self.queue.submit(std::iter::once(effect_encoder.finish()));
+            effect_chain = Some(chain);
+            ran
+        } else {
+            false
+        };
+
         // ===== Step 6: Read back result =====
+        // If color effects ran, read from effect chain output; otherwise read from tonemap output
+        if color_effects_ran {
+            if let Some(chain) = effect_chain.as_ref() {
+                return chain.read_color_output_pixels(&self.device, &self.queue).await
+                    .map(|(_, _, pixels)| pixels);
+            }
+        }
+
+        // Read from tonemap output texture
         let bytes_per_pixel = 4u32; // RGBA8
         let unpadded_bytes_per_row = self.width * bytes_per_pixel;
         let align = COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -1143,7 +1184,11 @@ impl HighResExporter {
             mapped_at_creation: false,
         });
 
-        encoder.copy_texture_to_buffer(
+        let mut copy_encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Export Readback Encoder"),
+        });
+
+        copy_encoder.copy_texture_to_buffer(
             TexelCopyTextureInfo {
                 texture: &output_texture,
                 mip_level: 0,
@@ -1165,7 +1210,7 @@ impl HighResExporter {
             },
         );
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.queue.submit(std::iter::once(copy_encoder.finish()));
 
         // Map and read pixels
         let buffer_slice = readback_buffer.slice(..);

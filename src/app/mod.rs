@@ -654,8 +654,10 @@ impl App {
                 } else if let Some(ref mut renderer) = self.flame_renderer {
                     // Viewport-size export: use current renderer
                     let total_iterations = renderer.total_iterations();
+                    let has_color_effects = export_config.color_effects.iter().any(|e| e.enabled);
 
                     // For transparent export, we need to re-run tonemap with transparent_mode=1
+                    // and then re-run color effects if enabled
                     if transparent {
                         let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
                         renderer.set_transparent_mode(&self.gpu.queue, true, &export_config, iterations_per_thread);
@@ -665,12 +667,35 @@ impl App {
                             label: Some("Transparent Export Tonemap"),
                         });
                         renderer.tonemap_pass(&mut encoder);
+
+                        // Re-run color effects if enabled (they need to process the new tonemapped output)
+                        if has_color_effects {
+                            self.effect_chain.reset_slots();
+                            self.effect_chain.run_color_effects(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                &mut encoder,
+                                renderer.get_fractal_texture_view(),
+                                &export_config.color_effects,
+                            );
+                        }
+
                         self.gpu.queue.submit(std::iter::once(encoder.finish()));
                     }
 
-                    let pixels_future = renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, export_config.background_color);
+                    // Read pixels from effect chain output if color effects are enabled,
+                    // otherwise read from renderer's fractal texture
+                    let pixels_result: Result<(u32, u32, Vec<u8>), String> = if has_color_effects {
+                        pollster::block_on(
+                            self.effect_chain.read_color_output_pixels(&self.gpu.device, &self.gpu.queue)
+                        )
+                    } else {
+                        pollster::block_on(
+                            renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, export_config.background_color)
+                        ).map_err(|e| e.to_string())
+                    };
 
-                    match pollster::block_on(pixels_future) {
+                    match pixels_result {
                         Ok((width, height, rgba_data)) => {
                             // Build metadata with captured values
                             let metadata = crate::png_metadata::PngMetadata::from_app_state(
@@ -715,6 +740,19 @@ impl App {
                             label: Some("Restore Normal Tonemap"),
                         });
                         renderer.tonemap_pass(&mut encoder);
+
+                        // Re-run color effects with normal tonemap output
+                        if has_color_effects {
+                            self.effect_chain.reset_slots();
+                            self.effect_chain.run_color_effects(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                &mut encoder,
+                                renderer.get_fractal_texture_view(),
+                                &export_config.color_effects,
+                            );
+                        }
+
                         self.gpu.queue.submit(std::iter::once(encoder.finish()));
                     }
                 }
