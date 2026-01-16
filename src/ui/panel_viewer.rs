@@ -370,7 +370,7 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.animation_controller,
             self.context.track_editor_state,
-            self.context.flame,
+            self.context.config_manager.active_config(),
         );
     }
 

@@ -937,6 +937,8 @@ track_editor:
   category_rendering: "Rendering"
   category_transform: "Transform %{index}"
   category_final_transform: "Final Transform"
+  category_density_effects: "Density Effects"
+  category_color_effects: "Color Effects"
 
   # Animatable parameter names (View)
   param_zoom: "Zoom"

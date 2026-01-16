@@ -8,7 +8,8 @@ use crate::animation::{
     Animation, AnimationController, CircularTrack, EasingFunction, Interpolation,
     Keyframe, OscillatorType, Track, TrackSource,
 };
-use crate::scene::transforms::Flame;
+use crate::config::FractalConfig;
+use crate::effects::{global_effect_registry, EffectInstance};
 use crate::variations::global_registry;
 
 /// UI state for track editor
@@ -42,8 +43,10 @@ struct ParameterCategory {
 }
 
 /// Get list of animatable parameters organized by category
-fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
+fn animatable_parameters(config: &FractalConfig) -> Vec<ParameterCategory> {
     let registry = global_registry();
+    let effect_registry = global_effect_registry();
+    let flame = &config.flame;
     let transform_count = flame.transforms.len();
 
     let mut categories = vec![
@@ -201,7 +204,60 @@ fn animatable_parameters(flame: &Flame) -> Vec<ParameterCategory> {
         });
     }
 
+    // Add Density Effects category
+    if !config.density_effects.is_empty() {
+        let mut params = Vec::new();
+        for (i, effect) in config.density_effects.iter().enumerate() {
+            add_effect_params(&mut params, effect, i, "DensityEffect", &effect_registry);
+        }
+        if !params.is_empty() {
+            categories.push(ParameterCategory {
+                name: t!("track_editor.category_density_effects").to_string(),
+                params,
+            });
+        }
+    }
+
+    // Add Color Effects category
+    if !config.color_effects.is_empty() {
+        let mut params = Vec::new();
+        for (i, effect) in config.color_effects.iter().enumerate() {
+            add_effect_params(&mut params, effect, i, "ColorEffect", &effect_registry);
+        }
+        if !params.is_empty() {
+            categories.push(ParameterCategory {
+                name: t!("track_editor.category_color_effects").to_string(),
+                params,
+            });
+        }
+    }
+
     categories
+}
+
+/// Helper to add effect parameters to the params list
+fn add_effect_params(
+    params: &mut Vec<(String, String)>,
+    effect: &EffectInstance,
+    index: usize,
+    prefix: &str,
+    registry: &crate::effects::EffectRegistry,
+) {
+    if let Some(info) = registry.get(&effect.effect_type) {
+        // Add enabled toggle (note: "Enabled" with capital E to match ConfigPath parsing)
+        params.push((
+            format!("{} → Enabled", info.display_name),
+            format!("{}.{}.Enabled", prefix, index),
+        ));
+
+        // Add each parameter
+        for param_def in &info.parameters {
+            params.push((
+                format!("{} → {}", info.display_name, param_def.display_name),
+                format!("{}.{}.{}", prefix, index, param_def.name),
+            ));
+        }
+    }
 }
 
 /// Render the track editor section
@@ -209,7 +265,7 @@ pub fn render_track_editor(
     ui: &mut Ui,
     controller: &mut AnimationController,
     state: &mut TrackEditorState,
-    flame: &Flame,
+    config: &FractalConfig,
 ) {
     let has_animation = controller.animation.is_some();
 
@@ -246,7 +302,7 @@ pub fn render_track_editor(
 
             // Add track dialog
             if state.add_track_dialog_open && has_animation {
-                render_add_track_dialog(ui, controller, state, flame);
+                render_add_track_dialog(ui, controller, state, config);
             }
 
             ui.separator();
@@ -270,7 +326,7 @@ fn render_add_track_dialog(
     ui: &mut Ui,
     controller: &mut AnimationController,
     state: &mut TrackEditorState,
-    flame: &Flame,
+    config: &FractalConfig,
 ) {
     egui::Frame::new()
         .fill(ui.visuals().extreme_bg_color)
@@ -296,7 +352,7 @@ fn render_add_track_dialog(
             });
 
             // Target parameter selection
-            let categories = animatable_parameters(flame);
+            let categories = animatable_parameters(config);
 
             ui.horizontal(|ui| {
                 ui.label(t!("track_editor.target"));
