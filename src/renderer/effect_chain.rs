@@ -6,6 +6,51 @@
 
 use std::collections::HashMap;
 use egui_wgpu::wgpu;
+
+// ============================================================================
+// WASM: Embed effect shaders at compile time (no filesystem access)
+// Desktop: Load from filesystem at runtime (allows hot-reloading)
+// ============================================================================
+
+/// Embedded effect shaders for WASM builds
+#[cfg(target_arch = "wasm32")]
+mod embedded_shaders {
+    // Color effects
+    pub const CHROMATIC_ABERRATION: &str = include_str!("../../shaders/effects/color/chromatic_aberration.wgsl");
+    pub const FILM_GRAIN: &str = include_str!("../../shaders/effects/color/film_grain.wgsl");
+    pub const HUE_CYCLE: &str = include_str!("../../shaders/effects/color/hue_cycle.wgsl");
+    pub const VIGNETTE: &str = include_str!("../../shaders/effects/color/vignette.wgsl");
+
+    // Density effects
+    pub const DENSITY_BLUR: &str = include_str!("../../shaders/effects/density/density_blur.wgsl");
+    pub const SHARPEN: &str = include_str!("../../shaders/effects/density/sharpen.wgsl");
+}
+
+/// Load effect shader source by path
+/// - WASM: Returns embedded shader source
+/// - Desktop: Loads from filesystem
+fn load_effect_shader(shader_path: &str) -> Result<String, String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Map shader path to embedded source
+        match shader_path {
+            "effects/color/chromatic_aberration.wgsl" => Ok(embedded_shaders::CHROMATIC_ABERRATION.to_string()),
+            "effects/color/film_grain.wgsl" => Ok(embedded_shaders::FILM_GRAIN.to_string()),
+            "effects/color/hue_cycle.wgsl" => Ok(embedded_shaders::HUE_CYCLE.to_string()),
+            "effects/color/vignette.wgsl" => Ok(embedded_shaders::VIGNETTE.to_string()),
+            "effects/density/density_blur.wgsl" => Ok(embedded_shaders::DENSITY_BLUR.to_string()),
+            "effects/density/sharpen.wgsl" => Ok(embedded_shaders::SHARPEN.to_string()),
+            _ => Err(format!("Unknown effect shader: {}", shader_path)),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let full_path = format!("shaders/{}", shader_path);
+        std::fs::read_to_string(&full_path)
+            .map_err(|e| format!("Failed to load effect shader {}: {}", full_path, e))
+    }
+}
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingResource, BindingType, BlendState, Buffer, BufferBindingType,
@@ -261,12 +306,11 @@ impl EffectChainRunner {
             }
         };
 
-        // Load shader source
-        let shader_path = format!("shaders/{}", effect_info.shader_path);
-        let shader_source = match std::fs::read_to_string(&shader_path) {
+        // Load shader source (embedded for WASM, filesystem for desktop)
+        let shader_source = match load_effect_shader(&effect_info.shader_path) {
             Ok(source) => source,
             Err(e) => {
-                log::error!("Failed to load effect shader {}: {}", shader_path, e);
+                log::error!("{}", e);
                 return;
             }
         };
