@@ -841,6 +841,16 @@ pub enum SnapshotData {
         index: usize,
         effect: crate::effects::EffectInstance,
     },
+
+    /// Color effect moved (reordered)
+    /// Undo: move from to_index back to from_index
+    /// Redo: move from from_index to to_index
+    MoveColorEffect { from_index: usize, to_index: usize },
+
+    /// Density effect moved (reordered)
+    /// Undo: move from to_index back to from_index
+    /// Redo: move from from_index to to_index
+    MoveDensityEffect { from_index: usize, to_index: usize },
 }
 
 /// A batch of related changes (single undo point)
@@ -1020,6 +1030,38 @@ impl ConfigChange {
             timestamp: now,
             description,
             snapshot: Some(SnapshotData::DeleteDensityEffect { index, effect }),
+            last_update_time: now,
+        }
+    }
+
+    /// Create a color effect move change (reorder)
+    pub fn move_color_effect_snapshot(
+        from_index: usize,
+        to_index: usize,
+        description: String,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description,
+            snapshot: Some(SnapshotData::MoveColorEffect { from_index, to_index }),
+            last_update_time: now,
+        }
+    }
+
+    /// Create a density effect move change (reorder)
+    pub fn move_density_effect_snapshot(
+        from_index: usize,
+        to_index: usize,
+        description: String,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description,
+            snapshot: Some(SnapshotData::MoveDensityEffect { from_index, to_index }),
             last_update_time: now,
         }
     }
