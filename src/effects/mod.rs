@@ -591,6 +591,13 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(1.0),
                 max_value: Some(6.0),
             },
+            EffectParameter {
+                name: "time".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1000.0),
+            },
         ],
     });
 
