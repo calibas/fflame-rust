@@ -1256,6 +1256,8 @@ effects:
       intensity: "Intensity"
       scale: "Scale"
       speed: "Speed"
+      time: "Time"
+      blend_mode: "Blend Mode"
 
   tunnel:
     name: "Tunnel"
@@ -1263,6 +1265,7 @@ effects:
       speed: "Speed"
       rotation_speed: "Rotation Speed"
       distortion: "Distortion"
+      time: "Time"
 
   sobel_edges:
     name: "Edge Glow"
@@ -1278,6 +1281,24 @@ effects:
       intensity: "Intensity"
       scale: "Scale"
       octaves: "Octaves"
+
+  simplex_noise:
+    name: "Simplex Noise"
+    params:
+      intensity: "Intensity"
+      scale: "Scale"
+      octaves: "Octaves"
+      time: "Time"
+      mode: "Mode"
+
+  worley_noise:
+    name: "Worley Noise"
+    params:
+      intensity: "Intensity"
+      scale: "Scale"
+      time: "Time"
+      mode: "Pattern"
+      color_mode: "Color Mode"
 
 # Errors
 errors:
