@@ -1322,14 +1322,6 @@ async fn render_frame_to_completion(
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        // Poll device to allow GPU work to complete and prevent starvation
-        // of other GPU consumers (like the main window surface).
-        // Use Poll::Wait to ensure work completes before submitting more.
-        let _ = device.poll(egui_wgpu::wgpu::PollType::Poll);
-
-        // Yield CPU to main thread briefly to allow UI updates
-        std::thread::yield_now();
-
         if total_rendered >= target {
             // Final accumulation if we have partial batch
             if batch_frame_count > 0 {
@@ -1339,8 +1331,6 @@ async fn render_frame_to_completion(
                 let total_samples_in_batch = samples_this_frame * batch_frame_count as u64;
                 renderer.accumulate_pass(&mut final_encoder, queue, device, total_samples_in_batch);
                 queue.submit(std::iter::once(final_encoder.finish()));
-                // Final poll to ensure work completes
-                let _ = device.poll(egui_wgpu::wgpu::PollType::Poll);
             }
             break;
         }
@@ -1724,6 +1714,13 @@ pub async fn export_animation_fast(
         .join()
         .map_err(|_| AnimationExportError::FfmpegFailed("Writer thread panicked".to_string()))?
         .map_err(AnimationExportError::FfmpegFailed)?;
+
+    // Ensure all GPU work is complete before device is dropped
+    // This prevents driver cleanup from interfering with the main device
+    let _ = device.poll(PollType::Wait {
+        submission_index: None,
+        timeout: Some(std::time::Duration::from_secs(5)),
+    });
 
     let total_time_ms = total_start.elapsed().as_secs_f64() * 1000.0;
     let avg_frame_time_ms = total_time_ms / total_frames as f64;

@@ -238,6 +238,9 @@ pub struct App {
 
     // Post-processing effect chain
     pub(super) effect_chain: crate::renderer::effect_chain::EffectChainRunner,
+
+    // Track export state to detect when export finishes (for surface recovery)
+    pub(super) was_video_exporting: bool,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -322,6 +325,7 @@ impl App {
             render_mode: RenderModeFSM::new(),
             histogram_frame_counter: 0,
             effect_chain,
+            was_video_exporting: false,
         };
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
@@ -387,9 +391,21 @@ impl App {
                             app.update();
                             match app.render(&window) {
                                 Ok(_) => {},
-                                Err(SurfaceError::Lost | SurfaceError::Outdated) => app.gpu.resize(app.gpu.size),
+                                Err(SurfaceError::Lost | SurfaceError::Outdated) => {
+                                    log::warn!("Surface lost/outdated, reconfiguring...");
+                                    app.gpu.resize(app.gpu.size);
+                                }
                                 Err(SurfaceError::OutOfMemory) => elwt.exit(),
-                                Err(e) => eprintln!("Render error: {:?}", e),
+                                Err(SurfaceError::Timeout) => {
+                                    // Timeout during surface acquisition - try to recover
+                                    log::warn!("Surface timeout, reconfiguring...");
+                                    app.gpu.resize(app.gpu.size);
+                                }
+                                Err(e) => {
+                                    // For "Other" errors, also try to recover by reconfiguring
+                                    log::error!("Surface error: {:?}, attempting recovery...", e);
+                                    app.gpu.resize(app.gpu.size);
+                                }
                             }
 
                             // Handle graceful quit (triggered by File → Quit menu)
@@ -509,22 +525,52 @@ impl App {
         // 5. Submit and present
         // ============================================================================
 
-        // Check if video export is in progress (affects surface acquisition and GPU work)
+        // Check if video export is in progress
         let is_video_exporting = self.animation_export_progress.lock()
             .map(|p| p.is_exporting)
             .unwrap_or(false);
 
-        // During video export, surface acquisition may fail due to GPU contention.
-        // Handle this gracefully by skipping the frame rather than propagating errors.
+        // During video export: completely skip rendering to avoid surface corruption
+        // The export uses its own GPU device which interferes with surface acquisition
+        if is_video_exporting {
+            // Update window title with export progress
+            if let Ok(progress) = self.animation_export_progress.lock() {
+                let percent = if progress.total_frames > 0 {
+                    (progress.current_frame * 100) / progress.total_frames
+                } else {
+                    0
+                };
+                let title = format!(
+                    "⏳ Exporting {}/{} ({}%) - Fractal Flame",
+                    progress.current_frame,
+                    progress.total_frames,
+                    percent
+                );
+                window.set_title(&title);
+            }
+            // Sleep to avoid busy-waiting
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            self.was_video_exporting = true;
+            return Ok(());
+        }
+
+        // Detect when video export has just finished
+        if self.was_video_exporting {
+            log::info!("Video export finished, reconfiguring surface...");
+            // Give driver time to release export device
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            // Reconfigure surface to ensure clean state
+            self.gpu.resize(self.gpu.size);
+            // Restore window title
+            window.set_title("Fractal Flame");
+            self.was_video_exporting = false;
+        }
+
+        // Normal rendering: acquire surface texture
         let frame = match self.gpu.surface.get_current_texture() {
             Ok(f) => f,
             Err(e) => {
-                if is_video_exporting {
-                    // Expected during export - GPU is busy with export work.
-                    // Sleep briefly to reduce CPU spinning, then skip this frame.
-                    std::thread::sleep(std::time::Duration::from_millis(16));
-                    return Ok(());
-                }
+                log::error!("Surface error: {:?}", e);
                 return Err(e);
             }
         };
