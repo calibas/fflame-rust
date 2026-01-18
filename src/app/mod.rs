@@ -425,6 +425,14 @@ impl App {
                     // Check if animation is playing (needs continuous redraws)
                     let animation_playing = app.animation_controller.is_playing();
 
+                    // Check if video/PNG export is in progress (needs UI updates for progress bar)
+                    let is_exporting = app.animation_export_progress.lock()
+                        .map(|p| p.is_exporting)
+                        .unwrap_or(false)
+                        || app.png_export_progress.lock()
+                        .map(|p| p.is_exporting)
+                        .unwrap_or(false);
+
                     // Update present mode based on system settings
                     app.gpu.set_present_mode(app.config_manager.system_settings().vsync_enabled);
 
@@ -436,7 +444,8 @@ impl App {
 
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
-                    if is_rendering || animation_playing || ui_active {
+                    // During export, keep redrawing to update progress bar
+                    if is_rendering || animation_playing || ui_active || is_exporting {
                         // Actively rendering fractals OR UI is active (for tooltips, hover effects)
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
@@ -500,7 +509,25 @@ impl App {
         // 5. Submit and present
         // ============================================================================
 
-        let frame = self.gpu.surface.get_current_texture()?;
+        // Check if video export is in progress (affects surface acquisition and GPU work)
+        let is_video_exporting = self.animation_export_progress.lock()
+            .map(|p| p.is_exporting)
+            .unwrap_or(false);
+
+        // During video export, surface acquisition may fail due to GPU contention.
+        // Handle this gracefully by skipping the frame rather than propagating errors.
+        let frame = match self.gpu.surface.get_current_texture() {
+            Ok(f) => f,
+            Err(e) => {
+                if is_video_exporting {
+                    // Expected during export - GPU is busy with export work.
+                    // Sleep briefly to reduce CPU spinning, then skip this frame.
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                    return Ok(());
+                }
+                return Err(e);
+            }
+        };
         let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
@@ -539,8 +566,15 @@ impl App {
         }
 
         // Get a snapshot of export progress for UI display
-        let export_progress = self.animation_export_progress.lock().unwrap().clone();
-        let png_export_progress = self.png_export_progress.lock().unwrap().clone();
+        // Use ok() + unwrap_or_default() to handle poisoned mutexes gracefully
+        let export_progress = self.animation_export_progress.lock()
+            .ok()
+            .map(|p| p.clone())
+            .unwrap_or_default();
+        let png_export_progress = self.png_export_progress.lock()
+            .ok()
+            .map(|p| p.clone())
+            .unwrap_or_default();
 
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
@@ -1093,8 +1127,10 @@ impl App {
         // Handle animation export request
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref export_settings) = ui_response.animation_export_requested {
-            // Check if already exporting
-            let already_exporting = self.animation_export_progress.lock().unwrap().is_exporting;
+            // Check if already exporting (handle poisoned mutex gracefully)
+            let already_exporting = self.animation_export_progress.lock()
+                .map(|p| p.is_exporting)
+                .unwrap_or(false);
             if already_exporting {
                 log::warn!("Animation export already in progress");
             } else if let Some(ref animation) = self.animation_controller.animation {
@@ -1123,9 +1159,8 @@ impl App {
                 println!("  Total frames: {}", export_config.total_frames());
                 println!("  Codec: {} (CRF {})", export_config.video_settings.codec.display_name(), export_config.video_settings.quality);
 
-                // Set initial export progress
-                {
-                    let mut p = self.animation_export_progress.lock().unwrap();
+                // Set initial export progress (handle poisoned mutex gracefully)
+                if let Ok(mut p) = self.animation_export_progress.lock() {
                     p.is_exporting = true;
                     p.current_frame = 0;
                     p.total_frames = export_config.total_frames();
