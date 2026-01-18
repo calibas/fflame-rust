@@ -343,6 +343,21 @@ impl I18nKey {
             params: params.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
         }
     }
+
+    /// Serialize to a string format for storage in history descriptions
+    /// Format: `key` or `key|param1=value1|param2=value2`
+    pub fn to_serialized(&self) -> String {
+        if self.params.is_empty() {
+            self.key.clone()
+        } else {
+            let params_str = self.params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("|");
+            format!("{}|{}", self.key, params_str)
+        }
+    }
 }
 
 impl ConfigPath {
@@ -758,9 +773,10 @@ impl ConfigDelta {
     }
 
     /// Human-readable description using i18n key
-    /// Returns just the i18n key - UI should translate via translate_description()
+    /// Returns serialized i18n key with params - UI translates via translate_description()
+    /// Format: `key` or `key|param1=value1|param2=value2`
     pub fn description(&self) -> String {
-        self.path.to_i18n_key().key.to_string()
+        self.path.to_i18n_key().to_serialized()
     }
 }
 

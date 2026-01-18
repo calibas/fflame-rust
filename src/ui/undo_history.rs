@@ -5,7 +5,7 @@ use rust_i18n::t;
 ///
 /// Descriptions can be:
 /// - Simple i18n keys: `history.action.reset_view`
-/// - i18n keys with parameters: `history.action.translate_up|name=Transform 1`
+/// - i18n keys with parameters: `key|param1=value1|param2=value2`
 /// - Fallback: returned as-is if not a valid i18n key
 fn translate_description(description: &str) -> String {
     // Check if this looks like an i18n key (starts with "history.")
@@ -15,14 +15,22 @@ fn translate_description(description: &str) -> String {
             let key = &description[..pipe_pos];
             let params_str = &description[pipe_pos + 1..];
 
-            // Parse the "name" parameter (most common case)
-            // Format: key|name=value
-            if let Some(name_value) = params_str.strip_prefix("name=") {
-                t!(key, name = name_value).to_string()
-            } else {
-                // Unknown parameter format - just translate the key
-                t!(key).to_string()
+            // Get the base translation
+            let mut result = t!(key).to_string();
+
+            // Parse and substitute all parameters
+            // Format: param1=value1|param2=value2|...
+            for param_pair in params_str.split('|') {
+                if let Some(eq_pos) = param_pair.find('=') {
+                    let param_name = &param_pair[..eq_pos];
+                    let param_value = &param_pair[eq_pos + 1..];
+                    // Replace %{param_name} with param_value
+                    let placeholder = format!("%{{{}}}", param_name);
+                    result = result.replace(&placeholder, param_value);
+                }
             }
+
+            result
         } else {
             // Simple key without parameters
             t!(description).to_string()
