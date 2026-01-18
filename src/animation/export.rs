@@ -1322,6 +1322,14 @@ async fn render_frame_to_completion(
 
         queue.submit(std::iter::once(encoder.finish()));
 
+        // Poll device to allow GPU work to complete and prevent starvation
+        // of other GPU consumers (like the main window surface).
+        // Use Poll::Wait to ensure work completes before submitting more.
+        let _ = device.poll(egui_wgpu::wgpu::PollType::Poll);
+
+        // Yield CPU to main thread briefly to allow UI updates
+        std::thread::yield_now();
+
         if total_rendered >= target {
             // Final accumulation if we have partial batch
             if batch_frame_count > 0 {
@@ -1331,6 +1339,8 @@ async fn render_frame_to_completion(
                 let total_samples_in_batch = samples_this_frame * batch_frame_count as u64;
                 renderer.accumulate_pass(&mut final_encoder, queue, device, total_samples_in_batch);
                 queue.submit(std::iter::once(final_encoder.finish()));
+                // Final poll to ensure work completes
+                let _ = device.poll(egui_wgpu::wgpu::PollType::Poll);
             }
             break;
         }
