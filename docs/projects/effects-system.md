@@ -360,18 +360,18 @@ struct EffectParams {
 - [ ] Effect reordering UI (drag-and-drop or up/down buttons)
 - [ ] Effect presets
 
-### Phase 3b: New Single-Pass Effects
+### Phase 3b: New Single-Pass Effects ✅
 Based on analysis of [new-shaders.md](new-shaders.md), these can be implemented with current architecture:
 
 **Color Effects (single-pass fragment shaders):**
-- [ ] `kaleidoscope` - N-fold rotational symmetry via polar coordinate folding
-- [ ] `plasma` - Classic demoscene summed sinusoids effect
-- [ ] `tunnel` - Polar coordinate texture mapping
-- [ ] `sobel_edges` - Edge detection with neon glow aesthetic
-- [ ] `domain_warp` - Organic flowing distortion using FBM noise
+- [x] `kaleidoscope` - N-fold rotational symmetry via polar coordinate folding
+- [x] `plasma` - Classic demoscene summed sinusoids effect
+- [x] `tunnel` - Polar coordinate texture mapping
+- [x] `sobel_edges` - Edge detection with neon glow aesthetic
+- [x] `domain_warp` - Organic flowing distortion using FBM noise
 
 **Density Effects:**
-- [ ] `bilateral_blur` - Edge-preserving blur (better quality than Gaussian)
+- [x] `bilateral_blur` - Edge-preserving blur (better quality than Gaussian)
 
 ### Phase 4: Polish
 - [ ] LUT library for color_grade
