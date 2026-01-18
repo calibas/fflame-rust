@@ -353,12 +353,12 @@ struct EffectParams {
 - [x] Basic UI for adding/configuring effects
 - [x] Effect enable/disable
 
-### Phase 3: Full Suite (In Progress)
+### Phase 3: Full Suite ✅
 - [x] Color effects: hue_shift, film_grain, chromatic_aberration
 - [x] Density effects: sharpen
 - [x] i18n support for effect names and parameters
-- [ ] Effect reordering UI (drag-and-drop or up/down buttons)
-- [ ] Effect presets
+- [x] Effect reordering UI (up/down buttons with undo/redo support)
+- ~~[ ] Effect presets~~ (skip for now)
 
 ### Phase 3b: New Single-Pass Effects ✅
 Based on analysis of [new-shaders.md](new-shaders.md), these can be implemented with current architecture:

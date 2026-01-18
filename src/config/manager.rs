@@ -554,6 +554,28 @@ impl ConfigManager {
                     }
                     return Ok(UpdateType::ToneMappingOnly);
                 }
+
+                crate::config::SnapshotData::MoveColorEffect { from_index, to_index } => {
+                    log::debug!("  Undoing move color effect {} -> {} (moving back)", from_index, to_index);
+                    // Undo: move from to_index back to from_index
+                    if *to_index < self.current.color_effects.len() {
+                        let effect = self.current.color_effects.remove(*to_index);
+                        let insert_at = (*from_index).min(self.current.color_effects.len());
+                        self.current.color_effects.insert(insert_at, effect);
+                    }
+                    return Ok(UpdateType::ToneMappingOnly);
+                }
+
+                crate::config::SnapshotData::MoveDensityEffect { from_index, to_index } => {
+                    log::debug!("  Undoing move density effect {} -> {} (moving back)", from_index, to_index);
+                    // Undo: move from to_index back to from_index
+                    if *to_index < self.current.density_effects.len() {
+                        let effect = self.current.density_effects.remove(*to_index);
+                        let insert_at = (*from_index).min(self.current.density_effects.len());
+                        self.current.density_effects.insert(insert_at, effect);
+                    }
+                    return Ok(UpdateType::ToneMappingOnly);
+                }
             }
         }
 
@@ -662,6 +684,28 @@ impl ConfigManager {
                     log::debug!("  Redoing delete density effect (remove at index {})", index);
                     if *index < self.current.density_effects.len() {
                         self.current.density_effects.remove(*index);
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::ToneMappingOnly);
+                }
+
+                crate::config::SnapshotData::MoveColorEffect { from_index, to_index } => {
+                    log::debug!("  Redoing move color effect {} -> {}", from_index, to_index);
+                    if *from_index < self.current.color_effects.len() {
+                        let effect = self.current.color_effects.remove(*from_index);
+                        let insert_at = (*to_index).min(self.current.color_effects.len());
+                        self.current.color_effects.insert(insert_at, effect);
+                    }
+                    self.position += 1;
+                    return Ok(UpdateType::ToneMappingOnly);
+                }
+
+                crate::config::SnapshotData::MoveDensityEffect { from_index, to_index } => {
+                    log::debug!("  Redoing move density effect {} -> {}", from_index, to_index);
+                    if *from_index < self.current.density_effects.len() {
+                        let effect = self.current.density_effects.remove(*from_index);
+                        let insert_at = (*to_index).min(self.current.density_effects.len());
+                        self.current.density_effects.insert(insert_at, effect);
                     }
                     self.position += 1;
                     return Ok(UpdateType::ToneMappingOnly);
@@ -1826,6 +1870,30 @@ impl ConfigManager {
                     } else {
                         return Err(ConfigError::InvalidIndex);
                     }
+                    self.push_undo(change);
+                    self.record_action(UpdateType::ToneMappingOnly);
+                    return Ok(());
+                }
+
+                crate::config::SnapshotData::MoveColorEffect { from_index, to_index } => {
+                    if *from_index >= self.current.color_effects.len() {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                    let effect = self.current.color_effects.remove(*from_index);
+                    let insert_at = (*to_index).min(self.current.color_effects.len());
+                    self.current.color_effects.insert(insert_at, effect);
+                    self.push_undo(change);
+                    self.record_action(UpdateType::ToneMappingOnly);
+                    return Ok(());
+                }
+
+                crate::config::SnapshotData::MoveDensityEffect { from_index, to_index } => {
+                    if *from_index >= self.current.density_effects.len() {
+                        return Err(ConfigError::InvalidIndex);
+                    }
+                    let effect = self.current.density_effects.remove(*from_index);
+                    let insert_at = (*to_index).min(self.current.density_effects.len());
+                    self.current.density_effects.insert(insert_at, effect);
                     self.push_undo(change);
                     self.record_action(UpdateType::ToneMappingOnly);
                     return Ok(());

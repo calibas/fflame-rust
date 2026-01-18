@@ -7,6 +7,32 @@ use egui::Ui;
 use crate::config::{ConfigChange, ConfigManager, ConfigPath, UpdateType};
 use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
 
+/// Render reorder buttons (up/down) for an effect
+/// Returns the action to take: None, MoveUp, or MoveDown
+fn render_reorder_buttons(ui: &mut Ui, index: usize, total: usize) -> Option<ReorderAction> {
+    let mut action = None;
+
+    // Up button (disabled if first)
+    let up_enabled = index > 0;
+    if ui.add_enabled(up_enabled, egui::Button::new("^").small()).clicked() {
+        action = Some(ReorderAction::MoveUp);
+    }
+
+    // Down button (disabled if last)
+    let down_enabled = index < total.saturating_sub(1);
+    if ui.add_enabled(down_enabled, egui::Button::new("v").small()).clicked() {
+        action = Some(ReorderAction::MoveDown);
+    }
+
+    action
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ReorderAction {
+    MoveUp,
+    MoveDown,
+}
+
 /// Render the Effects panel
 pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> UpdateType {
     let mut max_update = UpdateType::None;
@@ -29,6 +55,9 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
 
         // Show existing effects
         let mut effect_to_remove: Option<usize> = None;
+        let mut effect_to_move: Option<(usize, ReorderAction)> = None;
+        let num_color_effects = color_effects.len();
+
         for (idx, effect) in color_effects.iter().enumerate() {
             ui.group(|ui| {
                 ui.horizontal(|ui| {
@@ -44,13 +73,18 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
                         max_update = max_update.max(UpdateType::ToneMappingOnly);
                     }
 
+                    // Reorder buttons
+                    if let Some(action) = render_reorder_buttons(ui, idx, num_color_effects) {
+                        effect_to_move = Some((idx, action));
+                    }
+
                     // Effect name
                     ui.label(egui::RichText::new(&effect.effect_type).strong());
 
                     // Spacer
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Remove button
-                        if ui.small_button("✕").clicked() {
+                        if ui.small_button("X").clicked() {
                             effect_to_remove = Some(idx);
                         }
                     });
@@ -104,6 +138,26 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
                 log::error!("Failed to remove effect: {}", e);
             }
             max_update = max_update.max(UpdateType::ToneMappingOnly);
+        }
+
+        // Handle reordering after iteration
+        if let Some((idx, action)) = effect_to_move {
+            let (from_idx, to_idx) = match action {
+                ReorderAction::MoveUp => (idx, idx.saturating_sub(1)),
+                ReorderAction::MoveDown => (idx, (idx + 1).min(num_color_effects.saturating_sub(1))),
+            };
+            if from_idx != to_idx {
+                let effect_name = color_effects[from_idx].effect_type.clone();
+                let change = ConfigChange::move_color_effect_snapshot(
+                    from_idx,
+                    to_idx,
+                    format!("Move Effect: {}", effect_name),
+                );
+                if let Err(e) = config_manager.apply_structural_change(change) {
+                    log::error!("Failed to move effect: {}", e);
+                }
+                max_update = max_update.max(UpdateType::ToneMappingOnly);
+            }
         }
 
         // Add effect button with dropdown
@@ -177,6 +231,9 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
 
             // Show existing density effects
             let mut effect_to_remove: Option<usize> = None;
+            let mut effect_to_move: Option<(usize, ReorderAction)> = None;
+            let num_density_effects = density_effects.len();
+
             for (idx, effect) in density_effects.iter().enumerate() {
                 ui.group(|ui| {
                     ui.horizontal(|ui| {
@@ -191,10 +248,15 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
                             max_update = max_update.max(UpdateType::ToneMappingOnly);
                         }
 
+                        // Reorder buttons
+                        if let Some(action) = render_reorder_buttons(ui, idx, num_density_effects) {
+                            effect_to_move = Some((idx, action));
+                        }
+
                         ui.label(egui::RichText::new(&effect.effect_type).strong());
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("✕").clicked() {
+                            if ui.small_button("X").clicked() {
                                 effect_to_remove = Some(idx);
                             }
                         });
@@ -245,6 +307,26 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
                     log::error!("Failed to remove effect: {}", e);
                 }
                 max_update = max_update.max(UpdateType::ToneMappingOnly);
+            }
+
+            // Handle reordering after iteration
+            if let Some((idx, action)) = effect_to_move {
+                let (from_idx, to_idx) = match action {
+                    ReorderAction::MoveUp => (idx, idx.saturating_sub(1)),
+                    ReorderAction::MoveDown => (idx, (idx + 1).min(num_density_effects.saturating_sub(1))),
+                };
+                if from_idx != to_idx {
+                    let effect_name = density_effects[from_idx].effect_type.clone();
+                    let change = ConfigChange::move_density_effect_snapshot(
+                        from_idx,
+                        to_idx,
+                        format!("Move Effect: {}", effect_name),
+                    );
+                    if let Err(e) = config_manager.apply_structural_change(change) {
+                        log::error!("Failed to move effect: {}", e);
+                    }
+                    max_update = max_update.max(UpdateType::ToneMappingOnly);
+                }
             }
 
             // Add density effect buttons
