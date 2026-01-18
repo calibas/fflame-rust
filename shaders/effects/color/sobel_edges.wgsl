@@ -5,7 +5,8 @@
 //   params[0] = intensity (0-2): Edge brightness multiplier
 //   params[1] = threshold (0-1): Edge detection threshold
 //   params[2] = glow (0-1): Amount of edge glow/bloom
-//   params[3] = preserve_color (0-1): Blend between edge color and original
+//   params[3] = preserve_color (0-1): Use original color for edges vs white
+//   params[4] = blend_mode (0-12): See blend_modes.wgsl for options
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -27,6 +28,8 @@ struct VertexOutput {
 @group(0) @binding(1) var input_sampler: sampler;
 @group(0) @binding(2) var<uniform> effect_params: EffectParams;
 
+// INCLUDE_BLEND_MODES
+
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     var output: VertexOutput;
@@ -35,10 +38,6 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     output.position = vec4<f32>(x - 1.0, 1.0 - y, 0.0, 1.0);
     output.uv = vec2<f32>(x * 0.5, y * 0.5);
     return output;
-}
-
-fn luminance(c: vec3<f32>) -> f32 {
-    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
 fn sample_lum(uv: vec2<f32>) -> f32 {
@@ -51,6 +50,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let threshold = get_param(1u);
     let glow = get_param(2u);
     let preserve_color = get_param(3u);
+    let blend_mode = i32(get_param(4u));
 
     let texel = vec2<f32>(1.0 / f32(effect_params.width), 1.0 / f32(effect_params.height));
     let uv = input.uv;
@@ -71,23 +71,16 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
     // Edge magnitude
     var edge = sqrt(gx * gx + gy * gy);
-
-    // Apply threshold
     edge = smoothstep(threshold * 0.5, threshold, edge);
 
     // Get original color
     let original = textureSample(input_texture, input_sampler, uv);
 
-    // Create neon edge color (use original hue, boost saturation)
-    let edge_color = original.rgb * (1.0 + glow * 2.0);
+    // Create edge color (use original hue or white, boost with glow)
+    let edge_color = mix(vec3<f32>(1.0), original.rgb, preserve_color) * (1.0 + glow * 2.0) * edge;
 
-    // Mix edge with original based on edge strength and preserve_color
-    let edge_contribution = edge * intensity;
-    let result = mix(
-        original.rgb * (1.0 - edge_contribution * (1.0 - preserve_color)),
-        edge_color,
-        edge_contribution
-    );
+    // Apply blend mode
+    let result = apply_blend(original.rgb, edge_color, blend_mode, intensity);
 
     return vec4<f32>(result, original.a);
 }

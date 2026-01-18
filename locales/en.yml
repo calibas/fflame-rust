@@ -1203,23 +1203,29 @@ effects:
       intensity: "Intensity"
       radius: "Radius"
       softness: "Softness"
+      blend_mode: "Blend Mode"
 
   film_grain:
     name: "Film Grain"
     params:
       intensity: "Intensity"
       seed: "Seed"
+      blend_mode: "Blend Mode"
 
   chromatic_aberration:
     name: "Chromatic Aberration"
     params:
       amount: "Amount"
       radial: "Radial"
+      intensity: "Intensity"
+      blend_mode: "Blend Mode"
 
   hue_shift:
     name: "Hue Shift"
     params:
       offset: "Hue Offset"
+      intensity: "Intensity"
+      blend_mode: "Blend Mode"
 
   # Density Effects
   density_blur:
@@ -1249,6 +1255,8 @@ effects:
       segments: "Segments"
       rotation: "Rotation"
       zoom: "Zoom"
+      intensity: "Intensity"
+      blend_mode: "Blend Mode"
 
   plasma:
     name: "Plasma"
@@ -1266,6 +1274,8 @@ effects:
       rotation_speed: "Rotation Speed"
       distortion: "Distortion"
       time: "Time"
+      intensity: "Intensity"
+      blend_mode: "Blend Mode"
 
   sobel_edges:
     name: "Edge Glow"
@@ -1274,6 +1284,7 @@ effects:
       threshold: "Threshold"
       glow: "Glow"
       preserve_color: "Preserve Color"
+      blend_mode: "Blend Mode"
 
   domain_warp:
     name: "Domain Warp"
@@ -1282,6 +1293,7 @@ effects:
       scale: "Scale"
       octaves: "Octaves"
       time: "Time"
+      blend_mode: "Blend Mode"
 
   simplex_noise:
     name: "Simplex Noise"
@@ -1291,6 +1303,7 @@ effects:
       octaves: "Octaves"
       time: "Time"
       mode: "Mode"
+      blend_mode: "Blend Mode"
 
   worley_noise:
     name: "Worley Noise"
@@ -1300,6 +1313,7 @@ effects:
       time: "Time"
       mode: "Pattern"
       color_mode: "Color Mode"
+      blend_mode: "Blend Mode"
 
 # Errors
 errors:

@@ -7,6 +7,7 @@
 //   params[2] = time: Animation time
 //   params[3] = mode: 0=Cells, 1=Edges, 2=Organic, 3=Crystal
 //   params[4] = color_mode: 0=Grayscale, 1=Rainbow, 2=Original
+//   params[5] = blend_mode (0-12): See blend_modes.wgsl for options
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -27,6 +28,8 @@ struct VertexOutput {
 @group(0) @binding(0) var input_texture: texture_2d<f32>;
 @group(0) @binding(1) var input_sampler: sampler;
 @group(0) @binding(2) var<uniform> effect_params: EffectParams;
+
+// INCLUDE_BLEND_MODES
 
 const PI: f32 = 3.14159265359;
 
@@ -80,7 +83,7 @@ fn worley(p: vec2<f32>, time: f32) -> vec2<f32> {
     return vec2<f32>(d1, d2);
 }
 
-fn hsv_to_rgb(hsv: vec3<f32>) -> vec3<f32> {
+fn hsv_to_rgb_local(hsv: vec3<f32>) -> vec3<f32> {
     let h = hsv.x;
     let s = hsv.y;
     let v = hsv.z;
@@ -108,6 +111,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let time = get_param(2u);
     let mode = i32(get_param(3u));
     let color_mode = i32(get_param(4u));
+    let blend_mode = i32(get_param(5u));
 
     let uv = input.uv;
     let original = textureSample(input_texture, input_sampler, uv);
@@ -135,25 +139,25 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         pattern = f1;
     }
 
-    // Generate color based on color_mode
+    // Generate effect color based on color_mode
     var effect_color: vec3<f32>;
     if (color_mode == 1) {
         // Rainbow: Use distance for hue
-        effect_color = hsv_to_rgb(vec3<f32>(
+        effect_color = hsv_to_rgb_local(vec3<f32>(
             fract(f1 + time * 0.1),
             0.8,
             pattern
         ));
     } else if (color_mode == 2) {
-        // Original: Modulate original color
+        // Original: Modulate original color by pattern
         effect_color = original.rgb * pattern;
     } else {
         // Grayscale (default)
         effect_color = vec3<f32>(pattern);
     }
 
-    // Blend with original
-    let result = mix(original.rgb, effect_color, intensity);
+    // Apply blend mode
+    let result = apply_blend(original.rgb, effect_color, blend_mode, intensity);
 
     return vec4<f32>(result, original.a);
 }

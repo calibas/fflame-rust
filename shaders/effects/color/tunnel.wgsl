@@ -6,6 +6,8 @@
 //   params[1] = rotation_speed (0-5): Tunnel rotation speed
 //   params[2] = distortion (0-1): Amount of radial distortion
 //   params[3] = time: Current time for animation
+//   params[4] = intensity (0-1): Blend with original
+//   params[5] = blend_mode (0-12): See blend_modes.wgsl for options
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -27,6 +29,8 @@ struct VertexOutput {
 @group(0) @binding(1) var input_sampler: sampler;
 @group(0) @binding(2) var<uniform> effect_params: EffectParams;
 
+// INCLUDE_BLEND_MODES
+
 const PI: f32 = 3.14159265359;
 
 @vertex
@@ -45,6 +49,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let rotation_speed = get_param(1u);
     let distortion = get_param(2u);
     let time = get_param(3u);
+    let intensity = get_param(4u);
+    let blend_mode = i32(get_param(5u));
+
+    let original = textureSample(input_texture, input_sampler, input.uv);
 
     // Center coordinates and correct for aspect ratio
     let aspect = f32(effect_params.width) / f32(effect_params.height);
@@ -52,32 +60,33 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     p.x *= aspect;
 
     // Convert to polar coordinates
-    let angle = atan2(p.y, p.x) / PI;  // -1 to 1
+    let angle = atan2(p.y, p.x) / PI;
     let radius = length(p);
 
     // Avoid division by zero at center
     if (radius < 0.001) {
-        return textureSample(input_texture, input_sampler, input.uv);
+        return original;
     }
 
     // Apply distortion
     let distorted_radius = radius + distortion * sin(angle * PI * 4.0 + time) * 0.1;
 
     // Create tunnel UV coordinates
-    // X = angle (wraps around), Y = 1/radius (creates depth)
     var tunnel_uv = vec2<f32>(
         angle * 0.5 + 0.5 + time * rotation_speed * 0.1,
         1.0 / distorted_radius + time * speed
     );
-
-    // Tile the texture
     tunnel_uv = fract(tunnel_uv);
 
     // Sample with tunnel coordinates
-    let color = textureSample(input_texture, input_sampler, tunnel_uv);
+    let tunnel_color = textureSample(input_texture, input_sampler, tunnel_uv);
 
     // Darken toward center for depth effect
     let depth_fade = smoothstep(0.0, 0.5, radius);
+    let tunnel_rgb = tunnel_color.rgb * depth_fade;
 
-    return vec4<f32>(color.rgb * depth_fade, color.a);
+    // Apply blend mode
+    let result = apply_blend(original.rgb, tunnel_rgb, blend_mode, intensity);
+
+    return vec4<f32>(result, original.a);
 }

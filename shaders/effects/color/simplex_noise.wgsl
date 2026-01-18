@@ -6,7 +6,8 @@
 //   params[1] = scale (0.5-20): Noise frequency
 //   params[2] = octaves (1-6): Number of noise layers (FBM)
 //   params[3] = time: Animation time
-//   params[4] = mode: 0=Overlay, 1=Distort, 2=ColorShift, 3=Mask
+//   params[4] = mode: 0=Color, 1=Distort, 2=Mask
+//   params[5] = blend_mode (0-12): See blend_modes.wgsl for options
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -28,6 +29,8 @@ struct VertexOutput {
 @group(0) @binding(1) var input_sampler: sampler;
 @group(0) @binding(2) var<uniform> effect_params: EffectParams;
 
+// INCLUDE_BLEND_MODES
+
 const PI: f32 = 3.14159265359;
 
 @vertex
@@ -47,17 +50,14 @@ fn hash2(p: vec2<f32>) -> vec2<f32> {
 }
 
 fn simplex_noise(p: vec2<f32>) -> f32 {
-    // Skewing factors for 2D simplex grid
     let F2 = 0.5 * (sqrt(3.0) - 1.0);
     let G2 = (3.0 - sqrt(3.0)) / 6.0;
 
-    // Skew input to get simplex cell
     let s = (p.x + p.y) * F2;
     let i = floor(p + s);
     let t = (i.x + i.y) * G2;
     let x0 = p - (i - t);
 
-    // Determine which simplex we're in
     var i1: vec2<f32>;
     if (x0.x > x0.y) {
         i1 = vec2<f32>(1.0, 0.0);
@@ -68,7 +68,6 @@ fn simplex_noise(p: vec2<f32>) -> f32 {
     let x1 = x0 - i1 + G2;
     let x2 = x0 - 1.0 + 2.0 * G2;
 
-    // Calculate contributions from each corner
     var n0 = 0.0;
     var n1 = 0.0;
     var n2 = 0.0;
@@ -91,7 +90,6 @@ fn simplex_noise(p: vec2<f32>) -> f32 {
         n2 = t2 * t2 * dot(hash2(i + 1.0), x2);
     }
 
-    // Scale to [-1, 1]
     return 70.0 * (n0 + n1 + n2);
 }
 
@@ -100,7 +98,6 @@ fn fbm(p: vec2<f32>, octaves: i32) -> f32 {
     var amplitude = 0.5;
     var pos = p;
 
-    // Rotation matrix to reduce axis-aligned artifacts
     let rot = mat2x2<f32>(0.8, -0.6, 0.6, 0.8);
 
     for (var i = 0; i < octaves; i++) {
@@ -140,6 +137,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let octaves = clamp(i32(get_param(2u)), 1, 6);
     let time = get_param(3u);
     let mode = i32(get_param(4u));
+    let blend_mode = i32(get_param(5u));
 
     let uv = input.uv;
     let original = textureSample(input_texture, input_sampler, uv);
@@ -149,37 +147,29 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let noise = fbm(noise_pos, octaves);
     let noise2 = fbm(noise_pos + vec2<f32>(5.2, 1.3), octaves);
 
-    var result: vec3<f32>;
+    var effect_color: vec3<f32>;
 
     if (mode == 1) {
-        // Distort mode: Use noise to warp UVs
+        // Distort mode: Use noise to warp UVs, return warped image
         let warp = vec2<f32>(noise, noise2) * intensity * 0.1;
         let warped_uv = clamp(uv + warp, vec2<f32>(0.0), vec2<f32>(1.0));
-        result = textureSample(input_texture, input_sampler, warped_uv).rgb;
+        // For distort, we return directly (blend doesn't apply well)
+        return textureSample(input_texture, input_sampler, warped_uv);
     } else if (mode == 2) {
-        // Color shift: Use noise to shift hue
-        let hue_shift = (noise * 0.5 + 0.5) * intensity;
-
-        // Simple RGB to HSV-ish shift
-        let shifted = hsv_to_rgb(vec3<f32>(
-            fract(hue_shift + atan2(original.g - original.b, original.r - original.g) / (2.0 * PI)),
-            1.0,
-            length(original.rgb) / sqrt(3.0)
-        ));
-        result = mix(original.rgb, shifted, intensity);
-    } else if (mode == 3) {
-        // Mask mode: Use noise as alpha mask
+        // Mask mode: Use noise as brightness mask
         let mask = smoothstep(-0.5, 0.5, noise);
-        result = original.rgb * mix(1.0, mask, intensity);
+        effect_color = original.rgb * mask;
     } else {
-        // Overlay mode (default): Blend psychedelic noise colors
-        let noise_color = hsv_to_rgb(vec3<f32>(
+        // Color mode (default): Generate psychedelic noise colors
+        effect_color = hsv_to_rgb(vec3<f32>(
             fract(noise * 0.5 + 0.5 + time * 0.1),
             0.8,
             noise2 * 0.5 + 0.5
         ));
-        result = mix(original.rgb, original.rgb + noise_color * 0.5, intensity);
     }
+
+    // Apply blend mode
+    let result = apply_blend(original.rgb, effect_color, blend_mode, intensity);
 
     return vec4<f32>(result, original.a);
 }

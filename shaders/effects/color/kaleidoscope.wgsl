@@ -5,6 +5,8 @@
 //   params[0] = segments (2-16): Number of symmetric segments
 //   params[1] = rotation (0-360): Rotation offset in degrees
 //   params[2] = zoom (0.1-3.0): Zoom factor
+//   params[3] = intensity (0-1): Blend with original
+//   params[4] = blend_mode (0-12): See blend_modes.wgsl for options
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -26,6 +28,8 @@ struct VertexOutput {
 @group(0) @binding(1) var input_sampler: sampler;
 @group(0) @binding(2) var<uniform> effect_params: EffectParams;
 
+// INCLUDE_BLEND_MODES
+
 const PI: f32 = 3.14159265359;
 const TWO_PI: f32 = 6.28318530718;
 
@@ -40,36 +44,37 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 
 fn kaleidoscope_uv(uv: vec2<f32>, segments: f32, rotation: f32, zoom: f32) -> vec2<f32> {
-    // Center and apply zoom
     var centered = (uv - 0.5) / zoom;
 
-    // Convert to polar coordinates
     let radius = length(centered);
     var angle = atan2(centered.y, centered.x) + rotation;
 
-    // Fold into one segment
     let segment_angle = TWO_PI / segments;
     angle = angle - segment_angle * floor(angle / segment_angle);
 
-    // Mirror within segment for seamless reflection
     if (angle > segment_angle * 0.5) {
         angle = segment_angle - angle;
     }
 
-    // Convert back to cartesian and recenter
     return vec2<f32>(cos(angle), sin(angle)) * radius + 0.5;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let segments = max(2.0, get_param(0u));
-    let rotation = get_param(1u) * PI / 180.0;  // Convert degrees to radians
+    let rotation = get_param(1u) * PI / 180.0;
     let zoom = max(0.1, get_param(2u));
+    let intensity = get_param(3u);
+    let blend_mode = i32(get_param(4u));
+
+    let original = textureSample(input_texture, input_sampler, input.uv);
 
     let kaleido_uv = kaleidoscope_uv(input.uv, segments, rotation, zoom);
-
-    // Clamp UV to valid range for sampling
     let clamped_uv = clamp(kaleido_uv, vec2<f32>(0.001), vec2<f32>(0.999));
+    let kaleido = textureSample(input_texture, input_sampler, clamped_uv);
 
-    return textureSample(input_texture, input_sampler, clamped_uv);
+    // Apply blend mode between original and kaleidoscope
+    let result = apply_blend(original.rgb, kaleido.rgb, blend_mode, intensity);
+
+    return vec4<f32>(result, original.a);
 }
