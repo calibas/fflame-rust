@@ -383,6 +383,195 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
         ],
     });
+
+    // Bilateral Blur - edge-preserving blur
+    registry.register(EffectInfo {
+        name: "bilateral_blur".to_string(),
+        category: EffectCategory::Density,
+        shader_path: "effects/density/bilateral_blur.wgsl".to_string(),
+        parameters: vec![
+            EffectParameter {
+                name: "radius".to_string(),
+                param_type: ParamType::Float,
+                default_value: 3.0,
+                min_value: Some(1.0),
+                max_value: Some(10.0),
+            },
+            EffectParameter {
+                name: "sigma_spatial".to_string(),
+                param_type: ParamType::Float,
+                default_value: 3.0,
+                min_value: Some(1.0),
+                max_value: Some(10.0),
+            },
+            EffectParameter {
+                name: "sigma_range".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.1,
+                min_value: Some(0.05),
+                max_value: Some(0.5),
+            },
+        ],
+    });
+
+    // === Psychedelic Color Effects ===
+
+    // Kaleidoscope - N-fold rotational symmetry
+    registry.register(EffectInfo {
+        name: "kaleidoscope".to_string(),
+        category: EffectCategory::Color,
+        shader_path: "effects/color/kaleidoscope.wgsl".to_string(),
+        parameters: vec![
+            EffectParameter {
+                name: "segments".to_string(),
+                param_type: ParamType::Float,
+                default_value: 6.0,
+                min_value: Some(2.0),
+                max_value: Some(16.0),
+            },
+            EffectParameter {
+                name: "rotation".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(360.0),
+            },
+            EffectParameter {
+                name: "zoom".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.1),
+                max_value: Some(3.0),
+            },
+        ],
+    });
+
+    // Plasma - classic demoscene effect
+    registry.register(EffectInfo {
+        name: "plasma".to_string(),
+        category: EffectCategory::Color,
+        shader_path: "effects/color/plasma.wgsl".to_string(),
+        parameters: vec![
+            EffectParameter {
+                name: "intensity".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.3,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "scale".to_string(),
+                param_type: ParamType::Float,
+                default_value: 3.0,
+                min_value: Some(0.5),
+                max_value: Some(10.0),
+            },
+            EffectParameter {
+                name: "speed".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(10.0),
+            },
+        ],
+    });
+
+    // Tunnel - infinite tunnel effect
+    registry.register(EffectInfo {
+        name: "tunnel".to_string(),
+        category: EffectCategory::Color,
+        shader_path: "effects/color/tunnel.wgsl".to_string(),
+        parameters: vec![
+            EffectParameter {
+                name: "speed".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+            EffectParameter {
+                name: "rotation_speed".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(0.0),
+                max_value: Some(5.0),
+            },
+            EffectParameter {
+                name: "distortion".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+        ],
+    });
+
+    // Sobel Edges - neon edge detection
+    registry.register(EffectInfo {
+        name: "sobel_edges".to_string(),
+        category: EffectCategory::Color,
+        shader_path: "effects/color/sobel_edges.wgsl".to_string(),
+        parameters: vec![
+            EffectParameter {
+                name: "intensity".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(2.0),
+            },
+            EffectParameter {
+                name: "threshold".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.1,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "glow".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "preserve_color".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+        ],
+    });
+
+    // Domain Warp - organic noise distortion
+    registry.register(EffectInfo {
+        name: "domain_warp".to_string(),
+        category: EffectCategory::Color,
+        shader_path: "effects/color/domain_warp.wgsl".to_string(),
+        parameters: vec![
+            EffectParameter {
+                name: "intensity".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.1,
+                min_value: Some(0.0),
+                max_value: Some(0.5),
+            },
+            EffectParameter {
+                name: "scale".to_string(),
+                param_type: ParamType::Float,
+                default_value: 3.0,
+                min_value: Some(0.5),
+                max_value: Some(10.0),
+            },
+            EffectParameter {
+                name: "octaves".to_string(),
+                param_type: ParamType::Float,
+                default_value: 4.0,
+                min_value: Some(1.0),
+                max_value: Some(6.0),
+            },
+        ],
+    });
 }
 
 #[cfg(test)]
@@ -394,7 +583,9 @@ mod tests {
         let registry = global_effect_registry();
         assert!(registry.contains("vignette"));
         assert!(registry.contains("density_blur"));
-        assert!(registry.len() >= 6);
+        assert!(registry.contains("kaleidoscope"));
+        assert!(registry.contains("bilateral_blur"));
+        assert!(registry.len() >= 12);
     }
 
     #[test]

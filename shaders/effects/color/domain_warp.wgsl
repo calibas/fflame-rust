@@ -1,0 +1,111 @@
+// Domain Warp Effect
+//
+// Creates organic flowing distortion using fractal Brownian motion (FBM) noise.
+// Parameters:
+//   params[0] = intensity (0-0.5): Amount of UV distortion
+//   params[1] = scale (0.5-10): Noise frequency
+//   params[2] = octaves (1-6): Number of noise layers
+//   params[3] = time: Animation time
+
+struct EffectParams {
+    params: array<vec4<f32>, 4>,
+    width: u32,
+    height: u32,
+    _padding: vec2<f32>,
+}
+
+fn get_param(index: u32) -> f32 {
+    return effect_params.params[index / 4u][index % 4u];
+}
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@group(0) @binding(0) var input_texture: texture_2d<f32>;
+@group(0) @binding(1) var input_sampler: sampler;
+@group(0) @binding(2) var<uniform> effect_params: EffectParams;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var output: VertexOutput;
+    let x = f32((vertex_index & 1u) << 2u);
+    let y = f32((vertex_index & 2u) << 1u);
+    output.position = vec4<f32>(x - 1.0, 1.0 - y, 0.0, 1.0);
+    output.uv = vec2<f32>(x * 0.5, y * 0.5);
+    return output;
+}
+
+// Simplex-like noise (2D gradient noise)
+fn hash2(p: vec2<f32>) -> vec2<f32> {
+    var n = vec2<f32>(dot(p, vec2<f32>(127.1, 311.7)), dot(p, vec2<f32>(269.5, 183.3)));
+    return fract(sin(n) * 43758.5453) * 2.0 - 1.0;
+}
+
+fn noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+
+    // Cubic interpolation
+    let u = f * f * (3.0 - 2.0 * f);
+
+    let a = dot(hash2(i + vec2<f32>(0.0, 0.0)), f - vec2<f32>(0.0, 0.0));
+    let b = dot(hash2(i + vec2<f32>(1.0, 0.0)), f - vec2<f32>(1.0, 0.0));
+    let c = dot(hash2(i + vec2<f32>(0.0, 1.0)), f - vec2<f32>(0.0, 1.0));
+    let d = dot(hash2(i + vec2<f32>(1.0, 1.0)), f - vec2<f32>(1.0, 1.0));
+
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+fn fbm(p: vec2<f32>, octaves: i32) -> f32 {
+    var value = 0.0;
+    var amplitude = 0.5;
+    var pos = p;
+
+    // Rotation matrix to reduce axis-aligned artifacts
+    let rot = mat2x2<f32>(0.8, -0.6, 0.6, 0.8);
+
+    for (var i = 0; i < octaves; i++) {
+        value += amplitude * noise(pos);
+        pos = rot * pos * 2.02;
+        amplitude *= 0.5;
+    }
+
+    return value;
+}
+
+fn domain_warp(p: vec2<f32>, time: f32, octaves: i32) -> vec2<f32> {
+    // First layer of warping
+    let q = vec2<f32>(
+        fbm(p + vec2<f32>(0.0, 0.0) + time * 0.1, octaves),
+        fbm(p + vec2<f32>(5.2, 1.3) + time * 0.12, octaves)
+    );
+
+    // Second layer of warping (warp the warp)
+    let r = vec2<f32>(
+        fbm(p + 4.0 * q + vec2<f32>(1.7, 9.2), octaves),
+        fbm(p + 4.0 * q + vec2<f32>(8.3, 2.8), octaves)
+    );
+
+    return r;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let intensity = get_param(0u);
+    let scale = max(0.5, get_param(1u));
+    let octaves = clamp(i32(get_param(2u)), 1, 6);
+    let time = get_param(3u);
+
+    // Apply domain warping to UV coordinates
+    let warp = domain_warp(input.uv * scale, time, octaves);
+
+    // Distort UVs
+    let warped_uv = input.uv + warp * intensity;
+
+    // Clamp to valid range
+    let clamped_uv = clamp(warped_uv, vec2<f32>(0.0), vec2<f32>(1.0));
+
+    return textureSample(input_texture, input_sampler, clamped_uv);
+}
