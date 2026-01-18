@@ -1281,6 +1281,7 @@ effects:
       intensity: "Intensity"
       scale: "Scale"
       octaves: "Octaves"
+      time: "Time"
 
   simplex_noise:
     name: "Simplex Noise"
