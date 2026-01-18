@@ -5,8 +5,9 @@
 // Parameters:
 //   params[0] = intensity (0-1): Blend amount with original image
 //   params[1] = scale (0.5-10): Frequency of plasma pattern
-//   params[2] = speed (0-10): Animation speed (use with time uniform)
+//   params[2] = speed (0-10): Animation speed
 //   params[3] = time: Current time for animation
+//   params[4] = blend_mode: 0=Add, 1=Multiply, 2=Overlay, 3=Screen, 4=Color
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -64,6 +65,78 @@ fn plasma_color(v: f32) -> vec3<f32> {
     );
 }
 
+fn luminance(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// Overlay blend: combines multiply and screen
+fn blend_overlay(base: vec3<f32>, blend: vec3<f32>) -> vec3<f32> {
+    return select(
+        2.0 * base * blend,
+        1.0 - 2.0 * (1.0 - base) * (1.0 - blend),
+        base > vec3<f32>(0.5)
+    );
+}
+
+// Screen blend: inverse multiply
+fn blend_screen(base: vec3<f32>, blend: vec3<f32>) -> vec3<f32> {
+    return 1.0 - (1.0 - base) * (1.0 - blend);
+}
+
+// Color blend: use blend hue/saturation on base luminance
+fn rgb_to_hsl(c: vec3<f32>) -> vec3<f32> {
+    let cmax = max(c.r, max(c.g, c.b));
+    let cmin = min(c.r, min(c.g, c.b));
+    let delta = cmax - cmin;
+    let l = (cmax + cmin) * 0.5;
+
+    if (delta < 0.0001) {
+        return vec3<f32>(0.0, 0.0, l);
+    }
+
+    let s = delta / (1.0 - abs(2.0 * l - 1.0));
+    var h: f32;
+    if (cmax == c.r) {
+        h = ((c.g - c.b) / delta) % 6.0;
+    } else if (cmax == c.g) {
+        h = (c.b - c.r) / delta + 2.0;
+    } else {
+        h = (c.r - c.g) / delta + 4.0;
+    }
+    h /= 6.0;
+    if (h < 0.0) { h += 1.0; }
+
+    return vec3<f32>(h, s, l);
+}
+
+fn hsl_to_rgb(hsl: vec3<f32>) -> vec3<f32> {
+    let h = hsl.x;
+    let s = hsl.y;
+    let l = hsl.z;
+
+    let c = (1.0 - abs(2.0 * l - 1.0)) * s;
+    let x = c * (1.0 - abs((h * 6.0) % 2.0 - 1.0));
+    let m = l - c * 0.5;
+
+    var rgb: vec3<f32>;
+    let h6 = h * 6.0;
+    if (h6 < 1.0) { rgb = vec3<f32>(c, x, 0.0); }
+    else if (h6 < 2.0) { rgb = vec3<f32>(x, c, 0.0); }
+    else if (h6 < 3.0) { rgb = vec3<f32>(0.0, c, x); }
+    else if (h6 < 4.0) { rgb = vec3<f32>(0.0, x, c); }
+    else if (h6 < 5.0) { rgb = vec3<f32>(x, 0.0, c); }
+    else { rgb = vec3<f32>(c, 0.0, x); }
+
+    return rgb + m;
+}
+
+fn blend_color(base: vec3<f32>, blend: vec3<f32>) -> vec3<f32> {
+    let base_hsl = rgb_to_hsl(base);
+    let blend_hsl = rgb_to_hsl(blend);
+    // Use blend's hue and saturation, base's luminance
+    return hsl_to_rgb(vec3<f32>(blend_hsl.x, blend_hsl.y, base_hsl.z));
+}
+
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let original = textureSample(input_texture, input_sampler, input.uv);
@@ -72,13 +145,30 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let scale = max(0.5, get_param(1u));
     let speed = get_param(2u);
     let time = get_param(3u) * speed;
+    let blend_mode = i32(get_param(4u));
 
     // Generate plasma
     let v = plasma(input.uv, scale, time);
     let plasma_rgb = plasma_color(v);
 
-    // Blend modes: additive for glow effect
-    let blended = original.rgb + plasma_rgb * intensity;
+    // Apply blend mode
+    var blended: vec3<f32>;
+    if (blend_mode == 1) {
+        // Multiply: darkens image with plasma pattern
+        blended = mix(original.rgb, original.rgb * plasma_rgb, intensity);
+    } else if (blend_mode == 2) {
+        // Overlay: increases contrast with plasma
+        blended = mix(original.rgb, blend_overlay(original.rgb, plasma_rgb), intensity);
+    } else if (blend_mode == 3) {
+        // Screen: lightens image with plasma
+        blended = mix(original.rgb, blend_screen(original.rgb, plasma_rgb), intensity);
+    } else if (blend_mode == 4) {
+        // Color: applies plasma hue to original luminance
+        blended = mix(original.rgb, blend_color(original.rgb, plasma_rgb), intensity);
+    } else {
+        // Default (0): Additive glow
+        blended = original.rgb + plasma_rgb * intensity;
+    }
 
     return vec4<f32>(blended, original.a);
 }

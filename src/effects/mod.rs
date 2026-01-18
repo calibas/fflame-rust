@@ -473,6 +473,20 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(0.0),
                 max_value: Some(10.0),
             },
+            EffectParameter {
+                name: "time".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1000.0),
+            },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0, // 0=Add, 1=Multiply, 2=Overlay, 3=Screen, 4=Color
+                min_value: Some(0.0),
+                max_value: Some(4.0),
+            },
         ],
     });
 
@@ -502,6 +516,13 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "time".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1000.0),
             },
         ],
     });
@@ -572,6 +593,94 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
         ],
     });
+
+    // Simplex Noise - psychedelic noise overlay
+    registry.register(EffectInfo {
+        name: "simplex_noise".to_string(),
+        category: EffectCategory::Color,
+        shader_path: "effects/color/simplex_noise.wgsl".to_string(),
+        parameters: vec![
+            EffectParameter {
+                name: "intensity".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "scale".to_string(),
+                param_type: ParamType::Float,
+                default_value: 5.0,
+                min_value: Some(0.5),
+                max_value: Some(20.0),
+            },
+            EffectParameter {
+                name: "octaves".to_string(),
+                param_type: ParamType::Float,
+                default_value: 4.0,
+                min_value: Some(1.0),
+                max_value: Some(6.0),
+            },
+            EffectParameter {
+                name: "time".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1000.0),
+            },
+            EffectParameter {
+                name: "mode".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0, // 0=Overlay, 1=Distort, 2=ColorShift, 3=Mask
+                min_value: Some(0.0),
+                max_value: Some(3.0),
+            },
+        ],
+    });
+
+    // Worley Noise - cellular patterns
+    registry.register(EffectInfo {
+        name: "worley_noise".to_string(),
+        category: EffectCategory::Color,
+        shader_path: "effects/color/worley_noise.wgsl".to_string(),
+        parameters: vec![
+            EffectParameter {
+                name: "intensity".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.5,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "scale".to_string(),
+                param_type: ParamType::Float,
+                default_value: 8.0,
+                min_value: Some(1.0),
+                max_value: Some(20.0),
+            },
+            EffectParameter {
+                name: "time".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(0.0),
+                max_value: Some(1000.0),
+            },
+            EffectParameter {
+                name: "mode".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0, // 0=Cells, 1=Edges, 2=Organic, 3=Crystal
+                min_value: Some(0.0),
+                max_value: Some(3.0),
+            },
+            EffectParameter {
+                name: "color_mode".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0, // 0=Grayscale, 1=Rainbow, 2=Original
+                min_value: Some(0.0),
+                max_value: Some(2.0),
+            },
+        ],
+    });
 }
 
 #[cfg(test)]
@@ -585,7 +694,9 @@ mod tests {
         assert!(registry.contains("density_blur"));
         assert!(registry.contains("kaleidoscope"));
         assert!(registry.contains("bilateral_blur"));
-        assert!(registry.len() >= 12);
+        assert!(registry.contains("simplex_noise"));
+        assert!(registry.contains("worley_noise"));
+        assert!(registry.len() >= 14);
     }
 
     #[test]
