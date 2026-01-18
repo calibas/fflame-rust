@@ -15,41 +15,95 @@ use egui_wgpu::wgpu;
 /// Embedded effect shaders for WASM builds
 #[cfg(target_arch = "wasm32")]
 mod embedded_shaders {
+    // Common includes
+    pub const BLEND_MODES: &str = include_str!("../../shaders/effects/common/blend_modes.wgsl");
+
     // Color effects
     pub const CHROMATIC_ABERRATION: &str = include_str!("../../shaders/effects/color/chromatic_aberration.wgsl");
+    pub const DOMAIN_WARP: &str = include_str!("../../shaders/effects/color/domain_warp.wgsl");
     pub const FILM_GRAIN: &str = include_str!("../../shaders/effects/color/film_grain.wgsl");
     pub const HUE_CYCLE: &str = include_str!("../../shaders/effects/color/hue_cycle.wgsl");
+    pub const KALEIDOSCOPE: &str = include_str!("../../shaders/effects/color/kaleidoscope.wgsl");
+    pub const PLASMA: &str = include_str!("../../shaders/effects/color/plasma.wgsl");
+    pub const SIMPLEX_NOISE: &str = include_str!("../../shaders/effects/color/simplex_noise.wgsl");
+    pub const SOBEL_EDGES: &str = include_str!("../../shaders/effects/color/sobel_edges.wgsl");
+    pub const TUNNEL: &str = include_str!("../../shaders/effects/color/tunnel.wgsl");
     pub const VIGNETTE: &str = include_str!("../../shaders/effects/color/vignette.wgsl");
+    pub const WORLEY_NOISE: &str = include_str!("../../shaders/effects/color/worley_noise.wgsl");
 
     // Density effects
+    pub const BILATERAL_BLUR: &str = include_str!("../../shaders/effects/density/bilateral_blur.wgsl");
     pub const DENSITY_BLUR: &str = include_str!("../../shaders/effects/density/density_blur.wgsl");
     pub const SHARPEN: &str = include_str!("../../shaders/effects/density/sharpen.wgsl");
+}
+
+/// Load common include file
+fn load_blend_modes() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        embedded_shaders::BLEND_MODES.to_string()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::fs::read_to_string("shaders/effects/common/blend_modes.wgsl")
+            .unwrap_or_else(|e| {
+                log::error!("Failed to load blend_modes.wgsl: {}", e);
+                String::new()
+            })
+    }
+}
+
+/// Process shader includes by replacing markers with include content
+fn process_shader_includes(source: String) -> String {
+    const BLEND_MODES_MARKER: &str = "// INCLUDE_BLEND_MODES";
+
+    if source.contains(BLEND_MODES_MARKER) {
+        let blend_modes = load_blend_modes();
+        source.replace(BLEND_MODES_MARKER, &blend_modes)
+    } else {
+        source
+    }
 }
 
 /// Load effect shader source by path
 /// - WASM: Returns embedded shader source
 /// - Desktop: Loads from filesystem
+/// - Processes include markers (e.g., // INCLUDE_BLEND_MODES)
 fn load_effect_shader(shader_path: &str) -> Result<String, String> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        // Map shader path to embedded source
-        match shader_path {
-            "effects/color/chromatic_aberration.wgsl" => Ok(embedded_shaders::CHROMATIC_ABERRATION.to_string()),
-            "effects/color/film_grain.wgsl" => Ok(embedded_shaders::FILM_GRAIN.to_string()),
-            "effects/color/hue_cycle.wgsl" => Ok(embedded_shaders::HUE_CYCLE.to_string()),
-            "effects/color/vignette.wgsl" => Ok(embedded_shaders::VIGNETTE.to_string()),
-            "effects/density/density_blur.wgsl" => Ok(embedded_shaders::DENSITY_BLUR.to_string()),
-            "effects/density/sharpen.wgsl" => Ok(embedded_shaders::SHARPEN.to_string()),
-            _ => Err(format!("Unknown effect shader: {}", shader_path)),
+    let source = {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Map shader path to embedded source
+            match shader_path {
+                "effects/color/chromatic_aberration.wgsl" => Ok(embedded_shaders::CHROMATIC_ABERRATION.to_string()),
+                "effects/color/domain_warp.wgsl" => Ok(embedded_shaders::DOMAIN_WARP.to_string()),
+                "effects/color/film_grain.wgsl" => Ok(embedded_shaders::FILM_GRAIN.to_string()),
+                "effects/color/hue_cycle.wgsl" => Ok(embedded_shaders::HUE_CYCLE.to_string()),
+                "effects/color/kaleidoscope.wgsl" => Ok(embedded_shaders::KALEIDOSCOPE.to_string()),
+                "effects/color/plasma.wgsl" => Ok(embedded_shaders::PLASMA.to_string()),
+                "effects/color/simplex_noise.wgsl" => Ok(embedded_shaders::SIMPLEX_NOISE.to_string()),
+                "effects/color/sobel_edges.wgsl" => Ok(embedded_shaders::SOBEL_EDGES.to_string()),
+                "effects/color/tunnel.wgsl" => Ok(embedded_shaders::TUNNEL.to_string()),
+                "effects/color/vignette.wgsl" => Ok(embedded_shaders::VIGNETTE.to_string()),
+                "effects/color/worley_noise.wgsl" => Ok(embedded_shaders::WORLEY_NOISE.to_string()),
+                "effects/density/bilateral_blur.wgsl" => Ok(embedded_shaders::BILATERAL_BLUR.to_string()),
+                "effects/density/density_blur.wgsl" => Ok(embedded_shaders::DENSITY_BLUR.to_string()),
+                "effects/density/sharpen.wgsl" => Ok(embedded_shaders::SHARPEN.to_string()),
+                _ => Err(format!("Unknown effect shader: {}", shader_path)),
+            }
         }
-    }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let full_path = format!("shaders/{}", shader_path);
-        std::fs::read_to_string(&full_path)
-            .map_err(|e| format!("Failed to load effect shader {}: {}", full_path, e))
-    }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let full_path = format!("shaders/{}", shader_path);
+            std::fs::read_to_string(&full_path)
+                .map_err(|e| format!("Failed to load effect shader {}: {}", full_path, e))
+        }
+    };
+
+    // Process includes
+    source.map(process_shader_includes)
 }
 use wgpu::{
     BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,

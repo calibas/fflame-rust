@@ -264,6 +264,13 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(0.0),
                 max_value: Some(1.0),
             },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0, // Normal
+                min_value: Some(0.0),
+                max_value: Some(12.0),
+            },
         ],
     });
 
@@ -286,6 +293,13 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(1000.0),
+            },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 4.0, // Overlay (good for grain)
+                min_value: Some(0.0),
+                max_value: Some(12.0),
             },
         ],
     });
@@ -310,6 +324,20 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: None,
                 max_value: None,
             },
+            EffectParameter {
+                name: "intensity".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0, // Normal
+                min_value: Some(0.0),
+                max_value: Some(12.0),
+            },
         ],
     });
 
@@ -325,6 +353,20 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(360.0),
+            },
+            EffectParameter {
+                name: "intensity".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0, // Normal
+                min_value: Some(0.0),
+                max_value: Some(12.0),
             },
         ],
     });
@@ -443,6 +485,20 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(0.1),
                 max_value: Some(3.0),
             },
+            EffectParameter {
+                name: "intensity".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0, // Normal
+                min_value: Some(0.0),
+                max_value: Some(12.0),
+            },
         ],
     });
 
@@ -482,10 +538,10 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0, // 0=Add, 1=Multiply, 2=Overlay, 3=Screen, 4=Color
+                param_type: ParamType::Integer,
+                default_value: 1.0, // Add (classic plasma look)
                 min_value: Some(0.0),
-                max_value: Some(4.0),
+                max_value: Some(12.0),
             },
         ],
     });
@@ -524,6 +580,20 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(0.0),
                 max_value: Some(1000.0),
             },
+            EffectParameter {
+                name: "intensity".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0, // Normal
+                min_value: Some(0.0),
+                max_value: Some(12.0),
+            },
         ],
     });
 
@@ -561,6 +631,13 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(0.0),
                 max_value: Some(1.0),
             },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 1.0, // Add (good for neon glow)
+                min_value: Some(0.0),
+                max_value: Some(12.0),
+            },
         ],
     });
 
@@ -597,6 +674,13 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 0.0,
                 min_value: Some(0.0),
                 max_value: Some(1000.0),
+            },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0, // Normal
+                min_value: Some(0.0),
+                max_value: Some(12.0),
             },
         ],
     });
@@ -637,10 +721,17 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "mode".to_string(),
-                param_type: ParamType::Float,
-                default_value: 0.0, // 0=Overlay, 1=Distort, 2=ColorShift, 3=Mask
+                param_type: ParamType::Integer,
+                default_value: 0.0, // 0=Color, 1=Distort, 2=Mask
                 min_value: Some(0.0),
-                max_value: Some(3.0),
+                max_value: Some(2.0),
+            },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 4.0, // Overlay (good for noise)
+                min_value: Some(0.0),
+                max_value: Some(12.0),
             },
         ],
     });
@@ -674,17 +765,24 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "mode".to_string(),
-                param_type: ParamType::Float,
+                param_type: ParamType::Integer,
                 default_value: 0.0, // 0=Cells, 1=Edges, 2=Organic, 3=Crystal
                 min_value: Some(0.0),
                 max_value: Some(3.0),
             },
             EffectParameter {
                 name: "color_mode".to_string(),
-                param_type: ParamType::Float,
+                param_type: ParamType::Integer,
                 default_value: 1.0, // 0=Grayscale, 1=Rainbow, 2=Original
                 min_value: Some(0.0),
                 max_value: Some(2.0),
+            },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 4.0, // Overlay
+                min_value: Some(0.0),
+                max_value: Some(12.0),
             },
         ],
     });

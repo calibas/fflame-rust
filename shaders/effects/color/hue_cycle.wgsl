@@ -1,20 +1,19 @@
-// Hue Shift Effect
+// Hue Cycle Effect
 //
 // Rotates the hue of all colors by a fixed amount.
 // Animation system can keyframe the offset parameter for animated rotation.
 // Parameters:
 //   params[0] = offset (0-360): Hue rotation in degrees
+//   params[1] = intensity (0-1): Blend with original
+//   params[2] = blend_mode (0-12): See blend_modes.wgsl for options
 
 struct EffectParams {
-    // Parameters packed into vec4s for uniform buffer alignment
-    // Access as: params[i/4][i%4] or use helper below
     params: array<vec4<f32>, 4>,
     width: u32,
     height: u32,
     _padding: vec2<f32>,
 }
 
-// Helper to get parameter by index
 fn get_param(index: u32) -> f32 {
     return effect_params.params[index / 4u][index % 4u];
 }
@@ -28,21 +27,7 @@ struct VertexOutput {
 @group(0) @binding(1) var input_sampler: sampler;
 @group(0) @binding(2) var<uniform> effect_params: EffectParams;
 
-// Fullscreen triangle vertex shader
-@vertex
-fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    var output: VertexOutput;
-
-    // Generate fullscreen triangle (no vertex buffer needed)
-    // Triangle covers [-1, 3] x [-1, 3] in clip space
-    let x = f32((vertex_index & 1u) << 2u);
-    let y = f32((vertex_index & 2u) << 1u);
-
-    output.position = vec4<f32>(x - 1.0, 1.0 - y, 0.0, 1.0);
-    output.uv = vec2<f32>(x * 0.5, y * 0.5);
-
-    return output;
-}
+// INCLUDE_BLEND_MODES
 
 // Convert RGB to HSV
 fn rgb_to_hsv(rgb: vec3<f32>) -> vec3<f32> {
@@ -102,21 +87,34 @@ fn hsv_to_rgb(hsv: vec3<f32>) -> vec3<f32> {
     }
 }
 
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var output: VertexOutput;
+    let x = f32((vertex_index & 1u) << 2u);
+    let y = f32((vertex_index & 2u) << 1u);
+    output.position = vec4<f32>(x - 1.0, 1.0 - y, 0.0, 1.0);
+    output.uv = vec2<f32>(x * 0.5, y * 0.5);
+    return output;
+}
+
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // Sample input texture
-    let color = textureSample(input_texture, input_sampler, input.uv);
-
-    // Get hue offset in degrees
     let offset = get_param(0u);
+    let intensity = get_param(1u);
+    let blend_mode = i32(get_param(2u));
+
+    let original = textureSample(input_texture, input_sampler, input.uv);
 
     // Convert degrees to 0-1 range for hue rotation
     let rotation = offset / 360.0;
 
     // Convert to HSV, rotate hue, convert back
-    var hsv = rgb_to_hsv(color.rgb);
+    var hsv = rgb_to_hsv(original.rgb);
     hsv.x = fract(hsv.x + rotation);
-    let rgb = hsv_to_rgb(hsv);
+    let rotated = hsv_to_rgb(hsv);
 
-    return vec4<f32>(rgb, color.a);
+    // Apply blend mode
+    let result = apply_blend(original.rgb, rotated, blend_mode, intensity);
+
+    return vec4<f32>(result, original.a);
 }

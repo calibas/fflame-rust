@@ -6,6 +6,7 @@
 //   params[1] = scale (0.5-10): Noise frequency
 //   params[2] = octaves (1-6): Number of noise layers
 //   params[3] = time: Animation time
+//   params[4] = blend_mode (0-12): See blend_modes.wgsl for options
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -27,6 +28,8 @@ struct VertexOutput {
 @group(0) @binding(1) var input_sampler: sampler;
 @group(0) @binding(2) var<uniform> effect_params: EffectParams;
 
+// INCLUDE_BLEND_MODES
+
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     var output: VertexOutput;
@@ -47,7 +50,6 @@ fn noise(p: vec2<f32>) -> f32 {
     let i = floor(p);
     let f = fract(p);
 
-    // Cubic interpolation
     let u = f * f * (3.0 - 2.0 * f);
 
     let a = dot(hash2(i + vec2<f32>(0.0, 0.0)), f - vec2<f32>(0.0, 0.0));
@@ -63,7 +65,6 @@ fn fbm(p: vec2<f32>, octaves: i32) -> f32 {
     var amplitude = 0.5;
     var pos = p;
 
-    // Rotation matrix to reduce axis-aligned artifacts
     let rot = mat2x2<f32>(0.8, -0.6, 0.6, 0.8);
 
     for (var i = 0; i < octaves; i++) {
@@ -75,14 +76,12 @@ fn fbm(p: vec2<f32>, octaves: i32) -> f32 {
     return value;
 }
 
-fn domain_warp(p: vec2<f32>, time: f32, octaves: i32) -> vec2<f32> {
-    // First layer of warping
+fn domain_warp_calc(p: vec2<f32>, time: f32, octaves: i32) -> vec2<f32> {
     let q = vec2<f32>(
         fbm(p + vec2<f32>(0.0, 0.0) + time * 0.1, octaves),
         fbm(p + vec2<f32>(5.2, 1.3) + time * 0.12, octaves)
     );
 
-    // Second layer of warping (warp the warp)
     let r = vec2<f32>(
         fbm(p + 4.0 * q + vec2<f32>(1.7, 9.2), octaves),
         fbm(p + 4.0 * q + vec2<f32>(8.3, 2.8), octaves)
@@ -97,15 +96,17 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let scale = max(0.5, get_param(1u));
     let octaves = clamp(i32(get_param(2u)), 1, 6);
     let time = get_param(3u);
+    let blend_mode = i32(get_param(4u));
+
+    let original = textureSample(input_texture, input_sampler, input.uv);
 
     // Apply domain warping to UV coordinates
-    let warp = domain_warp(input.uv * scale, time, octaves);
+    let warp = domain_warp_calc(input.uv * scale, time, octaves);
+    let warped_uv = clamp(input.uv + warp * intensity, vec2<f32>(0.0), vec2<f32>(1.0));
+    let warped = textureSample(input_texture, input_sampler, warped_uv);
 
-    // Distort UVs
-    let warped_uv = input.uv + warp * intensity;
+    // Apply blend mode between original and warped
+    let result = apply_blend(original.rgb, warped.rgb, blend_mode, intensity * 2.0);
 
-    // Clamp to valid range
-    let clamped_uv = clamp(warped_uv, vec2<f32>(0.0), vec2<f32>(1.0));
-
-    return textureSample(input_texture, input_sampler, clamped_uv);
+    return vec4<f32>(result, original.a);
 }
