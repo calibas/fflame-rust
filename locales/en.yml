@@ -1235,6 +1235,50 @@ effects:
       amount: "Amount"
       radius: "Radius"
 
+  bilateral_blur:
+    name: "Bilateral Blur"
+    params:
+      radius: "Radius"
+      sigma_spatial: "Spatial Sigma"
+      sigma_range: "Range Sigma"
+
+  # Psychedelic Effects
+  kaleidoscope:
+    name: "Kaleidoscope"
+    params:
+      segments: "Segments"
+      rotation: "Rotation"
+      zoom: "Zoom"
+
+  plasma:
+    name: "Plasma"
+    params:
+      intensity: "Intensity"
+      scale: "Scale"
+      speed: "Speed"
+
+  tunnel:
+    name: "Tunnel"
+    params:
+      speed: "Speed"
+      rotation_speed: "Rotation Speed"
+      distortion: "Distortion"
+
+  sobel_edges:
+    name: "Edge Glow"
+    params:
+      intensity: "Intensity"
+      threshold: "Threshold"
+      glow: "Glow"
+      preserve_color: "Preserve Color"
+
+  domain_warp:
+    name: "Domain Warp"
+    params:
+      intensity: "Intensity"
+      scale: "Scale"
+      octaves: "Octaves"
+
 # Errors
 errors:
   file_not_found: "File not found"
