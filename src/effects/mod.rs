@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use rust_i18n::t;
 
 use crate::variations::ParamType;
 
@@ -27,9 +28,6 @@ pub enum EffectCategory {
 pub struct EffectParameter {
     /// Parameter name (e.g., "intensity", "radius")
     pub name: String,
-
-    /// Display name for UI (e.g., "Intensity", "Radius")
-    pub display_name: String,
 
     /// Parameter type (reuse from variations)
     pub param_type: ParamType,
@@ -50,9 +48,6 @@ pub struct EffectInfo {
     /// Unique name (e.g., "vignette", "density_blur")
     pub name: String,
 
-    /// Display name for UI (e.g., "Vignette", "Density Blur")
-    pub display_name: String,
-
     /// Category determines pipeline position
     pub category: EffectCategory,
 
@@ -64,6 +59,18 @@ pub struct EffectInfo {
 }
 
 impl EffectInfo {
+    /// Get the translated display name for this effect
+    pub fn translated_name(&self) -> String {
+        let key = format!("effects.{}.name", self.name);
+        t!(&key).to_string()
+    }
+
+    /// Get the translated display name for a parameter
+    pub fn translated_param_name(&self, param_name: &str) -> String {
+        let key = format!("effects.{}.params.{}", self.name, param_name);
+        t!(&key).to_string()
+    }
+
     /// Get the default value for a parameter by name
     pub fn get_param_default(&self, param_name: &str) -> Option<f32> {
         self.parameters
@@ -233,13 +240,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Vignette - darken edges
     registry.register(EffectInfo {
         name: "vignette".to_string(),
-        display_name: "Vignette".to_string(),
         category: EffectCategory::Color,
         shader_path: "effects/color/vignette.wgsl".to_string(),
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
-                display_name: "Intensity".to_string(),
                 param_type: ParamType::Float,
                 default_value: 0.5,
                 min_value: Some(0.0),
@@ -247,7 +252,6 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "radius".to_string(),
-                display_name: "Radius".to_string(),
                 param_type: ParamType::Float,
                 default_value: 0.5,
                 min_value: Some(0.0),
@@ -255,7 +259,6 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "softness".to_string(),
-                display_name: "Softness".to_string(),
                 param_type: ParamType::Float,
                 default_value: 0.5,
                 min_value: Some(0.0),
@@ -267,13 +270,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Film Grain - per-pixel random noise
     registry.register(EffectInfo {
         name: "film_grain".to_string(),
-        display_name: "Film Grain".to_string(),
         category: EffectCategory::Color,
         shader_path: "effects/color/film_grain.wgsl".to_string(),
         parameters: vec![
             EffectParameter {
                 name: "intensity".to_string(),
-                display_name: "Intensity".to_string(),
                 param_type: ParamType::Float,
                 default_value: 0.1,
                 min_value: Some(0.0),
@@ -281,7 +282,6 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "seed".to_string(),
-                display_name: "Seed".to_string(),
                 param_type: ParamType::Float,
                 default_value: 0.0,
                 min_value: Some(0.0),
@@ -293,13 +293,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Chromatic Aberration - RGB channel offset
     registry.register(EffectInfo {
         name: "chromatic_aberration".to_string(),
-        display_name: "Chromatic Aberration".to_string(),
         category: EffectCategory::Color,
         shader_path: "effects/color/chromatic_aberration.wgsl".to_string(),
         parameters: vec![
             EffectParameter {
                 name: "amount".to_string(),
-                display_name: "Amount".to_string(),
                 param_type: ParamType::Float,
                 default_value: 2.0,
                 min_value: Some(0.0),
@@ -307,7 +305,6 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "radial".to_string(),
-                display_name: "Radial".to_string(),
                 param_type: ParamType::Boolean,
                 default_value: 1.0, // true
                 min_value: None,
@@ -319,13 +316,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Hue Shift - static hue rotation (animate via keyframes)
     registry.register(EffectInfo {
         name: "hue_shift".to_string(),
-        display_name: "Hue Shift".to_string(),
         category: EffectCategory::Color,
         shader_path: "effects/color/hue_cycle.wgsl".to_string(),
         parameters: vec![
             EffectParameter {
                 name: "offset".to_string(),
-                display_name: "Hue Offset".to_string(),
                 param_type: ParamType::Angle,
                 default_value: 0.0,
                 min_value: Some(0.0),
@@ -339,13 +334,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Density Blur - blur weighted by density
     registry.register(EffectInfo {
         name: "density_blur".to_string(),
-        display_name: "Density Blur".to_string(),
         category: EffectCategory::Density,
         shader_path: "effects/density/density_blur.wgsl".to_string(),
         parameters: vec![
             EffectParameter {
                 name: "radius".to_string(),
-                display_name: "Radius".to_string(),
                 param_type: ParamType::Float,
                 default_value: 3.0,
                 min_value: Some(0.0),
@@ -353,7 +346,6 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "threshold".to_string(),
-                display_name: "Density Threshold".to_string(),
                 param_type: ParamType::Float,
                 default_value: 0.25,
                 min_value: Some(0.0),
@@ -361,7 +353,6 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "falloff".to_string(),
-                display_name: "Falloff".to_string(),
                 param_type: ParamType::Float,
                 default_value: 0.5,
                 min_value: Some(0.0),
@@ -373,13 +364,11 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
     // Sharpen - detail enhancement
     registry.register(EffectInfo {
         name: "sharpen".to_string(),
-        display_name: "Sharpen".to_string(),
         category: EffectCategory::Density,
         shader_path: "effects/density/sharpen.wgsl".to_string(),
         parameters: vec![
             EffectParameter {
                 name: "amount".to_string(),
-                display_name: "Amount".to_string(),
                 param_type: ParamType::Float,
                 default_value: 1.0,
                 min_value: Some(0.0),
@@ -387,7 +376,6 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
             EffectParameter {
                 name: "radius".to_string(),
-                display_name: "Radius".to_string(),
                 param_type: ParamType::Float,
                 default_value: 1.0,
                 min_value: Some(0.5),

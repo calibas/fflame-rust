@@ -244,16 +244,17 @@ fn add_effect_params(
     registry: &crate::effects::EffectRegistry,
 ) {
     if let Some(info) = registry.get(&effect.effect_type) {
+        let effect_name = info.translated_name();
         // Add enabled toggle (note: "Enabled" with capital E to match ConfigPath parsing)
         params.push((
-            format!("{} → Enabled", info.display_name),
+            format!("{} → Enabled", effect_name),
             format!("{}.{}.Enabled", prefix, index),
         ));
 
         // Add each parameter
         for param_def in &info.parameters {
             params.push((
-                format!("{} → {}", info.display_name, param_def.display_name),
+                format!("{} → {}", effect_name, info.translated_param_name(&param_def.name)),
                 format!("{}.{}.{}", prefix, index, param_def.name),
             ));
         }

@@ -1194,6 +1194,47 @@ path_overlay:
   preview_title: "Preview (click to select)"
   close_hint: "Right-click elsewhere to close"
 
+# Effects (Post-Processing)
+effects:
+  # Color Effects
+  vignette:
+    name: "Vignette"
+    params:
+      intensity: "Intensity"
+      radius: "Radius"
+      softness: "Softness"
+
+  film_grain:
+    name: "Film Grain"
+    params:
+      intensity: "Intensity"
+      seed: "Seed"
+
+  chromatic_aberration:
+    name: "Chromatic Aberration"
+    params:
+      amount: "Amount"
+      radial: "Radial"
+
+  hue_shift:
+    name: "Hue Shift"
+    params:
+      offset: "Hue Offset"
+
+  # Density Effects
+  density_blur:
+    name: "Density Blur"
+    params:
+      radius: "Radius"
+      threshold: "Density Threshold"
+      falloff: "Falloff"
+
+  sharpen:
+    name: "Sharpen"
+    params:
+      amount: "Amount"
+      radius: "Radius"
+
 # Errors
 errors:
   file_not_found: "File not found"

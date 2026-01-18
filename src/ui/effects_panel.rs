@@ -70,7 +70,7 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
                                     param_def.min_value.unwrap_or(0.0)
                                         ..=param_def.max_value.unwrap_or(1.0),
                                 )
-                                .text(&param_def.display_name);
+                                .text(info.translated_param_name(&param_def.name));
 
                                 if ui.add(slider).changed() {
                                     if let Err(e) = config_manager.update_param(
@@ -127,13 +127,14 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
             } else {
                 // Show buttons for each available effect
                 for info in available {
-                    if ui.button(&info.display_name).clicked() {
+                    let translated = info.translated_name();
+                    if ui.button(&translated).clicked() {
                         let effect = EffectInstance::new(&info.name);
                         let index = config_manager.active_config().color_effects.len();
                         let change = ConfigChange::add_color_effect_snapshot(
                             index,
                             effect,
-                            format!("Add Effect: {}", info.display_name),
+                            format!("Add Effect: {}", translated),
                         );
                         if let Err(e) = config_manager.apply_structural_change(change) {
                             log::error!("Failed to add effect: {}", e);
@@ -211,7 +212,7 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
                                         param_def.min_value.unwrap_or(0.0)
                                             ..=param_def.max_value.unwrap_or(1.0),
                                     )
-                                    .text(&param_def.display_name);
+                                    .text(info.translated_param_name(&param_def.name));
 
                                     if ui.add(slider).changed() {
                                         if let Err(e) = config_manager.update_param(
@@ -251,13 +252,14 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
             ui.horizontal(|ui| {
                 ui.label("Add effect:");
                 for info in density_effects_available {
-                    if ui.button(&info.display_name).clicked() {
+                    let translated = info.translated_name();
+                    if ui.button(&translated).clicked() {
                         let effect = EffectInstance::new(&info.name);
                         let index = config_manager.active_config().density_effects.len();
                         let change = ConfigChange::add_density_effect_snapshot(
                             index,
                             effect,
-                            format!("Add Effect: {}", info.display_name),
+                            format!("Add Effect: {}", translated),
                         );
                         if let Err(e) = config_manager.apply_structural_change(change) {
                             log::error!("Failed to add effect: {}", e);
