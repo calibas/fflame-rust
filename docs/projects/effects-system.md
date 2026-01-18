@@ -41,13 +41,13 @@ Operate on final RGB colors after tonemapping.
 
 ### Effect Registry
 
-Effects are registered by string name (like variations), not hardcoded enum variants:
+Effects are registered by string name (like variations), not hardcoded enum variants.
+Display names use the i18n system (`effects.{name}.name` keys in locales/*.yml).
 
 ```rust
 /// Metadata for a registered effect
 pub struct EffectInfo {
     pub name: String,           // "density_blur", "vignette", etc.
-    pub display_name: String,   // "Density Blur", "Vignette"
     pub category: EffectCategory,
     pub shader_path: String,    // "shaders/effects/density_blur.wgsl"
     pub parameters: Vec<EffectParameter>,
@@ -60,8 +60,7 @@ pub enum EffectCategory {
 
 pub struct EffectParameter {
     pub name: String,
-    pub display_name: String,
-    pub param_type: ParamType,  // Float, Integer, Bool
+    pub param_type: ParamType,  // Float, Integer, Bool, Angle
     pub default_value: f32,
     pub min_value: Option<f32>,
     pub max_value: Option<f32>,
@@ -341,30 +340,84 @@ struct EffectParams {
 
 ## Implementation Phases
 
-### Phase 1: Infrastructure
-- [ ] Create `EffectRegistry` with registration API
-- [ ] Add `EffectInstance` to FractalConfig
-- [ ] Add ConfigPath variants for effects
-- [ ] Create effect chain runner with ping-pong textures
-- [ ] Lazy texture allocation
+### Phase 1: Infrastructure ✅
+- [x] Create `EffectRegistry` with registration API
+- [x] Add `EffectInstance` to FractalConfig
+- [x] Add ConfigPath variants for effects
+- [x] Create effect chain runner with ping-pong textures
+- [x] Lazy texture allocation
 
-### Phase 2: First Effects
-- [ ] Implement `vignette` (simple color effect)
-- [ ] Implement `density_blur` (density effect)
-- [ ] Basic UI for adding/configuring effects
-- [ ] Effect enable/disable
+### Phase 2: First Effects ✅
+- [x] Implement `vignette` (simple color effect)
+- [x] Implement `density_blur` (density effect)
+- [x] Basic UI for adding/configuring effects
+- [x] Effect enable/disable
 
-### Phase 3: Full Suite
-- [ ] Remaining color effects (bloom, hue_cycle, film_grain, etc.)
-- [ ] Remaining density effects (sharpen, density_edge)
-- [ ] Effect reordering UI
+### Phase 3: Full Suite (In Progress)
+- [x] Color effects: hue_shift, film_grain, chromatic_aberration
+- [x] Density effects: sharpen
+- [x] i18n support for effect names and parameters
+- [ ] Effect reordering UI (drag-and-drop or up/down buttons)
 - [ ] Effect presets
+
+### Phase 3b: New Single-Pass Effects
+Based on analysis of [new-shaders.md](new-shaders.md), these can be implemented with current architecture:
+
+**Color Effects (single-pass fragment shaders):**
+- [ ] `kaleidoscope` - N-fold rotational symmetry via polar coordinate folding
+- [ ] `plasma` - Classic demoscene summed sinusoids effect
+- [ ] `tunnel` - Polar coordinate texture mapping
+- [ ] `sobel_edges` - Edge detection with neon glow aesthetic
+- [ ] `domain_warp` - Organic flowing distortion using FBM noise
+
+**Density Effects:**
+- [ ] `bilateral_blur` - Edge-preserving blur (better quality than Gaussian)
 
 ### Phase 4: Polish
 - [ ] LUT library for color_grade
 - [ ] Multi-pass effects (bloom with separate blur passes)
 - [ ] Animation timeline integration
 - [ ] Effect import/export
+
+---
+
+## Shader Compatibility Analysis
+
+Based on review of [new-shaders.md](new-shaders.md), here's what our current single-pass fragment shader architecture can support:
+
+### ✅ Can Implement Now (Single-Pass)
+
+| Effect | Category | Description |
+|--------|----------|-------------|
+| Bilateral Filtering | Density | Edge-preserving blur, O(n²) per pixel |
+| Kaleidoscope | Color | UV manipulation, very cheap |
+| Domain Warping | Color | Organic distortion using FBM |
+| Simplex/Worley Noise | Color | Procedural overlays/distortions |
+| Sobel Edge Detection | Color | Neon outline effect |
+| Plasma | Color | Classic demoscene effect |
+| Tunnel | Color | Polar coordinate warp |
+| Mandelbrot/Julia Overlay | Color | Fractal blend/overlay |
+
+### ⚠️ Partial Implementation Possible
+
+| Effect | What Works | Limitation |
+|--------|-----------|------------|
+| Bloom | Brightness extraction | Full blur needs multi-pass |
+| IQ Cosine Palette | Color remapping | Already have palette system |
+
+### ❌ Requires Architecture Changes
+
+| Effect | Reason |
+|--------|--------|
+| Gaussian Splatting | Needs vertex shader + point data pipeline |
+| Temporal Reprojection | Needs previous frame history buffer |
+| SVGF | 5-7 passes with variance tracking |
+| Guided Filtering | 3 passes |
+| Anisotropic Diffusion | 10-100+ iterations |
+| Feedback Effects | Ping-pong with previous frame |
+| Reaction-Diffusion | 10-50 compute iterations per frame |
+
+---
 
 ## Open Questions
 
