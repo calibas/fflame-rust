@@ -4,7 +4,7 @@
 //! All export paths (CLI, WASM, thumbnails, video) should use this API to ensure
 //! consistent behavior and reduce code duplication.
 
-use egui_wgpu::wgpu::{CommandEncoderDescriptor, Device, Queue, TextureFormat};
+use egui_wgpu::wgpu::{CommandEncoderDescriptor, Device, PollType, Queue, TextureFormat};
 
 use crate::config::FractalConfig;
 use crate::renderer::compute_kernel::FlameRenderer;
@@ -264,6 +264,13 @@ pub async fn render(
     }
 
     log::info!("Render: Render loop complete, total_rendered={}", total_rendered);
+
+    // Ensure all GPU work completes before post-processing
+    // This is critical for larger resolutions where work takes longer
+    let _ = device.poll(PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    });
 
     // Set transparent mode if requested
     if job.transparent {
