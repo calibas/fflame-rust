@@ -1253,10 +1253,11 @@ effects:
     name: "Kaleidoscope"
     params:
       segments: "Segments"
-      rotation: "Rotation"
+      rotation: "Source Angle"
       zoom: "Zoom"
       intensity: "Intensity"
       blend_mode: "Blend Mode"
+      square_mode: "Square Mode"
 
   plasma:
     name: "Plasma"
