@@ -8,6 +8,7 @@
 //   params[3] = time: Animation time
 //   params[4] = mode: 0=Color, 1=Distort, 2=Mask
 //   params[5] = blend_mode (0-12): See blend_modes.wgsl for options
+//   params[6] = direction (0-360): Direction of apparent motion in degrees
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -138,12 +139,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let time = get_param(3u);
     let mode = i32(get_param(4u));
     let blend_mode = i32(get_param(5u));
+    let direction = get_param(6u) * PI / 180.0;
 
     let uv = input.uv;
     let original = textureSample(input_texture, input_sampler, uv);
 
-    // Generate animated noise
-    let noise_pos = uv * scale + vec2<f32>(time * 0.1, time * 0.07);
+    // Generate animated noise with directional movement
+    let time_offset = vec2<f32>(cos(direction), sin(direction)) * time * 0.1;
+    let noise_pos = uv * scale + time_offset;
     let noise = fbm(noise_pos, octaves);
     let noise2 = fbm(noise_pos + vec2<f32>(5.2, 1.3), octaves);
 

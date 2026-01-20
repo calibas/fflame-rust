@@ -7,6 +7,9 @@
 //   params[2] = octaves (1-6): Number of noise layers
 //   params[3] = time: Animation time
 //   params[4] = blend_mode (0-12): See blend_modes.wgsl for options
+//   params[5] = direction (0-360): Direction of apparent motion in degrees
+
+const PI: f32 = 3.14159265359;
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -76,10 +79,10 @@ fn fbm(p: vec2<f32>, octaves: i32) -> f32 {
     return value;
 }
 
-fn domain_warp_calc(p: vec2<f32>, time: f32, octaves: i32) -> vec2<f32> {
+fn domain_warp_calc(p: vec2<f32>, time_offset: vec2<f32>, octaves: i32) -> vec2<f32> {
     let q = vec2<f32>(
-        fbm(p + vec2<f32>(0.0, 0.0) + time * 0.1, octaves),
-        fbm(p + vec2<f32>(5.2, 1.3) + time * 0.12, octaves)
+        fbm(p + vec2<f32>(0.0, 0.0) + time_offset, octaves),
+        fbm(p + vec2<f32>(5.2, 1.3) + time_offset * 1.2, octaves)
     );
 
     let r = vec2<f32>(
@@ -97,11 +100,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let octaves = clamp(i32(get_param(2u)), 1, 6);
     let time = get_param(3u);
     let blend_mode = i32(get_param(4u));
+    let direction = get_param(5u) * PI / 180.0;
 
     let original = textureSample(input_texture, input_sampler, input.uv);
 
+    // Compute directional time offset
+    let time_offset = vec2<f32>(cos(direction), sin(direction)) * time * 0.1;
+
     // Apply domain warping to UV coordinates
-    let warp = domain_warp_calc(input.uv * scale, time, octaves);
+    let warp = domain_warp_calc(input.uv * scale, time_offset, octaves);
     let warped_uv = clamp(input.uv + warp * intensity, vec2<f32>(0.0), vec2<f32>(1.0));
     let warped = textureSample(input_texture, input_sampler, warped_uv);
 
