@@ -10,7 +10,8 @@
       "Bash(cargo doc:*)",
       "Bash(git log:*)",
       "Bash(Select-Object -Last 30)",
-      "Bash(./build-wasm.bat)"
+      "Bash(./build-wasm.bat)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

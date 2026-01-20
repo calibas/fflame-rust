@@ -119,6 +119,24 @@ pub enum ConfigPath {
     RenderMode,
     PerspectiveStrength,
 
+    // ===== Effects (post-processing, no iteration reset needed) =====
+    /// Enable/disable a density effect
+    DensityEffectEnabled { index: usize },
+    /// Parameter value for a density effect
+    DensityEffectParam { index: usize, param: String },
+    /// Enable/disable a color effect
+    ColorEffectEnabled { index: usize },
+    /// Parameter value for a color effect
+    ColorEffectParam { index: usize, param: String },
+    /// Add a new color effect
+    AddColorEffect { effect_type: String },
+    /// Remove a color effect by index
+    RemoveColorEffect { index: usize },
+    /// Add a new density effect
+    AddDensityEffect { effect_type: String },
+    /// Remove a density effect by index
+    RemoveDensityEffect { index: usize },
+
     // ===== System Settings (device-specific, not tracked for undo) =====
     SystemIterationsPerThread,
     SystemBurnIn,
@@ -262,6 +280,32 @@ impl Display for ConfigPath {
             ConfigPath::RenderMode => write!(f, "Render Mode"),
             ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
 
+            // Effects
+            ConfigPath::DensityEffectEnabled { index } => {
+                write!(f, "Density Effect {} → Enabled", index + 1)
+            }
+            ConfigPath::DensityEffectParam { index, param } => {
+                write!(f, "Density Effect {} → {}", index + 1, param)
+            }
+            ConfigPath::ColorEffectEnabled { index } => {
+                write!(f, "Color Effect {} → Enabled", index + 1)
+            }
+            ConfigPath::ColorEffectParam { index, param } => {
+                write!(f, "Color Effect {} → {}", index + 1, param)
+            }
+            ConfigPath::AddColorEffect { effect_type } => {
+                write!(f, "Add Color Effect: {}", effect_type)
+            }
+            ConfigPath::RemoveColorEffect { index } => {
+                write!(f, "Remove Color Effect {}", index + 1)
+            }
+            ConfigPath::AddDensityEffect { effect_type } => {
+                write!(f, "Add Density Effect: {}", effect_type)
+            }
+            ConfigPath::RemoveDensityEffect { index } => {
+                write!(f, "Remove Density Effect {}", index + 1)
+            }
+
             // System Settings
             ConfigPath::SystemIterationsPerThread => write!(f, "System: Iterations Per Thread"),
             ConfigPath::SystemBurnIn => write!(f, "System: Burn-in Iterations"),
@@ -297,6 +341,21 @@ impl I18nKey {
         Self {
             key: key.to_string(),
             params: params.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        }
+    }
+
+    /// Serialize to a string format for storage in history descriptions
+    /// Format: `key` or `key|param1=value1|param2=value2`
+    pub fn to_serialized(&self) -> String {
+        if self.params.is_empty() {
+            self.key.clone()
+        } else {
+            let params_str = self.params
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect::<Vec<_>>()
+                .join("|");
+            format!("{}|{}", self.key, params_str)
         }
     }
 }
@@ -441,6 +500,46 @@ impl ConfigPath {
             ConfigPath::RenderMode => I18nKey::simple("history.param.render_mode"),
             ConfigPath::PerspectiveStrength => I18nKey::simple("history.param.perspective_strength"),
 
+            // Effects
+            ConfigPath::DensityEffectEnabled { index } => I18nKey::with_params(
+                "history.param.density_effect_enabled",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::DensityEffectParam { index, param } => I18nKey::with_params(
+                "history.param.density_effect_param",
+                vec![
+                    ("index", (index + 1).to_string()),
+                    ("param", param.clone()),
+                ],
+            ),
+            ConfigPath::ColorEffectEnabled { index } => I18nKey::with_params(
+                "history.param.color_effect_enabled",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::ColorEffectParam { index, param } => I18nKey::with_params(
+                "history.param.color_effect_param",
+                vec![
+                    ("index", (index + 1).to_string()),
+                    ("param", param.clone()),
+                ],
+            ),
+            ConfigPath::AddColorEffect { effect_type } => I18nKey::with_params(
+                "history.param.add_color_effect",
+                vec![("effect_type", effect_type.clone())],
+            ),
+            ConfigPath::RemoveColorEffect { index } => I18nKey::with_params(
+                "history.param.remove_color_effect",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::AddDensityEffect { effect_type } => I18nKey::with_params(
+                "history.param.add_density_effect",
+                vec![("effect_type", effect_type.clone())],
+            ),
+            ConfigPath::RemoveDensityEffect { index } => I18nKey::with_params(
+                "history.param.remove_density_effect",
+                vec![("index", (index + 1).to_string())],
+            ),
+
             // System Settings
             ConfigPath::SystemIterationsPerThread => I18nKey::simple("history.param.system_iterations_per_thread"),
             ConfigPath::SystemBurnIn => I18nKey::simple("history.param.system_burn_in"),
@@ -456,6 +555,8 @@ impl ConfigPath {
 /// A value that can be stored in FractalConfig
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfigValue {
+    /// Unit value for operations that don't need a value (e.g., Add/Remove)
+    Unit,
     Float(f32),
     Int(i32),
     UInt(u32),
@@ -505,6 +606,7 @@ impl ConfigValue {
 impl Display for ConfigValue {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
+            ConfigValue::Unit => write!(f, "()"),
             ConfigValue::Float(v) => write!(f, "{:.3}", v),
             ConfigValue::Int(v) => write!(f, "{}", v),
             ConfigValue::UInt(v) => write!(f, "{}", v),
@@ -532,6 +634,12 @@ impl Display for ConfigValue {
 }
 
 // Conversion traits: From basic types to ConfigValue
+impl From<()> for ConfigValue {
+    fn from(_: ()) -> Self {
+        ConfigValue::Unit
+    }
+}
+
 impl From<f32> for ConfigValue {
     fn from(v: f32) -> Self {
         ConfigValue::Float(v)
@@ -665,9 +773,10 @@ impl ConfigDelta {
     }
 
     /// Human-readable description using i18n key
-    /// Returns just the i18n key - UI should translate via translate_description()
+    /// Returns serialized i18n key with params - UI translates via translate_description()
+    /// Format: `key` or `key|param1=value1|param2=value2`
     pub fn description(&self) -> String {
-        self.path.to_i18n_key().key.to_string()
+        self.path.to_i18n_key().to_serialized()
     }
 }
 
@@ -704,6 +813,44 @@ pub enum SnapshotData {
         before: crate::scene::transforms::Transform,
         after: crate::scene::transforms::Transform,
     },
+
+    /// Color effect added
+    /// Undo: remove at index, Redo: insert at index
+    AddColorEffect {
+        index: usize,
+        effect: crate::effects::EffectInstance,
+    },
+
+    /// Color effect deleted
+    /// Undo: re-insert at index, Redo: remove at index
+    DeleteColorEffect {
+        index: usize,
+        effect: crate::effects::EffectInstance,
+    },
+
+    /// Density effect added
+    /// Undo: remove at index, Redo: insert at index
+    AddDensityEffect {
+        index: usize,
+        effect: crate::effects::EffectInstance,
+    },
+
+    /// Density effect deleted
+    /// Undo: re-insert at index, Redo: remove at index
+    DeleteDensityEffect {
+        index: usize,
+        effect: crate::effects::EffectInstance,
+    },
+
+    /// Color effect moved (reordered)
+    /// Undo: move from to_index back to from_index
+    /// Redo: move from from_index to to_index
+    MoveColorEffect { from_index: usize, to_index: usize },
+
+    /// Density effect moved (reordered)
+    /// Undo: move from to_index back to from_index
+    /// Redo: move from from_index to to_index
+    MoveDensityEffect { from_index: usize, to_index: usize },
 }
 
 /// A batch of related changes (single undo point)
@@ -819,6 +966,102 @@ impl ConfigChange {
             timestamp: now,
             description,
             snapshot: Some(SnapshotData::ModifyTransform { index, before, after }),
+            last_update_time: now,
+        }
+    }
+
+    /// Create add color effect snapshot
+    pub fn add_color_effect_snapshot(
+        index: usize,
+        effect: crate::effects::EffectInstance,
+        description: String,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description,
+            snapshot: Some(SnapshotData::AddColorEffect { index, effect }),
+            last_update_time: now,
+        }
+    }
+
+    /// Create delete color effect snapshot
+    pub fn delete_color_effect_snapshot(
+        index: usize,
+        effect: crate::effects::EffectInstance,
+        description: String,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description,
+            snapshot: Some(SnapshotData::DeleteColorEffect { index, effect }),
+            last_update_time: now,
+        }
+    }
+
+    /// Create add density effect snapshot
+    pub fn add_density_effect_snapshot(
+        index: usize,
+        effect: crate::effects::EffectInstance,
+        description: String,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description,
+            snapshot: Some(SnapshotData::AddDensityEffect { index, effect }),
+            last_update_time: now,
+        }
+    }
+
+    /// Create delete density effect snapshot
+    pub fn delete_density_effect_snapshot(
+        index: usize,
+        effect: crate::effects::EffectInstance,
+        description: String,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description,
+            snapshot: Some(SnapshotData::DeleteDensityEffect { index, effect }),
+            last_update_time: now,
+        }
+    }
+
+    /// Create a color effect move change (reorder)
+    pub fn move_color_effect_snapshot(
+        from_index: usize,
+        to_index: usize,
+        description: String,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description,
+            snapshot: Some(SnapshotData::MoveColorEffect { from_index, to_index }),
+            last_update_time: now,
+        }
+    }
+
+    /// Create a density effect move change (reorder)
+    pub fn move_density_effect_snapshot(
+        from_index: usize,
+        to_index: usize,
+        description: String,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description,
+            snapshot: Some(SnapshotData::MoveDensityEffect { from_index, to_index }),
             last_update_time: now,
         }
     }
@@ -947,6 +1190,16 @@ impl ConfigPath {
             | ConfigPath::MaxIterations
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
 
+            // Effects (post-processing, just need tonemap re-run)
+            ConfigPath::DensityEffectEnabled { .. }
+            | ConfigPath::DensityEffectParam { .. }
+            | ConfigPath::ColorEffectEnabled { .. }
+            | ConfigPath::ColorEffectParam { .. }
+            | ConfigPath::AddColorEffect { .. }
+            | ConfigPath::RemoveColorEffect { .. }
+            | ConfigPath::AddDensityEffect { .. }
+            | ConfigPath::RemoveDensityEffect { .. } => UpdateType::ToneMappingOnly,
+
             // System Settings
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
             ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps => UpdateType::ViewOnly,
@@ -1053,6 +1306,16 @@ impl ConfigPath {
             // Flame
             ConfigPath::RenderMode => "RenderMode".to_string(),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
+
+            // Effects
+            ConfigPath::DensityEffectEnabled { index } => format!("DensityEffect.{}.Enabled", index),
+            ConfigPath::DensityEffectParam { index, param } => format!("DensityEffect.{}.{}", index, param),
+            ConfigPath::ColorEffectEnabled { index } => format!("ColorEffect.{}.Enabled", index),
+            ConfigPath::ColorEffectParam { index, param } => format!("ColorEffect.{}.{}", index, param),
+            ConfigPath::AddColorEffect { effect_type } => format!("ColorEffect.Add.{}", effect_type),
+            ConfigPath::RemoveColorEffect { index } => format!("ColorEffect.Remove.{}", index),
+            ConfigPath::AddDensityEffect { effect_type } => format!("DensityEffect.Add.{}", effect_type),
+            ConfigPath::RemoveDensityEffect { index } => format!("DensityEffect.Remove.{}", index),
 
             // System Settings (not typically animated, but included for completeness)
             ConfigPath::SystemIterationsPerThread => "System.IterationsPerThread".to_string(),
@@ -1200,6 +1463,27 @@ impl ConfigPath {
                 "ExportHeight" => return Some(ConfigPath::SystemExportHeight),
                 "Language" => return Some(ConfigPath::SystemLanguage),
                 _ => {}
+            }
+        }
+
+        // Effect paths: DensityEffect.{index}.{Enabled|param} or ColorEffect.{index}.{Enabled|param}
+        if parts.len() == 3 && parts[0] == "DensityEffect" {
+            if let Ok(index) = parts[1].parse::<usize>() {
+                if parts[2] == "Enabled" {
+                    return Some(ConfigPath::DensityEffectEnabled { index });
+                } else {
+                    return Some(ConfigPath::DensityEffectParam { index, param: parts[2].to_string() });
+                }
+            }
+        }
+
+        if parts.len() == 3 && parts[0] == "ColorEffect" {
+            if let Ok(index) = parts[1].parse::<usize>() {
+                if parts[2] == "Enabled" {
+                    return Some(ConfigPath::ColorEffectEnabled { index });
+                } else {
+                    return Some(ConfigPath::ColorEffectParam { index, param: parts[2].to_string() });
+                }
             }
         }
 
@@ -1442,8 +1726,26 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
             }
         }
 
+        // Effect enabled flags (bool)
+        ConfigPath::DensityEffectEnabled { .. }
+        | ConfigPath::ColorEffectEnabled { .. } => {
+            json.as_bool().map(ConfigValue::Bool)
+        }
+
+        // Effect parameters (float)
+        ConfigPath::DensityEffectParam { .. }
+        | ConfigPath::ColorEffectParam { .. } => {
+            json.as_f64().map(|f| ConfigValue::Float(f as f32))
+        }
+
         // Complex types not supported for animation (yet)
         ConfigPath::TonemapCurve | ConfigPath::Palette => None,
+
+        // Add/Remove operations not animatable
+        ConfigPath::AddColorEffect { .. }
+        | ConfigPath::RemoveColorEffect { .. }
+        | ConfigPath::AddDensityEffect { .. }
+        | ConfigPath::RemoveDensityEffect { .. } => None,
     }
 }
 

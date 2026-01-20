@@ -102,6 +102,7 @@
 - Use forward slashes for paths
 - Avoid `/dev/null` (creates literal files on Windows)
 - NO `sed` EVER! It's never worked out well.
+- **Use relative paths for file edits** (e.g., `src/ui/mod.rs` not `c:\projects\fflame-rust\src\ui\mod.rs`) - helps avoid "file unexpectedly modified" errors from IDE/linter race conditions
 
 ### Key Concepts
 - **Fractal Flames**: IFS (Iterated Function System) with variations

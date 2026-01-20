@@ -27,3 +27,7 @@ Fractal renderers:
 - [Apophysis 7x](https://github.com/xyrus02/apophysis-7x)
 - [JWildfire](https://jwildfire.overwhale.com/)
 - [Chaotica](https://www.chaoticafractals.com/)
+- [Mandelbulber](https://github.com/buddhi1980/mandelbulber2)
+- [GPU Mandelbulb Tracer](https://gmt-0-8-152535429025.us-west1.run.app/)
+- [Iterator.it](https://iterator.it/)
+- [Fractility](https://sites.google.com/view/meltmixpix/fractility)

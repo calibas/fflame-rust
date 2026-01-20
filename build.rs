@@ -76,6 +76,9 @@ fn main() {
 
     // Copy assets folder to target directory (for standalone .exe)
     copy_assets_to_target();
+
+    // Copy shaders folder to target directory
+    copy_shaders_to_target();
 }
 
 fn copy_assets_to_target() {
@@ -128,4 +131,37 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+fn copy_shaders_to_target() {
+    use std::path::PathBuf;
+
+    // Get target directory
+    let out_dir = env::var("OUT_DIR").unwrap();
+    let target_dir = PathBuf::from(out_dir)
+        .ancestors()
+        .nth(3)
+        .unwrap()
+        .to_path_buf();
+
+    let shaders_src = Path::new("shaders");
+    let shaders_dst = target_dir.join("shaders");
+
+    // Only copy if shaders folder exists
+    if shaders_src.exists() {
+        // Remove old shaders if they exist
+        if shaders_dst.exists() {
+            let _ = fs::remove_dir_all(&shaders_dst);
+        }
+
+        // Copy shaders recursively
+        if let Err(e) = copy_dir_recursive(shaders_src, &shaders_dst) {
+            println!("cargo:warning=Failed to copy shaders: {}", e);
+        } else {
+            println!("cargo:warning=Copied shaders to {:?}", shaders_dst);
+        }
+    }
+
+    // Tell cargo to rerun if shaders change
+    println!("cargo:rerun-if-changed=shaders");
 }

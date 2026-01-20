@@ -225,6 +225,12 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator);
                 }
 
+                // Effects panel
+                let effects_open = workspace.panel_exists(super::workspace::PanelType::Effects);
+                if ui.selectable_label(effects_open, t!("menu.window_effects").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Effects);
+                }
+
                 ui.separator();
                 ui.menu_button(t!("menu.workspace_layout"), |ui| {
                     let current = workspace.current_layout;
