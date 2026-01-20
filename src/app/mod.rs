@@ -235,6 +235,12 @@ pub struct App {
 
     // Histogram computation (computed periodically, not every frame)
     pub(super) histogram_frame_counter: u32,
+
+    // Post-processing effect chain
+    pub(super) effect_chain: crate::renderer::effect_chain::EffectChainRunner,
+
+    // Track export state to detect when export finishes (for surface recovery)
+    pub(super) was_video_exporting: bool,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -279,6 +285,13 @@ impl App {
         let export_width = config_manager.system_settings().default_export_width;
         let export_height = config_manager.system_settings().default_export_height;
 
+        // Create effect chain for post-processing effects
+        let effect_chain = crate::renderer::effect_chain::EffectChainRunner::new(
+            &gpu.device,
+            gpu.size.width,
+            gpu.size.height,
+        );
+
         let mut app = Self {
             config_manager,
             gpu,
@@ -311,6 +324,8 @@ impl App {
             png_export_progress: Arc::new(Mutex::new(PngExportProgress::default())),
             render_mode: RenderModeFSM::new(),
             histogram_frame_counter: 0,
+            effect_chain,
+            was_video_exporting: false,
         };
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
@@ -376,9 +391,21 @@ impl App {
                             app.update();
                             match app.render(&window) {
                                 Ok(_) => {},
-                                Err(SurfaceError::Lost | SurfaceError::Outdated) => app.gpu.resize(app.gpu.size),
+                                Err(SurfaceError::Lost | SurfaceError::Outdated) => {
+                                    log::warn!("Surface lost/outdated, reconfiguring...");
+                                    app.gpu.resize(app.gpu.size);
+                                }
                                 Err(SurfaceError::OutOfMemory) => elwt.exit(),
-                                Err(e) => eprintln!("Render error: {:?}", e),
+                                Err(SurfaceError::Timeout) => {
+                                    // Timeout during surface acquisition - try to recover
+                                    log::warn!("Surface timeout, reconfiguring...");
+                                    app.gpu.resize(app.gpu.size);
+                                }
+                                Err(e) => {
+                                    // For "Other" errors, also try to recover by reconfiguring
+                                    log::error!("Surface error: {:?}, attempting recovery...", e);
+                                    app.gpu.resize(app.gpu.size);
+                                }
                             }
 
                             // Handle graceful quit (triggered by File → Quit menu)
@@ -414,6 +441,14 @@ impl App {
                     // Check if animation is playing (needs continuous redraws)
                     let animation_playing = app.animation_controller.is_playing();
 
+                    // Check if video/PNG export is in progress (needs UI updates for progress bar)
+                    let is_exporting = app.animation_export_progress.lock()
+                        .map(|p| p.is_exporting)
+                        .unwrap_or(false)
+                        || app.png_export_progress.lock()
+                        .map(|p| p.is_exporting)
+                        .unwrap_or(false);
+
                     // Update present mode based on system settings
                     app.gpu.set_present_mode(app.config_manager.system_settings().vsync_enabled);
 
@@ -425,7 +460,8 @@ impl App {
 
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
-                    if is_rendering || animation_playing || ui_active {
+                    // During export, keep redrawing to update progress bar
+                    if is_rendering || animation_playing || ui_active || is_exporting {
                         // Actively rendering fractals OR UI is active (for tooltips, hover effects)
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
@@ -489,7 +525,55 @@ impl App {
         // 5. Submit and present
         // ============================================================================
 
-        let frame = self.gpu.surface.get_current_texture()?;
+        // Check if video export is in progress
+        let is_video_exporting = self.animation_export_progress.lock()
+            .map(|p| p.is_exporting)
+            .unwrap_or(false);
+
+        // During video export: completely skip rendering to avoid surface corruption
+        // The export uses its own GPU device which interferes with surface acquisition
+        if is_video_exporting {
+            // Update window title with export progress
+            if let Ok(progress) = self.animation_export_progress.lock() {
+                let percent = if progress.total_frames > 0 {
+                    (progress.current_frame * 100) / progress.total_frames
+                } else {
+                    0
+                };
+                let title = format!(
+                    "⏳ Exporting {}/{} ({}%) - Fractal Flame",
+                    progress.current_frame,
+                    progress.total_frames,
+                    percent
+                );
+                window.set_title(&title);
+            }
+            // Sleep to avoid busy-waiting
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            self.was_video_exporting = true;
+            return Ok(());
+        }
+
+        // Detect when video export has just finished
+        if self.was_video_exporting {
+            log::info!("Video export finished, reconfiguring surface...");
+            // Give driver time to release export device
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            // Reconfigure surface to ensure clean state
+            self.gpu.resize(self.gpu.size);
+            // Restore window title
+            window.set_title("Fractal Flame");
+            self.was_video_exporting = false;
+        }
+
+        // Normal rendering: acquire surface texture
+        let frame = match self.gpu.surface.get_current_texture() {
+            Ok(f) => f,
+            Err(e) => {
+                log::error!("Surface error: {:?}", e);
+                return Err(e);
+            }
+        };
         let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
@@ -503,19 +587,40 @@ impl App {
         let can_undo = self.can_undo();
         let can_redo = self.can_redo();
 
-        // Register renderer's fractal texture with egui for display
+        // Register the appropriate texture with egui for display:
+        // - If effects ran on previous frame, use the effect output texture
+        // - Otherwise, use the renderer's fractal texture
         if let Some(ref renderer) = self.flame_renderer {
+            // Check if we have enabled color effects
+            let has_enabled_effects = self.config_manager.active_config().color_effects.iter().any(|e| e.enabled);
+
+            // Use effect output if available and effects are enabled
+            let texture_view = if has_enabled_effects {
+                self.effect_chain.get_color_output()
+            } else {
+                None
+            };
+
+            let texture_view = texture_view.unwrap_or_else(|| renderer.get_fractal_texture_view());
+
             self.egui_layer.register_fractal_texture(
                 &self.gpu.device,
-                renderer.get_fractal_texture_view(),
+                texture_view,
                 self.fractal_viewport_size.0,
                 self.fractal_viewport_size.1,
             );
         }
 
         // Get a snapshot of export progress for UI display
-        let export_progress = self.animation_export_progress.lock().unwrap().clone();
-        let png_export_progress = self.png_export_progress.lock().unwrap().clone();
+        // Use ok() + unwrap_or_default() to handle poisoned mutexes gracefully
+        let export_progress = self.animation_export_progress.lock()
+            .ok()
+            .map(|p| p.clone())
+            .unwrap_or_default();
+        let png_export_progress = self.png_export_progress.lock()
+            .ok()
+            .map(|p| p.clone())
+            .unwrap_or_default();
 
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
@@ -565,6 +670,9 @@ impl App {
                         &self.flame, self.config_manager.system_settings().iterations_per_thread, resize_config.zoom, resize_config.pan_x, resize_config.pan_y, resize_config.rotation,
                         resize_config.camera_rotation_x, resize_config.camera_rotation_y, resize_config.camera_z, resize_config.speed_factor);
                     self.gpu.queue.submit(std::iter::once(resize_encoder.finish()));
+
+                    // Resize effect chain textures
+                    self.effect_chain.resize(&self.gpu.device, viewport_size.0, viewport_size.1);
 
                     // Restore palette and color mode after buffer recreation
                     renderer.update_palette(&self.gpu.device, &self.gpu.queue, &resize_config.palette, resize_config.palette_rotation, resize_config.palette_squeeze);
@@ -626,8 +734,10 @@ impl App {
                 } else if let Some(ref mut renderer) = self.flame_renderer {
                     // Viewport-size export: use current renderer
                     let total_iterations = renderer.total_iterations();
+                    let has_color_effects = export_config.color_effects.iter().any(|e| e.enabled);
 
                     // For transparent export, we need to re-run tonemap with transparent_mode=1
+                    // and then re-run color effects if enabled
                     if transparent {
                         let iterations_per_thread = self.config_manager.system_settings().iterations_per_thread;
                         renderer.set_transparent_mode(&self.gpu.queue, true, &export_config, iterations_per_thread);
@@ -637,12 +747,35 @@ impl App {
                             label: Some("Transparent Export Tonemap"),
                         });
                         renderer.tonemap_pass(&mut encoder);
+
+                        // Re-run color effects if enabled (they need to process the new tonemapped output)
+                        if has_color_effects {
+                            self.effect_chain.reset_slots();
+                            self.effect_chain.run_color_effects(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                &mut encoder,
+                                renderer.get_fractal_texture_view(),
+                                &export_config.color_effects,
+                            );
+                        }
+
                         self.gpu.queue.submit(std::iter::once(encoder.finish()));
                     }
 
-                    let pixels_future = renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, export_config.background_color);
+                    // Read pixels from effect chain output if color effects are enabled,
+                    // otherwise read from renderer's fractal texture
+                    let pixels_result: Result<(u32, u32, Vec<u8>), String> = if has_color_effects {
+                        pollster::block_on(
+                            self.effect_chain.read_color_output_pixels(&self.gpu.device, &self.gpu.queue)
+                        )
+                    } else {
+                        pollster::block_on(
+                            renderer.read_fractal_pixels(&self.gpu.device, &self.gpu.queue, transparent, export_config.background_color)
+                        ).map_err(|e| e.to_string())
+                    };
 
-                    match pollster::block_on(pixels_future) {
+                    match pixels_result {
                         Ok((width, height, rgba_data)) => {
                             // Build metadata with captured values
                             let metadata = crate::png_metadata::PngMetadata::from_app_state(
@@ -687,6 +820,19 @@ impl App {
                             label: Some("Restore Normal Tonemap"),
                         });
                         renderer.tonemap_pass(&mut encoder);
+
+                        // Re-run color effects with normal tonemap output
+                        if has_color_effects {
+                            self.effect_chain.reset_slots();
+                            self.effect_chain.run_color_effects(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                &mut encoder,
+                                renderer.get_fractal_texture_view(),
+                                &export_config.color_effects,
+                            );
+                        }
+
                         self.gpu.queue.submit(std::iter::once(encoder.finish()));
                     }
                 }
@@ -805,6 +951,36 @@ impl App {
                     temp_renderer.tonemap_pass(&mut final_encoder);
                     self.gpu.queue.submit(std::iter::once(final_encoder.finish()));
 
+                    // Run color effects if enabled
+                    let has_color_effects = export_config.color_effects.iter().any(|e| e.enabled);
+                    let mut effect_chain: Option<crate::renderer::effect_chain::EffectChainRunner> = None;
+                    let color_effects_ran = if has_color_effects {
+                        log::info!("WASM custom export: Running {} color effect(s)",
+                            export_config.color_effects.iter().filter(|e| e.enabled).count());
+
+                        let mut chain = crate::renderer::effect_chain::EffectChainRunner::new(
+                            &self.gpu.device, export_width, export_height);
+
+                        let mut effect_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
+                            label: Some("WASM Export Color Effects"),
+                        });
+
+                        chain.reset_slots();
+                        let ran = chain.run_color_effects(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            &mut effect_encoder,
+                            temp_renderer.get_fractal_texture_view(),
+                            &export_config.color_effects,
+                        );
+
+                        self.gpu.queue.submit(std::iter::once(effect_encoder.finish()));
+                        effect_chain = Some(chain);
+                        ran
+                    } else {
+                        false
+                    };
+
                     // Move renderer to heap for async task
                     let temp_renderer = Box::new(temp_renderer);
                     let speed_factor = export_config.speed_factor;
@@ -813,34 +989,65 @@ impl App {
                     let device = self.gpu.device.clone();
                     let queue = self.gpu.queue.clone();
 
-                    spawn_local(async move {
-                        match temp_renderer.read_fractal_pixels(&device, &queue, transparent, background_color).await {
-                            Ok((width, height, rgba_data)) => {
-                                let metadata = crate::png_metadata::PngMetadata::from_app_state(
-                                    width,
-                                    height,
-                                    total_rendered,
-                                    render_time_ms,
-                                    iterations_per_thread,
-                                    speed_factor,
-                                    &export_config,
-                                );
+                    // Read from effect chain if effects ran, otherwise from renderer
+                    if color_effects_ran {
+                        if let Some(chain) = effect_chain {
+                            let chain = Box::new(chain);
+                            spawn_local(async move {
+                                match chain.read_color_output_pixels(&device, &queue).await {
+                                    Ok((width, height, rgba_data)) => {
+                                        let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                                            width,
+                                            height,
+                                            total_rendered,
+                                            render_time_ms,
+                                            iterations_per_thread,
+                                            speed_factor,
+                                            &export_config,
+                                        );
 
-                                match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
-                                    Ok(png_data) => {
-                                        // Trigger direct browser download
-                                        match trigger_browser_download(&png_data, "fractal.png", "image/png") {
-                                            Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0),
-                                            Err(e) => log::error!("Failed to trigger download: {}", e),
+                                        match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
+                                            Ok(png_data) => {
+                                                match trigger_browser_download(&png_data, "fractal.png", "image/png") {
+                                                    Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0),
+                                                    Err(e) => log::error!("Failed to trigger download: {}", e),
+                                                }
+                                            }
+                                            Err(e) => log::error!("Failed to encode PNG: {}", e),
                                         }
                                     }
-                                    Err(e) => log::error!("Failed to encode PNG: {}", e),
+                                    Err(e) => log::error!("Failed to capture effect pixels: {}", e),
                                 }
-                            }
-                            Err(e) => log::error!("Failed to capture pixels: {}", e),
+                            });
                         }
-                        // temp_renderer is dropped here
-                    });
+                    } else {
+                        spawn_local(async move {
+                            match temp_renderer.read_fractal_pixels(&device, &queue, transparent, background_color).await {
+                                Ok((width, height, rgba_data)) => {
+                                    let metadata = crate::png_metadata::PngMetadata::from_app_state(
+                                        width,
+                                        height,
+                                        total_rendered,
+                                        render_time_ms,
+                                        iterations_per_thread,
+                                        speed_factor,
+                                        &export_config,
+                                    );
+
+                                    match crate::renderer::compute_kernel::encode_png_from_rgba(width, height, rgba_data, Some(metadata)) {
+                                        Ok(png_data) => {
+                                            match trigger_browser_download(&png_data, "fractal.png", "image/png") {
+                                                Ok(()) => log::info!("PNG download started: {}×{} in {:.2}s", width, height, render_time_ms / 1000.0),
+                                                Err(e) => log::error!("Failed to trigger download: {}", e),
+                                            }
+                                        }
+                                        Err(e) => log::error!("Failed to encode PNG: {}", e),
+                                    }
+                                }
+                                Err(e) => log::error!("Failed to capture pixels: {}", e),
+                            }
+                        });
+                    }
                 } else if let Some(ref mut renderer) = self.flame_renderer {
                     // Viewport size export: use current renderer
                     //
@@ -851,8 +1058,10 @@ impl App {
                     let total_iterations = renderer.total_iterations();
                     let render_time_ms = self.metrics.render_time_ms;
                     let speed_factor = export_config.speed_factor;
+                    let has_color_effects = export_config.color_effects.iter().any(|e| e.enabled);
 
                     // For transparent export, set transparent mode and run tonemap before reading
+                    // Also re-run color effects if enabled
                     if transparent {
                         renderer.set_transparent_mode(&self.gpu.queue, true, &export_config, iterations_per_thread);
 
@@ -860,20 +1069,43 @@ impl App {
                             label: Some("Transparent Export Tonemap"),
                         });
                         renderer.tonemap_pass(&mut encoder);
+
+                        // Re-run color effects if enabled
+                        if has_color_effects {
+                            self.effect_chain.reset_slots();
+                            self.effect_chain.run_color_effects(
+                                &self.gpu.device,
+                                &self.gpu.queue,
+                                &mut encoder,
+                                renderer.get_fractal_texture_view(),
+                                &export_config.color_effects,
+                            );
+                        }
+
                         self.gpu.queue.submit(std::iter::once(encoder.finish()));
                     }
 
                     // Read pixels NOW, before the next frame overwrites the texture
-                    // We create a staging buffer and initiate the copy immediately
+                    // Use effect chain output if color effects are enabled
                     let width = renderer.width;
                     let height = renderer.height;
-                    let (staging_buffer, padded_bytes_per_row) = renderer.create_pixel_staging_buffer(&self.gpu.device);
+
+                    let (staging_buffer, padded_bytes_per_row) = if has_color_effects && self.effect_chain.has_color_output() {
+                        self.effect_chain.create_color_staging_buffer(&self.gpu.device)
+                    } else {
+                        renderer.create_pixel_staging_buffer(&self.gpu.device)
+                    };
 
                     // Copy texture to staging buffer
                     let mut copy_encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
                         label: Some("Viewport Export Copy"),
                     });
-                    renderer.copy_fractal_to_buffer(&mut copy_encoder, &staging_buffer, padded_bytes_per_row);
+
+                    if has_color_effects && self.effect_chain.has_color_output() {
+                        self.effect_chain.copy_color_to_buffer(&mut copy_encoder, &staging_buffer, padded_bytes_per_row);
+                    } else {
+                        renderer.copy_fractal_to_buffer(&mut copy_encoder, &staging_buffer, padded_bytes_per_row);
+                    }
                     self.gpu.queue.submit(std::iter::once(copy_encoder.finish()));
 
                     // Clone Arc handle for the async task
@@ -941,8 +1173,10 @@ impl App {
         // Handle animation export request
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref export_settings) = ui_response.animation_export_requested {
-            // Check if already exporting
-            let already_exporting = self.animation_export_progress.lock().unwrap().is_exporting;
+            // Check if already exporting (handle poisoned mutex gracefully)
+            let already_exporting = self.animation_export_progress.lock()
+                .map(|p| p.is_exporting)
+                .unwrap_or(false);
             if already_exporting {
                 log::warn!("Animation export already in progress");
             } else if let Some(ref animation) = self.animation_controller.animation {
@@ -971,9 +1205,8 @@ impl App {
                 println!("  Total frames: {}", export_config.total_frames());
                 println!("  Codec: {} (CRF {})", export_config.video_settings.codec.display_name(), export_config.video_settings.quality);
 
-                // Set initial export progress
-                {
-                    let mut p = self.animation_export_progress.lock().unwrap();
+                // Set initial export progress (handle poisoned mutex gracefully)
+                if let Ok(mut p) = self.animation_export_progress.lock() {
                     p.is_exporting = true;
                     p.current_frame = 0;
                     p.total_frames = export_config.total_frames();
@@ -1145,10 +1378,55 @@ impl App {
                 self.config_manager.system_settings().iterations_per_thread, batch_size_for_tonemap, is_live_preview,
                 final_config.levels_low, final_config.levels_high, final_config.levels_gamma);
 
-            // Render to internal fractal texture
-            renderer.tonemap_pass(&mut render_encoder);
+            // Reset effect slot counter for this frame (allows multiple effects with unique params)
+            self.effect_chain.reset_slots();
+
+            // Run density effects (before tonemap, on HDR accumulation data)
+            let density_effects_ran = self.effect_chain.run_density_effects(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut render_encoder,
+                renderer.get_accumulation_view(),
+                &final_config.density_effects,
+            );
+
+            // Render to internal fractal texture with tone mapping
+            // If density effects ran, use their output; otherwise use accumulation directly
+            if density_effects_ran {
+                if let Some(density_output) = self.effect_chain.get_density_output() {
+                    renderer.tonemap_pass_with_input(&self.gpu.device, &mut render_encoder, density_output);
+                } else {
+                    renderer.tonemap_pass(&mut render_encoder);
+                }
+            } else {
+                renderer.tonemap_pass(&mut render_encoder);
+            }
 
             self.metrics.record_tonemap_time(t_tonemap.elapsed().as_secs_f64() * 1000.0);
+
+            // Run color effects (after tonemap)
+            let effects_ran = self.effect_chain.run_color_effects(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut render_encoder,
+                renderer.get_fractal_texture_view(),
+                &final_config.color_effects,
+            );
+
+            // If effects ran, re-register the effect output texture with egui
+            if effects_ran {
+                log::info!("Effects ran, registering effect output texture");
+                if let Some(output_view) = self.effect_chain.get_color_output() {
+                    self.egui_layer.register_fractal_texture(
+                        &self.gpu.device,
+                        output_view,
+                        renderer.width,
+                        renderer.height,
+                    );
+                } else {
+                    log::warn!("Effects ran but no output texture available!");
+                }
+            }
         }
 
         // Submit rendering commands
@@ -1158,9 +1436,10 @@ impl App {
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
         // Update density histogram for Levels controls (every ~30 frames)
+        // Skip during animation playback to avoid frame drops from blocking GPU readback
         // Only on desktop - WASM would need async handling
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        if !self.animation_controller.is_playing() {
             self.histogram_frame_counter += 1;
             if self.histogram_frame_counter >= 30 {
                 self.histogram_frame_counter = 0;

@@ -4,10 +4,11 @@
 //! All export paths (CLI, WASM, thumbnails, video) should use this API to ensure
 //! consistent behavior and reduce code duplication.
 
-use egui_wgpu::wgpu::{CommandEncoderDescriptor, Device, Queue, TextureFormat};
+use egui_wgpu::wgpu::{CommandEncoderDescriptor, Device, PollType, Queue, TextureFormat};
 
 use crate::config::FractalConfig;
 use crate::renderer::compute_kernel::FlameRenderer;
+use crate::renderer::effect_chain::EffectChainRunner;
 
 /// Configuration for a render job
 pub struct RenderJob<'a> {
@@ -264,23 +265,97 @@ pub async fn render(
 
     log::info!("Render: Render loop complete, total_rendered={}", total_rendered);
 
+    // Ensure all GPU work completes before post-processing
+    // This is critical for larger resolutions where work takes longer
+    let _ = device.poll(PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    });
+
     // Set transparent mode if requested
     if job.transparent {
         renderer.set_transparent_mode(queue, true, job.config, job.iterations_per_thread);
     }
 
-    // Tonemap pass
-    let mut final_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+    // Create effect chain runner for post-processing effects
+    let mut effect_chain = EffectChainRunner::new(device, job.width, job.height);
+
+    // Check for enabled effects
+    let has_density_effects = EffectChainRunner::has_enabled_effects(&job.config.density_effects);
+    let has_color_effects = EffectChainRunner::has_enabled_effects(&job.config.color_effects);
+
+    log::info!(
+        "Render: Effects - density: {} enabled, color: {} enabled",
+        job.config.density_effects.iter().filter(|e| e.enabled).count(),
+        job.config.color_effects.iter().filter(|e| e.enabled).count()
+    );
+
+    // Run density effects (before tonemap, on HDR accumulation data)
+    let mut tonemap_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("Final Tonemap"),
     });
-    renderer.tonemap_pass(&mut final_encoder);
-    queue.submit(std::iter::once(final_encoder.finish()));
 
-    // Read pixels
-    let (width, height, rgba_data) = renderer
-        .read_fractal_pixels(device, queue, job.transparent, job.config.background_color)
-        .await
-        .map_err(|e| RenderError::PixelReadFailed(e.to_string()))?;
+    // Reset effect slot counter (allows multiple effects with unique params in same submit)
+    effect_chain.reset_slots();
+
+    if has_density_effects {
+        let density_ran = effect_chain.run_density_effects(
+            device,
+            queue,
+            &mut tonemap_encoder,
+            renderer.get_accumulation_view(),
+            &job.config.density_effects,
+        );
+
+        if density_ran {
+            if let Some(density_output) = effect_chain.get_density_output() {
+                renderer.tonemap_pass_with_input(device, &mut tonemap_encoder, density_output);
+            } else {
+                renderer.tonemap_pass(&mut tonemap_encoder);
+            }
+        } else {
+            renderer.tonemap_pass(&mut tonemap_encoder);
+        }
+    } else {
+        renderer.tonemap_pass(&mut tonemap_encoder);
+    }
+
+    queue.submit(std::iter::once(tonemap_encoder.finish()));
+
+    // Run color effects (after tonemap)
+    let color_effects_ran = if has_color_effects {
+        let mut color_encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Color Effects"),
+        });
+
+        let ran = effect_chain.run_color_effects(
+            device,
+            queue,
+            &mut color_encoder,
+            renderer.get_fractal_texture_view(),
+            &job.config.color_effects,
+        );
+
+        queue.submit(std::iter::once(color_encoder.finish()));
+        ran
+    } else {
+        false
+    };
+
+    // Read pixels from appropriate source
+    let (width, height, rgba_data) = if color_effects_ran {
+        // Read from color effect output
+        effect_chain
+            .read_color_output_pixels(device, queue)
+            .await
+            .map_err(|e| RenderError::PixelReadFailed(e))?
+    } else {
+        // Read from renderer's fractal texture
+        renderer
+            .read_fractal_pixels(device, queue, job.transparent, job.config.background_color)
+            .await
+            .map_err(|e| RenderError::PixelReadFailed(e.to_string()))?
+    };
 
     let render_time_ms = start_time.elapsed().as_secs_f64() * 1000.0;
 

@@ -502,6 +502,80 @@ impl FlameRenderer {
         drop(render_pass);
     }
 
+    /// Render with tone mapping using a custom input texture (for density effects)
+    ///
+    /// This creates a temporary bind group with the provided input texture instead of
+    /// the accumulation texture. Used when density effects have processed the accumulation
+    /// data and we need to tonemap their output.
+    pub fn tonemap_pass_with_input(&self, device: &Device, encoder: &mut CommandEncoder, input_view: &TextureView) {
+        // Create a temporary bind group with the custom input texture
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Tonemap Bind Group (Density Effect Input)"),
+            layout: &self.pipelines.tonemap_bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(input_view),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Sampler(&self.buffers.sampler),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: self.buffers.tonemap_params_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(&self.buffers.curve_lut_view),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::Sampler(&self.buffers.curve_lut_sampler),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: self.buffers.get_path_buffer_for_binding().as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: BindingResource::TextureView(&self.buffers.palette_view),
+                },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: BindingResource::Sampler(&self.buffers.sampler),
+                },
+            ],
+        });
+
+        let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Tonemap Pass (Density Effect Input)"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: &self.fractal_texture_view,
+                resolve_target: None,
+                ops: Operations {
+                    load: LoadOp::Clear(Color::BLACK),
+                    store: StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+        });
+
+        render_pass.set_pipeline(&self.pipelines.tonemap_pipeline);
+        render_pass.set_bind_group(0, &bind_group, &[]);
+        render_pass.draw(0..3, 0..1); // Fullscreen triangle
+
+        drop(render_pass);
+    }
+
+    /// Get the current accumulation texture view (for density effects input)
+    pub fn get_accumulation_view(&self) -> &TextureView {
+        self.buffers.current_accumulation_view()
+    }
+
     /// Debug: Read back scale buffer and compute statistics
     // Note: debug_scale_stats() removed - scale_buffer no longer exists
 

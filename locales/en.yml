@@ -61,6 +61,7 @@ menu:
   window_animation: "🎬 Animation"
   window_path_editor: "🧪 Path Editor (Experimental)"
   window_random_generator: "🎲 Random Generator"
+  window_effects: "✨ Effects"
 
   # Window Menu - Workspace layouts
   workspace_layout: "📐 Workspace Layout"
@@ -110,6 +111,7 @@ panels:
   path_editor: "Path Editor"
   export: "Export"
   random_generator: "Random Generator"
+  effects: "Effects"
   settings: "Settings"
   tone_mapping: "Tone Mapping"
 
@@ -474,6 +476,12 @@ history:
     levels_low: "Levels Low"
     levels_high: "Levels High"
     levels_midtones: "Levels Midtones"
+
+    # Effects (post-processing)
+    density_effect_enabled: "Density Effect %{index} → Enabled"
+    density_effect_param: "Density Effect %{index} → %{param}"
+    color_effect_enabled: "Color Effect %{index} → Enabled"
+    color_effect_param: "Color Effect %{index} → %{param}"
 
     # Color
     color_mode: "Color Mode"
@@ -929,6 +937,8 @@ track_editor:
   category_rendering: "Rendering"
   category_transform: "Transform %{index}"
   category_final_transform: "Final Transform"
+  category_density_effects: "Density Effects"
+  category_color_effects: "Color Effects"
 
   # Animatable parameter names (View)
   param_zoom: "Zoom"
@@ -1183,6 +1193,146 @@ path_overlay:
   debug_hue: "  hue:   %{value}"
   preview_title: "Preview (click to select)"
   close_hint: "Right-click elsewhere to close"
+
+# Effects (Post-Processing)
+effects:
+  # Color Effects
+  vignette:
+    name: "Vignette"
+    params:
+      intensity: "Intensity"
+      radius: "Radius"
+      softness: "Softness"
+      blend_mode: "Blend Mode"
+
+  film_grain:
+    name: "Film Grain"
+    params:
+      intensity: "Intensity"
+      seed: "Seed"
+      blend_mode: "Blend Mode"
+
+  chromatic_aberration:
+    name: "Chromatic Aberration"
+    params:
+      amount: "Amount"
+      radial: "Radial"
+      intensity: "Intensity"
+      blend_mode: "Blend Mode"
+
+  hue_shift:
+    name: "Hue Shift"
+    params:
+      offset: "Hue Offset"
+      intensity: "Intensity"
+      blend_mode: "Blend Mode"
+
+  # Density Effects
+  density_blur:
+    name: "Density Blur"
+    params:
+      radius: "Radius"
+      threshold: "Density Threshold"
+      falloff: "Falloff"
+
+  sharpen:
+    name: "Sharpen"
+    params:
+      amount: "Amount"
+      radius: "Radius"
+
+  bilateral_blur:
+    name: "Bilateral Blur"
+    params:
+      radius: "Radius"
+      sigma_spatial: "Spatial Sigma"
+      sigma_range: "Range Sigma"
+
+  # Psychedelic Effects
+  kaleidoscope:
+    name: "Kaleidoscope"
+    params:
+      segments: "Segments"
+      rotation: "Source Angle"
+      zoom: "Zoom"
+      intensity: "Intensity"
+      blend_mode: "Blend Mode"
+      square_mode: "Square Mode"
+
+  plasma:
+    name: "Plasma"
+    params:
+      intensity: "Intensity"
+      scale: "Scale"
+      speed: "Speed"
+      time: "Time"
+      blend_mode: "Blend Mode"
+      direction: "Direction"
+
+  tunnel:
+    name: "Tunnel"
+    params:
+      speed: "Speed"
+      rotation_speed: "Rotation Speed"
+      distortion: "Distortion"
+      time: "Time"
+      intensity: "Intensity"
+      blend_mode: "Blend Mode"
+
+  sobel_edges:
+    name: "Edge Glow"
+    params:
+      intensity: "Intensity"
+      threshold: "Threshold"
+      glow: "Glow"
+      preserve_color: "Preserve Color"
+      blend_mode: "Blend Mode"
+
+  domain_warp:
+    name: "Domain Warp"
+    params:
+      intensity: "Intensity"
+      scale: "Scale"
+      octaves: "Octaves"
+      time: "Time"
+      blend_mode: "Blend Mode"
+      direction: "Direction"
+
+  simplex_noise:
+    name: "Simplex Noise"
+    params:
+      intensity: "Intensity"
+      scale: "Scale"
+      octaves: "Octaves"
+      time: "Time"
+      mode: "Mode"
+      blend_mode: "Blend Mode"
+      direction: "Direction"
+
+  worley_noise:
+    name: "Worley Noise"
+    params:
+      intensity: "Intensity"
+      scale: "Scale"
+      time: "Time"
+      mode: "Pattern"
+      color_mode: "Color Mode"
+      blend_mode: "Blend Mode"
+      direction: "Direction"
+
+  julia:
+    name: "Julia/Mandelbrot"
+    params:
+      mode: "Mode"
+      julia_cx: "Julia C (Real)"
+      julia_cy: "Julia C (Imag)"
+      max_iter: "Max Iterations"
+      zoom: "Zoom"
+      center_x: "Center X"
+      center_y: "Center Y"
+      color_mode: "Color Mode"
+      intensity: "Intensity"
+      blend_mode: "Blend Mode"
 
 # Errors
 errors:
