@@ -8,6 +8,7 @@
 //   params[3] = mode: 0=Cells, 1=Edges, 2=Organic, 3=Crystal
 //   params[4] = color_mode: 0=Grayscale, 1=Rainbow, 2=Original
 //   params[5] = blend_mode (0-12): See blend_modes.wgsl for options
+//   params[6] = direction (0-360): Direction of apparent motion in degrees
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -112,12 +113,17 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let mode = i32(get_param(3u));
     let color_mode = i32(get_param(4u));
     let blend_mode = i32(get_param(5u));
+    let direction = get_param(6u) * PI / 180.0;
 
     let uv = input.uv;
     let original = textureSample(input_texture, input_sampler, uv);
 
-    // Calculate Worley noise
-    let w = worley(uv * scale, time);
+    // Compute directional time offset
+    let time_offset = vec2<f32>(cos(direction), sin(direction)) * time * 0.1;
+    let animated_uv = uv + time_offset;
+
+    // Calculate Worley noise with directional movement
+    let w = worley(animated_uv * scale, time);
     let f1 = w.x;  // Distance to closest point
     let f2 = w.y;  // Distance to second closest
 

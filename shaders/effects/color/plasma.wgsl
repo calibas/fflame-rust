@@ -8,6 +8,7 @@
 //   params[2] = speed (0-10): Animation speed multiplier
 //   params[3] = time: Current time for animation
 //   params[4] = blend_mode (0-12): See blend_modes.wgsl for options
+//   params[5] = direction (0-360): Direction of apparent motion in degrees
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -76,9 +77,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let speed = get_param(2u);
     let time = get_param(3u) * speed;
     let blend_mode = i32(get_param(4u));
+    let direction = get_param(5u) * PI / 180.0;
 
-    // Generate plasma
-    let v = plasma(input.uv, scale, time);
+    // Compute directional time offset and apply to UV
+    let time_offset = vec2<f32>(cos(direction), sin(direction)) * time * 0.1;
+    let animated_uv = input.uv + time_offset;
+
+    // Generate plasma with directional movement
+    let v = plasma(animated_uv, scale, time);
     let plasma_rgb = plasma_color(v);
 
     // Apply blend mode using shared library

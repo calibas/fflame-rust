@@ -292,7 +292,7 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 param_type: ParamType::Float,
                 default_value: 0.0,
                 min_value: Some(0.0),
-                max_value: Some(1000.0),
+                max_value: Some(256.0),
             },
             EffectParameter {
                 name: "blend_mode".to_string(),
@@ -550,6 +550,13 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(0.0),
                 max_value: Some(12.0),
             },
+            EffectParameter {
+                name: "direction".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 225.0, // Default: up-left (legacy behavior)
+                min_value: Some(0.0),
+                max_value: Some(360.0),
+            },
         ],
     });
 
@@ -689,6 +696,13 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(0.0),
                 max_value: Some(12.0),
             },
+            EffectParameter {
+                name: "direction".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 225.0, // Default: up-left (legacy behavior)
+                min_value: Some(0.0),
+                max_value: Some(360.0),
+            },
         ],
     });
 
@@ -740,6 +754,13 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(0.0),
                 max_value: Some(12.0),
             },
+            EffectParameter {
+                name: "direction".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 225.0, // Default: up-left (legacy behavior)
+                min_value: Some(0.0),
+                max_value: Some(360.0),
+            },
         ],
     });
 
@@ -790,6 +811,13 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 default_value: 4.0, // Overlay
                 min_value: Some(0.0),
                 max_value: Some(12.0),
+            },
+            EffectParameter {
+                name: "direction".to_string(),
+                param_type: ParamType::Angle,
+                default_value: 225.0, // Default: up-left (legacy behavior)
+                min_value: Some(0.0),
+                max_value: Some(360.0),
             },
         ],
     });

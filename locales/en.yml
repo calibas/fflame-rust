@@ -1267,6 +1267,7 @@ effects:
       speed: "Speed"
       time: "Time"
       blend_mode: "Blend Mode"
+      direction: "Direction"
 
   tunnel:
     name: "Tunnel"
@@ -1295,6 +1296,7 @@ effects:
       octaves: "Octaves"
       time: "Time"
       blend_mode: "Blend Mode"
+      direction: "Direction"
 
   simplex_noise:
     name: "Simplex Noise"
@@ -1305,6 +1307,7 @@ effects:
       time: "Time"
       mode: "Mode"
       blend_mode: "Blend Mode"
+      direction: "Direction"
 
   worley_noise:
     name: "Worley Noise"
@@ -1315,6 +1318,7 @@ effects:
       mode: "Pattern"
       color_mode: "Color Mode"
       blend_mode: "Blend Mode"
+      direction: "Direction"
 
 # Errors
 errors:
