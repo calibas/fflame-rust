@@ -374,10 +374,10 @@ Based on analysis of [new-shaders.md](new-shaders.md), these can be implemented 
 - [x] `bilateral_blur` - Edge-preserving blur (better quality than Gaussian)
 
 ### Phase 4: Polish
-- [ ] LUT library for color_grade
+- ~~[ ] LUT library for color_grade~~ (skip for now)
 - [ ] Multi-pass effects (bloom with separate blur passes)
-- [ ] Animation timeline integration
-- [ ] Effect import/export
+- [x] Animation timeline integration
+- ~~[ ] Effect import/export~~ (skip for now)
 
 ---
 
@@ -389,14 +389,14 @@ Based on review of [new-shaders.md](new-shaders.md), here's what our current sin
 
 | Effect | Category | Description |
 |--------|----------|-------------|
-| Bilateral Filtering | Density | Edge-preserving blur, O(n²) per pixel |
-| Kaleidoscope | Color | UV manipulation, very cheap |
-| Domain Warping | Color | Organic distortion using FBM |
-| Simplex/Worley Noise | Color | Procedural overlays/distortions |
-| Sobel Edge Detection | Color | Neon outline effect |
-| Plasma | Color | Classic demoscene effect |
-| Tunnel | Color | Polar coordinate warp |
-| Mandelbrot/Julia Overlay | Color | Fractal blend/overlay |
+| Bilateral Filtering✅ | Density | Edge-preserving blur, O(n²) per pixel |
+| Kaleidoscope✅ | Color | UV manipulation, very cheap |
+| Domain Warping✅ | Color | Organic distortion using FBM |
+| Simplex/Worley✅ Noise | Color | Procedural overlays/distortions |
+| Sobel Edge Detection✅ | Color | Neon outline effect |
+| Plasma✅ | Color | Classic demoscene effect |
+| Tunnel✅ | Color | Polar coordinate warp |
+| Mandelbrot/Julia Overlay✅ | Color | Fractal blend/overlay |
 
 ### ⚠️ Partial Implementation Possible
 
