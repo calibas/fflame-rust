@@ -30,6 +30,7 @@ mod embedded_shaders {
     pub const TUNNEL: &str = include_str!("../../shaders/effects/color/tunnel.wgsl");
     pub const VIGNETTE: &str = include_str!("../../shaders/effects/color/vignette.wgsl");
     pub const WORLEY_NOISE: &str = include_str!("../../shaders/effects/color/worley_noise.wgsl");
+    pub const JULIA: &str = include_str!("../../shaders/effects/color/julia.wgsl");
 
     // Density effects
     pub const BILATERAL_BLUR: &str = include_str!("../../shaders/effects/density/bilateral_blur.wgsl");
@@ -87,6 +88,7 @@ fn load_effect_shader(shader_path: &str) -> Result<String, String> {
                 "effects/color/tunnel.wgsl" => Ok(embedded_shaders::TUNNEL.to_string()),
                 "effects/color/vignette.wgsl" => Ok(embedded_shaders::VIGNETTE.to_string()),
                 "effects/color/worley_noise.wgsl" => Ok(embedded_shaders::WORLEY_NOISE.to_string()),
+                "effects/color/julia.wgsl" => Ok(embedded_shaders::JULIA.to_string()),
                 "effects/density/bilateral_blur.wgsl" => Ok(embedded_shaders::BILATERAL_BLUR.to_string()),
                 "effects/density/density_blur.wgsl" => Ok(embedded_shaders::DENSITY_BLUR.to_string()),
                 "effects/density/sharpen.wgsl" => Ok(embedded_shaders::SHARPEN.to_string()),
