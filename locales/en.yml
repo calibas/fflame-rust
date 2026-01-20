@@ -1320,6 +1320,20 @@ effects:
       blend_mode: "Blend Mode"
       direction: "Direction"
 
+  julia:
+    name: "Julia/Mandelbrot"
+    params:
+      mode: "Mode"
+      julia_cx: "Julia C (Real)"
+      julia_cy: "Julia C (Imag)"
+      max_iter: "Max Iterations"
+      zoom: "Zoom"
+      center_x: "Center X"
+      center_y: "Center Y"
+      color_mode: "Color Mode"
+      intensity: "Intensity"
+      blend_mode: "Blend Mode"
+
 # Errors
 errors:
   file_not_found: "File not found"
