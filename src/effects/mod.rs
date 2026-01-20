@@ -821,6 +821,85 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
             },
         ],
     });
+
+    // Julia/Mandelbrot - fractal overlay
+    registry.register(EffectInfo {
+        name: "julia".to_string(),
+        category: EffectCategory::Color,
+        shader_path: "effects/color/julia.wgsl".to_string(),
+        parameters: vec![
+            EffectParameter {
+                name: "mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 1.0, // 0=Mandelbrot, 1=Julia
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "julia_cx".to_string(),
+                param_type: ParamType::Float,
+                default_value: -0.7,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            EffectParameter {
+                name: "julia_cy".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.27,
+                min_value: Some(-2.0),
+                max_value: Some(2.0),
+            },
+            EffectParameter {
+                name: "max_iter".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 100.0,
+                min_value: Some(10.0),
+                max_value: Some(500.0),
+            },
+            EffectParameter {
+                name: "zoom".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.1),
+                max_value: Some(100.0),
+            },
+            EffectParameter {
+                name: "center_x".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-3.0),
+                max_value: Some(3.0),
+            },
+            EffectParameter {
+                name: "center_y".to_string(),
+                param_type: ParamType::Float,
+                default_value: 0.0,
+                min_value: Some(-3.0),
+                max_value: Some(3.0),
+            },
+            EffectParameter {
+                name: "color_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 1.0, // 0=Escape, 1=Smooth, 2=Original mask
+                min_value: Some(0.0),
+                max_value: Some(2.0),
+            },
+            EffectParameter {
+                name: "intensity".to_string(),
+                param_type: ParamType::Float,
+                default_value: 1.0,
+                min_value: Some(0.0),
+                max_value: Some(1.0),
+            },
+            EffectParameter {
+                name: "blend_mode".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0, // Normal
+                min_value: Some(0.0),
+                max_value: Some(12.0),
+            },
+        ],
+    });
 }
 
 #[cfg(test)]
