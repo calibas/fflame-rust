@@ -274,6 +274,87 @@ fn add_effect_params(
     }
 }
 
+/// Get the current value of a parameter from the config based on track path
+/// Returns None if the path is not recognized or the value cannot be extracted
+fn get_parameter_value(config: &FractalConfig, path: &str) -> Option<f64> {
+    let flame = &config.flame;
+
+    // Direct config fields
+    match path {
+        "Zoom" => return Some(config.zoom as f64),
+        "PanX" => return Some(config.pan_x as f64),
+        "PanY" => return Some(config.pan_y as f64),
+        "Rotation" => return Some(config.rotation as f64),
+        "CameraRotationX" => return Some(config.camera_rotation_x as f64),
+        "CameraRotationY" => return Some(config.camera_rotation_y as f64),
+        "CameraZ" => return Some(config.camera_z as f64),
+        "Exposure" => return Some(config.exposure as f64),
+        "Gamma" => return Some(config.gamma as f64),
+        "GammaThreshold" => return Some(config.gamma_threshold as f64),
+        "Brightness" => return Some(config.brightness as f64),
+        "Vibrancy" => return Some(config.vibrancy as f64),
+        "Saturation" => return Some(config.saturation as f64),
+        "HueShift" => return Some(config.hue_shift as f64),
+        "AlphaBlendLow" => return Some(config.alpha_blend_low as f64),
+        "AlphaBlendHigh" => return Some(config.alpha_blend_high as f64),
+        "DensityScale" => return Some(config.density_scale as f64),
+        "PaletteRotation" => return Some(config.palette_rotation as f64),
+        "SpeedFactor" => return Some(config.speed_factor as f64),
+        "HistogramColorScale" => return Some(config.histogram_color_scale as f64),
+        "BackgroundColorR" => return Some(config.background_color[0] as f64),
+        "BackgroundColorG" => return Some(config.background_color[1] as f64),
+        "BackgroundColorB" => return Some(config.background_color[2] as f64),
+        "BlendFactor" => return Some(config.blend_factor as f64),
+        "PerspectiveStrength" => return Some(flame.perspective_strength as f64),
+        _ => {}
+    }
+
+    // Parse Transform paths: Transform.{index}.{field}
+    if path.starts_with("Transform.") {
+        let parts: Vec<&str> = path.split('.').collect();
+        if parts.len() >= 3 {
+            if let Ok(idx) = parts[1].parse::<usize>() {
+                if idx < flame.transforms.len() {
+                    let transform = &flame.transforms[idx];
+                    match parts[2] {
+                        "Weight" => return Some(transform.weight as f64),
+                        "Color" => return Some(transform.color as f64),
+                        "ColorSpeed" => return Some(transform.color_speed as f64),
+                        "Opacity" => return Some(transform.opacity as f64),
+                        "Affine" if parts.len() >= 4 => {
+                            return match parts[3] {
+                                "A" => Some(transform.a as f64),
+                                "B" => Some(transform.b as f64),
+                                "C" => Some(transform.c as f64),
+                                "D" => Some(transform.d as f64),
+                                "E" => Some(transform.e as f64),
+                                "F" => Some(transform.f as f64),
+                                "G" => Some(transform.g as f64),
+                                _ => None,
+                            };
+                        }
+                        "Variation" if parts.len() >= 4 => {
+                            let var_name = parts[3];
+                            return transform.variations.get(var_name).map(|w| *w as f64);
+                        }
+                        "VariationParam" if parts.len() >= 5 => {
+                            let var_name = parts[3];
+                            let param_name = parts[4];
+                            // variation_params uses flat keys: "variation_name.param_name"
+                            let key = format!("{}.{}", var_name, param_name);
+                            return transform.variation_params.get(&key).map(|v| *v as f64);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // Default: value not found
+    None
+}
+
 /// Render the track editor section
 ///
 /// If `timeline_layout` is provided, renders visual track bars aligned with the scrubber.
@@ -321,8 +402,9 @@ pub fn render_track_editor(
 
     // Keyframe editor (shown when editing a track's keyframes)
     if let Some(ref track_path) = state.editing_keyframes_for.clone() {
+        let current_time = controller.current_time;
         if let Some(ref mut animation) = controller.animation {
-            render_keyframe_editor(ui, animation, &track_path, state);
+            render_keyframe_editor(ui, animation, &track_path, state, current_time, config);
         }
     }
 
@@ -894,8 +976,13 @@ fn render_keyframe_editor(
     animation: &mut Animation,
     track_path: &str,
     state: &mut TrackEditorState,
+    current_time: f64,
+    config: &FractalConfig,
 ) {
     let duration = animation.duration;
+
+    // Get the current value for this parameter from the config
+    let current_value = get_parameter_value(config, track_path);
 
     if let Some(track) = animation.tracks.get_mut(track_path) {
         if let TrackSource::Keyframes { ref mut keyframes } = track.source {
@@ -979,10 +1066,22 @@ fn render_keyframe_editor(
 
                     ui.separator();
 
-                    // Add keyframe button
+                    // Add keyframe buttons
                     ui.horizontal(|ui| {
+                        // Add keyframe at current time with current value (most useful)
+                        if ui.button(t!("track_editor.add_at_current")).clicked() {
+                            let value = current_value.unwrap_or(0.0);
+                            keyframes.push(Keyframe {
+                                time: current_time.clamp(0.0, duration),
+                                value: serde_json::json!(value),
+                                easing: EasingFunction::Linear,
+                            });
+                            // Auto-sort after adding
+                            keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+                        }
+
+                        // Add keyframe at end
                         if ui.button(t!("track_editor.add_keyframe")).clicked() {
-                            // Add at the end with interpolated value
                             let last_time = keyframes.last().map(|k| k.time).unwrap_or(0.0);
                             let last_value = keyframes.last()
                                 .and_then(|k| k.value.as_f64())
@@ -994,7 +1093,9 @@ fn render_keyframe_editor(
                                 easing: EasingFunction::Linear,
                             });
                         }
+                    });
 
+                    ui.horizontal(|ui| {
                         if ui.button(t!("track_editor.sort_by_time")).clicked() {
                             keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
                         }

@@ -928,7 +928,8 @@ track_editor:
   easing_easeinsine: "EaseInSine"
   easing_easeoutsine: "EaseOutSine"
   easing_easeinoutsine: "EaseInOutSine"
-  add_keyframe: "+ Add Keyframe"
+  add_keyframe: "+ Add at End"
+  add_at_current: "+ Add at Current Time"
   sort_by_time: "Sort by Time"
   done: "Done"
 
