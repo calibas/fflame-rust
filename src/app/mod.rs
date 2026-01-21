@@ -245,8 +245,9 @@ pub struct App {
     // Track export state to detect when export finishes (for surface recovery)
     pub(super) was_video_exporting: bool,
 
-    // Fullscreen mode (hides UI, shows only fractal viewport)
-    pub(super) fullscreen_mode: bool,
+    // Fullscreen state (two-stage: window fullscreen, then hide UI)
+    pub(super) window_fullscreen: bool,  // Window is in fullscreen mode
+    pub(super) ui_hidden: bool,          // UI panels are hidden (only in fullscreen)
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -333,7 +334,8 @@ impl App {
             histogram_frame_counter: 0,
             effect_chain,
             was_video_exporting: false,
-            fullscreen_mode: false,
+            window_fullscreen: false,
+            ui_hidden: false,
         };
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
@@ -658,7 +660,7 @@ impl App {
             &mut self.use_custom_export_size,
             &export_progress,
             &png_export_progress,
-            self.fullscreen_mode,
+            self.ui_hidden,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
