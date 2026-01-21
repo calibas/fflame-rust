@@ -58,6 +58,9 @@ pub struct UiResponse {
     // Animation timeline was scrubbed (slider dragged or frame stepped)
     pub animation_seek_changed: bool,
 
+    // Animation scrubber drag stopped or discrete seek action (frame step) - reset accumulation
+    pub animation_seek_drag_stopped: bool,
+
     // Path filters changed (applies to renderer, not config)
     pub path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>>,
 
@@ -102,6 +105,7 @@ impl Default for UiResponse {
             file_browser_open_requested: false,
             animation_export_requested: None,
             animation_seek_changed: false,
+            animation_seek_drag_stopped: false,
             path_filters_changed: None,
             generated_flame: None,
             generated_batch: None,

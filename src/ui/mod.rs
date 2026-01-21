@@ -335,6 +335,7 @@ impl EguiLayer {
         // Animation export
         let mut animation_export_requested: Option<animation_panel::AnimationExportSettings> = None;
         let mut animation_seek_changed = false;
+        let mut animation_seek_drag_stopped = false;
 
         // Path filters
         let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
@@ -488,6 +489,9 @@ impl EguiLayer {
 
                         // Animation seek changed flag
                         animation_seek_changed: &mut animation_seek_changed,
+
+                        // Animation scrubber drag stopped - for reset accumulation
+                        animation_seek_drag_stopped: &mut animation_seek_drag_stopped,
 
                         // PathMap mode: clicked pixel and path info
                         hovered_pixel: &mut self.clicked_pixel,
@@ -697,6 +701,7 @@ impl EguiLayer {
             file_browser_open_requested,
             animation_export_requested,
             animation_seek_changed,
+            animation_seek_drag_stopped,
             path_filters_changed,
             generated_flame,
             generated_batch,
