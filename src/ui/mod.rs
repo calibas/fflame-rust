@@ -28,7 +28,7 @@ mod variation_params;
 mod view;
 pub mod workspace;
 
-pub use animation_panel::ExportProgress;
+pub use animation_panel::{ExportProgress, TimelineLayout};
 pub use export_panel::PngExportProgress;
 pub use histogram::LevelsState;
 pub use track_editor::TrackEditorState;
