@@ -108,10 +108,10 @@ impl App {
                 self.view_changed_by_keyboard = true;
             }
             PhysicalKey::Code(KeyCode::KeyF) => {
-                self.toggle_fullscreen();
+                self.cycle_fullscreen();
             }
             PhysicalKey::Code(KeyCode::Escape) => {
-                if self.fullscreen_mode {
+                if self.window_fullscreen || self.ui_hidden {
                     self.exit_fullscreen();
                 }
             }
@@ -119,18 +119,34 @@ impl App {
         }
     }
 
-    /// Toggle fullscreen mode (F key)
-    pub fn toggle_fullscreen(&mut self) {
-        if self.fullscreen_mode {
-            self.exit_fullscreen();
+    /// Cycle fullscreen mode (F key)
+    /// Normal → Fullscreen+UI → Fullscreen-UI → Normal
+    pub fn cycle_fullscreen(&mut self) {
+        // For WASM, check actual browser state (our tracked state can be stale due to async)
+        #[cfg(target_arch = "wasm32")]
+        let is_fullscreen = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.fullscreen_element())
+            .is_some();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let is_fullscreen = self.window_fullscreen;
+
+        if !is_fullscreen {
+            // Stage 1: Enter fullscreen, keep UI visible
+            self.enter_window_fullscreen();
+        } else if !self.ui_hidden {
+            // Stage 2: Hide UI (already in fullscreen)
+            self.ui_hidden = true;
         } else {
-            self.enter_fullscreen();
+            // Stage 3: Exit fullscreen entirely
+            self.exit_fullscreen();
         }
     }
 
-    /// Enter fullscreen mode
-    pub fn enter_fullscreen(&mut self) {
-        self.fullscreen_mode = true;
+    /// Enter window fullscreen mode (stage 1)
+    fn enter_window_fullscreen(&mut self) {
+        self.window_fullscreen = true;
 
         // Desktop: Use winit's fullscreen API
         #[cfg(not(target_arch = "wasm32"))]
@@ -142,7 +158,6 @@ impl App {
         // WASM: Use browser's Fullscreen API on the canvas
         #[cfg(target_arch = "wasm32")]
         {
-            use wasm_bindgen::JsCast;
             if let Some(canvas) = web_sys::window()
                 .and_then(|w| w.document())
                 .and_then(|d| d.get_element_by_id("canvas"))
@@ -152,9 +167,10 @@ impl App {
         }
     }
 
-    /// Exit fullscreen mode
+    /// Exit fullscreen mode completely
     pub fn exit_fullscreen(&mut self) {
-        self.fullscreen_mode = false;
+        self.window_fullscreen = false;
+        self.ui_hidden = false;
 
         // Desktop: Exit fullscreen via winit
         #[cfg(not(target_arch = "wasm32"))]
@@ -176,15 +192,15 @@ impl App {
     pub fn sync_fullscreen_state(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
-            use wasm_bindgen::JsCast;
             let browser_is_fullscreen = web_sys::window()
                 .and_then(|w| w.document())
                 .and_then(|d| d.fullscreen_element())
                 .is_some();
 
             // If browser exited fullscreen but we still think we're in it, sync state
-            if self.fullscreen_mode && !browser_is_fullscreen {
-                self.fullscreen_mode = false;
+            if self.window_fullscreen && !browser_is_fullscreen {
+                self.window_fullscreen = false;
+                self.ui_hidden = false;
             }
         }
     }
