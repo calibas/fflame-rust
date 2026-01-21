@@ -278,6 +278,7 @@ impl EguiLayer {
         use_custom_export_size: &mut bool,
         animation_export_progress: &animation_panel::ExportProgress,
         png_export_progress: &export_panel::PngExportProgress,
+        fullscreen_mode: bool,
     ) -> UiResponse {
         let raw_input = self.state.take_egui_input(window);
 
@@ -357,7 +358,39 @@ impl EguiLayer {
                 font_loader::debug_font_info(ctx);
             }
 
-            // Render menu bar
+            // Fullscreen mode: render only the fractal, no UI panels
+            if fullscreen_mode {
+                // Render fractal texture fullscreen
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ctx, |ui| {
+                        if let Some(texture_id) = fractal_texture_id {
+                            let available = ui.available_size();
+                            ui.add(egui::Image::new(egui::load::SizedTexture::new(
+                                texture_id,
+                                available,
+                            )));
+                            // Track viewport size for renderer resize
+                            fractal_viewport_size = Some((available.x as u32, available.y as u32));
+                        }
+                    });
+
+                // Show exit hint at bottom
+                egui::Area::new(egui::Id::new("fullscreen_hint"))
+                    .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -20.0))
+                    .interactable(false)
+                    .show(ctx, |ui| {
+                        ui.add(egui::Label::new(
+                            egui::RichText::new("Press F or Esc to exit fullscreen")
+                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180))
+                                .size(14.0)
+                        ).selectable(false));
+                    });
+
+                return;
+            }
+
+            // Normal mode: render menu bar and dock panels
             menu_bar::render_menu_bar(
                 ctx,
                 workspace,
