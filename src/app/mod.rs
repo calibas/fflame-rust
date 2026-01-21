@@ -221,6 +221,9 @@ pub struct App {
 
     // Fractal viewport size (updated from UI each frame)
     pub(super) fractal_viewport_size: (u32, u32),
+    // Debounce viewport resize (WASM only - prevents rapid resize loops)
+    #[cfg(target_arch = "wasm32")]
+    pub(super) last_viewport_resize_time: Option<web_time::Instant>,
 
     // PNG export settings (UI state only, not in config)
     pub(super) export_width: u32,
@@ -325,6 +328,8 @@ impl App {
             ui_needs_repaint: false,
             last_input_time: None,
             fractal_viewport_size: initial_viewport_size, // Initialize to window size
+            #[cfg(target_arch = "wasm32")]
+            last_viewport_resize_time: None,
             export_width,
             export_height,
             use_custom_export_size: false,  // Default to viewport size
@@ -669,10 +674,29 @@ impl App {
         self.ui_needs_repaint = ui_response.needs_repaint;
 
         // Handle viewport resize immediately (before rendering)
+        // WASM: Debounce resizes to prevent rapid resize loops that can freeze the browser
         if let Some(viewport_size) = ui_response.fractal_viewport_size {
-            if viewport_size != self.fractal_viewport_size {
+            #[cfg(target_arch = "wasm32")]
+            let should_resize = {
+                let now = web_time::Instant::now();
+                // 100ms debounce - safe even at 10 FPS while still feeling responsive
+                let debounce_ok = self.last_viewport_resize_time
+                    .map(|t| now.duration_since(t).as_millis() > 100)
+                    .unwrap_or(true);
+                viewport_size != self.fractal_viewport_size && debounce_ok
+            };
+
+            #[cfg(not(target_arch = "wasm32"))]
+            let should_resize = viewport_size != self.fractal_viewport_size;
+
+            if should_resize {
                 log::info!("Fractal viewport resize: {:?} → {:?}", self.fractal_viewport_size, viewport_size);
                 self.fractal_viewport_size = viewport_size;
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.last_viewport_resize_time = Some(web_time::Instant::now());
+                }
 
                 // Resize renderer to match new viewport dimensions
                 if let Some(ref mut renderer) = self.flame_renderer {
