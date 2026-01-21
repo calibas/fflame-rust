@@ -77,6 +77,9 @@ pub struct PanelContext<'a> {
     pub animation_export_requested: &'a mut Option<super::animation_panel::AnimationExportSettings>,
     pub animation_export_progress: &'a super::animation_panel::ExportProgress,
 
+    // Export Animation panel state (Phase 5)
+    pub export_panel_state: &'a mut super::animation_panel::ExportPanelState,
+
     // Track editor state
     pub track_editor_state: &'a mut super::track_editor::TrackEditorState,
 
@@ -288,10 +291,9 @@ impl<'a> PanelViewer<'a> {
             self.context.animation_export_progress,
         );
 
-        // Handle open export panel request
+        // Handle open export panel request (Phase 5)
         if response.open_export_panel {
-            // TODO Phase 5: Open the Export Animation panel as a separate dockable panel
-            log::info!("Export Animation panel requested (will be implemented in Phase 5)");
+            self.context.export_panel_state.is_open = true;
         }
 
         // Handle animation load response
