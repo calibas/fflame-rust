@@ -1317,7 +1317,7 @@ impl App {
 
         // Determine overwrite mode (smooth transitions during parameter changes)
         // Must be computed before mutable borrow of flame_renderer
-        let use_overwrite = self.should_use_overwrite(is_controller_playing);
+        let use_overwrite = self.should_use_overwrite();
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {
