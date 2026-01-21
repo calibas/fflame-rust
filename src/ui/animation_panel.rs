@@ -517,8 +517,296 @@ fn quality_mode_label(mode: AnimationQualityMode) -> String {
     }
 }
 
-/// Render export controls for high-quality animation rendering
-/// NOTE: This will be moved to a separate Export Animation panel in Phase 5
+/// State for the Export Animation panel
+#[derive(Default)]
+pub struct ExportPanelState {
+    pub is_open: bool,
+}
+
+/// Render the Export Animation panel as a popup window
+///
+/// Phase 5: Separate panel for export settings and progress
+pub fn render_export_panel(
+    ctx: &egui::Context,
+    controller: &AnimationController,
+    settings: &mut AnimationExportSettings,
+    progress: &ExportProgress,
+    export_panel_state: &mut ExportPanelState,
+) -> Option<AnimationExportSettings> {
+    let mut export_request = None;
+    let has_animation = controller.animation.is_some();
+
+    if !export_panel_state.is_open {
+        return None;
+    }
+
+    egui::Window::new(t!("animation_panel.export_panel_title"))
+        .open(&mut export_panel_state.is_open)
+        .collapsible(false)
+        .resizable(true)
+        .min_width(400.0)
+        .show(ctx, |ui| {
+            // Show progress bar when exporting
+            if progress.is_exporting {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(&progress.status);
+                });
+
+                ui.add(egui::ProgressBar::new(progress.progress())
+                    .text(t!("animation_panel.frame_progress",
+                        current = progress.current_frame + 1,
+                        total = progress.total_frames))
+                    .animate(true));
+
+                let eta = progress.eta_seconds();
+                if eta > 0.0 {
+                    let eta_min = (eta / 60.0).floor() as u32;
+                    let eta_sec = (eta % 60.0).floor() as u32;
+                    ui.label(t!("animation_panel.eta", min = eta_min, sec = format!("{:02}", eta_sec)));
+                }
+
+                ui.separator();
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let ffmpeg_available = crate::animation::export::is_ffmpeg_available();
+
+                if !ffmpeg_available {
+                    ui.horizontal(|ui| {
+                        ui.label(t!("animation_panel.ffmpeg_not_found"));
+                    });
+                    ui.small(t!("animation_panel.ffmpeg_hint"));
+                    ui.separator();
+                }
+
+                ui.add_enabled_ui(has_animation && !progress.is_exporting && ffmpeg_available, |ui| {
+                    render_export_settings(ui, controller, settings, &mut export_request);
+                });
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                ui.label(t!("animation_panel.export_not_available_wasm"));
+            }
+        });
+
+    export_request
+}
+
+/// Render export settings controls (used inside the export panel)
+#[cfg(not(target_arch = "wasm32"))]
+fn render_export_settings(
+    ui: &mut Ui,
+    controller: &AnimationController,
+    settings: &mut AnimationExportSettings,
+    export_request: &mut Option<AnimationExportSettings>,
+) {
+    // Output file path
+    ui.horizontal(|ui| {
+        ui.label(t!("animation_panel.output"));
+        let path_str = settings.output_path.to_string_lossy().to_string();
+        let mut path_display = path_str.clone();
+        if ui.text_edit_singleline(&mut path_display).changed() {
+            settings.output_path = std::path::PathBuf::from(&path_display);
+        }
+
+        if ui.button(t!("animation_panel.browse")).clicked() {
+            let extension = settings.video_codec.extension();
+            if let Some(path) = rfd::FileDialog::new()
+                .set_title(t!("animation_panel.save_video_as").as_ref())
+                .add_filter("Video", &[extension])
+                .set_file_name(&format!("animation.{}", extension))
+                .save_file()
+            {
+                settings.output_path = path;
+            }
+        }
+    });
+
+    // Codec selection
+    ui.horizontal(|ui| {
+        ui.label(t!("animation_panel.codec"));
+        let old_codec = settings.video_codec;
+        egui::ComboBox::from_id_salt("video_codec")
+            .selected_text(settings.video_codec.display_name())
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut settings.video_codec, VideoCodec::H264, VideoCodec::H264.display_name());
+                ui.selectable_value(&mut settings.video_codec, VideoCodec::H265, VideoCodec::H265.display_name());
+                ui.selectable_value(&mut settings.video_codec, VideoCodec::VP9, VideoCodec::VP9.display_name());
+            });
+        // Update extension when codec changes
+        if old_codec != settings.video_codec {
+            if let Some(stem) = settings.output_path.file_stem() {
+                let new_name = format!("{}.{}", stem.to_string_lossy(), settings.video_codec.extension());
+                if let Some(parent) = settings.output_path.parent() {
+                    settings.output_path = parent.join(new_name);
+                } else {
+                    settings.output_path = std::path::PathBuf::from(new_name);
+                }
+            }
+        }
+    });
+
+    // Hardware acceleration
+    ui.horizontal(|ui| {
+        ui.label(t!("animation_panel.encoder"));
+        let old_accel = settings.hardware_accel;
+        egui::ComboBox::from_id_salt("hardware_accel")
+            .selected_text(settings.hardware_accel.display_name())
+            .show_ui(ui, |ui| {
+                for &accel in HardwareAccel::all() {
+                    // Only show options that support the current codec
+                    let supported = accel.supports_codec(settings.video_codec);
+                    ui.add_enabled_ui(supported, |ui| {
+                        let label = if supported {
+                            accel.display_name().to_string()
+                        } else {
+                            t!("animation_panel.encoder_not_available",
+                                encoder = accel.display_name(),
+                                codec = settings.video_codec.display_name()).to_string()
+                        };
+                        ui.selectable_value(&mut settings.hardware_accel, accel, label);
+                    });
+                }
+            });
+        // Reset to software if current accel doesn't support new codec
+        if old_accel != settings.hardware_accel || !settings.hardware_accel.supports_codec(settings.video_codec) {
+            if !settings.hardware_accel.supports_codec(settings.video_codec) {
+                settings.hardware_accel = HardwareAccel::None;
+            }
+        }
+    });
+
+    // Quality slider
+    ui.horizontal(|ui| {
+        ui.label(t!("animation_panel.quality"));
+        ui.add(egui::Slider::new(&mut settings.video_quality, 0..=51).text(t!("animation_panel.crf").as_ref()));
+    });
+    ui.small(t!("animation_panel.quality_hint"));
+
+    // Preset dropdown
+    ui.horizontal(|ui| {
+        ui.label(t!("animation_panel.preset"));
+
+        use crate::animation::export::EncodingPreset;
+        let available_presets = EncodingPreset::available_for(settings.hardware_accel);
+
+        if available_presets.is_empty() {
+            ui.label(t!("animation_panel.preset_not_supported"));
+        } else {
+            let old_accel = settings.hardware_accel;
+
+            // Reset preset to default if hardware accel changed
+            if let Some(prev_accel) = ui.memory_mut(|mem| {
+                mem.data.get_temp::<HardwareAccel>(egui::Id::new("last_hw_accel"))
+            }) {
+                if prev_accel != old_accel {
+                    settings.preset = EncodingPreset::default_for(old_accel);
+                }
+            }
+            ui.memory_mut(|mem| {
+                mem.data.insert_temp(egui::Id::new("last_hw_accel"), old_accel);
+            });
+
+            egui::ComboBox::from_id_salt("preset_combo")
+                .selected_text(settings.preset.display_name())
+                .show_ui(ui, |ui| {
+                    for preset in available_presets {
+                        ui.selectable_value(
+                            &mut settings.preset,
+                            preset,
+                            preset.display_name()
+                        );
+                    }
+                });
+        }
+    });
+    ui.small(t!("animation_panel.preset_hint"));
+
+    // Tune dropdown (CPU encoders only)
+    if settings.hardware_accel == HardwareAccel::None {
+        ui.horizontal(|ui| {
+            ui.label(t!("animation_panel.tune"));
+
+            use crate::animation::export::EncodingTune;
+            egui::ComboBox::from_id_salt("tune_combo")
+                .selected_text(settings.tune.display_name())
+                .show_ui(ui, |ui| {
+                    for &tune in EncodingTune::all() {
+                        ui.selectable_value(
+                            &mut settings.tune,
+                            tune,
+                            tune.display_name()
+                        );
+                    }
+                });
+        });
+        ui.small(t!("animation_panel.tune_hint"));
+    }
+
+    ui.separator();
+
+    // Resolution
+    ui.horizontal(|ui| {
+        ui.label(t!("animation_panel.resolution"));
+        ui.add(egui::DragValue::new(&mut settings.width).range(100..=7680).suffix("w"));
+        ui.label("×");
+        ui.add(egui::DragValue::new(&mut settings.height).range(100..=4320).suffix("h"));
+    });
+
+    // Quick resolution presets
+    ui.horizontal(|ui| {
+        if ui.small_button("720p").clicked() {
+            settings.width = 1280;
+            settings.height = 720;
+        }
+        if ui.small_button("1080p").clicked() {
+            settings.width = 1920;
+            settings.height = 1080;
+        }
+        if ui.small_button("4K").clicked() {
+            settings.width = 3840;
+            settings.height = 2160;
+        }
+    });
+
+    // FPS
+    ui.horizontal(|ui| {
+        ui.label(t!("animation_panel.frame_rate"));
+        ui.add(egui::DragValue::new(&mut settings.fps).range(1..=120).suffix(" fps"));
+
+        if ui.small_button("24").clicked() { settings.fps = 24; }
+        if ui.small_button("30").clicked() { settings.fps = 30; }
+        if ui.small_button("60").clicked() { settings.fps = 60; }
+    });
+
+    // Iterations
+    ui.horizontal(|ui| {
+        ui.label(t!("animation_panel.iterations_thread"));
+        ui.add(egui::DragValue::new(&mut settings.iterations_per_thread).range(32..=4096));
+    });
+
+    // Estimate
+    if let Some(ref animation) = controller.animation {
+        let total_frames = (animation.duration * settings.fps as f64).ceil() as u32;
+        ui.separator();
+        ui.label(t!("animation_panel.total_frames",
+            frames = total_frames,
+            duration = format!("{:.1}", animation.duration),
+            fps = settings.fps));
+    }
+
+    ui.separator();
+
+    // Export button
+    if ui.button(t!("animation_panel.export_video")).clicked() {
+        *export_request = Some(settings.clone());
+    }
+}
+
+/// Render export controls for high-quality animation rendering (Legacy - kept for reference)
 #[allow(dead_code)]
 fn render_export_controls(
     ui: &mut Ui,

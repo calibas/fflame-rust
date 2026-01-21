@@ -28,7 +28,7 @@ mod variation_params;
 mod view;
 pub mod workspace;
 
-pub use animation_panel::{ExportProgress, TimelineLayout};
+pub use animation_panel::{ExportProgress, ExportPanelState, TimelineLayout};
 pub use export_panel::PngExportProgress;
 pub use histogram::LevelsState;
 pub use track_editor::{TrackEditorState, TrackEditorResponse};
@@ -82,6 +82,9 @@ pub struct EguiLayer {
 
     // Animation export settings
     animation_export_settings: animation_panel::AnimationExportSettings,
+
+    // Export Animation panel state (Phase 5)
+    export_panel_state: animation_panel::ExportPanelState,
 
     // Track editor state
     track_editor_state: track_editor::TrackEditorState,
@@ -142,6 +145,7 @@ impl EguiLayer {
             fractal_texture_height: 0,
             selected_preset_config: None,
             animation_export_settings: animation_panel::AnimationExportSettings::default(),
+            export_panel_state: animation_panel::ExportPanelState::default(),
             track_editor_state: track_editor::TrackEditorState::default(),
             clicked_pixel: None,
             path_click_info: None,
@@ -476,6 +480,9 @@ impl EguiLayer {
                         animation_export_requested: &mut animation_export_requested,
                         animation_export_progress,
 
+                        // Export Animation panel state (Phase 5)
+                        export_panel_state: &mut self.export_panel_state,
+
                         // Track editor state
                         track_editor_state: &mut self.track_editor_state,
 
@@ -515,6 +522,17 @@ impl EguiLayer {
                 &mut palette_save_to_library,
                 &mut palette_delete_from_library,
             );
+
+            // Show Export Animation panel (Phase 5)
+            if let Some(export_settings) = animation_panel::render_export_panel(
+                ctx,
+                animation_controller,
+                &mut self.animation_export_settings,
+                animation_export_progress,
+                &mut self.export_panel_state,
+            ) {
+                animation_export_requested = Some(export_settings);
+            }
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
         });

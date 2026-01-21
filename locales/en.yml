@@ -837,6 +837,7 @@ animation_panel:
 
   # Export section
   export_header: "🎬 Export Animation"
+  export_panel_title: "🎬 Export Animation"
   exporting_status: "Exporting..."
   frame_progress: "Frame %{current}/%{total}"
   eta: "ETA: %{min}:%{sec}"
