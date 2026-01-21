@@ -3,8 +3,9 @@
 //! Provides controls for adding, editing, and deleting animation tracks.
 //!
 //! Phase 2 adds visual timeline bars for tracks aligned with the scrubber.
+//! Phase 3 adds interactions: click to seek, keyframe hover/click.
 
-use egui::{Ui, Color32, Rect, Pos2, Stroke, CornerRadius};
+use egui::{Ui, Color32, Rect, Pos2, Stroke, CornerRadius, Sense};
 use rust_i18n::t;
 use crate::animation::{
     Animation, AnimationController, CircularTrack, EasingFunction, Interpolation,
@@ -20,6 +21,8 @@ use super::animation_panel::TimelineLayout;
 pub struct TrackEditorState {
     /// Track path being edited for keyframes (None = no keyframe editor open)
     pub editing_keyframes_for: Option<String>,
+    /// Index of keyframe to highlight/scroll to when opening editor (set by clicking a dot)
+    pub selected_keyframe_index: Option<usize>,
     /// Whether the "add track" dialog is open
     pub add_track_dialog_open: bool,
     /// Selected track type for new track
@@ -28,6 +31,13 @@ pub struct TrackEditorState {
     pub new_track_target: String,
     /// Selected second target for circular tracks
     pub new_track_target_y: String,
+}
+
+/// Response from track editor rendering (Phase 3)
+#[derive(Default)]
+pub struct TrackEditorResponse {
+    /// User clicked on timeline/track area - seek to this time
+    pub seek_to_time: Option<f64>,
 }
 
 /// Type of track to add
@@ -268,14 +278,17 @@ fn add_effect_params(
 ///
 /// If `timeline_layout` is provided, renders visual track bars aligned with the scrubber.
 /// Otherwise, renders the traditional inline track controls.
+///
+/// Returns a response containing any seek requests from clicking on tracks.
 pub fn render_track_editor(
     ui: &mut Ui,
     controller: &mut AnimationController,
     state: &mut TrackEditorState,
     config: &FractalConfig,
     timeline_layout: Option<TimelineLayout>,
-) {
+) -> TrackEditorResponse {
     let has_animation = controller.animation.is_some();
+    let mut response = TrackEditorResponse::default();
 
     // Track list header with Add Track button
     let track_count = controller.animation.as_ref()
@@ -300,7 +313,7 @@ pub fn render_track_editor(
     // Render tracks - visual bars if timeline layout provided, otherwise inline controls
     if let Some(ref mut animation) = controller.animation {
         if let Some(layout) = timeline_layout {
-            render_tracks_visual(ui, animation, state, layout);
+            response = render_tracks_visual(ui, animation, state, layout);
         } else {
             render_tracks(ui, animation, state);
         }
@@ -312,9 +325,11 @@ pub fn render_track_editor(
             render_keyframe_editor(ui, animation, &track_path, state);
         }
     }
+
+    response
 }
 
-/// Render tracks as visual timeline bars (Phase 2)
+/// Render tracks as visual timeline bars (Phase 2+3)
 ///
 /// Layout per track:
 /// ```text
@@ -324,26 +339,34 @@ pub fn render_track_editor(
 ///              |  first_kf      |   last_kf
 ///              timeline_start   timeline_end
 /// ```
+///
+/// Phase 3 interactions:
+/// - Click on bar area to seek to that time
+/// - Hover on keyframe dot to see value tooltip
+/// - Click on keyframe dot to open editor for that track
 fn render_tracks_visual(
     ui: &mut Ui,
     animation: &mut Animation,
     state: &mut TrackEditorState,
     layout: TimelineLayout,
-) {
+) -> TrackEditorResponse {
     let track_keys: Vec<String> = animation.tracks.keys().cloned().collect();
     let mut track_to_delete: Option<String> = None;
+    let mut response = TrackEditorResponse::default();
 
     // Constants for visual rendering
     const TRACK_HEIGHT: f32 = 24.0;
     const LABEL_WIDTH: f32 = 100.0;
     const BUTTON_WIDTH: f32 = 80.0;
     const KEYFRAME_RADIUS: f32 = 5.0;
+    const KEYFRAME_HIT_RADIUS: f32 = 8.0; // Larger hit area for easier clicking
     const BAR_HEIGHT: f32 = 8.0;
 
     // Colors
     let bar_color = Color32::from_rgb(80, 120, 180);
     let bar_bg_color = Color32::from_gray(60);
     let keyframe_color = Color32::from_rgb(255, 200, 100);
+    let keyframe_hover_color = Color32::from_rgb(255, 255, 150);
     let position_line_color = Color32::from_rgb(255, 80, 80);
 
     // Calculate position line X
@@ -351,6 +374,9 @@ fn render_tracks_visual(
 
     // Track all track rects for position line drawing
     let mut all_track_rects: Vec<Rect> = Vec::new();
+
+    // Store bar area info for later position line calculation
+    let mut bar_area_info: Option<(f32, f32, f32)> = None; // (bar_left, bar_right, bar_scale)
 
     for path in track_keys {
         if let Some(track) = animation.tracks.get(&path) {
@@ -371,9 +397,10 @@ fn render_tracks_visual(
                 }
             };
 
-            let (rect, _response) = ui.allocate_exact_size(
+            // Allocate full row with click sensing
+            let (rect, row_response) = ui.allocate_exact_size(
                 egui::vec2(ui.available_width(), TRACK_HEIGHT),
-                egui::Sense::hover(),
+                Sense::click(),
             );
 
             if ui.is_rect_visible(rect) {
@@ -382,6 +409,16 @@ fn render_tracks_visual(
                 // Calculate bar area (between label and buttons)
                 let bar_left = rect.left() + LABEL_WIDTH;
                 let bar_right = rect.right() - BUTTON_WIDTH;
+                let bar_scale = if (layout.bar_right - layout.bar_left).abs() > 0.001 {
+                    (bar_right - bar_left) / (layout.bar_right - layout.bar_left)
+                } else {
+                    1.0
+                };
+
+                // Store bar area info for position line
+                if bar_area_info.is_none() {
+                    bar_area_info = Some((bar_left, bar_right, bar_scale));
+                }
 
                 // Background bar (full timeline extent)
                 let bg_rect = Rect::from_min_max(
@@ -391,30 +428,77 @@ fn render_tracks_visual(
                 painter.rect_filled(bg_rect, CornerRadius::same(2), bar_bg_color);
 
                 // Track bar (from first to last keyframe)
-                let track_bar_left = layout.time_to_x(first_time).max(bar_left).min(bar_right);
-                let track_bar_right = layout.time_to_x(last_time).max(bar_left).min(bar_right);
-
-                // Adjust for bar area offset
-                let bar_scale = (bar_right - bar_left) / (layout.bar_right - layout.bar_left);
-                let adjusted_bar_left = bar_left + (track_bar_left - layout.bar_left) * bar_scale;
-                let adjusted_bar_right = bar_left + (track_bar_right - layout.bar_left) * bar_scale;
+                let adjusted_bar_left = bar_left + (layout.time_to_x(first_time) - layout.bar_left) * bar_scale;
+                let adjusted_bar_right = bar_left + (layout.time_to_x(last_time) - layout.bar_left) * bar_scale;
 
                 let track_rect = Rect::from_min_max(
-                    Pos2::new(adjusted_bar_left, rect.center().y - BAR_HEIGHT / 2.0),
-                    Pos2::new(adjusted_bar_right, rect.center().y + BAR_HEIGHT / 2.0),
+                    Pos2::new(adjusted_bar_left.max(bar_left).min(bar_right), rect.center().y - BAR_HEIGHT / 2.0),
+                    Pos2::new(adjusted_bar_right.max(bar_left).min(bar_right), rect.center().y + BAR_HEIGHT / 2.0),
                 );
                 painter.rect_filled(track_rect, CornerRadius::same(2), bar_color);
 
-                // Keyframe dots
+                // Keyframe dots with hover/click interaction
+                let mut clicked_keyframe: Option<usize> = None;
+                let pointer_pos = ui.ctx().pointer_hover_pos();
+
                 if let TrackSource::Keyframes { keyframes } = &track.source {
-                    for keyframe in keyframes {
+                    for (kf_idx, keyframe) in keyframes.iter().enumerate() {
                         let kf_x = bar_left + (layout.time_to_x(keyframe.time) - layout.bar_left) * bar_scale;
                         if kf_x >= bar_left && kf_x <= bar_right {
-                            painter.circle_filled(
-                                Pos2::new(kf_x, rect.center().y),
-                                KEYFRAME_RADIUS,
-                                keyframe_color,
-                            );
+                            let kf_pos = Pos2::new(kf_x, rect.center().y);
+
+                            // Check if mouse is hovering over this keyframe
+                            let is_hovered = pointer_pos.map_or(false, |pos| {
+                                (pos - kf_pos).length() <= KEYFRAME_HIT_RADIUS
+                            });
+
+                            // Draw keyframe dot (highlighted if hovered)
+                            let color = if is_hovered { keyframe_hover_color } else { keyframe_color };
+                            painter.circle_filled(kf_pos, KEYFRAME_RADIUS, color);
+
+                            // Show tooltip on hover using manual tooltip window
+                            if is_hovered {
+                                let value_str = keyframe.value.as_f64()
+                                    .map(|v| format!("{:.3}", v))
+                                    .unwrap_or_else(|| format!("{}", keyframe.value));
+
+                                // Create a tooltip area near the pointer
+                                let tooltip_id = egui::Id::new(format!("kf_tooltip_{}_{}", path, kf_idx));
+                                #[allow(deprecated)]
+                                egui::containers::show_tooltip(
+                                    ui.ctx(),
+                                    egui::LayerId::new(egui::Order::Tooltip, tooltip_id),
+                                    tooltip_id,
+                                    |ui| {
+                                        ui.label(format!(
+                                            "{}: {} @ {:.2}s",
+                                            path, value_str, keyframe.time
+                                        ));
+                                    },
+                                );
+
+                                // Check for click on keyframe
+                                if row_response.clicked() {
+                                    clicked_keyframe = Some(kf_idx);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Handle keyframe click - open editor with that keyframe selected
+                if let Some(kf_idx) = clicked_keyframe {
+                    state.editing_keyframes_for = Some(path.clone());
+                    state.selected_keyframe_index = Some(kf_idx);
+                }
+                // Handle bar area click (not on keyframe) - seek to that time
+                else if row_response.clicked() {
+                    if let Some(pos) = pointer_pos {
+                        if pos.x >= bar_left && pos.x <= bar_right {
+                            // Convert click position to time
+                            let t = (pos.x - bar_left) / (bar_right - bar_left);
+                            let time = t as f64 * layout.duration;
+                            response.seek_to_time = Some(time);
                         }
                     }
                 }
@@ -451,6 +535,7 @@ fn render_tracks_visual(
                     ui.horizontal_centered(|ui| {
                         if ui.small_button(t!("track_editor.edit")).clicked() {
                             state.editing_keyframes_for = Some(path.clone());
+                            state.selected_keyframe_index = None; // No specific keyframe selected
                         }
                         if ui.small_button("X").on_hover_text(t!("track_editor.delete_track")).clicked() {
                             track_to_delete = Some(path.clone());
@@ -463,24 +548,23 @@ fn render_tracks_visual(
 
     // Draw position line through all tracks
     if !all_track_rects.is_empty() {
-        let painter = ui.painter();
-        let first_rect = all_track_rects.first().unwrap();
-        let last_rect = all_track_rects.last().unwrap();
+        if let Some((bar_left, bar_right, bar_scale)) = bar_area_info {
+            let painter = ui.painter();
+            let first_rect = all_track_rects.first().unwrap();
+            let last_rect = all_track_rects.last().unwrap();
 
-        // Calculate position line X in the bar area
-        let bar_left = first_rect.left();
-        let bar_right = first_rect.right();
-        let bar_scale = (bar_right - bar_left) / (layout.bar_right - layout.bar_left);
-        let pos_x = bar_left + (position_x - layout.bar_left) * bar_scale;
+            // Calculate position line X in the bar area
+            let pos_x = bar_left + (position_x - layout.bar_left) * bar_scale;
 
-        if pos_x >= bar_left && pos_x <= bar_right {
-            painter.line_segment(
-                [
-                    Pos2::new(pos_x, first_rect.top() - 4.0),
-                    Pos2::new(pos_x, last_rect.bottom() + 4.0),
-                ],
-                Stroke::new(2.0, position_line_color),
-            );
+            if pos_x >= bar_left && pos_x <= bar_right {
+                painter.line_segment(
+                    [
+                        Pos2::new(pos_x, first_rect.top() - 4.0),
+                        Pos2::new(pos_x, last_rect.bottom() + 4.0),
+                    ],
+                    Stroke::new(2.0, position_line_color),
+                );
+            }
         }
     }
 
@@ -510,6 +594,8 @@ fn render_tracks_visual(
     if let Some(i) = circular_to_delete {
         animation.remove_circular_track(i);
     }
+
+    response
 }
 
 /// Render the add track dialog
@@ -831,11 +917,24 @@ fn render_keyframe_editor(
                     // Keyframe rows
                     let mut keyframe_to_delete: Option<usize> = None;
                     let keyframe_count = keyframes.len();
+                    let selected_idx = state.selected_keyframe_index;
 
                     for (i, keyframe) in keyframes.iter_mut().enumerate() {
-                        ui.horizontal(|ui| {
-                            // Time
-                            ui.add(egui::DragValue::new(&mut keyframe.time)
+                        // Highlight selected keyframe (from clicking on dot)
+                        let is_selected = selected_idx == Some(i);
+
+                        let frame = if is_selected {
+                            egui::Frame::new()
+                                .fill(Color32::from_rgba_unmultiplied(100, 150, 255, 60))
+                                .inner_margin(2.0)
+                        } else {
+                            egui::Frame::NONE
+                        };
+
+                        frame.show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                // Time
+                                ui.add(egui::DragValue::new(&mut keyframe.time)
                                 .range(0.0..=duration)
                                 .speed(0.01)
                                 .suffix("s"));
@@ -863,12 +962,13 @@ fn render_keyframe_editor(
                                     ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInOutSine, t!("track_editor.easing_easeinoutsine").as_ref());
                                 });
 
-                            // Delete button (only if more than 1 keyframe)
-                            if keyframe_count > 1 {
-                                if ui.small_button("X").clicked() {
-                                    keyframe_to_delete = Some(i);
+                                // Delete button (only if more than 1 keyframe)
+                                if keyframe_count > 1 {
+                                    if ui.small_button("X").clicked() {
+                                        keyframe_to_delete = Some(i);
+                                    }
                                 }
-                            }
+                            });
                         });
                     }
 
@@ -903,6 +1003,7 @@ fn render_keyframe_editor(
                             // Sort keyframes by time before closing
                             keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
                             state.editing_keyframes_for = None;
+                            state.selected_keyframe_index = None;
                         }
                     });
                 });
@@ -910,5 +1011,6 @@ fn render_keyframe_editor(
     } else {
         // Track was deleted while editing
         state.editing_keyframes_for = None;
+        state.selected_keyframe_index = None;
     }
 }
