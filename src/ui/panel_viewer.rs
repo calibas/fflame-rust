@@ -372,13 +372,19 @@ impl<'a> PanelViewer<'a> {
 
         // Track editor section with visual bars aligned to timeline
         ui.separator();
-        super::track_editor::render_track_editor(
+        let track_response = super::track_editor::render_track_editor(
             ui,
             self.context.animation_controller,
             self.context.track_editor_state,
             self.context.config_manager.active_config(),
             response.timeline_layout,
         );
+
+        // Handle seek from clicking on track bars (Phase 3)
+        if let Some(time) = track_response.seek_to_time {
+            self.context.animation_controller.seek(time);
+            *self.context.animation_seek_changed = true;
+        }
     }
 
     /// Render the Performance panel (stats and version info)

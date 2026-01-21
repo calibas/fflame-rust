@@ -31,7 +31,7 @@ pub mod workspace;
 pub use animation_panel::{ExportProgress, TimelineLayout};
 pub use export_panel::PngExportProgress;
 pub use histogram::LevelsState;
-pub use track_editor::TrackEditorState;
+pub use track_editor::{TrackEditorState, TrackEditorResponse};
 pub use font_loader::{ensure_font_for_locale, initialize_default_fonts};
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
