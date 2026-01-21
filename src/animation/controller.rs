@@ -1,6 +1,6 @@
 //! Animation playback controller
 
-use super::{Animation, AnimationQualityMode, Interpolation, Keyframe, LoopMode, OscillatorType, PlaybackState, Track, TrackSource};
+use super::{Animation, Interpolation, Keyframe, LoopMode, OscillatorType, PlaybackState, Track, TrackSource};
 
 /// Controls animation playback and evaluates frame values
 pub struct AnimationController {
@@ -18,9 +18,6 @@ pub struct AnimationController {
 
     /// Direction for PingPong mode (1.0 = forward, -1.0 = backward)
     direction: f64,
-
-    /// Quality mode for animation rendering
-    pub quality_mode: AnimationQualityMode,
 }
 
 impl AnimationController {
@@ -32,16 +29,7 @@ impl AnimationController {
             current_time: 0.0,
             speed: 1.0,
             direction: 1.0,
-            quality_mode: AnimationQualityMode::default(),
         }
-    }
-
-    /// Check if animation should use overwrite mode (vs batched accumulation)
-    ///
-    /// Returns true for Responsive mode (immediate updates),
-    /// false for HighQuality mode (batched accumulation)
-    pub fn use_overwrite_mode(&self) -> bool {
-        self.quality_mode == AnimationQualityMode::Responsive
     }
 
     /// Load animation and reset playback

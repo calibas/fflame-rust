@@ -19,7 +19,7 @@
 
 use egui::Ui;
 use rust_i18n::t;
-use crate::animation::{Animation, AnimationController, AnimationQualityMode, LoopMode, PlaybackState};
+use crate::animation::{Animation, AnimationController, LoopMode, PlaybackState};
 use crate::animation::export::{VideoCodec, HardwareAccel};
 
 /// Export progress state for UI display
@@ -149,13 +149,6 @@ pub fn render_animation_content(
     response.seek_changed = seek_changed;
     response.seek_drag_stopped = seek_drag_stopped;
     response.timeline_layout = timeline_layout;
-
-    ui.separator();
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // QUALITY MODE (affects playback quality)
-    // ═══════════════════════════════════════════════════════════════════════════
-    render_quality_mode(ui, controller);
 
     ui.separator();
 
@@ -491,43 +484,6 @@ fn loop_mode_label(mode: LoopMode) -> String {
         LoopMode::Once => t!("animation_panel.loop_once").to_string(),
         LoopMode::Loop => t!("animation_panel.loop_repeat").to_string(),
         LoopMode::PingPong => t!("animation_panel.loop_pingpong").to_string(),
-    }
-}
-
-/// Render quality mode selector
-fn render_quality_mode(ui: &mut Ui, controller: &mut AnimationController) {
-    ui.horizontal(|ui| {
-        ui.label(t!("animation_panel.quality"));
-
-        egui::ComboBox::from_id_salt("quality_mode")
-            .selected_text(quality_mode_label(controller.quality_mode))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut controller.quality_mode,
-                    AnimationQualityMode::Responsive,
-                    quality_mode_label(AnimationQualityMode::Responsive),
-                );
-                ui.selectable_value(
-                    &mut controller.quality_mode,
-                    AnimationQualityMode::HighQuality,
-                    quality_mode_label(AnimationQualityMode::HighQuality),
-                );
-            });
-    });
-
-    // Show tooltip explaining the mode
-    let tooltip = match controller.quality_mode {
-        AnimationQualityMode::Responsive => t!("animation_panel.quality_responsive_tooltip"),
-        AnimationQualityMode::HighQuality => t!("animation_panel.quality_high_tooltip"),
-    };
-    ui.small(tooltip.as_ref());
-}
-
-/// Get display label for quality mode
-fn quality_mode_label(mode: AnimationQualityMode) -> String {
-    match mode {
-        AnimationQualityMode::Responsive => t!("animation_panel.quality_responsive").to_string(),
-        AnimationQualityMode::HighQuality => t!("animation_panel.quality_high").to_string(),
     }
 }
 
