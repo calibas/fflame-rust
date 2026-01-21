@@ -107,6 +107,8 @@ pub struct AnimationPanelResponse {
     pub export_animation: Option<AnimationExportSettings>,
     /// Timeline was scrubbed (slider dragged or frame stepped) - needs fractal update
     pub seek_changed: bool,
+    /// Scrubber drag stopped or discrete seek action (frame step) - reset accumulation
+    pub seek_drag_stopped: bool,
     /// Open the Export Animation panel
     pub open_export_panel: bool,
     /// Timeline layout for aligning tracks with scrubber
@@ -143,8 +145,9 @@ pub fn render_animation_content(
     // ═══════════════════════════════════════════════════════════════════════════
     // TIMELINE SCRUBBER (300px+ wide)
     // ═══════════════════════════════════════════════════════════════════════════
-    let (seek_changed, timeline_layout) = render_timeline_scrubber(ui, controller);
+    let (seek_changed, seek_drag_stopped, timeline_layout) = render_timeline_scrubber(ui, controller);
     response.seek_changed = seek_changed;
+    response.seek_drag_stopped = seek_drag_stopped;
     response.timeline_layout = timeline_layout;
 
     ui.separator();
@@ -178,7 +181,7 @@ fn render_top_section(
         // ═══════════════════════════════════════════════════════════════════════
         // LEFT COLUMN: Playback Controls
         // ═══════════════════════════════════════════════════════════════════════
-        render_playback_controls_left(&mut columns[0], controller);
+        render_playback_controls_left(&mut columns[0], controller, response);
 
         // ═══════════════════════════════════════════════════════════════════════
         // RIGHT COLUMN: File & Export Controls
@@ -188,7 +191,7 @@ fn render_top_section(
 }
 
 /// Render playback controls (left side of top section)
-fn render_playback_controls_left(ui: &mut Ui, controller: &mut AnimationController) {
+fn render_playback_controls_left(ui: &mut Ui, controller: &mut AnimationController, response: &mut AnimationPanelResponse) {
     let has_animation = controller.animation.is_some();
 
     // Row 1: Play/Pause/Stop and Step buttons
@@ -221,16 +224,18 @@ fn render_playback_controls_left(ui: &mut Ui, controller: &mut AnimationControll
 
         ui.separator();
 
-        // Step back
+        // Step back - discrete action, needs both seek_changed and seek_drag_stopped
         if ui.add_enabled(has_animation, egui::Button::new("◀"))
             .on_hover_text(t!("animation_panel.frame_back"))
             .clicked()
         {
             let step = 1.0 / 60.0;
             controller.seek((controller.current_time - step).max(0.0));
+            response.seek_changed = true;
+            response.seek_drag_stopped = true;
         }
 
-        // Step forward
+        // Step forward - discrete action, needs both seek_changed and seek_drag_stopped
         if ui.add_enabled(has_animation, egui::Button::new("▶"))
             .on_hover_text(t!("animation_panel.frame_forward"))
             .clicked()
@@ -238,6 +243,8 @@ fn render_playback_controls_left(ui: &mut Ui, controller: &mut AnimationControll
             let step = 1.0 / 60.0;
             let duration = controller.animation.as_ref().map(|a| a.duration).unwrap_or(1.0);
             controller.seek((controller.current_time + step).min(duration));
+            response.seek_changed = true;
+            response.seek_drag_stopped = true;
         }
 
         ui.separator();
@@ -248,6 +255,7 @@ fn render_playback_controls_left(ui: &mut Ui, controller: &mut AnimationControll
             .selected_text(format!("{:.2}x", controller.speed))
             .width(60.0)
             .show_ui(ui, |ui| {
+                ui.selectable_value(&mut controller.speed, 0.1, "0.1x");
                 ui.selectable_value(&mut controller.speed, 0.25, "0.25x");
                 ui.selectable_value(&mut controller.speed, 0.5, "0.5x");
                 ui.selectable_value(&mut controller.speed, 1.0, "1x");
@@ -395,11 +403,12 @@ impl TimelineLayout {
 }
 
 /// Render timeline scrubber with time display (300px+ wide)
-/// Returns (seek_changed, timeline_layout) for track alignment
-pub fn render_timeline_scrubber(ui: &mut Ui, controller: &mut AnimationController) -> (bool, Option<TimelineLayout>) {
+/// Returns (seek_changed, seek_drag_stopped, timeline_layout) for track alignment
+pub fn render_timeline_scrubber(ui: &mut Ui, controller: &mut AnimationController) -> (bool, bool, Option<TimelineLayout>) {
     let has_animation = controller.animation.is_some();
     let duration = controller.animation.as_ref().map(|a| a.duration).unwrap_or(1.0);
     let mut seek_changed = false;
+    let mut seek_drag_stopped = false;
 
     // Time display row
     ui.horizontal(|ui| {
@@ -445,9 +454,14 @@ pub fn render_timeline_scrubber(ui: &mut Ui, controller: &mut AnimationControlle
             controller.seek(time);
             seek_changed = true;
         }
+
+        // Track when drag stops for accumulation reset
+        if response.drag_stopped() {
+            seek_drag_stopped = true;
+        }
     });
 
-    (seek_changed, layout)
+    (seek_changed, seek_drag_stopped, layout)
 }
 
 /// Render export progress (shown only when exporting)

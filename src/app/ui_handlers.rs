@@ -723,12 +723,14 @@ impl App {
                 }
             }
 
-            // Sync flame and trigger refresh
+            // Sync flame and trigger refresh (preview mode - keep accumulation during drag)
             self.flame = self.config_manager.active_config().flame.clone();
             self.use_overwrite_next_frame = true;
+        }
 
-            // Always reset accumulation when seeking - ensures histogram is cleared
-            // even if animated values didn't change (e.g., scrubbing to same position)
+        // Only reset accumulation when drag stops or on discrete actions (frame step, click to seek)
+        // This provides smooth preview during scrubber drag, then clean rebuild when released
+        if ui_response.animation_seek_drag_stopped {
             self.config_manager.request_reset();
         }
     }

@@ -86,6 +86,9 @@ pub struct PanelContext<'a> {
     // Animation seek changed flag (timeline was scrubbed)
     pub animation_seek_changed: &'a mut bool,
 
+    // Animation scrubber drag stopped or discrete seek action (frame step) - reset accumulation
+    pub animation_seek_drag_stopped: &'a mut bool,
+
     // PathMap mode: hovered pixel coordinates and cached path info
     pub hovered_pixel: &'a mut Option<(u32, u32)>,
     pub path_click_info: &'a Option<super::PathClickInfo>,
@@ -371,6 +374,9 @@ impl<'a> PanelViewer<'a> {
         if response.seek_changed {
             *self.context.animation_seek_changed = true;
         }
+        if response.seek_drag_stopped {
+            *self.context.animation_seek_drag_stopped = true;
+        }
 
         // Track editor section with visual bars aligned to timeline
         ui.separator();
@@ -382,10 +388,11 @@ impl<'a> PanelViewer<'a> {
             response.timeline_layout,
         );
 
-        // Handle seek from clicking on track bars (Phase 3)
+        // Handle seek from clicking on track bars (Phase 3) - discrete action, needs reset
         if let Some(time) = track_response.seek_to_time {
             self.context.animation_controller.seek(time);
             *self.context.animation_seek_changed = true;
+            *self.context.animation_seek_drag_stopped = true;
         }
     }
 
