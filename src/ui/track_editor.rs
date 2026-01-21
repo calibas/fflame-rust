@@ -447,6 +447,7 @@ fn render_tracks_visual(
     // Colors
     let bar_color = Color32::from_rgb(80, 120, 180);
     let bar_bg_color = Color32::from_gray(60);
+    let bar_hover_color = Color32::from_gray(75); // Subtle hover effect
     let keyframe_color = Color32::from_rgb(255, 200, 100);
     let keyframe_hover_color = Color32::from_rgb(255, 255, 150);
     let position_line_color = Color32::from_rgb(255, 80, 80);
@@ -502,12 +503,13 @@ fn render_tracks_visual(
                     bar_area_info = Some((bar_left, bar_right, bar_scale));
                 }
 
-                // Background bar (full timeline extent)
+                // Background bar (full timeline extent) - with hover highlight
                 let bg_rect = Rect::from_min_max(
                     Pos2::new(bar_left, rect.center().y - BAR_HEIGHT / 2.0),
                     Pos2::new(bar_right, rect.center().y + BAR_HEIGHT / 2.0),
                 );
-                painter.rect_filled(bg_rect, CornerRadius::same(2), bar_bg_color);
+                let bg_color = if row_response.hovered() { bar_hover_color } else { bar_bg_color };
+                painter.rect_filled(bg_rect, CornerRadius::same(2), bg_color);
 
                 // Track bar (from first to last keyframe)
                 let adjusted_bar_left = bar_left + (layout.time_to_x(first_time) - layout.bar_left) * bar_scale;
@@ -537,6 +539,10 @@ fn render_tracks_visual(
                             // Draw keyframe dot (highlighted if hovered)
                             let color = if is_hovered { keyframe_hover_color } else { keyframe_color };
                             painter.circle_filled(kf_pos, KEYFRAME_RADIUS, color);
+                            // Add subtle outline on hover
+                            if is_hovered {
+                                painter.circle_stroke(kf_pos, KEYFRAME_RADIUS + 1.0, Stroke::new(1.5, Color32::WHITE));
+                            }
 
                             // Show tooltip on hover using manual tooltip window
                             if is_hovered {
@@ -581,6 +587,15 @@ fn render_tracks_visual(
                             let t = (pos.x - bar_left) / (bar_right - bar_left);
                             let time = t as f64 * layout.duration;
                             response.seek_to_time = Some(time);
+                        }
+                    }
+                }
+
+                // Show pointer cursor when hovering over the bar area
+                if row_response.hovered() {
+                    if let Some(pos) = pointer_pos {
+                        if pos.x >= bar_left && pos.x <= bar_right {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                     }
                 }
