@@ -825,14 +825,15 @@ animation_panel:
   quality_responsive_tooltip: "Fast preview - each frame updates immediately"
   quality_high_tooltip: "Better quality - batches 4 frames for smoother results (slight latency)"
 
-  # File controls
-  new: "+ New"
-  new_tooltip: "Create a new empty animation"
+  # Top right controls (file & export)
+  name: "Name:"
+  duration: "Duration:"
   load: "📂 Load"
   load_tooltip: "Load animation from file"
   save: "💾 Save"
   save_tooltip: "Save animation to file"
-  file_format_hint: "Animation files are JSON format (.anim or .json)"
+  export_animation: "🎬 Export Animation"
+  export_animation_tooltip: "Open export settings panel"
 
   # Export section
   export_header: "🎬 Export Animation"
@@ -887,6 +888,7 @@ track_editor:
   keyframes_count: "Keyframes (%{count})"
   circular_label: "(Circular)"
   delete_track: "Delete track"
+  edit: "Edit"
 
   # Track controls
   interpolation: "Interpolation:"

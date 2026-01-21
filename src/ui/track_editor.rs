@@ -1,8 +1,10 @@
 //! Animation track editor UI
 //!
 //! Provides controls for adding, editing, and deleting animation tracks.
+//!
+//! Phase 2 adds visual timeline bars for tracks aligned with the scrubber.
 
-use egui::Ui;
+use egui::{Ui, Color32, Rect, Pos2, Stroke, CornerRadius};
 use rust_i18n::t;
 use crate::animation::{
     Animation, AnimationController, CircularTrack, EasingFunction, Interpolation,
@@ -11,6 +13,7 @@ use crate::animation::{
 use crate::config::FractalConfig;
 use crate::effects::{global_effect_registry, EffectInstance};
 use crate::variations::global_registry;
+use super::animation_panel::TimelineLayout;
 
 /// UI state for track editor
 #[derive(Default)]
@@ -262,63 +265,250 @@ fn add_effect_params(
 }
 
 /// Render the track editor section
+///
+/// If `timeline_layout` is provided, renders visual track bars aligned with the scrubber.
+/// Otherwise, renders the traditional inline track controls.
 pub fn render_track_editor(
     ui: &mut Ui,
     controller: &mut AnimationController,
     state: &mut TrackEditorState,
     config: &FractalConfig,
+    timeline_layout: Option<TimelineLayout>,
 ) {
     let has_animation = controller.animation.is_some();
 
-    // Animation header with name and duration
-    if let Some(ref mut animation) = controller.animation {
-        ui.horizontal(|ui| {
-            ui.label(t!("track_editor.name"));
-            ui.text_edit_singleline(&mut animation.name);
-        });
-
-        ui.horizontal(|ui| {
-            ui.label(t!("track_editor.duration"));
-            ui.add(egui::DragValue::new(&mut animation.duration)
-                .range(0.1..=3600.0)
-                .speed(0.1)
-                .suffix("s"));
-        });
-
-        ui.separator();
-    }
-
-    // Track list header
+    // Track list header with Add Track button
     let track_count = controller.animation.as_ref()
         .map(|a| a.tracks.len() + a.circular_tracks.len())
         .unwrap_or(0);
 
-    egui::CollapsingHeader::new(t!("track_editor.tracks_header", count = track_count))
-        .default_open(true)
-        .show(ui, |ui| {
-            // Add track button
-            if ui.add_enabled(has_animation, egui::Button::new(t!("track_editor.add_track"))).clicked() {
-                state.add_track_dialog_open = true;
-            }
+    ui.horizontal(|ui| {
+        ui.strong(t!("track_editor.tracks_header", count = track_count));
+        ui.separator();
+        if ui.add_enabled(has_animation, egui::Button::new(t!("track_editor.add_track"))).clicked() {
+            state.add_track_dialog_open = true;
+        }
+    });
 
-            // Add track dialog
-            if state.add_track_dialog_open && has_animation {
-                render_add_track_dialog(ui, controller, state, config);
-            }
+    // Add track dialog
+    if state.add_track_dialog_open && has_animation {
+        render_add_track_dialog(ui, controller, state, config);
+    }
 
-            ui.separator();
+    ui.separator();
 
-            // Render existing tracks
-            if let Some(ref mut animation) = controller.animation {
-                render_tracks(ui, animation, state);
-            }
-        });
+    // Render tracks - visual bars if timeline layout provided, otherwise inline controls
+    if let Some(ref mut animation) = controller.animation {
+        if let Some(layout) = timeline_layout {
+            render_tracks_visual(ui, animation, state, layout);
+        } else {
+            render_tracks(ui, animation, state);
+        }
+    }
 
     // Keyframe editor (shown when editing a track's keyframes)
     if let Some(ref track_path) = state.editing_keyframes_for.clone() {
         if let Some(ref mut animation) = controller.animation {
             render_keyframe_editor(ui, animation, &track_path, state);
         }
+    }
+}
+
+/// Render tracks as visual timeline bars (Phase 2)
+///
+/// Layout per track:
+/// ```text
+/// Label        |--●====●========●---|     [Edit] [Delete]
+///              ^  ^    ^        ^   ^
+///              |  |    keyframe |   |
+///              |  first_kf      |   last_kf
+///              timeline_start   timeline_end
+/// ```
+fn render_tracks_visual(
+    ui: &mut Ui,
+    animation: &mut Animation,
+    state: &mut TrackEditorState,
+    layout: TimelineLayout,
+) {
+    let track_keys: Vec<String> = animation.tracks.keys().cloned().collect();
+    let mut track_to_delete: Option<String> = None;
+
+    // Constants for visual rendering
+    const TRACK_HEIGHT: f32 = 24.0;
+    const LABEL_WIDTH: f32 = 100.0;
+    const BUTTON_WIDTH: f32 = 80.0;
+    const KEYFRAME_RADIUS: f32 = 5.0;
+    const BAR_HEIGHT: f32 = 8.0;
+
+    // Colors
+    let bar_color = Color32::from_rgb(80, 120, 180);
+    let bar_bg_color = Color32::from_gray(60);
+    let keyframe_color = Color32::from_rgb(255, 200, 100);
+    let position_line_color = Color32::from_rgb(255, 80, 80);
+
+    // Calculate position line X
+    let position_x = layout.position_x();
+
+    // Track all track rects for position line drawing
+    let mut all_track_rects: Vec<Rect> = Vec::new();
+
+    for path in track_keys {
+        if let Some(track) = animation.tracks.get(&path) {
+            // Get time range for this track
+            let (first_time, last_time) = match &track.source {
+                TrackSource::Keyframes { keyframes } => {
+                    if keyframes.is_empty() {
+                        (0.0, layout.duration)
+                    } else {
+                        let first = keyframes.first().map(|k| k.time).unwrap_or(0.0);
+                        let last = keyframes.last().map(|k| k.time).unwrap_or(layout.duration);
+                        (first, last)
+                    }
+                }
+                TrackSource::Oscillator { .. } => {
+                    // Oscillators span full duration
+                    (0.0, layout.duration)
+                }
+            };
+
+            let (rect, _response) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), TRACK_HEIGHT),
+                egui::Sense::hover(),
+            );
+
+            if ui.is_rect_visible(rect) {
+                let painter = ui.painter();
+
+                // Calculate bar area (between label and buttons)
+                let bar_left = rect.left() + LABEL_WIDTH;
+                let bar_right = rect.right() - BUTTON_WIDTH;
+
+                // Background bar (full timeline extent)
+                let bg_rect = Rect::from_min_max(
+                    Pos2::new(bar_left, rect.center().y - BAR_HEIGHT / 2.0),
+                    Pos2::new(bar_right, rect.center().y + BAR_HEIGHT / 2.0),
+                );
+                painter.rect_filled(bg_rect, CornerRadius::same(2), bar_bg_color);
+
+                // Track bar (from first to last keyframe)
+                let track_bar_left = layout.time_to_x(first_time).max(bar_left).min(bar_right);
+                let track_bar_right = layout.time_to_x(last_time).max(bar_left).min(bar_right);
+
+                // Adjust for bar area offset
+                let bar_scale = (bar_right - bar_left) / (layout.bar_right - layout.bar_left);
+                let adjusted_bar_left = bar_left + (track_bar_left - layout.bar_left) * bar_scale;
+                let adjusted_bar_right = bar_left + (track_bar_right - layout.bar_left) * bar_scale;
+
+                let track_rect = Rect::from_min_max(
+                    Pos2::new(adjusted_bar_left, rect.center().y - BAR_HEIGHT / 2.0),
+                    Pos2::new(adjusted_bar_right, rect.center().y + BAR_HEIGHT / 2.0),
+                );
+                painter.rect_filled(track_rect, CornerRadius::same(2), bar_color);
+
+                // Keyframe dots
+                if let TrackSource::Keyframes { keyframes } = &track.source {
+                    for keyframe in keyframes {
+                        let kf_x = bar_left + (layout.time_to_x(keyframe.time) - layout.bar_left) * bar_scale;
+                        if kf_x >= bar_left && kf_x <= bar_right {
+                            painter.circle_filled(
+                                Pos2::new(kf_x, rect.center().y),
+                                KEYFRAME_RADIUS,
+                                keyframe_color,
+                            );
+                        }
+                    }
+                }
+
+                // Draw label on the left
+                let label_rect = Rect::from_min_max(
+                    rect.left_top(),
+                    Pos2::new(rect.left() + LABEL_WIDTH - 4.0, rect.bottom()),
+                );
+                // Truncate label if too long
+                let display_name = if path.len() > 12 {
+                    format!("{}...", &path[..12])
+                } else {
+                    path.clone()
+                };
+                painter.text(
+                    label_rect.right_center(),
+                    egui::Align2::RIGHT_CENTER,
+                    &display_name,
+                    egui::FontId::proportional(12.0),
+                    ui.visuals().text_color(),
+                );
+
+                all_track_rects.push(bg_rect);
+            }
+
+            // Buttons on the right (rendered in UI layer for interaction)
+            ui.allocate_ui_at_rect(
+                Rect::from_min_max(
+                    Pos2::new(rect.right() - BUTTON_WIDTH, rect.top()),
+                    rect.right_bottom(),
+                ),
+                |ui| {
+                    ui.horizontal_centered(|ui| {
+                        if ui.small_button(t!("track_editor.edit")).clicked() {
+                            state.editing_keyframes_for = Some(path.clone());
+                        }
+                        if ui.small_button("X").on_hover_text(t!("track_editor.delete_track")).clicked() {
+                            track_to_delete = Some(path.clone());
+                        }
+                    });
+                },
+            );
+        }
+    }
+
+    // Draw position line through all tracks
+    if !all_track_rects.is_empty() {
+        let painter = ui.painter();
+        let first_rect = all_track_rects.first().unwrap();
+        let last_rect = all_track_rects.last().unwrap();
+
+        // Calculate position line X in the bar area
+        let bar_left = first_rect.left();
+        let bar_right = first_rect.right();
+        let bar_scale = (bar_right - bar_left) / (layout.bar_right - layout.bar_left);
+        let pos_x = bar_left + (position_x - layout.bar_left) * bar_scale;
+
+        if pos_x >= bar_left && pos_x <= bar_right {
+            painter.line_segment(
+                [
+                    Pos2::new(pos_x, first_rect.top() - 4.0),
+                    Pos2::new(pos_x, last_rect.bottom() + 4.0),
+                ],
+                Stroke::new(2.0, position_line_color),
+            );
+        }
+    }
+
+    // Delete track if requested
+    if let Some(path) = track_to_delete {
+        animation.remove_track(&path);
+    }
+
+    // Circular tracks (rendered as simple rows for now)
+    let mut circular_to_delete: Option<usize> = None;
+
+    for (i, circular) in animation.circular_tracks.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let label = format!("{}, {}", circular.target_x, circular.target_y);
+            ui.label(&label);
+            ui.label(t!("track_editor.circular_label"));
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("X").on_hover_text(t!("track_editor.delete_track")).clicked() {
+                    circular_to_delete = Some(i);
+                }
+            });
+        });
+    }
+
+    // Delete circular track if requested
+    if let Some(i) = circular_to_delete {
+        animation.remove_circular_track(i);
     }
 }
 

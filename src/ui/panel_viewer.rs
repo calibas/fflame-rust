@@ -275,6 +275,12 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Animation panel (playback controls, timeline)
     fn render_animation_panel(&mut self, ui: &mut egui::Ui) {
+        // Ensure animation always exists (animation is always present with 0 tracks by default)
+        if self.context.animation_controller.animation.is_none() {
+            let new_anim = crate::animation::Animation::new("Untitled".to_string(), 10.0);
+            self.context.animation_controller.load(new_anim);
+        }
+
         let response = super::animation_panel::render_animation_content(
             ui,
             self.context.animation_controller,
@@ -282,10 +288,10 @@ impl<'a> PanelViewer<'a> {
             self.context.animation_export_progress,
         );
 
-        // Handle new animation request
-        if response.new_animation {
-            let new_anim = crate::animation::Animation::new("New Animation".to_string(), 10.0);
-            self.context.animation_controller.load(new_anim);
+        // Handle open export panel request
+        if response.open_export_panel {
+            // TODO Phase 5: Open the Export Animation panel as a separate dockable panel
+            log::info!("Export Animation panel requested (will be implemented in Phase 5)");
         }
 
         // Handle animation load response
@@ -364,13 +370,14 @@ impl<'a> PanelViewer<'a> {
             *self.context.animation_seek_changed = true;
         }
 
-        // Track editor section
+        // Track editor section with visual bars aligned to timeline
         ui.separator();
         super::track_editor::render_track_editor(
             ui,
             self.context.animation_controller,
             self.context.track_editor_state,
             self.context.config_manager.active_config(),
+            response.timeline_layout,
         );
     }
 
