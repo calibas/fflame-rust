@@ -44,7 +44,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return output;
 }
 
-fn kaleidoscope_uv(uv: vec2<f32>, segments: f32, rotation: f32, zoom: f32, aspect: f32, square_mode: bool) -> vec2<f32> {
+fn kaleidoscope_uv(uv: vec2<f32>, segments: f32, source_angle: f32, zoom: f32, aspect: f32, square_mode: bool) -> vec2<f32> {
     var centered = (uv - 0.5) / zoom;
 
     // In square mode, correct for aspect ratio so circles appear circular
@@ -54,14 +54,20 @@ fn kaleidoscope_uv(uv: vec2<f32>, segments: f32, rotation: f32, zoom: f32, aspec
     }
 
     let radius = length(centered);
-    var angle = atan2(centered.y, centered.x) + rotation;
+    var angle = atan2(centered.y, centered.x);
 
+    // Fold angle into one segment (creates the kaleidoscope pattern)
     let segment_angle = TWO_PI / segments;
     angle = angle - segment_angle * floor(angle / segment_angle);
 
+    // Mirror within segment
     if (angle > segment_angle * 0.5) {
         angle = segment_angle - angle;
     }
+
+    // Apply source angle AFTER folding to rotate which part of the image is sampled
+    // This controls the source slice, not the output pattern orientation
+    angle = angle + source_angle;
 
     var result = vec2<f32>(cos(angle), sin(angle)) * radius;
 
