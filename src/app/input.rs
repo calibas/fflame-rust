@@ -107,8 +107,85 @@ impl App {
                 );
                 self.view_changed_by_keyboard = true;
             }
+            PhysicalKey::Code(KeyCode::KeyF) => {
+                self.toggle_fullscreen();
+            }
+            PhysicalKey::Code(KeyCode::Escape) => {
+                if self.fullscreen_mode {
+                    self.exit_fullscreen();
+                }
+            }
             _ => {}
         }
     }
 
+    /// Toggle fullscreen mode (F key)
+    pub fn toggle_fullscreen(&mut self) {
+        if self.fullscreen_mode {
+            self.exit_fullscreen();
+        } else {
+            self.enter_fullscreen();
+        }
+    }
+
+    /// Enter fullscreen mode
+    pub fn enter_fullscreen(&mut self) {
+        self.fullscreen_mode = true;
+
+        // Desktop: Use winit's fullscreen API
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use winit::window::Fullscreen;
+            self.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
+
+        // WASM: Use browser's Fullscreen API on the canvas
+        #[cfg(target_arch = "wasm32")]
+        {
+            use wasm_bindgen::JsCast;
+            if let Some(canvas) = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.get_element_by_id("canvas"))
+            {
+                let _ = canvas.request_fullscreen();
+            }
+        }
+    }
+
+    /// Exit fullscreen mode
+    pub fn exit_fullscreen(&mut self) {
+        self.fullscreen_mode = false;
+
+        // Desktop: Exit fullscreen via winit
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.window.set_fullscreen(None);
+        }
+
+        // WASM: Exit fullscreen via document API
+        #[cfg(target_arch = "wasm32")]
+        {
+            if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+                document.exit_fullscreen();
+            }
+        }
+    }
+
+    /// Sync fullscreen state with browser's actual state (WASM only)
+    /// Called each frame to detect when browser exits fullscreen via Esc
+    pub fn sync_fullscreen_state(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            use wasm_bindgen::JsCast;
+            let browser_is_fullscreen = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.fullscreen_element())
+                .is_some();
+
+            // If browser exited fullscreen but we still think we're in it, sync state
+            if self.fullscreen_mode && !browser_is_fullscreen {
+                self.fullscreen_mode = false;
+            }
+        }
+    }
 }

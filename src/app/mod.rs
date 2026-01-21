@@ -175,6 +175,9 @@ use crate::config::ConfigManager;
 use crate::animation::AnimationController;
 
 pub struct App {
+    // Window reference (needed for fullscreen toggle)
+    pub(super) window: Arc<Window>,
+
     // Core state management
     pub(super) config_manager: ConfigManager,  // Single source of truth for ALL config (fractal + system)
 
@@ -241,6 +244,9 @@ pub struct App {
 
     // Track export state to detect when export finishes (for surface recovery)
     pub(super) was_video_exporting: bool,
+
+    // Fullscreen mode (hides UI, shows only fractal viewport)
+    pub(super) fullscreen_mode: bool,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -293,6 +299,7 @@ impl App {
         );
 
         let mut app = Self {
+            window: window.clone(),
             config_manager,
             gpu,
             egui_layer,
@@ -326,6 +333,7 @@ impl App {
             histogram_frame_counter: 0,
             effect_chain,
             was_video_exporting: false,
+            fullscreen_mode: false,
         };
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
@@ -501,6 +509,10 @@ impl App {
     fn render(&mut self, window: &Window) -> Result<(), SurfaceError> {
         use web_time::Instant;
 
+        // Sync fullscreen state with browser (WASM only)
+        // Detects when browser exits fullscreen via its own Esc handler
+        self.sync_fullscreen_state();
+
         // Skip rendering if window is minimized (size is 0)
         // This prevents surface errors and wasted GPU work
         if self.gpu.size.width == 0 || self.gpu.size.height == 0 {
@@ -646,6 +658,7 @@ impl App {
             &mut self.use_custom_export_size,
             &export_progress,
             &png_export_progress,
+            self.fullscreen_mode,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
