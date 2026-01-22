@@ -5,16 +5,20 @@
 //!
 //! Layout:
 //! ┌──────────────────────────────────────────────────────────────────────────┐
-//! │ TOP LEFT (Playback)           │ TOP RIGHT (File & Export)               │
-//! │ [▶][⏸][⏹] [◀][▶] Speed:[1x▼] │ Name: [________] [Save][Load]           │
-//! │ Duration: [10.0s] Loop: [▼]   │ [Export Animation]                      │
+//! │ PLAYBACK CONTROLS                                                        │
+//! │ [▶][⏸][⏹] [◀][▶] Speed:[1x▼]  Duration: [10.0s]  Loop: [▼]             │
 //! ├──────────────────────────────────────────────────────────────────────────┤
 //! │ TIMELINE SCRUBBER (300px+ wide)                                          │
 //! │ |----●-------------------------------|  0.0s                      10.0s │
 //! ├──────────────────────────────────────────────────────────────────────────┤
-//! │ TRACKS SECTION                                                           │
+//! │ TRACKS SECTION (rendered via track_editor)                               │
 //! │ [+ Add Track]                                                            │
 //! │ Track list with bars and keyframe visualization                          │
+//! ├──────────────────────────────────────────────────────────────────────────┤
+//! │ EXPORT PROGRESS (when exporting)                                         │
+//! ├──────────────────────────────────────────────────────────────────────────┤
+//! │ FILE CONTROLS                                                            │
+//! │ Name: [________] [Save][Load] [Export Animation]                         │
 //! └──────────────────────────────────────────────────────────────────────────┘
 
 use egui::Ui;
@@ -128,7 +132,6 @@ pub fn render_animation_content(
     ui: &mut Ui,
     controller: &mut AnimationController,
     _export_settings: &mut AnimationExportSettings, // Will be used in Phase 5 Export panel
-    export_progress: &ExportProgress,
 ) -> AnimationPanelResponse {
     let mut response = AnimationPanelResponse::default();
 
@@ -138,7 +141,7 @@ pub fn render_animation_content(
     // ═══════════════════════════════════════════════════════════════════════════
     // TOP SECTION: Playback (left) | File & Export (right)
     // ═══════════════════════════════════════════════════════════════════════════
-    render_top_section(ui, controller, &mut response);
+    render_playback_controls(ui, controller, &mut response);
 
     ui.separator();
 
@@ -152,39 +155,12 @@ pub fn render_animation_content(
 
     ui.separator();
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // EXPORT PROGRESS (shown only when exporting)
-    // ═══════════════════════════════════════════════════════════════════════════
-    if export_progress.is_exporting {
-        render_export_progress(ui, export_progress);
-        ui.separator();
-    }
-
     response
 }
 
-/// Render top section with playback controls on left and file/export on right
-fn render_top_section(
-    ui: &mut Ui,
-    controller: &mut AnimationController,
-    response: &mut AnimationPanelResponse,
-) {
-    // Use columns for the split layout
-    ui.columns(2, |columns| {
-        // ═══════════════════════════════════════════════════════════════════════
-        // LEFT COLUMN: Playback Controls
-        // ═══════════════════════════════════════════════════════════════════════
-        render_playback_controls_left(&mut columns[0], controller, response);
-
-        // ═══════════════════════════════════════════════════════════════════════
-        // RIGHT COLUMN: File & Export Controls
-        // ═══════════════════════════════════════════════════════════════════════
-        render_file_controls_right(&mut columns[1], controller, response);
-    });
-}
 
 /// Render playback controls (left side of top section)
-fn render_playback_controls_left(ui: &mut Ui, controller: &mut AnimationController, response: &mut AnimationPanelResponse) {
+fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, response: &mut AnimationPanelResponse) {
     let has_animation = controller.animation.is_some();
 
     // Row 1: Play/Pause/Stop and Step buttons
@@ -289,8 +265,9 @@ fn render_playback_controls_left(ui: &mut Ui, controller: &mut AnimationControll
     });
 }
 
-/// Render file and export controls (right side of top section)
-fn render_file_controls_right(
+/// Render file and export controls (Name, Save, Load, Export button)
+/// Call this after rendering tracks section
+pub fn render_file_controls(
     ui: &mut Ui,
     controller: &mut AnimationController,
     response: &mut AnimationPanelResponse,
@@ -458,7 +435,8 @@ pub fn render_timeline_scrubber(ui: &mut Ui, controller: &mut AnimationControlle
 }
 
 /// Render export progress (shown only when exporting)
-fn render_export_progress(ui: &mut Ui, progress: &ExportProgress) {
+/// Call this after rendering tracks section, before file controls
+pub fn render_export_progress(ui: &mut Ui, progress: &ExportProgress) {
     ui.horizontal(|ui| {
         ui.spinner();
         ui.label(&progress.status);

@@ -287,20 +287,55 @@ impl<'a> PanelViewer<'a> {
             self.context.animation_controller.load(new_anim);
         }
 
-        let response = super::animation_panel::render_animation_content(
+        let mut response = super::animation_panel::render_animation_content(
             ui,
             self.context.animation_controller,
             self.context.animation_export_settings,
-            self.context.animation_export_progress,
         );
 
+        // Handle timeline scrubbing (from render_animation_content)
+        if response.seek_changed {
+            *self.context.animation_seek_changed = true;
+        }
+        if response.seek_drag_stopped {
+            *self.context.animation_seek_drag_stopped = true;
+        }
+
+        // Track editor section with visual bars aligned to timeline
+        ui.separator();
+        let track_response = super::track_editor::render_track_editor(
+            ui,
+            self.context.animation_controller,
+            self.context.track_editor_state,
+            self.context.config_manager.active_config(),
+            response.timeline_layout,
+        );
+
+        // Handle seek from clicking on track bars (Phase 3) - discrete action, needs reset
+        if let Some(time) = track_response.seek_to_time {
+            self.context.animation_controller.seek(time);
+            *self.context.animation_seek_changed = true;
+            *self.context.animation_seek_drag_stopped = true;
+        }
+
+        // Export progress (after tracks section)
+        if self.context.animation_export_progress.is_exporting {
+            ui.separator();
+            super::animation_panel::render_export_progress(ui, self.context.animation_export_progress);
+        }
+
+        // File controls (after tracks section)
+        ui.separator();
+        super::animation_panel::render_file_controls(ui, self.context.animation_controller, &mut response);
+
+        // Handle file control responses (must be after render_file_controls)
         // Handle open export panel request (Phase 5)
         if response.open_export_panel {
             self.context.export_panel_state.is_open = true;
         }
 
         // Handle animation load response
-        if let Some(animation) = response.load_animation {
+        if let Some(animation) = response.load_animation.take() {
             // If animation has embedded config, load it via selected_preset_config
             // This ensures proper GPU sync and undo/redo handling
             if let Some(config) = animation.base_config.clone() {
@@ -366,33 +401,8 @@ impl<'a> PanelViewer<'a> {
         }
 
         // Handle animation export request
-        if let Some(settings) = response.export_animation {
+        if let Some(settings) = response.export_animation.take() {
             *self.context.animation_export_requested = Some(settings);
-        }
-
-        // Handle timeline scrubbing
-        if response.seek_changed {
-            *self.context.animation_seek_changed = true;
-        }
-        if response.seek_drag_stopped {
-            *self.context.animation_seek_drag_stopped = true;
-        }
-
-        // Track editor section with visual bars aligned to timeline
-        ui.separator();
-        let track_response = super::track_editor::render_track_editor(
-            ui,
-            self.context.animation_controller,
-            self.context.track_editor_state,
-            self.context.config_manager.active_config(),
-            response.timeline_layout,
-        );
-
-        // Handle seek from clicking on track bars (Phase 3) - discrete action, needs reset
-        if let Some(time) = track_response.seek_to_time {
-            self.context.animation_controller.seek(time);
-            *self.context.animation_seek_changed = true;
-            *self.context.animation_seek_drag_stopped = true;
         }
     }
 
