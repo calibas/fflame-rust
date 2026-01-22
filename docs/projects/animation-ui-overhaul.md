@@ -4,11 +4,19 @@
 
 Complete redesign of the animation panel with a proper timeline interface, track visualization, and separated concerns for track editing and export.
 
-## Current State
+## Status: ✅ Complete
 
-- Animation panel has inline controls mixed together
+All phases implemented as of 2026-01-21:
+- **Phase 1-3**: Layout restructure, track visualization, timeline interaction
+- **Phase 4-5**: Export panel separated, preview mode for scrubbing
+- **Phase 6**: Removed AnimationQualityMode (didn't have meaningful effect)
+- **Phase 7**: Unified Track Editor with hierarchical target selector
+
+## Previous State (Before Overhaul)
+
+- Animation panel had inline controls mixed together
 - "New Animation" button required to start animating
-- Track editing is inline and cramped
+- Track editing was inline and cramped
 - No visual timeline representation of tracks
 
 ## Target Design
@@ -83,26 +91,74 @@ Contains the Add Track button and track list.
 
 ### New Panels
 
-#### Add/Edit Track Panel
-- **Mode**: Add new track or Edit existing track
-- **Parameter selector** (Add mode): Dropdown of animatable parameters
-- **Keyframe list**: Table showing all keyframes
-  - Time (editable)
-  - Value (editable)
-  - Easing curve selector
-  - Delete keyframe button
-- **Add Keyframe button**: Adds keyframe at current time with current value
-- **Close/Done button**
+#### Unified Track Editor Panel (Phase 7 - Added 2026-01-21)
+
+A single window for both adding new tracks and editing existing tracks:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ Track Editor (Add Track / Edit Track)                       [X]     │
+├─────────────────────────────────────────────────────────────────────┤
+│ Type: [Keyframe ▼]                                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│ Target:                                                             │
+│ → PanX                                                    [✕]       │
+│ ▼ Change target                                                     │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │ 🔍 [Search parameters...]                                   │   │
+│   │ ▼ View                                                      │   │
+│   │   Zoom                                                      │   │
+│   │   Pan X                                                     │   │
+│   │   Pan Y                                                     │   │
+│   │   Rotation                                                  │   │
+│   │   ...                                                       │   │
+│   │ ▶ Color                                                     │   │
+│   │ ▶ Tone Mapping                                              │   │
+│   │ ▶ Rendering                                                 │   │
+│   │ ▶ Transform 0                                               │   │
+│   │ ▶ Transform 1                                               │   │
+│   │ ▶ Final Transform                                           │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────┤
+│ Keyframes: 3                                                        │
+│ ┌─────────────────────────────────────────────────────────────────┐ │
+│ │ 0.00s   0.500   Lin  [✕]                                        │ │
+│ │ 2.50s   1.200   I/O  [✕]                                        │ │
+│ │ 5.00s   0.500   Lin  [✕]                                        │ │
+│ └─────────────────────────────────────────────────────────────────┘ │
+│ [+ Add at Current Time]  [+ Add at End]                             │
+├─────────────────────────────────────────────────────────────────────┤
+│ Interpolation: [Linear ▼]                                           │
+├─────────────────────────────────────────────────────────────────────┤
+│ [Create Track]                                         [Close]      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Features:**
+- **Type selector**: Keyframes, Oscillator, or Circular
+- **Hierarchical target selector**: Collapsible categories with search filter
+  - Categories: View, Color, Tone Mapping, Rendering, Transform N, Final Transform
+  - Dynamic content based on active variations and effects
+- **Type-specific subpanels**:
+  - **Keyframes**: Inline keyframe list with time/value/easing, interpolation mode
+  - **Oscillator**: Waveform type, center, amplitude, frequency, phase
+  - **Circular**: Center X/Y, radius, speed, phase (with separate Target X and Target Y)
+- **Auto-create behavior**: Track appears when valid target + type are selected
+- **Triggers**:
+  - Add Track button → Opens panel in "Add" mode
+  - Edit button on track row → Opens panel in "Edit" mode with track loaded
+  - Keyframe dot click → Opens panel with that keyframe selected
 
 #### Export Animation Panel
 - Moved from inline controls to separate panel
-- **Resolution**: Width x Height inputs
-- **Frame Rate**: FPS input
-- **Format**: MP4/WebM/GIF selector
-- **Quality settings**
+- **Codec**: H.264, H.265, VP9 selector with hardware acceleration options
+- **Resolution**: Width x Height inputs with quick presets (720p, 1080p, 4K)
+- **Frame Rate**: FPS input with quick presets (24, 30, 60)
+- **Quality settings**: CRF slider, encoding preset, tune options
+- **Iterations per thread**: Quality vs speed tradeoff
 - **Output path** (desktop only)
 - **Export button**
-- **Progress indicator** during export
+- **Progress indicator** with ETA during export
 
 ### Behavior Changes
 
@@ -123,51 +179,81 @@ Contains the Add Track button and track list.
 
 ## Implementation Phases
 
-### Phase 1: Layout Restructure
+### Phase 1: Layout Restructure ✅
 - Reorganize animation panel layout
 - Move controls to top left/right sections
 - Implement wider timeline scrubber
 - Remove "New Animation" button
 
-### Phase 2: Track Visualization
+### Phase 2: Track Visualization ✅
 - Implement track bar rendering
 - Add keyframe dot visualization
 - Implement red position line through all tracks
 - Add hover tooltip for keyframe values
 
-### Phase 3: Track Interaction
-- Click on timeline to jump
-- Drag scrubber position
+### Phase 3: Track Interaction ✅
+- Click on timeline/track bar to seek to time
+- Drag scrubber position with preview mode
 - Click on keyframe dot to edit
 - Track Edit/Delete buttons
 
-### Phase 4: Add/Edit Track Panel
-- Create new panel
-- Parameter selector for new tracks
-- Keyframe list with editing
-- Easing curve selection
+### Phase 4: Add/Edit Track Panel ✅ (Legacy)
+- Original inline dialog implementation
+- Replaced by unified Track Editor in Phase 7
 
-### Phase 5: Export Animation Panel
-- Extract export controls to separate panel
-- Add export button to open panel
-- Progress indicator
+### Phase 5: Export Animation Panel ✅
+- Extract export controls to separate window
+- Add codec selection (H.264, H.265, VP9)
+- Hardware acceleration options (NVENC, QuickSync, AMF)
+- Quality presets and encoding tuning
+- Progress indicator with ETA
 
-### Phase 6: Polish
-- Keyboard shortcuts (if time permits)
-- Visual refinements
-- Edge case handling
+### Phase 6: Polish ✅
+- Added 0.1x playback speed option
+- Preview mode for scrubbing (seek_changed vs seek_drag_stopped)
+- Removed AnimationQualityMode (didn't have meaningful effect on quality)
 
-## Files to Modify
+### Phase 7: Unified Track Editor ✅ (Added 2026-01-21)
+- **Hierarchical Target Selector** (`src/ui/target_selector.rs`)
+  - Reusable component for selecting ConfigPath targets
+  - Collapsible categories with search filtering
+  - Dynamic content based on flame configuration
+  - Categories: View, Color, Tone Mapping, Rendering, Transform N, Final Transform
+- **Unified Track Editor Panel** (`src/ui/track_editor.rs`)
+  - Single window for Add Track and Edit Track
+  - Type selector: Keyframes, Oscillator, Circular
+  - Type-specific subpanels with inline editing
+  - Track target can be changed anytime
+- **Integration Points**
+  - Add Track button → opens panel in Add mode
+  - Edit button on track row → opens panel in Edit mode
+  - Keyframe dot click → opens panel with keyframe selected
 
-- `src/ui/animation_panel.rs` - Main panel overhaul
-- `src/ui/track_editor.rs` - May need updates or replacement
-- `src/ui/mod.rs` - Register new panels
-- `src/ui/workspace.rs` - Add new panels to dock system
-- `src/animation/mod.rs` - Ensure animation always exists
-- `locales/en.yml` - New UI strings
+## Files Modified
+
+### Phase 1-6
+- `src/ui/animation_panel.rs` - Main panel layout, playback controls, timeline scrubber
+- `src/ui/track_editor.rs` - Track visualization, keyframe dots, seek on click
+- `src/ui/mod.rs` - Register panels, render calls
+- `src/animation/mod.rs` - Animation always exists, export settings
+- `locales/en.yml` - UI strings
+
+### Phase 7
+- `src/ui/target_selector.rs` - **NEW** - Hierarchical target selector component
+- `src/ui/track_editor.rs` - Added unified Track Editor panel functions:
+  - `render_track_editor_panel()` - Main window render
+  - `render_track_editor_panel_content()` - Panel content
+  - `render_keyframe_subpanel()` - Keyframe-specific UI
+  - `render_oscillator_subpanel()` - Oscillator-specific UI
+  - `render_circular_subpanel()` - Circular track-specific UI
+  - `open_add_track_panel()` / `open_edit_track_panel()` - Entry points
+- `src/ui/mod.rs` - Added render call for Track Editor panel
+- `locales/en.yml` - New localization strings for Track Editor
 
 ## Notes
 
-- This is primarily a UI change
-- Animation system backend should already support all needed functionality
-- Focus on usability and visual clarity
+- Animation UI overhaul is complete
+- Track target is changeable at any time (user can explore without accidental creation)
+- Clicking track row still seeks to time (per user preference)
+- Clicking keyframe dots opens Track Editor (not legacy keyframe editor)
+- Old "Add Track Dialog" still exists for backwards compatibility but is deprecated

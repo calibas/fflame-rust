@@ -5,7 +5,7 @@
 //! Phase 2 adds visual timeline bars for tracks aligned with the scrubber.
 //! Phase 3 adds interactions: click to seek, keyframe hover/click.
 
-use egui::{Ui, Color32, Rect, Pos2, Stroke, CornerRadius, Sense};
+use egui::{Ui, Color32, Rect, Pos2, Stroke, CornerRadius, Sense, ScrollArea};
 use rust_i18n::t;
 use crate::animation::{
     Animation, AnimationController, CircularTrack, EasingFunction, Interpolation,
@@ -13,8 +13,10 @@ use crate::animation::{
 };
 use crate::config::FractalConfig;
 use crate::effects::{global_effect_registry, EffectInstance};
+use crate::scene::transforms::Flame;
 use crate::variations::global_registry;
 use super::animation_panel::TimelineLayout;
+use super::target_selector::{TargetSelectorState, render_target_selector};
 
 /// UI state for track editor
 #[derive(Default)]
@@ -23,7 +25,7 @@ pub struct TrackEditorState {
     pub editing_keyframes_for: Option<String>,
     /// Index of keyframe to highlight/scroll to when opening editor (set by clicking a dot)
     pub selected_keyframe_index: Option<usize>,
-    /// Whether the "add track" dialog is open
+    /// Whether the "add track" dialog is open (legacy)
     pub add_track_dialog_open: bool,
     /// Selected track type for new track
     pub new_track_type: NewTrackType,
@@ -31,6 +33,62 @@ pub struct TrackEditorState {
     pub new_track_target: String,
     /// Selected second target for circular tracks
     pub new_track_target_y: String,
+    /// Unified Track Editor panel state
+    pub track_editor_panel_open: bool,
+    /// Track index being edited in the unified panel (None = adding new track)
+    pub editing_track_index: Option<usize>,
+    /// Target selector state for the unified panel
+    pub target_selector_state: TargetSelectorState,
+    /// Target selector state for Y axis (circular tracks)
+    pub target_selector_state_y: TargetSelectorState,
+    /// Oscillator parameters for editing
+    pub oscillator_params: OscillatorParams,
+    /// Circular track parameters for editing
+    pub circular_params: CircularParams,
+}
+
+/// Oscillator parameters for track editor
+#[derive(Clone)]
+pub struct OscillatorParams {
+    pub oscillator_type: OscillatorType,
+    pub center: f64,
+    pub amplitude: f64,
+    pub frequency: f64,
+    pub phase: f64,
+}
+
+impl Default for OscillatorParams {
+    fn default() -> Self {
+        Self {
+            oscillator_type: OscillatorType::Sine,
+            center: 0.0,
+            amplitude: 1.0,
+            frequency: 0.5,
+            phase: 0.0,
+        }
+    }
+}
+
+/// Circular track parameters for track editor
+#[derive(Clone)]
+pub struct CircularParams {
+    pub center_x: f64,
+    pub center_y: f64,
+    pub radius: f64,
+    pub speed: f64,
+    pub phase: f64,
+}
+
+impl Default for CircularParams {
+    fn default() -> Self {
+        Self {
+            center_x: 0.0,
+            center_y: 0.0,
+            radius: 0.5,
+            speed: 0.1,
+            phase: 0.0,
+        }
+    }
 }
 
 /// Response from track editor rendering (Phase 3)
@@ -380,7 +438,7 @@ pub fn render_track_editor(
         ui.strong(t!("track_editor.tracks_header", count = track_count));
         ui.separator();
         if ui.add_enabled(has_animation, egui::Button::new(t!("track_editor.add_track"))).clicked() {
-            state.add_track_dialog_open = true;
+            open_add_track_panel(state);
         }
     });
 
@@ -432,8 +490,7 @@ fn render_tracks_visual(
     state: &mut TrackEditorState,
     layout: TimelineLayout,
 ) -> TrackEditorResponse {
-    let track_keys: Vec<String> = animation.tracks.keys().cloned().collect();
-    let mut track_to_delete: Option<String> = None;
+    let mut track_to_delete: Option<usize> = None;
     let mut response = TrackEditorResponse::default();
 
     // Constants for visual rendering
@@ -461,8 +518,9 @@ fn render_tracks_visual(
     // Store bar area info for later position line calculation
     let mut bar_area_info: Option<(f32, f32, f32)> = None; // (bar_left, bar_right, bar_scale)
 
-    for path in track_keys {
-        if let Some(track) = animation.tracks.get(&path) {
+    for (track_index, track) in animation.tracks.iter().enumerate() {
+        let path = track.target.clone();
+        {
             // Get time range for this track
             let (first_time, last_time) = match &track.source {
                 TrackSource::Keyframes { keyframes } => {
@@ -574,9 +632,9 @@ fn render_tracks_visual(
                     }
                 }
 
-                // Handle keyframe click - open editor with that keyframe selected
+                // Handle keyframe click - open Track Editor panel with that keyframe selected
                 if let Some(kf_idx) = clicked_keyframe {
-                    state.editing_keyframes_for = Some(path.clone());
+                    open_edit_track_panel(state, track_index, track);
                     state.selected_keyframe_index = Some(kf_idx);
                 }
                 // Handle bar area click (not on keyframe) - seek to that time
@@ -631,16 +689,15 @@ fn render_tracks_visual(
                 |ui| {
                     ui.horizontal_centered(|ui| {
                         if ui.small_button(t!("track_editor.edit")).clicked() {
-                            state.editing_keyframes_for = Some(path.clone());
-                            state.selected_keyframe_index = None; // No specific keyframe selected
+                            open_edit_track_panel(state, track_index, track);
                         }
                         if ui.small_button("X").on_hover_text(t!("track_editor.delete_track")).clicked() {
-                            track_to_delete = Some(path.clone());
+                            track_to_delete = Some(track_index);
                         }
                     });
                 },
             );
-        }
+        } // end of ui.is_rect_visible block
     }
 
     // Draw position line through all tracks
@@ -666,8 +723,8 @@ fn render_tracks_visual(
     }
 
     // Delete track if requested
-    if let Some(path) = track_to_delete {
-        animation.remove_track(&path);
+    if let Some(index) = track_to_delete {
+        animation.remove_track(index);
     }
 
     // Circular tracks (rendered as simple rows for now)
@@ -791,6 +848,7 @@ fn render_add_track_dialog(
                         match state.new_track_type {
                             NewTrackType::Keyframe => {
                                 let track = Track {
+                                    target: state.new_track_target.clone(),
                                     source: TrackSource::Keyframes {
                                         keyframes: vec![
                                             Keyframe {
@@ -807,10 +865,11 @@ fn render_add_track_dialog(
                                     },
                                     interpolation: Interpolation::Linear,
                                 };
-                                animation.add_track_str(state.new_track_target.clone(), track);
+                                animation.add_track(track);
                             }
                             NewTrackType::Oscillator => {
                                 let track = Track {
+                                    target: state.new_track_target.clone(),
                                     source: TrackSource::Oscillator {
                                         oscillator_type: OscillatorType::Sine,
                                         center: 0.0,
@@ -820,7 +879,7 @@ fn render_add_track_dialog(
                                     },
                                     interpolation: Interpolation::Linear,
                                 };
-                                animation.add_track_str(state.new_track_target.clone(), track);
+                                animation.add_track(track);
                             }
                             NewTrackType::Circular => {
                                 let track = CircularTrack::new(
@@ -850,91 +909,91 @@ fn render_add_track_dialog(
 
 /// Render the list of existing tracks
 fn render_tracks(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditorState) {
-    // Collect track keys to avoid borrow issues
-    let track_keys: Vec<String> = animation.tracks.keys().cloned().collect();
-    let mut track_to_delete: Option<String> = None;
+    let mut track_to_delete: Option<usize> = None;
+    let track_count = animation.tracks.len();
 
-    for path in track_keys {
-        if let Some(track) = animation.tracks.get_mut(&path) {
-            egui::Frame::new()
-                .fill(ui.visuals().faint_bg_color)
-                .inner_margin(4.0)
-                .corner_radius(2.0)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        // Track name and type
-                        let track_type_str = match &track.source {
-                            TrackSource::Keyframes { keyframes } => t!("track_editor.keyframes_count", count = keyframes.len()).to_string(),
-                            TrackSource::Oscillator { oscillator_type, .. } => format!("{:?}", oscillator_type),
-                        };
-                        ui.strong(&path);
-                        ui.label(format!("({})", track_type_str));
+    for track_index in 0..track_count {
+        let track = &mut animation.tracks[track_index];
+        let path = track.target.clone();
 
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("X").on_hover_text(t!("track_editor.delete_track").as_ref()).clicked() {
-                                track_to_delete = Some(path.clone());
-                            }
-                        });
+        egui::Frame::new()
+            .fill(ui.visuals().faint_bg_color)
+            .inner_margin(4.0)
+            .corner_radius(2.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // Track name and type
+                    let track_type_str = match &track.source {
+                        TrackSource::Keyframes { keyframes } => t!("track_editor.keyframes_count", count = keyframes.len()).to_string(),
+                        TrackSource::Oscillator { oscillator_type, .. } => format!("{:?}", oscillator_type),
+                    };
+                    ui.strong(&path);
+                    ui.label(format!("({})", track_type_str));
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("X").on_hover_text(t!("track_editor.delete_track").as_ref()).clicked() {
+                            track_to_delete = Some(track_index);
+                        }
                     });
-
-                    // Track-specific controls
-                    match &mut track.source {
-                        TrackSource::Keyframes { .. } => {
-                            ui.horizontal(|ui| {
-                                ui.label(t!("track_editor.interpolation"));
-                                egui::ComboBox::from_id_salt(format!("interp_{}", path))
-                                    .selected_text(format!("{:?}", track.interpolation))
-                                    .width(100.0)
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(&mut track.interpolation, Interpolation::Step, t!("track_editor.interpolation_step").as_ref());
-                                        ui.selectable_value(&mut track.interpolation, Interpolation::Linear, t!("track_editor.interpolation_linear").as_ref());
-                                        ui.selectable_value(&mut track.interpolation, Interpolation::Smooth, t!("track_editor.interpolation_smooth").as_ref());
-                                        ui.selectable_value(&mut track.interpolation, Interpolation::Sinusoidal, t!("track_editor.interpolation_sinusoidal").as_ref());
-                                    });
-                            });
-
-                            if ui.small_button(t!("track_editor.edit_keyframes")).clicked() {
-                                state.editing_keyframes_for = Some(path.clone());
-                            }
-                        }
-                        TrackSource::Oscillator { oscillator_type, center, amplitude, frequency, phase } => {
-                            ui.horizontal(|ui| {
-                                ui.label(t!("track_editor.osc_type"));
-                                egui::ComboBox::from_id_salt(format!("osc_type_{}", path))
-                                    .selected_text(format!("{:?}", oscillator_type))
-                                    .width(80.0)
-                                    .show_ui(ui, |ui| {
-                                        ui.selectable_value(oscillator_type, OscillatorType::Sine, t!("track_editor.osc_sine").as_ref());
-                                        ui.selectable_value(oscillator_type, OscillatorType::Triangle, t!("track_editor.osc_triangle").as_ref());
-                                        ui.selectable_value(oscillator_type, OscillatorType::Sawtooth, t!("track_editor.osc_sawtooth").as_ref());
-                                        ui.selectable_value(oscillator_type, OscillatorType::Square, t!("track_editor.osc_square").as_ref());
-                                    });
-                            });
-
-                            ui.horizontal(|ui| {
-                                ui.label(t!("track_editor.center"));
-                                ui.add(egui::DragValue::new(center).speed(0.01));
-                                ui.label(t!("track_editor.amplitude"));
-                                ui.add(egui::DragValue::new(amplitude).speed(0.01));
-                            });
-
-                            ui.horizontal(|ui| {
-                                ui.label(t!("track_editor.frequency"));
-                                ui.add(egui::DragValue::new(frequency).speed(0.01).suffix(" Hz"));
-                                ui.label(t!("track_editor.phase"));
-                                ui.add(egui::DragValue::new(phase).speed(0.01));
-                            });
-                        }
-                    }
                 });
 
-            ui.add_space(4.0);
-        }
+                // Track-specific controls
+                match &mut track.source {
+                    TrackSource::Keyframes { .. } => {
+                        ui.horizontal(|ui| {
+                            ui.label(t!("track_editor.interpolation"));
+                            egui::ComboBox::from_id_salt(format!("interp_{}", track_index))
+                                .selected_text(format!("{:?}", track.interpolation))
+                                .width(100.0)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut track.interpolation, Interpolation::Step, t!("track_editor.interpolation_step").as_ref());
+                                    ui.selectable_value(&mut track.interpolation, Interpolation::Linear, t!("track_editor.interpolation_linear").as_ref());
+                                    ui.selectable_value(&mut track.interpolation, Interpolation::Smooth, t!("track_editor.interpolation_smooth").as_ref());
+                                    ui.selectable_value(&mut track.interpolation, Interpolation::Sinusoidal, t!("track_editor.interpolation_sinusoidal").as_ref());
+                                });
+                        });
+
+                        if ui.small_button(t!("track_editor.edit_keyframes")).clicked() {
+                            state.editing_keyframes_for = Some(path.clone());
+                        }
+                    }
+                    TrackSource::Oscillator { oscillator_type, center, amplitude, frequency, phase } => {
+                        ui.horizontal(|ui| {
+                            ui.label(t!("track_editor.osc_type"));
+                            egui::ComboBox::from_id_salt(format!("osc_type_{}", track_index))
+                                .selected_text(format!("{:?}", oscillator_type))
+                                .width(80.0)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(oscillator_type, OscillatorType::Sine, t!("track_editor.osc_sine").as_ref());
+                                    ui.selectable_value(oscillator_type, OscillatorType::Triangle, t!("track_editor.osc_triangle").as_ref());
+                                    ui.selectable_value(oscillator_type, OscillatorType::Sawtooth, t!("track_editor.osc_sawtooth").as_ref());
+                                    ui.selectable_value(oscillator_type, OscillatorType::Square, t!("track_editor.osc_square").as_ref());
+                                });
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label(t!("track_editor.center"));
+                            ui.add(egui::DragValue::new(center).speed(0.01));
+                            ui.label(t!("track_editor.amplitude"));
+                            ui.add(egui::DragValue::new(amplitude).speed(0.01));
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label(t!("track_editor.frequency"));
+                            ui.add(egui::DragValue::new(frequency).speed(0.01).suffix(" Hz"));
+                            ui.label(t!("track_editor.phase"));
+                            ui.add(egui::DragValue::new(phase).speed(0.01));
+                        });
+                    }
+                }
+            });
+
+        ui.add_space(4.0);
     }
 
     // Delete track if requested
-    if let Some(path) = track_to_delete {
-        animation.remove_track(&path);
+    if let Some(index) = track_to_delete {
+        animation.remove_track(index);
     }
 
     // Circular tracks
@@ -999,7 +1058,9 @@ fn render_keyframe_editor(
     // Get the current value for this parameter from the config
     let current_value = get_parameter_value(config, track_path);
 
-    if let Some(track) = animation.tracks.get_mut(track_path) {
+    // Find the track by target path
+    let track_opt = animation.tracks.iter_mut().find(|t| t.target == track_path);
+    if let Some(track) = track_opt {
         if let TrackSource::Keyframes { ref mut keyframes } = track.source {
             egui::Window::new(t!("track_editor.keyframe_window_title", path = track_path))
                 .collapsible(false)
@@ -1128,5 +1189,576 @@ fn render_keyframe_editor(
         // Track was deleted while editing
         state.editing_keyframes_for = None;
         state.selected_keyframe_index = None;
+    }
+}
+
+// ============================================================================
+// UNIFIED TRACK EDITOR PANEL (Phase 7)
+// ============================================================================
+
+/// Render the unified Track Editor panel as a window
+///
+/// This panel combines Add Track and Edit Track functionality:
+/// - Hierarchical target selector
+/// - Track type selection (Keyframes, Oscillator, Circular)
+/// - Type-specific parameter subpanels
+/// - Auto-creates/updates track when target and type are valid
+pub fn render_track_editor_panel(
+    ctx: &egui::Context,
+    controller: &mut AnimationController,
+    state: &mut TrackEditorState,
+    flame: &Flame,
+    config: &FractalConfig,
+    current_time: f64,
+) {
+    if !state.track_editor_panel_open {
+        return;
+    }
+
+    let is_editing = state.editing_track_index.is_some();
+    let title = if is_editing {
+        t!("track_editor.edit_track_title")
+    } else {
+        t!("track_editor.add_track_title")
+    };
+
+    let mut open = state.track_editor_panel_open;
+
+    egui::Window::new(title)
+        .open(&mut open)
+        .resizable(true)
+        .default_width(350.0)
+        .default_height(450.0)
+        .show(ctx, |ui| {
+            render_track_editor_panel_content(ui, controller, state, flame, config, current_time);
+        });
+
+    state.track_editor_panel_open = open;
+}
+
+/// Render the content of the Track Editor panel
+fn render_track_editor_panel_content(
+    ui: &mut Ui,
+    controller: &mut AnimationController,
+    state: &mut TrackEditorState,
+    flame: &Flame,
+    config: &FractalConfig,
+    current_time: f64,
+) {
+    let Some(ref mut animation) = controller.animation else {
+        ui.label(t!("track_editor.no_animation"));
+        return;
+    };
+
+    let is_editing = state.editing_track_index.is_some();
+    let duration = animation.duration;
+
+    // =========================================================================
+    // TYPE SELECTOR
+    // =========================================================================
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.type"));
+        egui::ComboBox::from_id_salt("track_type_selector")
+            .selected_text(match state.new_track_type {
+                NewTrackType::Keyframe => t!("track_editor.type_keyframe"),
+                NewTrackType::Oscillator => t!("track_editor.type_oscillator"),
+                NewTrackType::Circular => t!("track_editor.type_circular"),
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut state.new_track_type, NewTrackType::Keyframe, t!("track_editor.type_keyframe").as_ref());
+                ui.selectable_value(&mut state.new_track_type, NewTrackType::Oscillator, t!("track_editor.type_oscillator").as_ref());
+                ui.selectable_value(&mut state.new_track_type, NewTrackType::Circular, t!("track_editor.type_circular").as_ref());
+            });
+    });
+
+    ui.separator();
+
+    // =========================================================================
+    // TARGET SELECTOR (Hierarchical)
+    // =========================================================================
+    ui.label(t!("track_editor.target"));
+
+    // Show current selection
+    if !state.new_track_target.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label("→");
+            ui.strong(&state.new_track_target);
+            if ui.small_button("✕").clicked() {
+                state.new_track_target.clear();
+            }
+        });
+    }
+
+    // Hierarchical target selector
+    egui::CollapsingHeader::new(if state.new_track_target.is_empty() {
+        t!("track_editor.select_target")
+    } else {
+        t!("track_editor.change_target")
+    })
+    .default_open(state.new_track_target.is_empty())
+    .show(ui, |ui| {
+        if let Some(path) = render_target_selector(
+            ui,
+            &mut state.target_selector_state,
+            flame,
+            if state.new_track_target.is_empty() { None } else { Some(&state.new_track_target) },
+        ) {
+            state.new_track_target = path.to_string_key();
+        }
+    });
+
+    // Second target for Circular tracks
+    if state.new_track_type == NewTrackType::Circular {
+        ui.separator();
+        ui.label(t!("track_editor.target_y"));
+
+        if !state.new_track_target_y.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label("→");
+                ui.strong(&state.new_track_target_y);
+                if ui.small_button("✕").clicked() {
+                    state.new_track_target_y.clear();
+                }
+            });
+        }
+
+        egui::CollapsingHeader::new(if state.new_track_target_y.is_empty() {
+            t!("track_editor.select_target_y")
+        } else {
+            t!("track_editor.change_target_y")
+        })
+        .default_open(state.new_track_target_y.is_empty())
+        .show(ui, |ui| {
+            if let Some(path) = render_target_selector(
+                ui,
+                &mut state.target_selector_state_y,
+                flame,
+                if state.new_track_target_y.is_empty() { None } else { Some(&state.new_track_target_y) },
+            ) {
+                state.new_track_target_y = path.to_string_key();
+            }
+        });
+    }
+
+    ui.separator();
+
+    // =========================================================================
+    // TYPE-SPECIFIC SUBPANELS
+    // =========================================================================
+    match state.new_track_type {
+        NewTrackType::Keyframe => {
+            render_keyframe_subpanel(ui, animation, state, current_time, duration, config);
+        }
+        NewTrackType::Oscillator => {
+            render_oscillator_subpanel(ui, state);
+        }
+        NewTrackType::Circular => {
+            render_circular_subpanel(ui, state);
+        }
+    }
+
+    ui.separator();
+
+    // =========================================================================
+    // ACTION BUTTONS
+    // =========================================================================
+    ui.horizontal(|ui| {
+        let can_create = match state.new_track_type {
+            NewTrackType::Circular => !state.new_track_target.is_empty() && !state.new_track_target_y.is_empty(),
+            _ => !state.new_track_target.is_empty(),
+        };
+
+        if is_editing {
+            if ui.add_enabled(can_create, egui::Button::new(t!("track_editor.update_track"))).clicked() {
+                update_or_create_track(animation, state, duration, config);
+            }
+        } else {
+            if ui.add_enabled(can_create, egui::Button::new(t!("track_editor.create_track"))).clicked() {
+                // Create the track and switch to edit mode for it
+                if let Some(new_index) = update_or_create_track(animation, state, duration, config) {
+                    state.editing_track_index = Some(new_index);
+                }
+            }
+        }
+
+        if ui.button(t!("track_editor.close")).clicked() {
+            close_track_editor_panel(state);
+        }
+    });
+}
+
+/// Render keyframe-specific options subpanel
+fn render_keyframe_subpanel(
+    ui: &mut Ui,
+    animation: &mut Animation,
+    state: &mut TrackEditorState,
+    current_time: f64,
+    duration: f64,
+    config: &FractalConfig,
+) {
+    ui.label(t!("track_editor.keyframes_section"));
+
+    // If editing an existing keyframe track, show the keyframes
+    if let Some(track_index) = state.editing_track_index {
+        if let Some(track) = animation.get_track_mut(track_index) {
+            if let TrackSource::Keyframes { ref mut keyframes } = track.source {
+                // Interpolation selector
+                ui.horizontal(|ui| {
+                    ui.label(t!("track_editor.interpolation"));
+                    egui::ComboBox::from_id_salt("keyframe_interpolation")
+                        .selected_text(format!("{:?}", track.interpolation))
+                        .width(100.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut track.interpolation, Interpolation::Step, t!("track_editor.interpolation_step").as_ref());
+                            ui.selectable_value(&mut track.interpolation, Interpolation::Linear, t!("track_editor.interpolation_linear").as_ref());
+                            ui.selectable_value(&mut track.interpolation, Interpolation::Smooth, t!("track_editor.interpolation_smooth").as_ref());
+                            ui.selectable_value(&mut track.interpolation, Interpolation::Sinusoidal, t!("track_editor.interpolation_sinusoidal").as_ref());
+                        });
+                });
+
+                // Keyframe list (scrollable)
+                ui.label(format!("{}: {}", t!("track_editor.keyframe_count"), keyframes.len()));
+
+                ScrollArea::vertical()
+                    .max_height(150.0)
+                    .show(ui, |ui| {
+                        let mut to_delete: Option<usize> = None;
+                        let kf_count = keyframes.len();
+
+                        for (i, kf) in keyframes.iter_mut().enumerate() {
+                            ui.horizontal(|ui| {
+                                // Time
+                                ui.add(egui::DragValue::new(&mut kf.time)
+                                    .range(0.0..=duration)
+                                    .speed(0.01)
+                                    .suffix("s")
+                                    .min_decimals(2));
+
+                                // Value
+                                let mut value = kf.value.as_f64().unwrap_or(0.0);
+                                if ui.add(egui::DragValue::new(&mut value).speed(0.01).min_decimals(3)).changed() {
+                                    kf.value = serde_json::json!(value);
+                                }
+
+                                // Easing (compact)
+                                egui::ComboBox::from_id_salt(format!("kf_ease_{}", i))
+                                    .selected_text(easing_short_name(&kf.easing))
+                                    .width(60.0)
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::Linear, "Lin");
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseIn, "In");
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseOut, "Out");
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseInOut, "I/O");
+                                    });
+
+                                // Delete (if more than 1)
+                                if kf_count > 1 && ui.small_button("✕").clicked() {
+                                    to_delete = Some(i);
+                                }
+                            });
+                        }
+
+                        if let Some(i) = to_delete {
+                            keyframes.remove(i);
+                        }
+                    });
+
+                // Add keyframe buttons
+                ui.horizontal(|ui| {
+                    if ui.button(t!("track_editor.add_at_current")).clicked() {
+                        let current_value = get_parameter_value(config, &state.new_track_target).unwrap_or(0.0);
+                        keyframes.push(Keyframe {
+                            time: current_time.clamp(0.0, duration),
+                            value: serde_json::json!(current_value),
+                            easing: EasingFunction::Linear,
+                        });
+                        keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+                    }
+
+                    if ui.button(t!("track_editor.add_keyframe")).clicked() {
+                        let last_time = keyframes.last().map(|k| k.time).unwrap_or(0.0);
+                        let last_value = keyframes.last().and_then(|k| k.value.as_f64()).unwrap_or(0.0);
+                        keyframes.push(Keyframe {
+                            time: (last_time + 1.0).min(duration),
+                            value: serde_json::json!(last_value),
+                            easing: EasingFunction::Linear,
+                        });
+                    }
+                });
+
+                return;
+            }
+        }
+    }
+
+    // No existing track - show placeholder
+    ui.label(t!("track_editor.keyframes_will_be_created"));
+}
+
+/// Render oscillator-specific options subpanel
+fn render_oscillator_subpanel(ui: &mut Ui, state: &mut TrackEditorState) {
+    ui.label(t!("track_editor.oscillator_section"));
+
+    // Waveform type
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.waveform"));
+        egui::ComboBox::from_id_salt("osc_waveform")
+            .selected_text(oscillator_type_name(&state.oscillator_params.oscillator_type))
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut state.oscillator_params.oscillator_type, OscillatorType::Sine, t!("track_editor.waveform_sine").as_ref());
+                ui.selectable_value(&mut state.oscillator_params.oscillator_type, OscillatorType::Triangle, t!("track_editor.waveform_triangle").as_ref());
+                ui.selectable_value(&mut state.oscillator_params.oscillator_type, OscillatorType::Sawtooth, t!("track_editor.waveform_sawtooth").as_ref());
+                ui.selectable_value(&mut state.oscillator_params.oscillator_type, OscillatorType::Square, t!("track_editor.waveform_square").as_ref());
+            });
+    });
+
+    // Parameters
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.osc_center"));
+        ui.add(egui::DragValue::new(&mut state.oscillator_params.center).speed(0.01));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.osc_amplitude"));
+        ui.add(egui::DragValue::new(&mut state.oscillator_params.amplitude).speed(0.01));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.osc_frequency"));
+        ui.add(egui::DragValue::new(&mut state.oscillator_params.frequency).speed(0.01).suffix(" Hz"));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.osc_phase"));
+        ui.add(egui::DragValue::new(&mut state.oscillator_params.phase).speed(0.01).range(0.0..=1.0));
+    });
+}
+
+/// Render circular track-specific options subpanel
+fn render_circular_subpanel(ui: &mut Ui, state: &mut TrackEditorState) {
+    ui.label(t!("track_editor.circular_section"));
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.circ_center_x"));
+        ui.add(egui::DragValue::new(&mut state.circular_params.center_x).speed(0.01));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.circ_center_y"));
+        ui.add(egui::DragValue::new(&mut state.circular_params.center_y).speed(0.01));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.circ_radius"));
+        ui.add(egui::DragValue::new(&mut state.circular_params.radius).speed(0.01));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.circ_speed"));
+        ui.add(egui::DragValue::new(&mut state.circular_params.speed).speed(0.01).suffix(" rev/s"));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.circ_phase"));
+        ui.add(egui::DragValue::new(&mut state.circular_params.phase).speed(0.01));
+    });
+}
+
+/// Create or update a track based on current state
+/// Returns the index of the created/updated track (for switching to edit mode)
+fn update_or_create_track(
+    animation: &mut Animation,
+    state: &mut TrackEditorState,
+    duration: f64,
+    config: &FractalConfig,
+) -> Option<usize> {
+    match state.new_track_type {
+        NewTrackType::Keyframe => {
+            if let Some(track_index) = state.editing_track_index {
+                // Update existing track
+                if let Some(track) = animation.get_track_mut(track_index) {
+                    track.target = state.new_track_target.clone();
+                    // Keep existing keyframes, just update target
+                }
+                Some(track_index)
+            } else {
+                // Create new track
+                let initial_value = get_parameter_value(config, &state.new_track_target).unwrap_or(0.0);
+                let track = Track::new(
+                    state.new_track_target.clone(),
+                    TrackSource::Keyframes {
+                        keyframes: vec![
+                            Keyframe {
+                                time: 0.0,
+                                value: serde_json::json!(initial_value),
+                                easing: EasingFunction::Linear,
+                            },
+                            Keyframe {
+                                time: duration,
+                                value: serde_json::json!(initial_value),
+                                easing: EasingFunction::Linear,
+                            },
+                        ],
+                    },
+                );
+                let new_index = animation.add_track(track);
+                Some(new_index)
+            }
+        }
+        NewTrackType::Oscillator => {
+            if let Some(track_index) = state.editing_track_index {
+                // Update existing track
+                if let Some(track) = animation.get_track_mut(track_index) {
+                    track.target = state.new_track_target.clone();
+                    track.source = TrackSource::Oscillator {
+                        oscillator_type: state.oscillator_params.oscillator_type,
+                        center: state.oscillator_params.center,
+                        amplitude: state.oscillator_params.amplitude,
+                        frequency: state.oscillator_params.frequency,
+                        phase: state.oscillator_params.phase,
+                    };
+                }
+                Some(track_index)
+            } else {
+                // Create new track
+                let track = Track::new(
+                    state.new_track_target.clone(),
+                    TrackSource::Oscillator {
+                        oscillator_type: state.oscillator_params.oscillator_type,
+                        center: state.oscillator_params.center,
+                        amplitude: state.oscillator_params.amplitude,
+                        frequency: state.oscillator_params.frequency,
+                        phase: state.oscillator_params.phase,
+                    },
+                );
+                let new_index = animation.add_track(track);
+                Some(new_index)
+            }
+        }
+        NewTrackType::Circular => {
+            // Circular tracks use a different index space
+            if let Some(encoded_index) = state.editing_track_index {
+                if encoded_index >= usize::MAX / 2 {
+                    // This is a circular track edit (encoded as usize::MAX - index)
+                    let circular_index = usize::MAX - encoded_index;
+                    if let Some(track) = animation.circular_tracks.get_mut(circular_index) {
+                        track.target_x = state.new_track_target.clone();
+                        track.target_y = state.new_track_target_y.clone();
+                        track.center_x = state.circular_params.center_x;
+                        track.center_y = state.circular_params.center_y;
+                        track.radius = state.circular_params.radius;
+                        track.speed = state.circular_params.speed;
+                        track.phase = state.circular_params.phase;
+                    }
+                    return Some(encoded_index);
+                }
+            }
+            // Create new circular track
+            let track = CircularTrack {
+                target_x: state.new_track_target.clone(),
+                target_y: state.new_track_target_y.clone(),
+                center_x: state.circular_params.center_x,
+                center_y: state.circular_params.center_y,
+                radius: state.circular_params.radius,
+                speed: state.circular_params.speed,
+                phase: state.circular_params.phase,
+            };
+            let new_index = animation.add_circular_track(track);
+            // Return encoded index for circular tracks
+            Some(usize::MAX - new_index)
+        }
+    }
+}
+
+/// Close the track editor panel and reset state
+fn close_track_editor_panel(state: &mut TrackEditorState) {
+    state.track_editor_panel_open = false;
+    state.editing_track_index = None;
+    state.new_track_target.clear();
+    state.new_track_target_y.clear();
+    state.target_selector_state = TargetSelectorState::default();
+    state.target_selector_state_y = TargetSelectorState::default();
+}
+
+/// Open the track editor panel to add a new track
+pub fn open_add_track_panel(state: &mut TrackEditorState) {
+    state.track_editor_panel_open = true;
+    state.editing_track_index = None;
+    state.new_track_target.clear();
+    state.new_track_target_y.clear();
+    state.new_track_type = NewTrackType::Keyframe;
+    state.oscillator_params = OscillatorParams::default();
+    state.circular_params = CircularParams::default();
+    state.target_selector_state = TargetSelectorState::default();
+    state.target_selector_state_y = TargetSelectorState::default();
+}
+
+/// Open the track editor panel to edit an existing track by index
+pub fn open_edit_track_panel(state: &mut TrackEditorState, track_index: usize, track: &Track) {
+    state.track_editor_panel_open = true;
+    state.editing_track_index = Some(track_index);
+    state.new_track_target = track.target.clone();
+    state.new_track_type = match &track.source {
+        TrackSource::Keyframes { .. } => NewTrackType::Keyframe,
+        TrackSource::Oscillator { oscillator_type, center, amplitude, frequency, phase } => {
+            state.oscillator_params = OscillatorParams {
+                oscillator_type: *oscillator_type,
+                center: *center,
+                amplitude: *amplitude,
+                frequency: *frequency,
+                phase: *phase,
+            };
+            NewTrackType::Oscillator
+        }
+    };
+    state.target_selector_state = TargetSelectorState::default();
+}
+
+/// Open the track editor panel to edit a circular track by index
+pub fn open_edit_circular_track_panel(state: &mut TrackEditorState, circular_index: usize, track: &CircularTrack) {
+    state.track_editor_panel_open = true;
+    // For circular tracks, store index with offset to distinguish from regular tracks
+    // We use a convention: editing_track_index for circular tracks stores usize::MAX - circular_index
+    state.editing_track_index = Some(usize::MAX - circular_index);
+    state.new_track_type = NewTrackType::Circular;
+    state.new_track_target = track.target_x.clone();
+    state.new_track_target_y = track.target_y.clone();
+    state.circular_params = CircularParams {
+        center_x: track.center_x,
+        center_y: track.center_y,
+        radius: track.radius,
+        speed: track.speed,
+        phase: track.phase,
+    };
+    state.target_selector_state = TargetSelectorState::default();
+    state.target_selector_state_y = TargetSelectorState::default();
+}
+
+/// Get short name for easing function
+fn easing_short_name(easing: &EasingFunction) -> &'static str {
+    match easing {
+        EasingFunction::Linear => "Lin",
+        EasingFunction::EaseIn => "In",
+        EasingFunction::EaseOut => "Out",
+        EasingFunction::EaseInOut => "I/O",
+        EasingFunction::EaseInQuad => "In²",
+        EasingFunction::EaseOutQuad => "Out²",
+        EasingFunction::EaseInOutQuad => "I/O²",
+        EasingFunction::EaseInCubic => "In³",
+        EasingFunction::EaseOutCubic => "Out³",
+        EasingFunction::EaseInOutCubic => "I/O³",
+        EasingFunction::EaseInSine => "InS",
+        EasingFunction::EaseOutSine => "OutS",
+        EasingFunction::EaseInOutSine => "I/OS",
+    }
+}
+
+/// Get display name for oscillator type
+fn oscillator_type_name(osc_type: &OscillatorType) -> String {
+    match osc_type {
+        OscillatorType::Sine => t!("track_editor.waveform_sine").to_string(),
+        OscillatorType::Triangle => t!("track_editor.waveform_triangle").to_string(),
+        OscillatorType::Sawtooth => t!("track_editor.waveform_sawtooth").to_string(),
+        OscillatorType::Square => t!("track_editor.waveform_square").to_string(),
     }
 }

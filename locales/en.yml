@@ -993,6 +993,49 @@ track_editor:
   param_variation_weight: "%{name} (Weight)"
   param_variation_param: "%{name} - %{param}"
 
+  # Unified Track Editor Panel
+  add_track_title: "Add Track"
+  edit_track_title: "Edit Track"
+  no_animation: "No animation loaded"
+  select_target: "Select target..."
+  change_target: "Change target"
+  select_target_y: "Select Y target..."
+  change_target_y: "Change Y target"
+
+  # Type-specific subpanels
+  keyframes_section: "Keyframes"
+  oscillator_section: "Oscillator Parameters"
+  circular_section: "Circular Motion"
+  keyframe_count: "Keyframes"
+  keyframes_will_be_created: "Keyframes will be created when track is added"
+
+  # Waveform options
+  waveform: "Waveform:"
+  waveform_sine: "Sine"
+  waveform_triangle: "Triangle"
+  waveform_sawtooth: "Sawtooth"
+  waveform_square: "Square"
+
+  # Oscillator parameters (abbreviated)
+  osc_center: "Center:"
+  osc_amplitude: "Amplitude:"
+  osc_frequency: "Frequency:"
+  osc_phase: "Phase:"
+
+  # Circular parameters
+  circ_center_x: "Center X:"
+  circ_center_y: "Center Y:"
+  circ_radius: "Radius:"
+  circ_speed: "Speed:"
+  circ_phase: "Phase:"
+
+  # Action buttons
+  update_track: "Update Track"
+  replace_track: "Replace Track"
+  create_track: "Create Track"
+  close: "Close"
+  warning_replace: "⚠ A track with this target already exists and will be replaced"
+
 # Path Editor Panel
 path_editor:
   title: "Path Editor"
