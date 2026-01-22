@@ -283,7 +283,7 @@ impl<'a> PanelViewer<'a> {
     fn render_animation_panel(&mut self, ui: &mut egui::Ui) {
         // Ensure animation always exists (animation is always present with 0 tracks by default)
         if self.context.animation_controller.animation.is_none() {
-            let new_anim = crate::animation::Animation::new("Untitled".to_string(), 10.0);
+            let new_anim = crate::animation::Animation::new("New Animation".to_string(), 10.0);
             self.context.animation_controller.load(new_anim);
         }
 
