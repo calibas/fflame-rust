@@ -6,6 +6,8 @@
 
 use egui::{CollapsingHeader, ScrollArea, TextEdit, Ui};
 use crate::config::delta::{AffineParam, ConfigPath};
+use crate::config::FractalConfig;
+use crate::effects::global_effect_registry;
 use crate::scene::transforms::Flame;
 use crate::variations::global_registry;
 
@@ -87,6 +89,7 @@ pub fn render_target_selector(
     ui: &mut Ui,
     state: &mut TargetSelectorState,
     flame: &Flame,
+    config: &FractalConfig,
     current_selection: Option<&str>,
 ) -> Option<ConfigPath> {
     let mut selected: Option<ConfigPath> = None;
@@ -163,7 +166,20 @@ pub fn render_target_selector(
             }
 
             // Effects category (dynamic based on current effects)
-            // TODO: Add when effects system is more mature
+            let effects_items = get_effects_items(config);
+            if !effects_items.is_empty() {
+                if let Some(path) = render_category(
+                    ui,
+                    state,
+                    TargetCategory::Effects,
+                    &effects_items,
+                    &filter,
+                    has_filter,
+                    current_selection,
+                ) {
+                    selected = Some(path);
+                }
+            }
 
             // Transform categories (one per transform)
             for i in 0..flame.transforms.len() {
@@ -305,6 +321,70 @@ fn get_rendering_items() -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::HistogramColorScale, "Histogram Color Scale"),
         TargetItem::new(ConfigPath::PerspectiveStrength, "Perspective Strength"),
     ]
+}
+
+/// Get effects parameter items (dynamic based on current effects in config)
+fn get_effects_items(config: &FractalConfig) -> Vec<TargetItem> {
+    let mut items = Vec::new();
+    let registry = global_effect_registry();
+
+    // Density Effects
+    for (index, effect) in config.density_effects.iter().enumerate() {
+        let effect_name = if let Some(info) = registry.get(&effect.effect_type) {
+            info.translated_name()
+        } else {
+            capitalize_first(&effect.effect_type)
+        };
+
+        // Enabled toggle
+        items.push(TargetItem::new(
+            ConfigPath::DensityEffectEnabled { index },
+            &format!("{} (Density) → Enabled", effect_name),
+        ));
+
+        // Parameters
+        if let Some(info) = registry.get(&effect.effect_type) {
+            for param in &info.parameters {
+                items.push(TargetItem::new(
+                    ConfigPath::DensityEffectParam {
+                        index,
+                        param: param.name.clone(),
+                    },
+                    &format!("{} (Density) → {}", effect_name, info.translated_param_name(&param.name)),
+                ));
+            }
+        }
+    }
+
+    // Color Effects
+    for (index, effect) in config.color_effects.iter().enumerate() {
+        let effect_name = if let Some(info) = registry.get(&effect.effect_type) {
+            info.translated_name()
+        } else {
+            capitalize_first(&effect.effect_type)
+        };
+
+        // Enabled toggle
+        items.push(TargetItem::new(
+            ConfigPath::ColorEffectEnabled { index },
+            &format!("{} (Color) → Enabled", effect_name),
+        ));
+
+        // Parameters
+        if let Some(info) = registry.get(&effect.effect_type) {
+            for param in &info.parameters {
+                items.push(TargetItem::new(
+                    ConfigPath::ColorEffectParam {
+                        index,
+                        param: param.name.clone(),
+                    },
+                    &format!("{} (Color) → {}", effect_name, info.translated_param_name(&param.name)),
+                ));
+            }
+        }
+    }
+
+    items
 }
 
 /// Get transform parameter items (dynamic based on active variations)

@@ -1301,6 +1301,7 @@ fn render_track_editor_panel_content(
             ui,
             &mut state.target_selector_state,
             flame,
+            config,
             if state.new_track_target.is_empty() { None } else { Some(&state.new_track_target) },
         ) {
             state.new_track_target = path.to_string_key();
@@ -1333,6 +1334,7 @@ fn render_track_editor_panel_content(
                 ui,
                 &mut state.target_selector_state_y,
                 flame,
+                config,
                 if state.new_track_target_y.is_empty() { None } else { Some(&state.new_track_target_y) },
             ) {
                 state.new_track_target_y = path.to_string_key();
