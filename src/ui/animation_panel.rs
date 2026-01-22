@@ -149,8 +149,9 @@ pub fn render_animation_content(
     // TIMELINE SCRUBBER (300px+ wide)
     // ═══════════════════════════════════════════════════════════════════════════
     let (seek_changed, seek_drag_stopped, timeline_layout) = render_timeline_scrubber(ui, controller);
-    response.seek_changed = seek_changed;
-    response.seek_drag_stopped = seek_drag_stopped;
+    // Use |= to combine with any seek events from playback controls (frame step buttons)
+    response.seek_changed |= seek_changed;
+    response.seek_drag_stopped |= seek_drag_stopped;
     response.timeline_layout = timeline_layout;
 
     ui.separator();
