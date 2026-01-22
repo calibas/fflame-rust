@@ -5,9 +5,8 @@
 //! During playback, the animation controller updates ConfigManager silently
 //! (without creating undo points).
 
-use crate::config::{ConfigPath, FractalConfig};
+use crate::config::FractalConfig;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 mod controller;
 mod interpolation;
@@ -31,8 +30,8 @@ pub struct Animation {
     /// Total duration in seconds
     pub duration: f64,
 
-    /// Parameter tracks (ConfigPath → Track)
-    pub tracks: HashMap<String, Track>, // String instead of ConfigPath for JSON serialization
+    /// Parameter tracks (indexed by position, allowing multiple tracks with same target)
+    pub tracks: Vec<Track>,
 
     /// Circular motion tracks (output X and Y to two parameters)
     #[serde(default)]
@@ -45,6 +44,9 @@ pub struct Animation {
 /// Single parameter track
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
+    /// Target parameter path (ConfigPath string key)
+    pub target: String,
+
     /// Source of track values (keyframes or procedural)
     pub source: TrackSource,
 
@@ -153,7 +155,7 @@ impl Animation {
             name,
             base_config: None,
             duration,
-            tracks: HashMap::new(),
+            tracks: Vec::new(),
             circular_tracks: Vec::new(),
             loop_mode: LoopMode::Once,
         }
@@ -165,7 +167,7 @@ impl Animation {
             name,
             base_config: Some(config),
             duration,
-            tracks: HashMap::new(),
+            tracks: Vec::new(),
             circular_tracks: Vec::new(),
             loop_mode: LoopMode::Once,
         }
@@ -181,26 +183,27 @@ impl Animation {
         self.base_config.is_some()
     }
 
-    /// Add track for parameter using ConfigPath
-    pub fn add_track(&mut self, path: ConfigPath, track: Track) {
-        // Convert ConfigPath to string for JSON serialization
-        let path_str = format!("{:?}", path); // TODO: Better serialization
-        self.tracks.insert(path_str, track);
+    /// Add track (returns index of the new track)
+    pub fn add_track(&mut self, track: Track) -> usize {
+        let index = self.tracks.len();
+        self.tracks.push(track);
+        index
     }
 
-    /// Add track for parameter using string key
-    pub fn add_track_str(&mut self, path: String, track: Track) {
-        self.tracks.insert(path, track);
-    }
-
-    /// Add circular motion track
-    pub fn add_circular_track(&mut self, track: CircularTrack) {
+    /// Add circular motion track (returns index of the new track)
+    pub fn add_circular_track(&mut self, track: CircularTrack) -> usize {
+        let index = self.circular_tracks.len();
         self.circular_tracks.push(track);
+        index
     }
 
-    /// Remove a track by its target path
-    pub fn remove_track(&mut self, path: &str) -> Option<Track> {
-        self.tracks.remove(path)
+    /// Remove a track by index
+    pub fn remove_track(&mut self, index: usize) -> Option<Track> {
+        if index < self.tracks.len() {
+            Some(self.tracks.remove(index))
+        } else {
+            None
+        }
     }
 
     /// Remove a circular track by index
@@ -210,6 +213,16 @@ impl Animation {
         } else {
             None
         }
+    }
+
+    /// Get track by index
+    pub fn get_track(&self, index: usize) -> Option<&Track> {
+        self.tracks.get(index)
+    }
+
+    /// Get mutable track by index
+    pub fn get_track_mut(&mut self, index: usize) -> Option<&mut Track> {
+        self.tracks.get_mut(index)
     }
 
     /// Load from JSON file
@@ -224,9 +237,19 @@ impl Animation {
 }
 
 impl Track {
-    /// Create track with single keyframe (constant value)
-    pub fn constant(value: serde_json::Value) -> Self {
+    /// Create a new track with the given target and source
+    pub fn new(target: String, source: TrackSource) -> Self {
         Self {
+            target,
+            source,
+            interpolation: Interpolation::Linear,
+        }
+    }
+
+    /// Create keyframe track with single keyframe (constant value)
+    pub fn constant(target: String, value: serde_json::Value) -> Self {
+        Self {
+            target,
             source: TrackSource::Keyframes {
                 keyframes: vec![Keyframe {
                     time: 0.0,
@@ -238,9 +261,10 @@ impl Track {
         }
     }
 
-    /// Create track with two keyframes (start → end)
-    pub fn linear(start_value: serde_json::Value, end_value: serde_json::Value, duration: f64) -> Self {
+    /// Create keyframe track with two keyframes (start → end)
+    pub fn linear(target: String, start_value: serde_json::Value, end_value: serde_json::Value, duration: f64) -> Self {
         Self {
+            target,
             source: TrackSource::Keyframes {
                 keyframes: vec![
                     Keyframe {
@@ -261,12 +285,14 @@ impl Track {
 
     /// Create oscillator track
     pub fn oscillator(
+        target: String,
         oscillator_type: OscillatorType,
         center: f64,
         amplitude: f64,
         frequency: f64,
     ) -> Self {
         Self {
+            target,
             source: TrackSource::Oscillator {
                 oscillator_type,
                 center,
@@ -280,6 +306,7 @@ impl Track {
 
     /// Create oscillator track with phase offset
     pub fn oscillator_with_phase(
+        target: String,
         oscillator_type: OscillatorType,
         center: f64,
         amplitude: f64,
@@ -287,6 +314,7 @@ impl Track {
         phase: f64,
     ) -> Self {
         Self {
+            target,
             source: TrackSource::Oscillator {
                 oscillator_type,
                 center,
@@ -361,11 +389,12 @@ mod tests {
         anim.loop_mode = LoopMode::Loop;
 
         let track = Track::linear(
+            "Zoom".into(),
             serde_json::json!(1.0),
             serde_json::json!(10.0),
             10.0,
         );
-        anim.tracks.insert("Zoom".into(), track);
+        anim.add_track(track);
 
         let json = anim.to_json().unwrap();
         let loaded = Animation::from_json(&json).unwrap();
@@ -374,20 +403,22 @@ mod tests {
         assert_eq!(loaded.duration, 10.0);
         assert_eq!(loaded.loop_mode, LoopMode::Loop);
         assert_eq!(loaded.tracks.len(), 1);
+        assert_eq!(loaded.tracks[0].target, "Zoom");
     }
 
     #[test]
     fn test_oscillator_track_json() {
         let mut anim = Animation::new("Oscillate".into(), 5.0);
 
-        let track = Track::oscillator(OscillatorType::Sine, 1.0, 0.5, 2.0);
-        anim.tracks.insert("Exposure".into(), track);
+        let track = Track::oscillator("Exposure".into(), OscillatorType::Sine, 1.0, 0.5, 2.0);
+        anim.add_track(track);
 
         let json = anim.to_json().unwrap();
         let loaded = Animation::from_json(&json).unwrap();
 
         assert_eq!(loaded.tracks.len(), 1);
-        let track = loaded.tracks.get("Exposure").unwrap();
+        let track = &loaded.tracks[0];
+        assert_eq!(track.target, "Exposure");
         match &track.source {
             TrackSource::Oscillator { oscillator_type, center, amplitude, frequency, .. } => {
                 assert_eq!(*oscillator_type, OscillatorType::Sine);
@@ -431,14 +462,16 @@ mod tests {
         anim.loop_mode = LoopMode::PingPong;
 
         // Keyframe track
-        anim.tracks.insert("Zoom".into(), Track::linear(
+        anim.add_track(Track::linear(
+            "Zoom".into(),
             serde_json::json!(1.0),
             serde_json::json!(5.0),
             10.0,
         ));
 
         // Oscillator track
-        anim.tracks.insert("Brightness".into(), Track::oscillator(
+        anim.add_track(Track::oscillator(
+            "Brightness".into(),
             OscillatorType::Triangle,
             1.0,
             0.3,

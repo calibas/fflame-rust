@@ -18,6 +18,7 @@ mod performance;
 mod random_generator;
 mod response;
 mod settings;
+mod target_selector;
 mod tone_mapping;
 pub mod track_editor;
 mod transforms;
@@ -537,6 +538,16 @@ impl EguiLayer {
             ) {
                 animation_export_requested = Some(export_settings);
             }
+
+            // Show Track Editor panel (unified Add/Edit track panel)
+            track_editor::render_track_editor_panel(
+                ctx,
+                animation_controller,
+                &mut self.track_editor_state,
+                &config_manager.active_config().flame,
+                config_manager.active_config(),
+                animation_controller.current_time,
+            );
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
         });

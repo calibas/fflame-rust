@@ -144,9 +144,9 @@ impl AnimationController {
         let mut values = Vec::new();
 
         // Evaluate regular tracks
-        for (path_str, track) in &animation.tracks {
+        for track in &animation.tracks {
             if let Some(value) = self.evaluate_track(track, time) {
-                values.push((path_str.clone(), value));
+                values.push((track.target.clone(), value));
             }
         }
 
@@ -405,6 +405,7 @@ mod tests {
     fn test_track_evaluation_keyframes() {
         let controller = AnimationController::new();
         let track = Track::linear(
+            "Test".into(),
             serde_json::json!(0.0),
             serde_json::json!(10.0),
             10.0,
@@ -426,7 +427,7 @@ mod tests {
     #[test]
     fn test_oscillator_sine() {
         let controller = AnimationController::new();
-        let track = Track::oscillator(OscillatorType::Sine, 5.0, 2.0, 1.0);
+        let track = Track::oscillator("Test".into(), OscillatorType::Sine, 5.0, 2.0, 1.0);
 
         // At t=0, sine(0) = 0, so value = center = 5.0
         let val = controller.evaluate_track(&track, 0.0).unwrap();
@@ -448,7 +449,7 @@ mod tests {
     #[test]
     fn test_oscillator_square() {
         let controller = AnimationController::new();
-        let track = Track::oscillator(OscillatorType::Square, 0.0, 1.0, 1.0);
+        let track = Track::oscillator("Test".into(), OscillatorType::Square, 0.0, 1.0, 1.0);
 
         // First half of cycle: -1
         let val = controller.evaluate_track(&track, 0.25).unwrap();
