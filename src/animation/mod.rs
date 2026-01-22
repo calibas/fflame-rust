@@ -6,7 +6,7 @@
 //! (without creating undo points).
 
 use crate::config::FractalConfig;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 mod controller;
 mod interpolation;
@@ -31,6 +31,8 @@ pub struct Animation {
     pub duration: f64,
 
     /// Parameter tracks (indexed by position, allowing multiple tracks with same target)
+    /// Supports loading from both old HashMap format and new Vec format for backwards compatibility
+    #[serde(deserialize_with = "deserialize_tracks")]
     pub tracks: Vec<Track>,
 
     /// Circular motion tracks (output X and Y to two parameters)
@@ -39,6 +41,64 @@ pub struct Animation {
 
     /// Looping behavior
     pub loop_mode: LoopMode,
+}
+
+/// Legacy track format (for backwards compatibility)
+/// Old format stored tracks as HashMap with target as key
+#[derive(Debug, Clone, Deserialize)]
+struct LegacyTrack {
+    source: TrackSource,
+    #[serde(default)]
+    interpolation: Interpolation,
+}
+
+/// Deserialize tracks from either Vec<Track> (new) or HashMap<String, LegacyTrack> (old)
+fn deserialize_tracks<'de, D>(deserializer: D) -> Result<Vec<Track>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{SeqAccess, MapAccess, Visitor};
+    use std::fmt;
+
+    struct TracksVisitor;
+
+    impl<'de> Visitor<'de> for TracksVisitor {
+        type Value = Vec<Track>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a sequence of tracks or a map of target -> track")
+        }
+
+        // New format: Vec<Track>
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut tracks = Vec::new();
+            while let Some(track) = seq.next_element::<Track>()? {
+                tracks.push(track);
+            }
+            Ok(tracks)
+        }
+
+        // Old format: HashMap<String, LegacyTrack>
+        fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+        where
+            M: MapAccess<'de>,
+        {
+            let mut tracks = Vec::new();
+            while let Some((target, legacy)) = map.next_entry::<String, LegacyTrack>()? {
+                tracks.push(Track {
+                    target,
+                    source: legacy.source,
+                    interpolation: legacy.interpolation,
+                });
+            }
+            Ok(tracks)
+        }
+    }
+
+    deserializer.deserialize_any(TracksVisitor)
 }
 
 /// Single parameter track
