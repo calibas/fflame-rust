@@ -1274,72 +1274,90 @@ fn render_track_editor_panel_content(
     ui.separator();
 
     // =========================================================================
-    // TARGET SELECTOR (Hierarchical)
+    // TARGET SELECTOR (Hierarchical or read-only)
     // =========================================================================
     ui.label(t!("track_editor.target"));
 
-    // Show current selection
-    if !state.new_track_target.is_empty() {
+    if is_editing {
+        // Edit mode: Show target as read-only label
         ui.horizontal(|ui| {
             ui.label("→");
             ui.strong(&state.new_track_target);
-            if ui.small_button("✕").clicked() {
-                state.new_track_target.clear();
+        });
+    } else {
+        // Add mode: Show editable target selector
+        // Show current selection
+        if !state.new_track_target.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label("→");
+                ui.strong(&state.new_track_target);
+                if ui.small_button("✕").clicked() {
+                    state.new_track_target.clear();
+                }
+            });
+        }
+
+        // Hierarchical target selector
+        egui::CollapsingHeader::new(if state.new_track_target.is_empty() {
+            t!("track_editor.select_target")
+        } else {
+            t!("track_editor.change_target")
+        })
+        .default_open(state.new_track_target.is_empty())
+        .show(ui, |ui| {
+            if let Some(path) = render_target_selector(
+                ui,
+                &mut state.target_selector_state,
+                flame,
+                config,
+                if state.new_track_target.is_empty() { None } else { Some(&state.new_track_target) },
+            ) {
+                state.new_track_target = path.to_string_key();
             }
         });
     }
-
-    // Hierarchical target selector
-    egui::CollapsingHeader::new(if state.new_track_target.is_empty() {
-        t!("track_editor.select_target")
-    } else {
-        t!("track_editor.change_target")
-    })
-    .default_open(state.new_track_target.is_empty())
-    .show(ui, |ui| {
-        if let Some(path) = render_target_selector(
-            ui,
-            &mut state.target_selector_state,
-            flame,
-            config,
-            if state.new_track_target.is_empty() { None } else { Some(&state.new_track_target) },
-        ) {
-            state.new_track_target = path.to_string_key();
-        }
-    });
 
     // Second target for Circular tracks
     if state.new_track_type == NewTrackType::Circular {
         ui.separator();
         ui.label(t!("track_editor.target_y"));
 
-        if !state.new_track_target_y.is_empty() {
+        if is_editing {
+            // Edit mode: Show target Y as read-only label
             ui.horizontal(|ui| {
                 ui.label("→");
                 ui.strong(&state.new_track_target_y);
-                if ui.small_button("✕").clicked() {
-                    state.new_track_target_y.clear();
+            });
+        } else {
+            // Add mode: Show editable target Y selector
+            if !state.new_track_target_y.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.label("→");
+                    ui.strong(&state.new_track_target_y);
+                    if ui.small_button("✕").clicked() {
+                        state.new_track_target_y.clear();
+                    }
+                });
+            }
+
+            egui::CollapsingHeader::new(if state.new_track_target_y.is_empty() {
+                t!("track_editor.select_target_y")
+            } else {
+                t!("track_editor.change_target_y")
+            })
+            .default_open(state.new_track_target_y.is_empty())
+            .show(ui, |ui| {
+                if let Some(path) = render_target_selector(
+                    ui,
+                    &mut state.target_selector_state_y,
+                    flame,
+                    config,
+                    if state.new_track_target_y.is_empty() { None } else { Some(&state.new_track_target_y) },
+                ) {
+                    state.new_track_target_y = path.to_string_key();
                 }
             });
         }
-
-        egui::CollapsingHeader::new(if state.new_track_target_y.is_empty() {
-            t!("track_editor.select_target_y")
-        } else {
-            t!("track_editor.change_target_y")
-        })
-        .default_open(state.new_track_target_y.is_empty())
-        .show(ui, |ui| {
-            if let Some(path) = render_target_selector(
-                ui,
-                &mut state.target_selector_state_y,
-                flame,
-                config,
-                if state.new_track_target_y.is_empty() { None } else { Some(&state.new_track_target_y) },
-            ) {
-                state.new_track_target_y = path.to_string_key();
-            }
-        });
     }
 
     ui.separator();
@@ -1359,34 +1377,29 @@ fn render_track_editor_panel_content(
         }
     }
 
+    // In Edit mode, apply changes immediately after each frame
+    // This makes oscillator/circular parameter changes and type switches take effect instantly
+    if is_editing {
+        update_or_create_track(animation, state, duration, config);
+    }
+
     ui.separator();
 
     // =========================================================================
-    // ACTION BUTTONS
+    // ACTION BUTTONS (Add mode only)
     // =========================================================================
-    ui.horizontal(|ui| {
+    if !is_editing {
         let can_create = match state.new_track_type {
             NewTrackType::Circular => !state.new_track_target.is_empty() && !state.new_track_target_y.is_empty(),
             _ => !state.new_track_target.is_empty(),
         };
 
-        if is_editing {
-            if ui.add_enabled(can_create, egui::Button::new(t!("track_editor.update_track"))).clicked() {
-                update_or_create_track(animation, state, duration, config);
-            }
-        } else {
-            if ui.add_enabled(can_create, egui::Button::new(t!("track_editor.create_track"))).clicked() {
-                // Create the track and switch to edit mode for it
-                if let Some(new_index) = update_or_create_track(animation, state, duration, config) {
-                    state.editing_track_index = Some(new_index);
-                }
-            }
-        }
-
-        if ui.button(t!("track_editor.close")).clicked() {
+        if ui.add_enabled(can_create, egui::Button::new(t!("track_editor.create_track"))).clicked() {
+            // Create the track and close panel
+            update_or_create_track(animation, state, duration, config);
             close_track_editor_panel(state);
         }
-    });
+    }
 }
 
 /// Render keyframe-specific options subpanel
