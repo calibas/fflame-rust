@@ -275,16 +275,17 @@ pub fn render_file_controls(
 ) {
     let has_animation = controller.animation.is_some();
 
-    // Row 1: Name and Save/Load
-    ui.horizontal(|ui| {
-        ui.label(t!("animation_panel.name"));
-        if let Some(ref mut animation) = controller.animation {
-            ui.add(egui::TextEdit::singleline(&mut animation.name).desired_width(120.0));
-        } else {
-            let mut empty = String::new();
-            ui.add_enabled(false, egui::TextEdit::singleline(&mut empty).desired_width(120.0));
-        }
+    // Row 1: Name
+    // ui.label(t!("animation_panel.name"));
+    if let Some(ref mut animation) = controller.animation {
+        ui.add(egui::TextEdit::singleline(&mut animation.name).desired_width(120.0));
+    } else {
+        let mut empty = String::new();
+        ui.add_enabled(false, egui::TextEdit::singleline(&mut empty).desired_width(120.0));
+    }
 
+    // Row 2: Save/Load
+    ui.horizontal(|ui| {
         // Save button
         if ui.add_enabled(has_animation, egui::Button::new(t!("animation_panel.save")))
             .on_hover_text(t!("animation_panel.save_tooltip"))
@@ -324,7 +325,7 @@ pub fn render_file_controls(
         }
     });
 
-    // Row 2: Export Animation button
+    // Row 3: Export Animation button
     ui.horizontal(|ui| {
         if ui.add_enabled(has_animation, egui::Button::new(t!("animation_panel.export_animation")))
             .on_hover_text(t!("animation_panel.export_animation_tooltip"))

@@ -723,9 +723,10 @@ impl App {
                 }
             }
 
-            // Sync flame and trigger refresh (preview mode - keep accumulation during drag)
+            // Sync flame and trigger refresh
+            // Note: Overwrite mode is handled by update_overwrite_mode based on recorded actions
+            // This ensures tone-mapping-only changes don't incorrectly enable overwrite mode
             self.flame = self.config_manager.active_config().flame.clone();
-            self.use_overwrite_next_frame = true;
         }
 
         // Only reset accumulation when drag stops or on discrete actions (frame step, click to seek)
