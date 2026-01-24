@@ -21,10 +21,6 @@ use super::target_selector::{TargetSelectorState, render_target_selector};
 /// UI state for track editor
 #[derive(Default)]
 pub struct TrackEditorState {
-    /// Track path being edited for keyframes (None = no keyframe editor open)
-    pub editing_keyframes_for: Option<String>,
-    /// Index of keyframe to highlight/scroll to when opening editor (set by clicking a dot)
-    pub selected_keyframe_index: Option<usize>,
     /// Whether the "add track" dialog is open (legacy)
     pub add_track_dialog_open: bool,
     /// Selected track type for new track
@@ -458,14 +454,6 @@ pub fn render_track_editor(
         }
     }
 
-    // Keyframe editor (shown when editing a track's keyframes)
-    if let Some(ref track_path) = state.editing_keyframes_for.clone() {
-        let current_time = controller.current_time;
-        if let Some(ref mut animation) = controller.animation {
-            render_keyframe_editor(ui, animation, &track_path, state, current_time, config);
-        }
-    }
-
     response
 }
 
@@ -632,10 +620,9 @@ fn render_tracks_visual(
                     }
                 }
 
-                // Handle keyframe click - open Track Editor panel with that keyframe selected
-                if let Some(kf_idx) = clicked_keyframe {
+                // Handle keyframe click - open Track Editor panel
+                if let Some(_kf_idx) = clicked_keyframe {
                     open_edit_track_panel(state, track_index, track);
-                    state.selected_keyframe_index = Some(kf_idx);
                 }
                 // Handle bar area click (not on keyframe) - seek to that time
                 else if row_response.clicked() {
@@ -952,10 +939,6 @@ fn render_tracks(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditor
                                     ui.selectable_value(&mut track.interpolation, Interpolation::Sinusoidal, t!("track_editor.interpolation_sinusoidal").as_ref());
                                 });
                         });
-
-                        if ui.small_button(t!("track_editor.edit_keyframes")).clicked() {
-                            state.editing_keyframes_for = Some(path.clone());
-                        }
                     }
                     TrackSource::Oscillator { oscillator_type, center, amplitude, frequency, phase } => {
                         ui.horizontal(|ui| {
@@ -1044,154 +1027,6 @@ fn render_tracks(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditor
     }
 }
 
-/// Render the keyframe editor for a specific track
-fn render_keyframe_editor(
-    ui: &mut Ui,
-    animation: &mut Animation,
-    track_path: &str,
-    state: &mut TrackEditorState,
-    current_time: f64,
-    config: &FractalConfig,
-) {
-    let duration = animation.duration;
-
-    // Get the current value for this parameter from the config
-    let current_value = get_parameter_value(config, track_path);
-
-    // Find the track by target path
-    let track_opt = animation.tracks.iter_mut().find(|t| t.target == track_path);
-    if let Some(track) = track_opt {
-        if let TrackSource::Keyframes { ref mut keyframes } = track.source {
-            egui::Window::new(t!("track_editor.keyframe_window_title", path = track_path))
-                .collapsible(false)
-                .resizable(true)
-                .show(ui.ctx(), |ui| {
-                    // Header row
-                    ui.horizontal(|ui| {
-                        ui.label(t!("track_editor.time"));
-                        ui.add_space(40.0);
-                        ui.label(t!("track_editor.value"));
-                        ui.add_space(40.0);
-                        ui.label(t!("track_editor.easing"));
-                    });
-
-                    ui.separator();
-
-                    // Keyframe rows
-                    let mut keyframe_to_delete: Option<usize> = None;
-                    let keyframe_count = keyframes.len();
-                    let selected_idx = state.selected_keyframe_index;
-
-                    for (i, keyframe) in keyframes.iter_mut().enumerate() {
-                        // Highlight selected keyframe (from clicking on dot)
-                        let is_selected = selected_idx == Some(i);
-
-                        let frame = if is_selected {
-                            egui::Frame::new()
-                                .fill(Color32::from_rgba_unmultiplied(100, 150, 255, 60))
-                                .inner_margin(2.0)
-                        } else {
-                            egui::Frame::NONE
-                        };
-
-                        frame.show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                // Time
-                                ui.add(egui::DragValue::new(&mut keyframe.time)
-                                .range(0.0..=duration)
-                                .speed(0.01)
-                                .suffix("s"));
-
-                            // Value (as f64)
-                            let mut value_f64 = keyframe.value.as_f64().unwrap_or(0.0);
-                            if ui.add(egui::DragValue::new(&mut value_f64).speed(0.01)).changed() {
-                                keyframe.value = serde_json::json!(value_f64);
-                            }
-
-                            // Easing
-                            egui::ComboBox::from_id_salt(format!("easing_{}_{}", track_path, i))
-                                .selected_text(format!("{:?}", keyframe.easing))
-                                .width(120.0)
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::Linear, t!("track_editor.easing_linear").as_ref());
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseIn, t!("track_editor.easing_easein").as_ref());
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseOut, t!("track_editor.easing_easeout").as_ref());
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInOut, t!("track_editor.easing_easeinout").as_ref());
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInCubic, t!("track_editor.easing_easeincubic").as_ref());
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseOutCubic, t!("track_editor.easing_easeoutcubic").as_ref());
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInOutCubic, t!("track_editor.easing_easeinoutcubic").as_ref());
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInSine, t!("track_editor.easing_easeinsine").as_ref());
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseOutSine, t!("track_editor.easing_easeoutsine").as_ref());
-                                    ui.selectable_value(&mut keyframe.easing, EasingFunction::EaseInOutSine, t!("track_editor.easing_easeinoutsine").as_ref());
-                                });
-
-                                // Delete button (only if more than 1 keyframe)
-                                if keyframe_count > 1 {
-                                    if ui.small_button("X").clicked() {
-                                        keyframe_to_delete = Some(i);
-                                    }
-                                }
-                            });
-                        });
-                    }
-
-                    // Delete keyframe if requested
-                    if let Some(i) = keyframe_to_delete {
-                        keyframes.remove(i);
-                    }
-
-                    ui.separator();
-
-                    // Add keyframe buttons
-                    ui.horizontal(|ui| {
-                        // Add keyframe at current time with current value (most useful)
-                        if ui.button(t!("track_editor.add_at_current")).clicked() {
-                            let value = current_value.unwrap_or(0.0);
-                            keyframes.push(Keyframe {
-                                time: current_time.clamp(0.0, duration),
-                                value: serde_json::json!(value),
-                                easing: EasingFunction::Linear,
-                            });
-                            // Auto-sort after adding
-                            keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
-                        }
-
-                        // Add keyframe at end
-                        if ui.button(t!("track_editor.add_keyframe")).clicked() {
-                            let last_time = keyframes.last().map(|k| k.time).unwrap_or(0.0);
-                            let last_value = keyframes.last()
-                                .and_then(|k| k.value.as_f64())
-                                .unwrap_or(0.0);
-
-                            keyframes.push(Keyframe {
-                                time: (last_time + 1.0).min(duration),
-                                value: serde_json::json!(last_value),
-                                easing: EasingFunction::Linear,
-                            });
-                        }
-                    });
-
-                    ui.horizontal(|ui| {
-                        if ui.button(t!("track_editor.sort_by_time")).clicked() {
-                            keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
-                        }
-
-                        if ui.button(t!("track_editor.done")).clicked() {
-                            // Sort keyframes by time before closing
-                            keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
-                            state.editing_keyframes_for = None;
-                            state.selected_keyframe_index = None;
-                        }
-                    });
-                });
-        }
-    } else {
-        // Track was deleted while editing
-        state.editing_keyframes_for = None;
-        state.selected_keyframe_index = None;
-    }
-}
-
 // ============================================================================
 // UNIFIED TRACK EDITOR PANEL (Phase 7)
 // ============================================================================
@@ -1254,24 +1089,26 @@ fn render_track_editor_panel_content(
     let duration = animation.duration;
 
     // =========================================================================
-    // TYPE SELECTOR
+    // TYPE SELECTOR (Add mode only)
     // =========================================================================
-    ui.horizontal(|ui| {
-        ui.label(t!("track_editor.type"));
-        egui::ComboBox::from_id_salt("track_type_selector")
-            .selected_text(match state.new_track_type {
-                NewTrackType::Keyframe => t!("track_editor.type_keyframe"),
-                NewTrackType::Oscillator => t!("track_editor.type_oscillator"),
-                NewTrackType::Circular => t!("track_editor.type_circular"),
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut state.new_track_type, NewTrackType::Keyframe, t!("track_editor.type_keyframe").as_ref());
-                ui.selectable_value(&mut state.new_track_type, NewTrackType::Oscillator, t!("track_editor.type_oscillator").as_ref());
-                ui.selectable_value(&mut state.new_track_type, NewTrackType::Circular, t!("track_editor.type_circular").as_ref());
-            });
-    });
+    if !is_editing {
+        ui.horizontal(|ui| {
+            ui.label(t!("track_editor.type"));
+            egui::ComboBox::from_id_salt("track_type_selector")
+                .selected_text(match state.new_track_type {
+                    NewTrackType::Keyframe => t!("track_editor.type_keyframe"),
+                    NewTrackType::Oscillator => t!("track_editor.type_oscillator"),
+                    NewTrackType::Circular => t!("track_editor.type_circular"),
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut state.new_track_type, NewTrackType::Keyframe, t!("track_editor.type_keyframe").as_ref());
+                    ui.selectable_value(&mut state.new_track_type, NewTrackType::Oscillator, t!("track_editor.type_oscillator").as_ref());
+                    ui.selectable_value(&mut state.new_track_type, NewTrackType::Circular, t!("track_editor.type_circular").as_ref());
+                });
+        });
 
-    ui.separator();
+        ui.separator();
+    }
 
     // =========================================================================
     // TARGET SELECTOR (Hierarchical or read-only)
@@ -1455,15 +1292,21 @@ fn render_keyframe_subpanel(
                                     kf.value = serde_json::json!(value);
                                 }
 
-                                // Easing (compact)
+                                // Easing
                                 egui::ComboBox::from_id_salt(format!("kf_ease_{}", i))
-                                    .selected_text(easing_short_name(&kf.easing))
-                                    .width(60.0)
+                                    .selected_text(format!("{:?}", kf.easing))
+                                    .width(120.0)
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(&mut kf.easing, EasingFunction::Linear, "Lin");
-                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseIn, "In");
-                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseOut, "Out");
-                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseInOut, "I/O");
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::Linear, t!("track_editor.easing_linear").as_ref());
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseIn, t!("track_editor.easing_easein").as_ref());
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseOut, t!("track_editor.easing_easeout").as_ref());
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseInOut, t!("track_editor.easing_easeinout").as_ref());
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseInCubic, t!("track_editor.easing_easeincubic").as_ref());
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseOutCubic, t!("track_editor.easing_easeoutcubic").as_ref());
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseInOutCubic, t!("track_editor.easing_easeinoutcubic").as_ref());
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseInSine, t!("track_editor.easing_easeinsine").as_ref());
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseOutSine, t!("track_editor.easing_easeoutsine").as_ref());
+                                        ui.selectable_value(&mut kf.easing, EasingFunction::EaseInOutSine, t!("track_editor.easing_easeinoutsine").as_ref());
                                     });
 
                                 // Delete (if more than 1)
@@ -1498,6 +1341,10 @@ fn render_keyframe_subpanel(
                             value: serde_json::json!(last_value),
                             easing: EasingFunction::Linear,
                         });
+                    }
+
+                    if ui.button(t!("track_editor.sort_by_time")).clicked() {
+                        keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
                     }
                 });
 
