@@ -1034,7 +1034,6 @@ track_editor:
   # Action buttons
   update_track: "Update Track"
   replace_track: "Replace Track"
-  create_track: "Create Track"
   close: "Close"
   warning_replace: "⚠ A track with this target already exists and will be replaced"
 

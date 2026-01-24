@@ -21,8 +21,6 @@ use super::target_selector::{TargetSelectorState, render_target_selector};
 /// UI state for track editor
 #[derive(Default)]
 pub struct TrackEditorState {
-    /// Whether the "add track" dialog is open (legacy)
-    pub add_track_dialog_open: bool,
     /// Selected track type for new track
     pub new_track_type: NewTrackType,
     /// Selected target for new track
@@ -440,11 +438,6 @@ pub fn render_track_editor(
         }
     });
 
-    // Add track dialog
-    if state.add_track_dialog_open && has_animation {
-        render_add_track_dialog(ui, controller, state, config);
-    }
-
     ui.separator();
 
     // Render tracks - visual bars if timeline layout provided, otherwise inline controls
@@ -744,161 +737,6 @@ fn render_tracks_visual(
     }
 
     response
-}
-
-/// Render the add track dialog
-fn render_add_track_dialog(
-    ui: &mut Ui,
-    controller: &mut AnimationController,
-    state: &mut TrackEditorState,
-    config: &FractalConfig,
-) {
-    egui::Frame::new()
-        .fill(ui.visuals().extreme_bg_color)
-        .inner_margin(8.0)
-        .corner_radius(4.0)
-        .show(ui, |ui| {
-            ui.label(t!("track_editor.add_new_track"));
-
-            // Track type selection
-            ui.horizontal(|ui| {
-                ui.label(t!("track_editor.type"));
-                egui::ComboBox::from_id_salt("new_track_type")
-                    .selected_text(match state.new_track_type {
-                        NewTrackType::Keyframe => t!("track_editor.type_keyframe"),
-                        NewTrackType::Oscillator => t!("track_editor.type_oscillator"),
-                        NewTrackType::Circular => t!("track_editor.type_circular"),
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut state.new_track_type, NewTrackType::Keyframe, t!("track_editor.type_keyframe").as_ref());
-                        ui.selectable_value(&mut state.new_track_type, NewTrackType::Oscillator, t!("track_editor.type_oscillator").as_ref());
-                        ui.selectable_value(&mut state.new_track_type, NewTrackType::Circular, t!("track_editor.type_circular").as_ref());
-                    });
-            });
-
-            // Target parameter selection
-            let categories = animatable_parameters(config);
-
-            ui.horizontal(|ui| {
-                ui.label(t!("track_editor.target"));
-                egui::ComboBox::from_id_salt("new_track_target")
-                    .selected_text(if state.new_track_target.is_empty() {
-                        t!("track_editor.select").to_string()
-                    } else {
-                        state.new_track_target.clone()
-                    })
-                    .show_ui(ui, |ui| {
-                        for category in &categories {
-                            ui.separator();
-                            ui.label(&category.name);
-                            for (display_name, path) in &category.params {
-                                if ui.selectable_label(
-                                    state.new_track_target == *path,
-                                    display_name
-                                ).clicked() {
-                                    state.new_track_target = path.to_string();
-                                }
-                            }
-                        }
-                    });
-            });
-
-            // Second target for circular tracks
-            if state.new_track_type == NewTrackType::Circular {
-                ui.horizontal(|ui| {
-                    ui.label(t!("track_editor.target_y"));
-                    egui::ComboBox::from_id_salt("new_track_target_y")
-                        .selected_text(if state.new_track_target_y.is_empty() {
-                            t!("track_editor.select").to_string()
-                        } else {
-                            state.new_track_target_y.clone()
-                        })
-                        .show_ui(ui, |ui| {
-                            for category in &categories {
-                                ui.separator();
-                                ui.label(&category.name);
-                                for (display_name, path) in &category.params {
-                                    if ui.selectable_label(
-                                        state.new_track_target_y == *path,
-                                        display_name
-                                    ).clicked() {
-                                        state.new_track_target_y = path.to_string();
-                                    }
-                                }
-                            }
-                        });
-                });
-            }
-
-            // Add/Cancel buttons
-            ui.horizontal(|ui| {
-                let can_add = match state.new_track_type {
-                    NewTrackType::Circular => !state.new_track_target.is_empty() && !state.new_track_target_y.is_empty(),
-                    _ => !state.new_track_target.is_empty(),
-                };
-
-                if ui.add_enabled(can_add, egui::Button::new(t!("track_editor.add"))).clicked() {
-                    if let Some(ref mut animation) = controller.animation {
-                        match state.new_track_type {
-                            NewTrackType::Keyframe => {
-                                let track = Track {
-                                    target: state.new_track_target.clone(),
-                                    source: TrackSource::Keyframes {
-                                        keyframes: vec![
-                                            Keyframe {
-                                                time: 0.0,
-                                                value: serde_json::json!(0.0),
-                                                easing: EasingFunction::Linear,
-                                            },
-                                            Keyframe {
-                                                time: animation.duration,
-                                                value: serde_json::json!(1.0),
-                                                easing: EasingFunction::Linear,
-                                            },
-                                        ],
-                                    },
-                                    interpolation: Interpolation::Linear,
-                                };
-                                animation.add_track(track);
-                            }
-                            NewTrackType::Oscillator => {
-                                let track = Track {
-                                    target: state.new_track_target.clone(),
-                                    source: TrackSource::Oscillator {
-                                        oscillator_type: OscillatorType::Sine,
-                                        center: 0.0,
-                                        amplitude: 1.0,
-                                        frequency: 0.5,
-                                        phase: 0.0,
-                                    },
-                                    interpolation: Interpolation::Linear,
-                                };
-                                animation.add_track(track);
-                            }
-                            NewTrackType::Circular => {
-                                let track = CircularTrack::new(
-                                    state.new_track_target.clone(),
-                                    state.new_track_target_y.clone(),
-                                    0.0, 0.0,  // center
-                                    0.5,       // radius
-                                    0.1,       // speed (rev/s)
-                                );
-                                animation.add_circular_track(track);
-                            }
-                        }
-                    }
-                    state.add_track_dialog_open = false;
-                    state.new_track_target.clear();
-                    state.new_track_target_y.clear();
-                }
-
-                if ui.button(t!("track_editor.cancel")).clicked() {
-                    state.add_track_dialog_open = false;
-                    state.new_track_target.clear();
-                    state.new_track_target_y.clear();
-                }
-            });
-        });
 }
 
 /// Render the list of existing tracks
@@ -1238,7 +1076,13 @@ fn render_track_editor_panel_content(
             _ => !state.new_track_target.is_empty(),
         };
 
-        if ui.add_enabled(can_create, egui::Button::new(t!("track_editor.create_track"))).clicked() {
+        let add_button = egui::Button::new(t!("track_editor.add_track"));
+        let add_button = if can_create {
+            add_button.fill(egui::Color32::from_rgb(60, 120, 60))
+        } else {
+            add_button
+        };
+        if ui.add_enabled(can_create, add_button).clicked() {
             // Create the track and close panel
             update_or_create_track(animation, state, duration, config);
             close_track_editor_panel(state);

@@ -433,14 +433,13 @@ impl App {
                     }
                 }
                 Event::Resumed => {
-                    // On WASM, request a resize to ensure proper canvas dimensions
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        let size = window.inner_size();
-                        if size.width > 0 && size.height > 0 {
-                            log::info!("Resumed event - resizing to {}x{}", size.width, size.height);
-                            app.gpu.resize(size);
-                        }
+                    // Refresh window state when app resumes (wake from sleep, etc.)
+                    // This fixes UI offset issues on Windows after sleep/wake cycles
+                    let size = window.inner_size();
+                    if size.width > 0 && size.height > 0 {
+                        log::info!("Resumed event - resizing to {}x{}", size.width, size.height);
+                        app.gpu.resize(size);
+                        window.request_redraw();
                     }
                 }
                 Event::AboutToWait => {
