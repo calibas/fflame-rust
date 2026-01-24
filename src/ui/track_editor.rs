@@ -913,7 +913,8 @@ pub fn render_track_editor_panel(
             render_track_editor_panel_content(ui, controller, state, flame, config, current_time);
         });
 
-    state.track_editor_panel_open = open;
+    // Close if either X button clicked (open=false) or explicitly closed by code
+    state.track_editor_panel_open = open && state.track_editor_panel_open;
 }
 
 /// Render the content of the Track Editor panel
@@ -963,7 +964,7 @@ fn render_track_editor_panel_content(
     if is_editing {
         // Edit mode: Show target as read-only label
         ui.horizontal(|ui| {
-            ui.label("→");
+            ui.add_space(8.0);
             ui.strong(&state.new_track_target);
         });
     } else {
@@ -971,9 +972,9 @@ fn render_track_editor_panel_content(
         // Show current selection
         if !state.new_track_target.is_empty() {
             ui.horizontal(|ui| {
-                ui.label("→");
+                ui.add_space(8.0);
                 ui.strong(&state.new_track_target);
-                if ui.small_button("✕").clicked() {
+                if ui.small_button("X").clicked() {
                     state.new_track_target.clear();
                 }
             });
