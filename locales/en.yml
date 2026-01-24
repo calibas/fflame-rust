@@ -1010,6 +1010,7 @@ track_editor:
   circular_section: "Circular Motion"
   keyframe_count: "Keyframes"
   keyframes_will_be_created: "Keyframes will be created when track is added"
+  select_target_first: "Select a target parameter to edit keyframes"
 
   # Waveform options
   waveform: "Waveform:"
