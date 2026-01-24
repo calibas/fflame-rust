@@ -11,7 +11,7 @@ use crate::animation::{
     Animation, AnimationController, CircularTrack, EasingFunction, Interpolation,
     Keyframe, OscillatorType, Track, TrackSource,
 };
-use crate::config::FractalConfig;
+use crate::config::{ConfigPath, FractalConfig};
 use crate::effects::{global_effect_registry, EffectInstance};
 use crate::scene::transforms::Flame;
 use crate::variations::global_registry;
@@ -39,6 +39,10 @@ pub struct TrackEditorState {
     pub oscillator_params: OscillatorParams,
     /// Circular track parameters for editing
     pub circular_params: CircularParams,
+    /// Preview keyframes for Add Track mode (before track is created)
+    pub preview_keyframes: Vec<Keyframe>,
+    /// Interpolation mode for preview keyframes
+    pub preview_interpolation: Interpolation,
 }
 
 /// Oscillator parameters for track editor
@@ -646,8 +650,8 @@ fn render_tracks_visual(
                     Pos2::new(rect.left() + LABEL_WIDTH - 4.0, rect.bottom()),
                 );
                 // Truncate label if too long (show more characters)
-                let display_name = if path.len() > 16 {
-                    format!("{}...", &path[..16])
+                let display_name = if path.len() > 14 {
+                    format!("{}...", &path[..14])
                 } else {
                     path.clone()
                 };
@@ -996,6 +1000,20 @@ fn render_track_editor_panel_content(
                 if state.new_track_target.is_empty() { None } else { Some(&state.new_track_target) },
             ) {
                 state.new_track_target = path.to_string_key();
+                // Auto-initialize values based on track type (Add mode only)
+                if !is_editing {
+                    match state.new_track_type {
+                        NewTrackType::Keyframe => {
+                            initialize_preview_keyframes(state, config, duration);
+                        }
+                        NewTrackType::Oscillator => {
+                            initialize_oscillator_center(state, config);
+                        }
+                        NewTrackType::Circular => {
+                            initialize_circular_centers(state, config);
+                        }
+                    }
+                }
             }
         });
     }
@@ -1038,6 +1056,10 @@ fn render_track_editor_panel_content(
                     if state.new_track_target_y.is_empty() { None } else { Some(&state.new_track_target_y) },
                 ) {
                     state.new_track_target_y = path.to_string_key();
+                    // Auto-initialize Y center for circular track
+                    if !is_editing {
+                        initialize_circular_centers(state, config);
+                    }
                 }
             });
         }
@@ -1205,8 +1227,105 @@ fn render_keyframe_subpanel(
         }
     }
 
-    // No existing track - show placeholder
-    ui.label(t!("track_editor.keyframes_will_be_created"));
+    // Add mode: show preview keyframes editor
+    if !state.preview_keyframes.is_empty() {
+        // Interpolation selector for preview
+        ui.horizontal(|ui| {
+            ui.label(t!("track_editor.interpolation"));
+            egui::ComboBox::from_id_salt("preview_interpolation")
+                .selected_text(format!("{:?}", state.preview_interpolation))
+                .width(100.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut state.preview_interpolation, Interpolation::Step, t!("track_editor.interpolation_step").as_ref());
+                    ui.selectable_value(&mut state.preview_interpolation, Interpolation::Linear, t!("track_editor.interpolation_linear").as_ref());
+                    ui.selectable_value(&mut state.preview_interpolation, Interpolation::Smooth, t!("track_editor.interpolation_smooth").as_ref());
+                    ui.selectable_value(&mut state.preview_interpolation, Interpolation::Sinusoidal, t!("track_editor.interpolation_sinusoidal").as_ref());
+                });
+        });
+
+        // Preview keyframe list
+        ui.label(format!("{}: {}", t!("track_editor.keyframe_count"), state.preview_keyframes.len()));
+
+        ScrollArea::vertical()
+            .max_height(150.0)
+            .show(ui, |ui| {
+                let mut to_delete: Option<usize> = None;
+                let kf_count = state.preview_keyframes.len();
+
+                for (i, kf) in state.preview_keyframes.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        // Time
+                        ui.add(egui::DragValue::new(&mut kf.time)
+                            .range(0.0..=duration)
+                            .speed(0.01)
+                            .suffix("s")
+                            .min_decimals(2));
+
+                        // Value
+                        let mut value = kf.value.as_f64().unwrap_or(0.0);
+                        if ui.add(egui::DragValue::new(&mut value).speed(0.01).min_decimals(3)).changed() {
+                            kf.value = serde_json::json!(value);
+                        }
+
+                        // Easing
+                        egui::ComboBox::from_id_salt(format!("preview_kf_ease_{}", i))
+                            .selected_text(format!("{:?}", kf.easing))
+                            .width(120.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut kf.easing, EasingFunction::Linear, t!("track_editor.easing_linear").as_ref());
+                                ui.selectable_value(&mut kf.easing, EasingFunction::EaseIn, t!("track_editor.easing_easein").as_ref());
+                                ui.selectable_value(&mut kf.easing, EasingFunction::EaseOut, t!("track_editor.easing_easeout").as_ref());
+                                ui.selectable_value(&mut kf.easing, EasingFunction::EaseInOut, t!("track_editor.easing_easeinout").as_ref());
+                                ui.selectable_value(&mut kf.easing, EasingFunction::EaseInCubic, t!("track_editor.easing_easeincubic").as_ref());
+                                ui.selectable_value(&mut kf.easing, EasingFunction::EaseOutCubic, t!("track_editor.easing_easeoutcubic").as_ref());
+                                ui.selectable_value(&mut kf.easing, EasingFunction::EaseInOutCubic, t!("track_editor.easing_easeinoutcubic").as_ref());
+                                ui.selectable_value(&mut kf.easing, EasingFunction::EaseInSine, t!("track_editor.easing_easeinsine").as_ref());
+                                ui.selectable_value(&mut kf.easing, EasingFunction::EaseOutSine, t!("track_editor.easing_easeoutsine").as_ref());
+                                ui.selectable_value(&mut kf.easing, EasingFunction::EaseInOutSine, t!("track_editor.easing_easeinoutsine").as_ref());
+                            });
+
+                        // Delete (if more than 1)
+                        if kf_count > 1 && ui.small_button("✕").clicked() {
+                            to_delete = Some(i);
+                        }
+                    });
+                }
+
+                if let Some(i) = to_delete {
+                    state.preview_keyframes.remove(i);
+                }
+            });
+
+        // Add keyframe buttons
+        ui.horizontal(|ui| {
+            if ui.button(t!("track_editor.add_at_current")).clicked() {
+                let current_value = get_parameter_value(config, &state.new_track_target).unwrap_or(0.0);
+                state.preview_keyframes.push(Keyframe {
+                    time: current_time.clamp(0.0, duration),
+                    value: serde_json::json!(current_value),
+                    easing: EasingFunction::Linear,
+                });
+                state.preview_keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+            }
+
+            if ui.button(t!("track_editor.add_keyframe")).clicked() {
+                let last_time = state.preview_keyframes.last().map(|k| k.time).unwrap_or(0.0);
+                let last_value = state.preview_keyframes.last().and_then(|k| k.value.as_f64()).unwrap_or(0.0);
+                state.preview_keyframes.push(Keyframe {
+                    time: (last_time + 1.0).min(duration),
+                    value: serde_json::json!(last_value),
+                    easing: EasingFunction::Linear,
+                });
+            }
+
+            if ui.button(t!("track_editor.sort_by_time")).clicked() {
+                state.preview_keyframes.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap());
+            }
+        });
+    } else {
+        // No target selected yet
+        ui.label(t!("track_editor.select_target_first"));
+    }
 }
 
 /// Render oscillator-specific options subpanel
@@ -1296,25 +1415,30 @@ fn update_or_create_track(
                 }
                 Some(track_index)
             } else {
-                // Create new track
-                let initial_value = get_parameter_value(config, &state.new_track_target).unwrap_or(0.0);
-                let track = Track::new(
+                // Create new track using preview keyframes (auto-filled when target selected)
+                let keyframes = if state.preview_keyframes.is_empty() {
+                    // Fallback if no preview keyframes
+                    let initial_value = get_parameter_value(config, &state.new_track_target).unwrap_or(0.0);
+                    vec![
+                        Keyframe {
+                            time: 0.0,
+                            value: serde_json::json!(initial_value),
+                            easing: EasingFunction::Linear,
+                        },
+                        Keyframe {
+                            time: duration,
+                            value: serde_json::json!(initial_value),
+                            easing: EasingFunction::Linear,
+                        },
+                    ]
+                } else {
+                    state.preview_keyframes.clone()
+                };
+                let mut track = Track::new(
                     state.new_track_target.clone(),
-                    TrackSource::Keyframes {
-                        keyframes: vec![
-                            Keyframe {
-                                time: 0.0,
-                                value: serde_json::json!(initial_value),
-                                easing: EasingFunction::Linear,
-                            },
-                            Keyframe {
-                                time: duration,
-                                value: serde_json::json!(initial_value),
-                                easing: EasingFunction::Linear,
-                            },
-                        ],
-                    },
+                    TrackSource::Keyframes { keyframes },
                 );
+                track.interpolation = state.preview_interpolation;
                 let new_index = animation.add_track(track);
                 Some(new_index)
             }
@@ -1392,6 +1516,8 @@ fn close_track_editor_panel(state: &mut TrackEditorState) {
     state.new_track_target_y.clear();
     state.target_selector_state = TargetSelectorState::default();
     state.target_selector_state_y = TargetSelectorState::default();
+    state.preview_keyframes.clear();
+    state.preview_interpolation = Interpolation::Linear;
 }
 
 /// Open the track editor panel to add a new track
@@ -1405,6 +1531,8 @@ pub fn open_add_track_panel(state: &mut TrackEditorState) {
     state.circular_params = CircularParams::default();
     state.target_selector_state = TargetSelectorState::default();
     state.target_selector_state_y = TargetSelectorState::default();
+    state.preview_keyframes.clear();
+    state.preview_interpolation = Interpolation::Linear;
 }
 
 /// Open the track editor panel to edit an existing track by index
@@ -1474,5 +1602,206 @@ fn oscillator_type_name(osc_type: &OscillatorType) -> String {
         OscillatorType::Triangle => t!("track_editor.waveform_triangle").to_string(),
         OscillatorType::Sawtooth => t!("track_editor.waveform_sawtooth").to_string(),
         OscillatorType::Square => t!("track_editor.waveform_square").to_string(),
+    }
+}
+
+/// Get the current value for a ConfigPath from the fractal config
+/// Returns None if the path doesn't map to a numeric value
+pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f64> {
+    use crate::config::AffineParam;
+
+    match path {
+        // View parameters
+        ConfigPath::Zoom => Some(config.zoom as f64),
+        ConfigPath::PanX => Some(config.pan_x as f64),
+        ConfigPath::PanY => Some(config.pan_y as f64),
+        ConfigPath::Rotation => Some(config.rotation as f64),
+        ConfigPath::CameraRotationX => Some(config.camera_rotation_x as f64),
+        ConfigPath::CameraRotationY => Some(config.camera_rotation_y as f64),
+        ConfigPath::CameraZ => Some(config.camera_z as f64),
+
+        // Tone mapping
+        ConfigPath::Exposure => Some(config.exposure as f64),
+        ConfigPath::Gamma => Some(config.gamma as f64),
+        ConfigPath::GammaThreshold => Some(config.gamma_threshold as f64),
+        ConfigPath::Brightness => Some(config.brightness as f64),
+        ConfigPath::Vibrancy => Some(config.vibrancy as f64),
+        ConfigPath::Saturation => Some(config.saturation as f64),
+        ConfigPath::HueShift => Some(config.hue_shift as f64),
+        ConfigPath::DensityScale => Some(config.density_scale as f64),
+        ConfigPath::LevelsLow => Some(config.levels_low as f64),
+        ConfigPath::LevelsHigh => Some(config.levels_high as f64),
+        ConfigPath::LevelsGamma => Some(config.levels_gamma as f64),
+
+        // Color
+        ConfigPath::PaletteRotation => Some(config.palette_rotation as f64),
+        ConfigPath::PaletteSqueeze => Some(config.palette_squeeze as f64),
+        ConfigPath::SpeedFactor => Some(config.speed_factor as f64),
+        ConfigPath::BackgroundColorR => Some(config.background_color[0] as f64),
+        ConfigPath::BackgroundColorG => Some(config.background_color[1] as f64),
+        ConfigPath::BackgroundColorB => Some(config.background_color[2] as f64),
+
+        // Rendering
+        ConfigPath::HistogramColorScale => Some(config.histogram_color_scale as f64),
+        ConfigPath::BlendFactor => Some(config.blend_factor as f64),
+        ConfigPath::PerspectiveStrength => Some(config.flame.perspective_strength as f64),
+
+        // Transform parameters
+        ConfigPath::TransformWeight { index } => {
+            config.flame.transforms.get(*index).map(|t| t.weight as f64)
+        }
+        ConfigPath::TransformColor { index } => {
+            config.flame.transforms.get(*index).map(|t| t.color as f64)
+        }
+        ConfigPath::TransformColorSpeed { index } => {
+            config.flame.transforms.get(*index).map(|t| t.color_speed as f64)
+        }
+        ConfigPath::TransformOpacity { index } => {
+            config.flame.transforms.get(*index).map(|t| t.opacity as f64)
+        }
+        ConfigPath::TransformAffine { index, param } => {
+            config.flame.transforms.get(*index).map(|t| {
+                match param {
+                    AffineParam::A => t.a as f64,
+                    AffineParam::B => t.b as f64,
+                    AffineParam::C => t.c as f64,
+                    AffineParam::D => t.d as f64,
+                    AffineParam::E => t.e as f64,
+                    AffineParam::F => t.f as f64,
+                    AffineParam::G => t.g as f64,
+                }
+            })
+        }
+        ConfigPath::TransformOriginX { index } => {
+            config.flame.transforms.get(*index).map(|t| t.e as f64)
+        }
+        ConfigPath::TransformOriginY { index } => {
+            config.flame.transforms.get(*index).map(|t| -t.f as f64)
+        }
+        ConfigPath::TransformRotation { index } => {
+            config.flame.transforms.get(*index).map(|t| t.rotation() as f64)
+        }
+        ConfigPath::TransformScale { index } => {
+            config.flame.transforms.get(*index).map(|t| t.scale() as f64)
+        }
+        ConfigPath::TransformVariation { index, variation } => {
+            config.flame.transforms.get(*index).and_then(|t| {
+                t.variations.get(variation).map(|&v| v as f64)
+            })
+        }
+
+        // Final transform
+        ConfigPath::FinalTransformAffine { param } => {
+            config.flame.final_transform.as_ref().map(|t| {
+                match param {
+                    AffineParam::A => t.a as f64,
+                    AffineParam::B => t.b as f64,
+                    AffineParam::C => t.c as f64,
+                    AffineParam::D => t.d as f64,
+                    AffineParam::E => t.e as f64,
+                    AffineParam::F => t.f as f64,
+                    AffineParam::G => t.g as f64,
+                }
+            })
+        }
+        ConfigPath::FinalTransformOriginX => {
+            config.flame.final_transform.as_ref().map(|t| t.e as f64)
+        }
+        ConfigPath::FinalTransformOriginY => {
+            config.flame.final_transform.as_ref().map(|t| -t.f as f64)
+        }
+        ConfigPath::FinalTransformRotation => {
+            config.flame.final_transform.as_ref().map(|t| t.rotation() as f64)
+        }
+        ConfigPath::FinalTransformScale => {
+            config.flame.final_transform.as_ref().map(|t| t.scale() as f64)
+        }
+
+        // Non-numeric or complex types
+        _ => None,
+    }
+}
+
+/// Determine the auto-fill end value for a parameter
+/// Most parameters just return the same value (start = end)
+/// Special parameters like rotation get +2π for a full cycle
+pub fn get_auto_fill_end_value(path: &ConfigPath, start_value: f64) -> f64 {
+    use std::f64::consts::TAU; // 2π
+
+    match path {
+        // Rotation parameters: add full rotation
+        ConfigPath::TransformRotation { .. } |
+        ConfigPath::FinalTransformRotation |
+        ConfigPath::Rotation |
+        ConfigPath::CameraRotationX |
+        ConfigPath::CameraRotationY => start_value + TAU,
+
+        // Color index: add 1.0 for full palette cycle
+        ConfigPath::TransformColor { .. } => start_value + 1.0,
+
+        // Palette rotation: add 1.0 for full rotation
+        ConfigPath::PaletteRotation => start_value + 1.0,
+
+        // All other parameters: same as start (user adjusts manually)
+        _ => start_value,
+    }
+}
+
+/// Initialize preview keyframes based on the selected target
+pub fn initialize_preview_keyframes(
+    state: &mut TrackEditorState,
+    config: &FractalConfig,
+    duration: f64,
+) {
+    // Parse the target string to ConfigPath
+    let path = match ConfigPath::from_string_key(&state.new_track_target) {
+        Some(p) => p,
+        None => {
+            // Can't parse path, use default keyframes
+            state.preview_keyframes = vec![
+                Keyframe { time: 0.0, value: serde_json::json!(0.0), easing: EasingFunction::Linear },
+                Keyframe { time: duration, value: serde_json::json!(1.0), easing: EasingFunction::Linear },
+            ];
+            return;
+        }
+    };
+
+    // Get current value
+    let start_value = get_current_value(config, &path).unwrap_or(0.0);
+    let end_value = get_auto_fill_end_value(&path, start_value);
+
+    state.preview_keyframes = vec![
+        Keyframe { time: 0.0, value: serde_json::json!(start_value), easing: EasingFunction::Linear },
+        Keyframe { time: duration, value: serde_json::json!(end_value), easing: EasingFunction::Linear },
+    ];
+    state.preview_interpolation = Interpolation::Linear;
+}
+
+/// Initialize oscillator center from current value
+pub fn initialize_oscillator_center(
+    state: &mut TrackEditorState,
+    config: &FractalConfig,
+) {
+    if let Some(path) = ConfigPath::from_string_key(&state.new_track_target) {
+        if let Some(value) = get_current_value(config, &path) {
+            state.oscillator_params.center = value;
+        }
+    }
+}
+
+/// Initialize circular track centers from current values
+pub fn initialize_circular_centers(
+    state: &mut TrackEditorState,
+    config: &FractalConfig,
+) {
+    if let Some(path_x) = ConfigPath::from_string_key(&state.new_track_target) {
+        if let Some(value) = get_current_value(config, &path_x) {
+            state.circular_params.center_x = value;
+        }
+    }
+    if let Some(path_y) = ConfigPath::from_string_key(&state.new_track_target_y) {
+        if let Some(value) = get_current_value(config, &path_y) {
+            state.circular_params.center_y = value;
+        }
     }
 }
