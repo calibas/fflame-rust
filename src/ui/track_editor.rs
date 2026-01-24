@@ -111,6 +111,23 @@ struct ParameterCategory {
     params: Vec<(String, String)>, // (display_name, path_string)
 }
 
+/// Convert internal 0-based path string to 1-based display string
+///
+/// Internal paths use 0-based indices for backward compatibility with saved files,
+/// but UI displays 1-based indices to match the rest of the application.
+fn path_to_display(path: &str) -> String {
+    // Match "Transform.N." pattern and increment the number
+    if let Some(rest) = path.strip_prefix("Transform.") {
+        if let Some(dot_pos) = rest.find('.') {
+            if let Ok(index) = rest[..dot_pos].parse::<usize>() {
+                return format!("Transform.{}.{}", index + 1, &rest[dot_pos + 1..]);
+            }
+        }
+    }
+    // Return unchanged for non-transform paths
+    path.to_string()
+}
+
 /// Get list of animatable parameters organized by category
 fn animatable_parameters(config: &FractalConfig) -> Vec<ParameterCategory> {
     let registry = global_registry();
@@ -220,7 +237,7 @@ fn animatable_parameters(config: &FractalConfig) -> Vec<ParameterCategory> {
         }
 
         categories.push(ParameterCategory {
-            name: t!("track_editor.category_transform", index = i).to_string(),
+            name: t!("track_editor.category_transform", index = i + 1).to_string(),
             params,
         });
     }
@@ -649,11 +666,13 @@ fn render_tracks_visual(
                     rect.left_top(),
                     Pos2::new(rect.left() + LABEL_WIDTH - 4.0, rect.bottom()),
                 );
+                // Convert to 1-based display (internal paths use 0-based for compatibility)
+                let display_path = path_to_display(&path);
                 // Truncate label if too long (show more characters)
-                let display_name = if path.len() > 14 {
-                    format!("{}...", &path[..14])
+                let display_name = if display_path.len() > 14 {
+                    format!("{}...", &display_path[..14])
                 } else {
-                    path.clone()
+                    display_path.clone()
                 };
                 painter.text(
                     label_rect.right_center(),
@@ -665,7 +684,7 @@ fn render_tracks_visual(
                 // Add tooltip with full track name on hover
                 let label_response = ui.interact(label_rect, egui::Id::new(format!("track_label_{}", track_index)), Sense::hover());
                 if label_response.hovered() {
-                    label_response.on_hover_text(&path);
+                    label_response.on_hover_text(&display_path);
                 }
 
                 all_track_rects.push(bg_rect);
