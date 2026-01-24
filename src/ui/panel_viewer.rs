@@ -982,6 +982,7 @@ impl<'a> PanelViewer<'a> {
         super::effects_panel::render_effects_panel(
             ui,
             self.context.config_manager,
+            self.context.animation_controller,
         );
     }
 }

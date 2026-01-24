@@ -4,6 +4,7 @@
 
 use egui::Ui;
 
+use crate::animation::AnimationController;
 use crate::config::{ConfigChange, ConfigManager, ConfigPath, UpdateType};
 use crate::effects::{global_effect_registry, EffectCategory, EffectInstance};
 
@@ -34,7 +35,11 @@ enum ReorderAction {
 }
 
 /// Render the Effects panel
-pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> UpdateType {
+pub fn render_effects_panel(
+    ui: &mut Ui,
+    config_manager: &mut ConfigManager,
+    animation_controller: &mut AnimationController,
+) -> UpdateType {
     let mut max_update = UpdateType::None;
 
     ui.heading("Post-Processing Effects");
@@ -136,6 +141,14 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
             );
             if let Err(e) = config_manager.apply_structural_change(change) {
                 log::error!("Failed to remove effect: {}", e);
+            } else {
+                // Update animation track paths to reflect the removed effect
+                if let Some(ref mut animation) = animation_controller.animation {
+                    let removed_count = animation.on_color_effect_removed(idx);
+                    if removed_count > 0 {
+                        log::info!("Removed {} animation tracks targeting deleted color effect {}", removed_count, idx + 1);
+                    }
+                }
             }
             max_update = max_update.max(UpdateType::ToneMappingOnly);
         }
@@ -155,6 +168,11 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
                 );
                 if let Err(e) = config_manager.apply_structural_change(change) {
                     log::error!("Failed to move effect: {}", e);
+                } else {
+                    // Update animation track paths to reflect the reordered effects
+                    if let Some(ref mut animation) = animation_controller.animation {
+                        animation.on_color_effect_reordered(from_idx, to_idx);
+                    }
                 }
                 max_update = max_update.max(UpdateType::ToneMappingOnly);
             }
@@ -305,6 +323,14 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
                 );
                 if let Err(e) = config_manager.apply_structural_change(change) {
                     log::error!("Failed to remove effect: {}", e);
+                } else {
+                    // Update animation track paths to reflect the removed effect
+                    if let Some(ref mut animation) = animation_controller.animation {
+                        let removed_count = animation.on_density_effect_removed(idx);
+                        if removed_count > 0 {
+                            log::info!("Removed {} animation tracks targeting deleted density effect {}", removed_count, idx + 1);
+                        }
+                    }
                 }
                 max_update = max_update.max(UpdateType::ToneMappingOnly);
             }
@@ -324,6 +350,11 @@ pub fn render_effects_panel(ui: &mut Ui, config_manager: &mut ConfigManager) -> 
                     );
                     if let Err(e) = config_manager.apply_structural_change(change) {
                         log::error!("Failed to move effect: {}", e);
+                    } else {
+                        // Update animation track paths to reflect the reordered effects
+                        if let Some(ref mut animation) = animation_controller.animation {
+                            animation.on_density_effect_reordered(from_idx, to_idx);
+                        }
                     }
                     max_update = max_update.max(UpdateType::ToneMappingOnly);
                 }

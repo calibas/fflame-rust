@@ -275,6 +275,152 @@ impl Animation {
         }
     }
 
+    /// Update animation tracks when a transform is removed.
+    ///
+    /// Removes all tracks targeting the deleted transform and decrements
+    /// indices for tracks targeting higher transforms.
+    ///
+    /// Returns the number of tracks that were removed.
+    pub fn on_transform_removed(&mut self, removed_index: usize) -> usize {
+        let prefix = format!("Transform.{}.", removed_index);
+        let initial_count = self.tracks.len();
+
+        // Remove tracks targeting the deleted transform
+        self.tracks.retain(|track| !track.target.starts_with(&prefix));
+
+        // Decrement indices for tracks targeting higher transforms
+        for track in &mut self.tracks {
+            if let Some(new_target) = decrement_transform_index(&track.target, removed_index) {
+                track.target = new_target;
+            }
+        }
+
+        // Same for circular tracks
+        self.circular_tracks.retain(|track| {
+            !track.target_x.starts_with(&prefix) && !track.target_y.starts_with(&prefix)
+        });
+        for track in &mut self.circular_tracks {
+            if let Some(new_target) = decrement_transform_index(&track.target_x, removed_index) {
+                track.target_x = new_target;
+            }
+            if let Some(new_target) = decrement_transform_index(&track.target_y, removed_index) {
+                track.target_y = new_target;
+            }
+        }
+
+        initial_count - self.tracks.len()
+    }
+
+    /// Update animation tracks when a color effect is removed.
+    ///
+    /// Removes all tracks targeting the deleted effect and decrements
+    /// indices for tracks targeting higher effects.
+    ///
+    /// Returns the number of tracks that were removed.
+    pub fn on_color_effect_removed(&mut self, removed_index: usize) -> usize {
+        let prefix = format!("ColorEffect.{}.", removed_index);
+        let initial_count = self.tracks.len();
+
+        // Remove tracks targeting the deleted effect
+        self.tracks.retain(|track| !track.target.starts_with(&prefix));
+
+        // Decrement indices for tracks targeting higher effects
+        for track in &mut self.tracks {
+            if let Some(new_target) = decrement_effect_index(&track.target, "ColorEffect", removed_index) {
+                track.target = new_target;
+            }
+        }
+
+        // Circular tracks typically don't target effects, but handle them for completeness
+        self.circular_tracks.retain(|track| {
+            !track.target_x.starts_with(&prefix) && !track.target_y.starts_with(&prefix)
+        });
+        for track in &mut self.circular_tracks {
+            if let Some(new_target) = decrement_effect_index(&track.target_x, "ColorEffect", removed_index) {
+                track.target_x = new_target;
+            }
+            if let Some(new_target) = decrement_effect_index(&track.target_y, "ColorEffect", removed_index) {
+                track.target_y = new_target;
+            }
+        }
+
+        initial_count - self.tracks.len()
+    }
+
+    /// Update animation tracks when a density effect is removed.
+    ///
+    /// Removes all tracks targeting the deleted effect and decrements
+    /// indices for tracks targeting higher effects.
+    ///
+    /// Returns the number of tracks that were removed.
+    pub fn on_density_effect_removed(&mut self, removed_index: usize) -> usize {
+        let prefix = format!("DensityEffect.{}.", removed_index);
+        let initial_count = self.tracks.len();
+
+        // Remove tracks targeting the deleted effect
+        self.tracks.retain(|track| !track.target.starts_with(&prefix));
+
+        // Decrement indices for tracks targeting higher effects
+        for track in &mut self.tracks {
+            if let Some(new_target) = decrement_effect_index(&track.target, "DensityEffect", removed_index) {
+                track.target = new_target;
+            }
+        }
+
+        // Circular tracks typically don't target effects, but handle them for completeness
+        self.circular_tracks.retain(|track| {
+            !track.target_x.starts_with(&prefix) && !track.target_y.starts_with(&prefix)
+        });
+        for track in &mut self.circular_tracks {
+            if let Some(new_target) = decrement_effect_index(&track.target_x, "DensityEffect", removed_index) {
+                track.target_x = new_target;
+            }
+            if let Some(new_target) = decrement_effect_index(&track.target_y, "DensityEffect", removed_index) {
+                track.target_y = new_target;
+            }
+        }
+
+        initial_count - self.tracks.len()
+    }
+
+    /// Update animation tracks when color effects are reordered.
+    ///
+    /// Remaps effect indices based on a move from old_index to new_index.
+    pub fn on_color_effect_reordered(&mut self, old_index: usize, new_index: usize) {
+        for track in &mut self.tracks {
+            if let Some(new_target) = remap_effect_index(&track.target, "ColorEffect", old_index, new_index) {
+                track.target = new_target;
+            }
+        }
+        for track in &mut self.circular_tracks {
+            if let Some(new_target) = remap_effect_index(&track.target_x, "ColorEffect", old_index, new_index) {
+                track.target_x = new_target;
+            }
+            if let Some(new_target) = remap_effect_index(&track.target_y, "ColorEffect", old_index, new_index) {
+                track.target_y = new_target;
+            }
+        }
+    }
+
+    /// Update animation tracks when density effects are reordered.
+    ///
+    /// Remaps effect indices based on a move from old_index to new_index.
+    pub fn on_density_effect_reordered(&mut self, old_index: usize, new_index: usize) {
+        for track in &mut self.tracks {
+            if let Some(new_target) = remap_effect_index(&track.target, "DensityEffect", old_index, new_index) {
+                track.target = new_target;
+            }
+        }
+        for track in &mut self.circular_tracks {
+            if let Some(new_target) = remap_effect_index(&track.target_x, "DensityEffect", old_index, new_index) {
+                track.target_x = new_target;
+            }
+            if let Some(new_target) = remap_effect_index(&track.target_y, "DensityEffect", old_index, new_index) {
+                track.target_y = new_target;
+            }
+        }
+    }
+
     /// Get track by index
     pub fn get_track(&self, index: usize) -> Option<&Track> {
         self.tracks.get(index)
@@ -437,6 +583,74 @@ impl CircularTrack {
         let y = self.center_y + self.radius * angle.sin();
         (x, y)
     }
+}
+
+/// Helper to decrement transform index in a path string if it's higher than removed_index.
+///
+/// Path format: "Transform.{N}.{field}..."
+fn decrement_transform_index(path: &str, removed_index: usize) -> Option<String> {
+    if let Some(rest) = path.strip_prefix("Transform.") {
+        if let Some(dot_pos) = rest.find('.') {
+            if let Ok(index) = rest[..dot_pos].parse::<usize>() {
+                if index > removed_index {
+                    return Some(format!("Transform.{}.{}", index - 1, &rest[dot_pos + 1..]));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Helper to decrement effect index in a path string if it's higher than removed_index.
+///
+/// Path format: "{prefix}.{N}.{field}" where prefix is "ColorEffect" or "DensityEffect"
+fn decrement_effect_index(path: &str, prefix: &str, removed_index: usize) -> Option<String> {
+    let full_prefix = format!("{}.", prefix);
+    if let Some(rest) = path.strip_prefix(&full_prefix) {
+        if let Some(dot_pos) = rest.find('.') {
+            if let Ok(index) = rest[..dot_pos].parse::<usize>() {
+                if index > removed_index {
+                    return Some(format!("{}.{}.{}", prefix, index - 1, &rest[dot_pos + 1..]));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Helper to remap effect index when effects are reordered.
+///
+/// When an effect moves from old_index to new_index:
+/// - The moved effect: old_index -> new_index
+/// - Effects between shift up or down depending on direction
+fn remap_effect_index(path: &str, prefix: &str, old_index: usize, new_index: usize) -> Option<String> {
+    let full_prefix = format!("{}.", prefix);
+    if let Some(rest) = path.strip_prefix(&full_prefix) {
+        if let Some(dot_pos) = rest.find('.') {
+            if let Ok(index) = rest[..dot_pos].parse::<usize>() {
+                let new_idx = if index == old_index {
+                    // This is the moved effect
+                    new_index
+                } else if old_index < new_index {
+                    // Moving down: effects in (old_index, new_index] shift up by 1
+                    if index > old_index && index <= new_index {
+                        index - 1
+                    } else {
+                        return None; // No change needed
+                    }
+                } else {
+                    // Moving up: effects in [new_index, old_index) shift down by 1
+                    if index >= new_index && index < old_index {
+                        index + 1
+                    } else {
+                        return None; // No change needed
+                    }
+                };
+                return Some(format!("{}.{}.{}", prefix, new_idx, &rest[dot_pos + 1..]));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
