@@ -861,6 +861,7 @@ animation_panel:
   resolution: "Resolution:"
   frame_rate: "Frame Rate:"
   iterations_thread: "Iterations/thread:"
+  max_iterations: "Max iterations:"
   total_frames: "Total frames: %{frames} (%{duration}s × %{fps} fps)"
   export_video: "🎬 Export Video"
   export_not_available_wasm: "Animation export not available in web version"

@@ -332,6 +332,11 @@ impl<'a> PanelViewer<'a> {
         // Handle open export panel request (Phase 5)
         if response.open_export_panel {
             self.context.export_panel_state.is_open = true;
+            // Auto-fill export settings from current config
+            self.context.animation_export_settings.iterations_per_thread =
+                self.context.config_manager.system_settings().iterations_per_thread;
+            self.context.animation_export_settings.max_iterations =
+                self.context.config_manager.active_config().max_iterations;
         }
 
         // Handle animation load response

@@ -1221,8 +1221,12 @@ impl App {
             } else if let Some(ref animation) = self.animation_controller.animation {
                 use crate::animation::export::{AnimationExportConfig, UiProgressCallback, export_animation_fast, VideoEncodingSettings};
 
+                // Clone config and override max_iterations from export settings
+                let mut config = self.config_manager.active_config().clone();
+                config.max_iterations = export_settings.max_iterations;
+
                 let export_config = AnimationExportConfig {
-                    config: self.config_manager.active_config().clone(),
+                    config,
                     animation: animation.clone(),
                     output_path: export_settings.output_path.clone(),
                     width: export_settings.width,
