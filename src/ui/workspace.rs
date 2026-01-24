@@ -81,6 +81,8 @@ pub enum WorkspaceLayout {
     Beginner,
     /// Standard: Fractal + Transform Editor + Appearance + View
     Standard,
+    /// Animation: Standard layout with Animation panel at bottom
+    Animation,
     /// Advanced: All panels visible, split layout
     Advanced,
     /// Export: Rendering + Appearance focused
@@ -109,6 +111,7 @@ impl Workspace {
         self.dock_state = match layout {
             WorkspaceLayout::Beginner => Self::create_beginner_layout(),
             WorkspaceLayout::Standard => Self::create_standard_layout(),
+            WorkspaceLayout::Animation => Self::create_animation_layout(),
             WorkspaceLayout::Advanced => Self::create_advanced_layout(),
             WorkspaceLayout::Export => Self::create_export_layout(),
         };
@@ -166,6 +169,35 @@ impl Workspace {
 
         // Split right for other controls (Colors, View, Triangle Editor, Rendering, History)
         let [_fractal_node, _right_node] = state.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.75, // Right panel starts at 75% (takes remaining 25%)
+            vec![PanelType::Colors, PanelType::View, PanelType::TriangleEditor, PanelType::Rendering, PanelType::History],
+        );
+
+        state
+    }
+
+    /// Create Animation layout: Standard layout with Animation panel at bottom center
+    fn create_animation_layout() -> DockState<PanelType> {
+        // Start with FractalViewport in the center
+        let mut state = DockState::new(vec![PanelType::FractalViewport]);
+
+        // Split bottom of the center area for Animation panel
+        let [_top_node, _bottom_node] = state.main_surface_mut().split_below(
+            egui_dock::NodeIndex::root(),
+            0.75, // Animation panel takes bottom 25% of center
+            vec![PanelType::Animation],
+        );
+
+        // Split left for Transforms
+        let [_fractal_node, _left_node] = state.main_surface_mut().split_left(
+            egui_dock::NodeIndex::root(),
+            0.25, // 25% width for left panel
+            vec![PanelType::Transforms],
+        );
+
+        // Split right for other controls (Colors, View, Triangle Editor, Rendering, History)
+        let [_center_node, _right_node] = state.main_surface_mut().split_right(
             egui_dock::NodeIndex::root(),
             0.75, // Right panel starts at 75% (takes remaining 25%)
             vec![PanelType::Colors, PanelType::View, PanelType::TriangleEditor, PanelType::Rendering, PanelType::History],

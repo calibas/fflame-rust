@@ -9,6 +9,7 @@ pub fn render_help_content(ui: &mut egui::Ui) {
     ui.label(t!("help.pan_view"));
     ui.label(t!("help.zoom_plus_minus"));
     ui.label(t!("help.zoom_numpad"));
+    ui.label(t!("help.full_screen"));
 
     ui.separator();
     ui.label(t!("help.editing"));

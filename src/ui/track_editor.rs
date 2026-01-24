@@ -433,7 +433,9 @@ pub fn render_track_editor(
     ui.horizontal(|ui| {
         ui.strong(t!("track_editor.tracks_header", count = track_count));
         ui.separator();
-        if ui.add_enabled(has_animation, egui::Button::new(t!("track_editor.add_track"))).clicked() {
+        let add_button = egui::Button::new(t!("track_editor.add_track"))
+            .fill(egui::Color32::from_rgb(60, 120, 60));
+        if ui.add_enabled(has_animation, add_button).clicked() {
             open_add_track_panel(state);
         }
     });
@@ -645,14 +647,14 @@ fn render_tracks_visual(
                     }
                 }
 
-                // Draw label on the left
+                // Draw label on the left with tooltip for full name
                 let label_rect = Rect::from_min_max(
                     rect.left_top(),
                     Pos2::new(rect.left() + LABEL_WIDTH - 4.0, rect.bottom()),
                 );
-                // Truncate label if too long
-                let display_name = if path.len() > 12 {
-                    format!("{}...", &path[..12])
+                // Truncate label if too long (show more characters)
+                let display_name = if path.len() > 16 {
+                    format!("{}...", &path[..16])
                 } else {
                     path.clone()
                 };
@@ -663,6 +665,11 @@ fn render_tracks_visual(
                     egui::FontId::proportional(12.0),
                     ui.visuals().text_color(),
                 );
+                // Add tooltip with full track name on hover
+                let label_response = ui.interact(label_rect, egui::Id::new(format!("track_label_{}", track_index)), Sense::hover());
+                if label_response.hovered() {
+                    label_response.on_hover_text(&path);
+                }
 
                 all_track_rects.push(bg_rect);
             }
