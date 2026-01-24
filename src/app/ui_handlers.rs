@@ -138,6 +138,14 @@ impl App {
                 } else {
                     // Update app state from config
                     self.flame = self.config_manager.active_config().flame.clone();
+
+                    // Update animation track paths to reflect the removed transform
+                    if let Some(ref mut animation) = self.animation_controller.animation {
+                        let removed_count = animation.on_transform_removed(idx);
+                        if removed_count > 0 {
+                            log::info!("Removed {} animation tracks targeting deleted transform {}", removed_count, idx + 1);
+                        }
+                    }
                 }
             }
         }
