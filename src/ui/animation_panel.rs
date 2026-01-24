@@ -69,8 +69,10 @@ pub struct AnimationExportSettings {
     pub height: u32,
     /// Frames per second
     pub fps: u32,
-    /// Iterations per thread
+    /// Iterations per thread (GPU batching)
     pub iterations_per_thread: u32,
+    /// Max iterations per frame (quality)
+    pub max_iterations: u64,
     /// Video codec
     pub video_codec: VideoCodec,
     /// Hardware acceleration
@@ -91,6 +93,7 @@ impl Default for AnimationExportSettings {
             height: 1080,
             fps: 30,
             iterations_per_thread: 256,
+            max_iterations: 10_000_000,
             video_codec: VideoCodec::H265,
             hardware_accel: HardwareAccel::None,
             video_quality: 12,
@@ -723,10 +726,56 @@ fn render_export_settings(
         if ui.small_button("60").clicked() { settings.fps = 60; }
     });
 
-    // Iterations
+    // Iterations per thread (GPU batching)
     ui.horizontal(|ui| {
         ui.label(t!("animation_panel.iterations_thread"));
         ui.add(egui::DragValue::new(&mut settings.iterations_per_thread).range(32..=4096));
+    });
+
+    // Max iterations (quality)
+    ui.horizontal(|ui| {
+        ui.label(t!("animation_panel.max_iterations"));
+        ui.add(egui::DragValue::new(&mut settings.max_iterations)
+            .range(100_000..=1_000_000_000_000_u64)
+            .speed(100_000.0)
+            .custom_formatter(|n, _| {
+                let n = n as u64;
+                if n >= 1_000_000_000_000 {
+                    format!("{}T", n / 1_000_000_000_000)
+                } else if n >= 1_000_000_000 {
+                    let billions = n / 1_000_000_000;
+                    let remainder = (n % 1_000_000_000) / 100_000_000;
+                    if remainder > 0 {
+                        format!("{}.{}B", billions, remainder)
+                    } else {
+                        format!("{}B", billions)
+                    }
+                } else if n >= 1_000_000 {
+                    let millions = n / 1_000_000;
+                    let remainder = (n % 1_000_000) / 100_000;
+                    if remainder > 0 {
+                        format!("{}.{}M", millions, remainder)
+                    } else {
+                        format!("{}M", millions)
+                    }
+                } else {
+                    format!("{}", n)
+                }
+            })
+            .custom_parser(|s| {
+                let s = s.trim().to_uppercase();
+                if let Some(num_str) = s.strip_suffix('T') {
+                    num_str.parse::<f64>().ok().map(|n| n * 1_000_000_000_000.0)
+                } else if let Some(num_str) = s.strip_suffix('B') {
+                    num_str.parse::<f64>().ok().map(|n| n * 1_000_000_000.0)
+                } else if let Some(num_str) = s.strip_suffix('M') {
+                    num_str.parse::<f64>().ok().map(|n| n * 1_000_000.0)
+                } else if let Some(num_str) = s.strip_suffix('K') {
+                    num_str.parse::<f64>().ok().map(|n| n * 1_000.0)
+                } else {
+                    s.parse::<f64>().ok()
+                }
+            }));
     });
 
     // Estimate
