@@ -67,6 +67,7 @@ menu:
   workspace_layout: "📐 Workspace Layout"
   layout_beginner: "Beginner"
   layout_standard: "Standard"
+  layout_animation: "Animation"
   layout_advanced: "Advanced"
   layout_export: "Export"
 
@@ -84,6 +85,7 @@ help:
   pan_view: "  ⬅⬆⬇➡ - Pan view"
   zoom_plus_minus: "  + / -      - Zoom in/out"
   zoom_numpad: "  Numpad +/-  - Zoom in/out"
+  full_screen: "  F        - Full Screen Mode"
   editing: "Editing:"
   undo_shortcut: "  Ctrl+Z   - Undo"
   redo_shortcut: "  Ctrl+Y   - Redo"

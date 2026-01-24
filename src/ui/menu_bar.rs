@@ -235,18 +235,21 @@ pub fn render_menu_bar(
                 ui.menu_button(t!("menu.workspace_layout"), |ui| {
                     let current = workspace.current_layout;
 
-                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Beginner, t!("menu.layout_beginner").as_ref()).clicked() {
-                        workspace.apply_layout(super::workspace::WorkspaceLayout::Beginner);
-                    }
+                    // if ui.selectable_label(current == super::workspace::WorkspaceLayout::Beginner, t!("menu.layout_beginner").as_ref()).clicked() {
+                    //     workspace.apply_layout(super::workspace::WorkspaceLayout::Beginner);
+                    // }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Standard, t!("menu.layout_standard").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
                     }
-                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, t!("menu.layout_advanced").as_ref()).clicked() {
-                        workspace.apply_layout(super::workspace::WorkspaceLayout::Advanced);
+                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Animation, t!("menu.layout_animation").as_ref()).clicked() {
+                        workspace.apply_layout(super::workspace::WorkspaceLayout::Animation);
                     }
-                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Export, t!("menu.layout_export").as_ref()).clicked() {
-                        workspace.apply_layout(super::workspace::WorkspaceLayout::Export);
-                    }
+                    // if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, t!("menu.layout_advanced").as_ref()).clicked() {
+                    //     workspace.apply_layout(super::workspace::WorkspaceLayout::Advanced);
+                    // }
+                    // if ui.selectable_label(current == super::workspace::WorkspaceLayout::Export, t!("menu.layout_export").as_ref()).clicked() {
+                    //     workspace.apply_layout(super::workspace::WorkspaceLayout::Export);
+                    // }
                 });
             });
 
