@@ -701,7 +701,7 @@ fn render_tracks_visual(
                         if ui.small_button(t!("track_editor.edit")).clicked() {
                             open_edit_track_panel(state, track_index, track);
                         }
-                        if ui.small_button("X").on_hover_text(t!("track_editor.delete_track")).clicked() {
+                        if ui.small_button("🗑").on_hover_text(t!("track_editor.delete_track")).clicked() {
                             track_to_delete = Some(track_index);
                         }
                     });
@@ -747,7 +747,7 @@ fn render_tracks_visual(
             ui.label(t!("track_editor.circular_label"));
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("X").on_hover_text(t!("track_editor.delete_track")).clicked() {
+                if ui.small_button("🗑").on_hover_text(t!("track_editor.delete_track")).clicked() {
                     circular_to_delete = Some(i);
                 }
             });
@@ -786,7 +786,7 @@ fn render_tracks(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditor
                     ui.label(format!("({})", track_type_str));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("X").on_hover_text(t!("track_editor.delete_track").as_ref()).clicked() {
+                        if ui.small_button("🗑").on_hover_text(t!("track_editor.delete_track").as_ref()).clicked() {
                             track_to_delete = Some(track_index);
                         }
                     });
@@ -861,7 +861,7 @@ fn render_tracks(ui: &mut Ui, animation: &mut Animation, state: &mut TrackEditor
                     ui.label(t!("track_editor.circular_label"));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("X").on_hover_text(t!("track_editor.delete_track").as_ref()).clicked() {
+                        if ui.small_button("🗑").on_hover_text(t!("track_editor.delete_track").as_ref()).clicked() {
                             circular_to_delete = Some(i);
                         }
                     });
@@ -927,11 +927,16 @@ pub fn render_track_editor_panel(
 
     let mut open = state.track_editor_panel_open;
 
+    // Highlighted frame to make dialog stand out from docked panels
+    let highlight_frame = egui::Frame::window(&ctx.style())
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 149, 237))); // Cornflower blue
+
     egui::Window::new(title)
         .open(&mut open)
         .resizable(true)
         .default_width(350.0)
         .default_height(450.0)
+        .frame(highlight_frame)
         .show(ctx, |ui| {
             render_track_editor_panel_content(ui, controller, state, flame, config, current_time);
         });
@@ -997,7 +1002,7 @@ fn render_track_editor_panel_content(
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
                 ui.strong(&state.new_track_target);
-                if ui.small_button("X").clicked() {
+                if ui.small_button("🗑").clicked() {
                     state.new_track_target.clear();
                 }
             });
@@ -1054,7 +1059,7 @@ fn render_track_editor_panel_content(
                 ui.horizontal(|ui| {
                     ui.label("→");
                     ui.strong(&state.new_track_target_y);
-                    if ui.small_button("✕").clicked() {
+                    if ui.small_button("🗑").clicked() {
                         state.new_track_target_y.clear();
                     }
                 });
@@ -1203,7 +1208,7 @@ fn render_keyframe_subpanel(
                                     });
 
                                 // Delete (if more than 1)
-                                if kf_count > 1 && ui.small_button("✕").clicked() {
+                                if kf_count > 1 && ui.small_button("🗑").clicked() {
                                     to_delete = Some(i);
                                 }
                             });
@@ -1304,7 +1309,7 @@ fn render_keyframe_subpanel(
                             });
 
                         // Delete (if more than 1)
-                        if kf_count > 1 && ui.small_button("✕").clicked() {
+                        if kf_count > 1 && ui.small_button("🗑").clicked() {
                             to_delete = Some(i);
                         }
                     });
