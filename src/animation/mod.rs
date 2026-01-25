@@ -5,9 +5,8 @@
 //! During playback, the animation controller updates ConfigManager silently
 //! (without creating undo points).
 
-use crate::config::{ConfigPath, FractalConfig};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use crate::config::FractalConfig;
+use serde::{Deserialize, Deserializer, Serialize};
 
 mod controller;
 mod interpolation;
@@ -31,8 +30,10 @@ pub struct Animation {
     /// Total duration in seconds
     pub duration: f64,
 
-    /// Parameter tracks (ConfigPath → Track)
-    pub tracks: HashMap<String, Track>, // String instead of ConfigPath for JSON serialization
+    /// Parameter tracks (indexed by position, allowing multiple tracks with same target)
+    /// Supports loading from both old HashMap format and new Vec format for backwards compatibility
+    #[serde(deserialize_with = "deserialize_tracks")]
+    pub tracks: Vec<Track>,
 
     /// Circular motion tracks (output X and Y to two parameters)
     #[serde(default)]
@@ -42,9 +43,70 @@ pub struct Animation {
     pub loop_mode: LoopMode,
 }
 
+/// Legacy track format (for backwards compatibility)
+/// Old format stored tracks as HashMap with target as key
+#[derive(Debug, Clone, Deserialize)]
+struct LegacyTrack {
+    source: TrackSource,
+    #[serde(default)]
+    interpolation: Interpolation,
+}
+
+/// Deserialize tracks from either Vec<Track> (new) or HashMap<String, LegacyTrack> (old)
+fn deserialize_tracks<'de, D>(deserializer: D) -> Result<Vec<Track>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{SeqAccess, MapAccess, Visitor};
+    use std::fmt;
+
+    struct TracksVisitor;
+
+    impl<'de> Visitor<'de> for TracksVisitor {
+        type Value = Vec<Track>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a sequence of tracks or a map of target -> track")
+        }
+
+        // New format: Vec<Track>
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut tracks = Vec::new();
+            while let Some(track) = seq.next_element::<Track>()? {
+                tracks.push(track);
+            }
+            Ok(tracks)
+        }
+
+        // Old format: HashMap<String, LegacyTrack>
+        fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+        where
+            M: MapAccess<'de>,
+        {
+            let mut tracks = Vec::new();
+            while let Some((target, legacy)) = map.next_entry::<String, LegacyTrack>()? {
+                tracks.push(Track {
+                    target,
+                    source: legacy.source,
+                    interpolation: legacy.interpolation,
+                });
+            }
+            Ok(tracks)
+        }
+    }
+
+    deserializer.deserialize_any(TracksVisitor)
+}
+
 /// Single parameter track
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
+    /// Target parameter path (ConfigPath string key)
+    pub target: String,
+
     /// Source of track values (keyframes or procedural)
     pub source: TrackSource,
 
@@ -146,24 +208,6 @@ pub enum PlaybackState {
     Paused,
 }
 
-/// Animation quality mode - controls rendering behavior during playback
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AnimationQualityMode {
-    /// Responsive mode: uses overwrite blending for smooth real-time preview
-    /// - Each frame immediately updates the display
-    /// - Lower quality but no latency
-    /// - Good for previewing animations
-    #[default]
-    Responsive,
-
-    /// High quality mode: uses batched accumulation (4 frames) like normal rendering
-    /// - Accumulates samples across 4 frames before blending
-    /// - Higher quality with smoother density transitions
-    /// - Has ~4 frame latency (parameter changes visible 4 frames later)
-    /// - Good for final renders or slow animations
-    HighQuality,
-}
-
 impl Animation {
     /// Create empty animation (without embedded config)
     pub fn new(name: String, duration: f64) -> Self {
@@ -171,7 +215,7 @@ impl Animation {
             name,
             base_config: None,
             duration,
-            tracks: HashMap::new(),
+            tracks: Vec::new(),
             circular_tracks: Vec::new(),
             loop_mode: LoopMode::Once,
         }
@@ -183,7 +227,7 @@ impl Animation {
             name,
             base_config: Some(config),
             duration,
-            tracks: HashMap::new(),
+            tracks: Vec::new(),
             circular_tracks: Vec::new(),
             loop_mode: LoopMode::Once,
         }
@@ -199,26 +243,27 @@ impl Animation {
         self.base_config.is_some()
     }
 
-    /// Add track for parameter using ConfigPath
-    pub fn add_track(&mut self, path: ConfigPath, track: Track) {
-        // Convert ConfigPath to string for JSON serialization
-        let path_str = format!("{:?}", path); // TODO: Better serialization
-        self.tracks.insert(path_str, track);
+    /// Add track (returns index of the new track)
+    pub fn add_track(&mut self, track: Track) -> usize {
+        let index = self.tracks.len();
+        self.tracks.push(track);
+        index
     }
 
-    /// Add track for parameter using string key
-    pub fn add_track_str(&mut self, path: String, track: Track) {
-        self.tracks.insert(path, track);
-    }
-
-    /// Add circular motion track
-    pub fn add_circular_track(&mut self, track: CircularTrack) {
+    /// Add circular motion track (returns index of the new track)
+    pub fn add_circular_track(&mut self, track: CircularTrack) -> usize {
+        let index = self.circular_tracks.len();
         self.circular_tracks.push(track);
+        index
     }
 
-    /// Remove a track by its target path
-    pub fn remove_track(&mut self, path: &str) -> Option<Track> {
-        self.tracks.remove(path)
+    /// Remove a track by index
+    pub fn remove_track(&mut self, index: usize) -> Option<Track> {
+        if index < self.tracks.len() {
+            Some(self.tracks.remove(index))
+        } else {
+            None
+        }
     }
 
     /// Remove a circular track by index
@@ -228,6 +273,162 @@ impl Animation {
         } else {
             None
         }
+    }
+
+    /// Update animation tracks when a transform is removed.
+    ///
+    /// Removes all tracks targeting the deleted transform and decrements
+    /// indices for tracks targeting higher transforms.
+    ///
+    /// Returns the number of tracks that were removed.
+    pub fn on_transform_removed(&mut self, removed_index: usize) -> usize {
+        let prefix = format!("Transform.{}.", removed_index);
+        let initial_count = self.tracks.len();
+
+        // Remove tracks targeting the deleted transform
+        self.tracks.retain(|track| !track.target.starts_with(&prefix));
+
+        // Decrement indices for tracks targeting higher transforms
+        for track in &mut self.tracks {
+            if let Some(new_target) = decrement_transform_index(&track.target, removed_index) {
+                track.target = new_target;
+            }
+        }
+
+        // Same for circular tracks
+        self.circular_tracks.retain(|track| {
+            !track.target_x.starts_with(&prefix) && !track.target_y.starts_with(&prefix)
+        });
+        for track in &mut self.circular_tracks {
+            if let Some(new_target) = decrement_transform_index(&track.target_x, removed_index) {
+                track.target_x = new_target;
+            }
+            if let Some(new_target) = decrement_transform_index(&track.target_y, removed_index) {
+                track.target_y = new_target;
+            }
+        }
+
+        initial_count - self.tracks.len()
+    }
+
+    /// Update animation tracks when a color effect is removed.
+    ///
+    /// Removes all tracks targeting the deleted effect and decrements
+    /// indices for tracks targeting higher effects.
+    ///
+    /// Returns the number of tracks that were removed.
+    pub fn on_color_effect_removed(&mut self, removed_index: usize) -> usize {
+        let prefix = format!("ColorEffect.{}.", removed_index);
+        let initial_count = self.tracks.len();
+
+        // Remove tracks targeting the deleted effect
+        self.tracks.retain(|track| !track.target.starts_with(&prefix));
+
+        // Decrement indices for tracks targeting higher effects
+        for track in &mut self.tracks {
+            if let Some(new_target) = decrement_effect_index(&track.target, "ColorEffect", removed_index) {
+                track.target = new_target;
+            }
+        }
+
+        // Circular tracks typically don't target effects, but handle them for completeness
+        self.circular_tracks.retain(|track| {
+            !track.target_x.starts_with(&prefix) && !track.target_y.starts_with(&prefix)
+        });
+        for track in &mut self.circular_tracks {
+            if let Some(new_target) = decrement_effect_index(&track.target_x, "ColorEffect", removed_index) {
+                track.target_x = new_target;
+            }
+            if let Some(new_target) = decrement_effect_index(&track.target_y, "ColorEffect", removed_index) {
+                track.target_y = new_target;
+            }
+        }
+
+        initial_count - self.tracks.len()
+    }
+
+    /// Update animation tracks when a density effect is removed.
+    ///
+    /// Removes all tracks targeting the deleted effect and decrements
+    /// indices for tracks targeting higher effects.
+    ///
+    /// Returns the number of tracks that were removed.
+    pub fn on_density_effect_removed(&mut self, removed_index: usize) -> usize {
+        let prefix = format!("DensityEffect.{}.", removed_index);
+        let initial_count = self.tracks.len();
+
+        // Remove tracks targeting the deleted effect
+        self.tracks.retain(|track| !track.target.starts_with(&prefix));
+
+        // Decrement indices for tracks targeting higher effects
+        for track in &mut self.tracks {
+            if let Some(new_target) = decrement_effect_index(&track.target, "DensityEffect", removed_index) {
+                track.target = new_target;
+            }
+        }
+
+        // Circular tracks typically don't target effects, but handle them for completeness
+        self.circular_tracks.retain(|track| {
+            !track.target_x.starts_with(&prefix) && !track.target_y.starts_with(&prefix)
+        });
+        for track in &mut self.circular_tracks {
+            if let Some(new_target) = decrement_effect_index(&track.target_x, "DensityEffect", removed_index) {
+                track.target_x = new_target;
+            }
+            if let Some(new_target) = decrement_effect_index(&track.target_y, "DensityEffect", removed_index) {
+                track.target_y = new_target;
+            }
+        }
+
+        initial_count - self.tracks.len()
+    }
+
+    /// Update animation tracks when color effects are reordered.
+    ///
+    /// Remaps effect indices based on a move from old_index to new_index.
+    pub fn on_color_effect_reordered(&mut self, old_index: usize, new_index: usize) {
+        for track in &mut self.tracks {
+            if let Some(new_target) = remap_effect_index(&track.target, "ColorEffect", old_index, new_index) {
+                track.target = new_target;
+            }
+        }
+        for track in &mut self.circular_tracks {
+            if let Some(new_target) = remap_effect_index(&track.target_x, "ColorEffect", old_index, new_index) {
+                track.target_x = new_target;
+            }
+            if let Some(new_target) = remap_effect_index(&track.target_y, "ColorEffect", old_index, new_index) {
+                track.target_y = new_target;
+            }
+        }
+    }
+
+    /// Update animation tracks when density effects are reordered.
+    ///
+    /// Remaps effect indices based on a move from old_index to new_index.
+    pub fn on_density_effect_reordered(&mut self, old_index: usize, new_index: usize) {
+        for track in &mut self.tracks {
+            if let Some(new_target) = remap_effect_index(&track.target, "DensityEffect", old_index, new_index) {
+                track.target = new_target;
+            }
+        }
+        for track in &mut self.circular_tracks {
+            if let Some(new_target) = remap_effect_index(&track.target_x, "DensityEffect", old_index, new_index) {
+                track.target_x = new_target;
+            }
+            if let Some(new_target) = remap_effect_index(&track.target_y, "DensityEffect", old_index, new_index) {
+                track.target_y = new_target;
+            }
+        }
+    }
+
+    /// Get track by index
+    pub fn get_track(&self, index: usize) -> Option<&Track> {
+        self.tracks.get(index)
+    }
+
+    /// Get mutable track by index
+    pub fn get_track_mut(&mut self, index: usize) -> Option<&mut Track> {
+        self.tracks.get_mut(index)
     }
 
     /// Load from JSON file
@@ -242,9 +443,19 @@ impl Animation {
 }
 
 impl Track {
-    /// Create track with single keyframe (constant value)
-    pub fn constant(value: serde_json::Value) -> Self {
+    /// Create a new track with the given target and source
+    pub fn new(target: String, source: TrackSource) -> Self {
         Self {
+            target,
+            source,
+            interpolation: Interpolation::Linear,
+        }
+    }
+
+    /// Create keyframe track with single keyframe (constant value)
+    pub fn constant(target: String, value: serde_json::Value) -> Self {
+        Self {
+            target,
             source: TrackSource::Keyframes {
                 keyframes: vec![Keyframe {
                     time: 0.0,
@@ -256,9 +467,10 @@ impl Track {
         }
     }
 
-    /// Create track with two keyframes (start → end)
-    pub fn linear(start_value: serde_json::Value, end_value: serde_json::Value, duration: f64) -> Self {
+    /// Create keyframe track with two keyframes (start → end)
+    pub fn linear(target: String, start_value: serde_json::Value, end_value: serde_json::Value, duration: f64) -> Self {
         Self {
+            target,
             source: TrackSource::Keyframes {
                 keyframes: vec![
                     Keyframe {
@@ -279,12 +491,14 @@ impl Track {
 
     /// Create oscillator track
     pub fn oscillator(
+        target: String,
         oscillator_type: OscillatorType,
         center: f64,
         amplitude: f64,
         frequency: f64,
     ) -> Self {
         Self {
+            target,
             source: TrackSource::Oscillator {
                 oscillator_type,
                 center,
@@ -298,6 +512,7 @@ impl Track {
 
     /// Create oscillator track with phase offset
     pub fn oscillator_with_phase(
+        target: String,
         oscillator_type: OscillatorType,
         center: f64,
         amplitude: f64,
@@ -305,6 +520,7 @@ impl Track {
         phase: f64,
     ) -> Self {
         Self {
+            target,
             source: TrackSource::Oscillator {
                 oscillator_type,
                 center,
@@ -369,6 +585,74 @@ impl CircularTrack {
     }
 }
 
+/// Helper to decrement transform index in a path string if it's higher than removed_index.
+///
+/// Path format: "Transform.{N}.{field}..."
+fn decrement_transform_index(path: &str, removed_index: usize) -> Option<String> {
+    if let Some(rest) = path.strip_prefix("Transform.") {
+        if let Some(dot_pos) = rest.find('.') {
+            if let Ok(index) = rest[..dot_pos].parse::<usize>() {
+                if index > removed_index {
+                    return Some(format!("Transform.{}.{}", index - 1, &rest[dot_pos + 1..]));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Helper to decrement effect index in a path string if it's higher than removed_index.
+///
+/// Path format: "{prefix}.{N}.{field}" where prefix is "ColorEffect" or "DensityEffect"
+fn decrement_effect_index(path: &str, prefix: &str, removed_index: usize) -> Option<String> {
+    let full_prefix = format!("{}.", prefix);
+    if let Some(rest) = path.strip_prefix(&full_prefix) {
+        if let Some(dot_pos) = rest.find('.') {
+            if let Ok(index) = rest[..dot_pos].parse::<usize>() {
+                if index > removed_index {
+                    return Some(format!("{}.{}.{}", prefix, index - 1, &rest[dot_pos + 1..]));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Helper to remap effect index when effects are reordered.
+///
+/// When an effect moves from old_index to new_index:
+/// - The moved effect: old_index -> new_index
+/// - Effects between shift up or down depending on direction
+fn remap_effect_index(path: &str, prefix: &str, old_index: usize, new_index: usize) -> Option<String> {
+    let full_prefix = format!("{}.", prefix);
+    if let Some(rest) = path.strip_prefix(&full_prefix) {
+        if let Some(dot_pos) = rest.find('.') {
+            if let Ok(index) = rest[..dot_pos].parse::<usize>() {
+                let new_idx = if index == old_index {
+                    // This is the moved effect
+                    new_index
+                } else if old_index < new_index {
+                    // Moving down: effects in (old_index, new_index] shift up by 1
+                    if index > old_index && index <= new_index {
+                        index - 1
+                    } else {
+                        return None; // No change needed
+                    }
+                } else {
+                    // Moving up: effects in [new_index, old_index) shift down by 1
+                    if index >= new_index && index < old_index {
+                        index + 1
+                    } else {
+                        return None; // No change needed
+                    }
+                };
+                return Some(format!("{}.{}.{}", prefix, new_idx, &rest[dot_pos + 1..]));
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,11 +663,12 @@ mod tests {
         anim.loop_mode = LoopMode::Loop;
 
         let track = Track::linear(
+            "Zoom".into(),
             serde_json::json!(1.0),
             serde_json::json!(10.0),
             10.0,
         );
-        anim.tracks.insert("Zoom".into(), track);
+        anim.add_track(track);
 
         let json = anim.to_json().unwrap();
         let loaded = Animation::from_json(&json).unwrap();
@@ -392,20 +677,22 @@ mod tests {
         assert_eq!(loaded.duration, 10.0);
         assert_eq!(loaded.loop_mode, LoopMode::Loop);
         assert_eq!(loaded.tracks.len(), 1);
+        assert_eq!(loaded.tracks[0].target, "Zoom");
     }
 
     #[test]
     fn test_oscillator_track_json() {
         let mut anim = Animation::new("Oscillate".into(), 5.0);
 
-        let track = Track::oscillator(OscillatorType::Sine, 1.0, 0.5, 2.0);
-        anim.tracks.insert("Exposure".into(), track);
+        let track = Track::oscillator("Exposure".into(), OscillatorType::Sine, 1.0, 0.5, 2.0);
+        anim.add_track(track);
 
         let json = anim.to_json().unwrap();
         let loaded = Animation::from_json(&json).unwrap();
 
         assert_eq!(loaded.tracks.len(), 1);
-        let track = loaded.tracks.get("Exposure").unwrap();
+        let track = &loaded.tracks[0];
+        assert_eq!(track.target, "Exposure");
         match &track.source {
             TrackSource::Oscillator { oscillator_type, center, amplitude, frequency, .. } => {
                 assert_eq!(*oscillator_type, OscillatorType::Sine);
@@ -449,14 +736,16 @@ mod tests {
         anim.loop_mode = LoopMode::PingPong;
 
         // Keyframe track
-        anim.tracks.insert("Zoom".into(), Track::linear(
+        anim.add_track(Track::linear(
+            "Zoom".into(),
             serde_json::json!(1.0),
             serde_json::json!(5.0),
             10.0,
         ));
 
         // Oscillator track
-        anim.tracks.insert("Brightness".into(), Track::oscillator(
+        anim.add_track(Track::oscillator(
+            "Brightness".into(),
             OscillatorType::Triangle,
             1.0,
             0.3,

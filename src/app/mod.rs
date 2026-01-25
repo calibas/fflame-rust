@@ -433,14 +433,13 @@ impl App {
                     }
                 }
                 Event::Resumed => {
-                    // On WASM, request a resize to ensure proper canvas dimensions
-                    #[cfg(target_arch = "wasm32")]
-                    {
-                        let size = window.inner_size();
-                        if size.width > 0 && size.height > 0 {
-                            log::info!("Resumed event - resizing to {}x{}", size.width, size.height);
-                            app.gpu.resize(size);
-                        }
+                    // Refresh window state when app resumes (wake from sleep, etc.)
+                    // This fixes UI offset issues on Windows after sleep/wake cycles
+                    let size = window.inner_size();
+                    if size.width > 0 && size.height > 0 {
+                        log::info!("Resumed event - resizing to {}x{}", size.width, size.height);
+                        app.gpu.resize(size);
+                        window.request_redraw();
                     }
                 }
                 Event::AboutToWait => {
@@ -1222,8 +1221,12 @@ impl App {
             } else if let Some(ref animation) = self.animation_controller.animation {
                 use crate::animation::export::{AnimationExportConfig, UiProgressCallback, export_animation_fast, VideoEncodingSettings};
 
+                // Clone config and override max_iterations from export settings
+                let mut config = self.config_manager.active_config().clone();
+                config.max_iterations = export_settings.max_iterations;
+
                 let export_config = AnimationExportConfig {
-                    config: self.config_manager.active_config().clone(),
+                    config,
                     animation: animation.clone(),
                     output_path: export_settings.output_path.clone(),
                     width: export_settings.width,
@@ -1317,7 +1320,7 @@ impl App {
 
         // Determine overwrite mode (smooth transitions during parameter changes)
         // Must be computed before mutable borrow of flame_renderer
-        let use_overwrite = self.should_use_overwrite(is_controller_playing);
+        let use_overwrite = self.should_use_overwrite();
 
         // Run flame compute shader with progressive refinement
         if let Some(ref mut renderer) = self.flame_renderer {

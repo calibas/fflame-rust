@@ -1,6 +1,6 @@
 //! Animation playback controller
 
-use super::{Animation, AnimationQualityMode, Interpolation, Keyframe, LoopMode, OscillatorType, PlaybackState, Track, TrackSource};
+use super::{Animation, Interpolation, Keyframe, LoopMode, OscillatorType, PlaybackState, Track, TrackSource};
 
 /// Controls animation playback and evaluates frame values
 pub struct AnimationController {
@@ -18,9 +18,6 @@ pub struct AnimationController {
 
     /// Direction for PingPong mode (1.0 = forward, -1.0 = backward)
     direction: f64,
-
-    /// Quality mode for animation rendering
-    pub quality_mode: AnimationQualityMode,
 }
 
 impl AnimationController {
@@ -32,16 +29,7 @@ impl AnimationController {
             current_time: 0.0,
             speed: 1.0,
             direction: 1.0,
-            quality_mode: AnimationQualityMode::default(),
         }
-    }
-
-    /// Check if animation should use overwrite mode (vs batched accumulation)
-    ///
-    /// Returns true for Responsive mode (immediate updates),
-    /// false for HighQuality mode (batched accumulation)
-    pub fn use_overwrite_mode(&self) -> bool {
-        self.quality_mode == AnimationQualityMode::Responsive
     }
 
     /// Load animation and reset playback
@@ -156,9 +144,9 @@ impl AnimationController {
         let mut values = Vec::new();
 
         // Evaluate regular tracks
-        for (path_str, track) in &animation.tracks {
+        for track in &animation.tracks {
             if let Some(value) = self.evaluate_track(track, time) {
-                values.push((path_str.clone(), value));
+                values.push((track.target.clone(), value));
             }
         }
 
@@ -417,6 +405,7 @@ mod tests {
     fn test_track_evaluation_keyframes() {
         let controller = AnimationController::new();
         let track = Track::linear(
+            "Test".into(),
             serde_json::json!(0.0),
             serde_json::json!(10.0),
             10.0,
@@ -438,7 +427,7 @@ mod tests {
     #[test]
     fn test_oscillator_sine() {
         let controller = AnimationController::new();
-        let track = Track::oscillator(OscillatorType::Sine, 5.0, 2.0, 1.0);
+        let track = Track::oscillator("Test".into(), OscillatorType::Sine, 5.0, 2.0, 1.0);
 
         // At t=0, sine(0) = 0, so value = center = 5.0
         let val = controller.evaluate_track(&track, 0.0).unwrap();
@@ -460,7 +449,7 @@ mod tests {
     #[test]
     fn test_oscillator_square() {
         let controller = AnimationController::new();
-        let track = Track::oscillator(OscillatorType::Square, 0.0, 1.0, 1.0);
+        let track = Track::oscillator("Test".into(), OscillatorType::Square, 0.0, 1.0, 1.0);
 
         // First half of cycle: -1
         let val = controller.evaluate_track(&track, 0.25).unwrap();

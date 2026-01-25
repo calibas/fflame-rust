@@ -138,6 +138,14 @@ impl App {
                 } else {
                     // Update app state from config
                     self.flame = self.config_manager.active_config().flame.clone();
+
+                    // Update animation track paths to reflect the removed transform
+                    if let Some(ref mut animation) = self.animation_controller.animation {
+                        let removed_count = animation.on_transform_removed(idx);
+                        if removed_count > 0 {
+                            log::info!("Removed {} animation tracks targeting deleted transform {}", removed_count, idx + 1);
+                        }
+                    }
                 }
             }
         }
@@ -724,11 +732,14 @@ impl App {
             }
 
             // Sync flame and trigger refresh
+            // Note: Overwrite mode is handled by update_overwrite_mode based on recorded actions
+            // This ensures tone-mapping-only changes don't incorrectly enable overwrite mode
             self.flame = self.config_manager.active_config().flame.clone();
-            self.use_overwrite_next_frame = true;
+        }
 
-            // Always reset accumulation when seeking - ensures histogram is cleared
-            // even if animated values didn't change (e.g., scrubbing to same position)
+        // Only reset accumulation when drag stops or on discrete actions (frame step, click to seek)
+        // This provides smooth preview during scrubber drag, then clean rebuild when released
+        if ui_response.animation_seek_drag_stopped {
             self.config_manager.request_reset();
         }
     }

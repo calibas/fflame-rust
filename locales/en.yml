@@ -67,6 +67,7 @@ menu:
   workspace_layout: "📐 Workspace Layout"
   layout_beginner: "Beginner"
   layout_standard: "Standard"
+  layout_animation: "Animation"
   layout_advanced: "Advanced"
   layout_export: "Export"
 
@@ -84,6 +85,7 @@ help:
   pan_view: "  ⬅⬆⬇➡ - Pan view"
   zoom_plus_minus: "  + / -      - Zoom in/out"
   zoom_numpad: "  Numpad +/-  - Zoom in/out"
+  full_screen: "  F        - Full Screen Mode"
   editing: "Editing:"
   undo_shortcut: "  Ctrl+Z   - Undo"
   redo_shortcut: "  Ctrl+Y   - Redo"
@@ -825,17 +827,19 @@ animation_panel:
   quality_responsive_tooltip: "Fast preview - each frame updates immediately"
   quality_high_tooltip: "Better quality - batches 4 frames for smoother results (slight latency)"
 
-  # File controls
-  new: "+ New"
-  new_tooltip: "Create a new empty animation"
+  # Top right controls (file & export)
+  name: "Name:"
+  duration: "Duration:"
   load: "📂 Load"
   load_tooltip: "Load animation from file"
   save: "💾 Save"
   save_tooltip: "Save animation to file"
-  file_format_hint: "Animation files are JSON format (.anim or .json)"
+  export_animation: "🎬 Export Animation"
+  export_animation_tooltip: "Open export settings panel"
 
   # Export section
   export_header: "🎬 Export Animation"
+  export_panel_title: "🎬 Export Animation"
   exporting_status: "Exporting..."
   frame_progress: "Frame %{current}/%{total}"
   eta: "ETA: %{min}:%{sec}"
@@ -857,6 +861,7 @@ animation_panel:
   resolution: "Resolution:"
   frame_rate: "Frame Rate:"
   iterations_thread: "Iterations/thread:"
+  max_iterations: "Max iterations:"
   total_frames: "Total frames: %{frames} (%{duration}s × %{fps} fps)"
   export_video: "🎬 Export Video"
   export_not_available_wasm: "Animation export not available in web version"
@@ -887,6 +892,7 @@ track_editor:
   keyframes_count: "Keyframes (%{count})"
   circular_label: "(Circular)"
   delete_track: "Delete track"
+  edit: "Edit"
 
   # Track controls
   interpolation: "Interpolation:"
@@ -926,7 +932,8 @@ track_editor:
   easing_easeinsine: "EaseInSine"
   easing_easeoutsine: "EaseOutSine"
   easing_easeinoutsine: "EaseInOutSine"
-  add_keyframe: "+ Add Keyframe"
+  add_keyframe: "+ End"
+  add_at_current: "+ Current Time"
   sort_by_time: "Sort by Time"
   done: "Done"
 
@@ -988,6 +995,49 @@ track_editor:
   param_affine: "Affine %{param}"
   param_variation_weight: "%{name} (Weight)"
   param_variation_param: "%{name} - %{param}"
+
+  # Unified Track Editor Panel
+  add_track_title: "Add Track"
+  edit_track_title: "Edit Track"
+  no_animation: "No animation loaded"
+  select_target: "Select target..."
+  change_target: "Change target"
+  select_target_y: "Select Y target..."
+  change_target_y: "Change Y target"
+
+  # Type-specific subpanels
+  keyframes_section: "Keyframes"
+  oscillator_section: "Oscillator Parameters"
+  circular_section: "Circular Motion"
+  keyframe_count: "Keyframes"
+  keyframes_will_be_created: "Keyframes will be created when track is added"
+  select_target_first: "Select a target parameter to edit keyframes"
+
+  # Waveform options
+  waveform: "Waveform:"
+  waveform_sine: "Sine"
+  waveform_triangle: "Triangle"
+  waveform_sawtooth: "Sawtooth"
+  waveform_square: "Square"
+
+  # Oscillator parameters (abbreviated)
+  osc_center: "Center:"
+  osc_amplitude: "Amplitude:"
+  osc_frequency: "Frequency:"
+  osc_phase: "Phase:"
+
+  # Circular parameters
+  circ_center_x: "Center X:"
+  circ_center_y: "Center Y:"
+  circ_radius: "Radius:"
+  circ_speed: "Speed:"
+  circ_phase: "Phase:"
+
+  # Action buttons
+  update_track: "Update Track"
+  replace_track: "Replace Track"
+  close: "Close"
+  warning_replace: "⚠ A track with this target already exists and will be replaced"
 
 # Path Editor Panel
 path_editor:

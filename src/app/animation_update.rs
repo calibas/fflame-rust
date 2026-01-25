@@ -44,6 +44,7 @@ impl App {
                 .enter_animation(self.config_manager.active_config());
             // Enable animation mode in ConfigManager - UI changes become silent (no undo)
             self.config_manager.set_animation_mode(true);
+            // Note: Overwrite mode is automatically enabled during animation (see should_use_overwrite)
         }
     }
 
