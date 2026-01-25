@@ -22,7 +22,7 @@ The renderer uses a **3-pass GPU pipeline** that runs every frame:
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ 1. COMPUTE PASS (main_2d.wgsl / main_3d.wgsl)      │
+│ 1. COMPUTE PASS (main_template.wgsl)               │
 │    Generate fractal samples                         │
 │    - Each thread: N iterations                      │
 │    - Atomic write to histogram buffer (u32)         │

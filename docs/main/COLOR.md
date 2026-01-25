@@ -11,7 +11,7 @@
 
 **Code locations:**
 - [src/scene/palette.rs](../../src/scene/palette.rs) - Palette system
-- [shaders/core/main_2d.wgsl](../../shaders/core/main_2d.wgsl) - Color generation
+- [shaders/core/main_template.wgsl](../../shaders/core/main_template.wgsl) - Color generation
 - [shaders/accumulate.wgsl](../../shaders/accumulate.wgsl) - Histogram decoding
 
 ---
@@ -340,7 +340,7 @@ histogram[base + 3] = Density (u32, count of hits)
 
 ### Encoding (Compute Shader)
 
-**Location:** [shaders/core/main_2d.wgsl](../../shaders/core/main_2d.wgsl) / [main_3d.wgsl](../../shaders/core/main_3d.wgsl)
+**Location:** [shaders/core/main_template.wgsl](../../shaders/core/main_template.wgsl)
 
 ```wgsl
 fn write_to_histogram(screen_pos: vec2<u32>, color: vec3<f32>) {
@@ -596,15 +596,15 @@ adjusted_blend = blend_factor * compression_factor;
 | Task | Files to Modify |
 |------|-----------------|
 | Add built-in palette | [palette.rs](../../src/scene/palette.rs) `PaletteLibrary::new()` |
-| Change color mode algorithm | [main_2d.wgsl](../../shaders/core/main_2d.wgsl), [main_3d.wgsl](../../shaders/core/main_3d.wgsl) |
-| Modify histogram format | [buffers.rs](../../src/gpu/buffers.rs), [main_2d.wgsl](../../shaders/core/main_2d.wgsl), [accumulate.wgsl](../../shaders/accumulate.wgsl) |
+| Change color mode algorithm | [main_template.wgsl](../../shaders/core/main_template.wgsl) |
+| Modify histogram format | [buffers.rs](../../src/gpu/buffers.rs), [main_template.wgsl](../../shaders/core/main_template.wgsl), [accumulate.wgsl](../../shaders/accumulate.wgsl) |
 | Change accumulation formula | [accumulate.wgsl](../../shaders/accumulate.wgsl), [buffers.rs](../../src/gpu/buffers.rs) `AccumulateParams` |
 | Add color mode | [transforms.rs](../../src/scene/transforms.rs), shaders, [ui/mod.rs](../../src/ui/mod.rs) |
 | Import/export palette | Use Palette Editor UI → Import/Export section |
 
 ---
 
-**Last Updated:** 2025-10-28
+**Last Updated:** 2026-01-24
 **Related Documentation:**
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design
 - [TRANSFORMS.md](TRANSFORMS.md) - Color modes in flame algorithm

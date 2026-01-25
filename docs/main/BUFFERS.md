@@ -20,7 +20,7 @@ The renderer uses three different bind group configurations, one for each pipeli
 
 ### Bind Group 0 (Compute Pass)
 
-Used by the trajectory shaders (main_2d.wgsl / main_3d.wgsl) to generate fractal samples.
+Used by the compute shader (main_template.wgsl) to generate fractal samples.
 
 ```wgsl
 @group(0) @binding(0) - transforms: array<GpuTransform>           (storage buffer, read)
@@ -552,13 +552,13 @@ queue.write_texture(
 | Change tone mapping params | [buffers.rs](../../src/gpu/buffers.rs) `TonemapParams`, [tonemap.wgsl](../../shaders/tonemap.wgsl) |
 | Change accumulation behavior | [buffers.rs](../../src/gpu/buffers.rs) `AccumulateParams`, [accumulate.wgsl](../../shaders/accumulate.wgsl) |
 | Add variation parameter | [variations/mod.rs](../../src/variations/mod.rs) `add_parameters()`, shader uses `get_param()` |
-| Change histogram format | [buffers.rs](../../src/gpu/buffers.rs), [main_2d.wgsl](../../shaders/core/main_2d.wgsl), [accumulate.wgsl](../../shaders/accumulate.wgsl) |
+| Change histogram format | [buffers.rs](../../src/gpu/buffers.rs), [main_template.wgsl](../../shaders/core/main_template.wgsl), [accumulate.wgsl](../../shaders/accumulate.wgsl) |
 
 **Important:** When adding fields, always check alignment! Use `bytemuck::offset_of!()` to verify struct layout matches shader expectations.
 
 ---
 
-**Last Updated:** 2025-10-28
+**Last Updated:** 2026-01-24
 **Related Documentation:**
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design
 - [RENDERER.md](RENDERER.md) - How buffers are used in rendering *(coming soon)*
