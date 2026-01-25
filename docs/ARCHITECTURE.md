@@ -298,18 +298,26 @@ fractal_flame_wgpu/
 │   └── bin/simple_benchmark.rs     CLI benchmark tool (human-readable performance)
 │
 └── Shaders (WGSL) - **See [SHADERS.md](main/SHADERS.md)** for complete shader documentation
-    ├── core/                   Modular components (dynamically assembled)
-    │   ├── header.wgsl         Bind groups and data structures
-    │   ├── rng.wgsl            PCG random number generator
-    │   ├── variations_2d.wgsl  2D variation functions
-    │   ├── variations_3d.wgsl  All variations including 3D
-    │   ├── utilities.wgsl      Helper functions (param access, projection, r/θ/φ)
-    │   ├── main_2d.wgsl        2D entry point
-    │   └── main_3d.wgsl        3D entry point
+    ├── core/                       Modular components (assembled by ShaderBuilder)
+    │   ├── header.wgsl             Bind groups and structs (interactive)
+    │   ├── header_export.wgsl      Header for headless export
+    │   ├── header_tiled.wgsl       Header for high-res tiled rendering
+    │   ├── rng.wgsl                PCG random number generator
+    │   ├── utilities.wgsl          Helper functions (r/θ/φ, projection)
+    │   ├── utilities_tiled.wgsl    Utilities for tiled rendering
+    │   ├── affine.wgsl             2D affine transform
+    │   ├── affine_3d.wgsl          3D affine transform with Z
+    │   ├── main_template.wgsl      Main compute shader ({{VARIATIONS_CODE}} placeholder)
+    │   ├── main_2d_export.wgsl     2D export entry point
+    │   ├── main_3d_export.wgsl     3D export entry point
+    │   ├── main_2d_tiled.wgsl      2D high-res tiled entry point
+    │   ├── main_3d_tiled.wgsl      3D high-res tiled entry point
+    │   └── path_filter.wgsl        Path filtering for density estimation
+    │   (Note: Variation functions generated dynamically, not stored as files)
     │
-    ├── ShaderBuilder           Dynamic compilation (only active variations)
-    ├── accumulate.wgsl         Progressive refinement pass
-    └── tonemap.wgsl            Display rendering pass
+    ├── ShaderBuilder               Dynamic compilation (only active variations)
+    ├── accumulate.wgsl             Ping-pong progressive refinement
+    └── tonemap.wgsl                Display rendering pass
 ```
 
 ---
@@ -436,7 +444,7 @@ The renderer uses a **histogram-based atomic accumulation** system to safely col
 
 **3-Stage Pipeline:**
 ```
-1. Compute Pass (main_2d.wgsl / main_3d.wgsl)
+1. Compute Pass (main_template.wgsl - dynamically compiled)
    - Each thread generates 256-1024 iterations
    - Converts final_color (RGB f32) to u32 with fixed scale
    - Atomically adds to histogram buffer
@@ -689,10 +697,10 @@ MAX_UNDO_HISTORY = 50            // Undo stack depth
 
 | Task | Files to Modify |
 |------|-----------------|
-| Add new 2D variation | [variations/mod.rs](src/variations/mod.rs), [variations_2d.wgsl](shaders/core/variations_2d.wgsl), [variations_3d.wgsl](shaders/core/variations_3d.wgsl) |
-| Add new 3D variation | [variations/mod.rs](src/variations/mod.rs), [variations_3d.wgsl](shaders/core/variations_3d.wgsl) |
+| Add new 2D variation | [variations/mod.rs](src/variations/mod.rs), [shader_builder.rs](src/renderer/shader_builder.rs) (generates WGSL) |
+| Add new 3D variation | [variations/mod.rs](src/variations/mod.rs), [shader_builder.rs](src/renderer/shader_builder.rs) (generates WGSL) |
 | Add variation parameters | [variations/mod.rs](src/variations/mod.rs) - use `registry.add_parameters()` |
-| Change color algorithm | [main_2d.wgsl](shaders/core/main_2d.wgsl), [main_3d.wgsl](shaders/core/main_3d.wgsl), [tonemap.wgsl](shaders/tonemap.wgsl) |
+| Change color algorithm | [main_template.wgsl](shaders/core/main_template.wgsl), [tonemap.wgsl](shaders/tonemap.wgsl) |
 | Add UI panel/window | [ui/mod.rs](src/ui/mod.rs) - add to menu bar and window rendering |
 | Add preset | [presets.rs](src/scene/presets.rs) or create `.fflame` file in `assets/presets/` |
 | Modify accumulation | [accumulate.wgsl](shaders/accumulate.wgsl), [compute_kernel.rs](src/renderer/compute_kernel.rs) |

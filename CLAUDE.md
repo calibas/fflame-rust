@@ -27,17 +27,22 @@
 
 ### Project Structure
 - **Shaders**: Dynamic shader compilation from modular components
-  - `shaders/core/` - Modular shader components (dynamically assembled)
-    - `header.wgsl` - Structs and bind groups
-    - `rng.wgsl` - Random number generation
-    - `variations_2d.wgsl` - 2D variation functions
-    - `variations_3d.wgsl` - 3D variation functions (includes all 2D + 3D-specific)
+  - `shaders/core/` - Modular shader components (dynamically assembled by ShaderBuilder)
+    - `header.wgsl` - Structs and bind groups (interactive rendering)
+    - `header_export.wgsl` - Header for headless export
+    - `header_tiled.wgsl` - Header for high-res tiled rendering
+    - `rng.wgsl` - Random number generation (PCG algorithm)
     - `utilities.wgsl` - Helper functions (r, θ, φ calculations)
-    - `main_2d.wgsl` - 2D compute shader entry point
-    - `main_3d.wgsl` - 3D compute shader entry point
-  - `shaders/accumulate.wgsl` - Temporal blending pass
+    - `utilities_tiled.wgsl` - Utilities for tiled rendering
+    - `affine.wgsl` - 2D affine transform application
+    - `affine_3d.wgsl` - 3D affine transform with Z handling
+    - `main_template.wgsl` - Main compute shader with `{{VARIATIONS_CODE}}` placeholder
+    - `main_2d_export.wgsl` / `main_3d_export.wgsl` - Export entry points
+    - `main_2d_tiled.wgsl` / `main_3d_tiled.wgsl` - High-res tiled entry points
+    - `path_filter.wgsl` - Path filtering for density estimation
+  - `shaders/accumulate.wgsl` - Ping-pong temporal blending pass
   - `shaders/tonemap.wgsl` - Display tone mapping pass
-  - **Note**: Shaders are built dynamically by `ShaderBuilder` with only active variations
+  - **Note**: Variation functions are generated dynamically by `ShaderBuilder` based on active variations per flame (not stored as separate files)
 
 - **Core Modules**:
   - `src/app/` - Application state and event handling (modular)

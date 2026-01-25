@@ -10,8 +10,9 @@
 
 **Code locations:**
 - [src/scene/transforms.rs](../../src/scene/transforms.rs) - Transform struct and Flame algorithm
-- [shaders/core/main_2d.wgsl](../../shaders/core/main_2d.wgsl) - 2D GPU implementation
-- [shaders/core/main_3d.wgsl](../../shaders/core/main_3d.wgsl) - 3D GPU implementation
+- [shaders/core/main_template.wgsl](../../shaders/core/main_template.wgsl) - GPU compute shader template
+- [shaders/core/affine.wgsl](../../shaders/core/affine.wgsl) - 2D affine transform
+- [shaders/core/affine_3d.wgsl](../../shaders/core/affine_3d.wgsl) - 3D affine transform
 
 ---
 
@@ -180,7 +181,7 @@ pub fn iterate(&self, p: [f32; 2], color_index: &mut f32) -> [f32; 2] {
 
 ### GPU Implementation (2D Mode)
 
-**Location:** [shaders/core/main_2d.wgsl](../../shaders/core/main_2d.wgsl)
+**Location:** [shaders/core/main_template.wgsl](../../shaders/core/main_template.wgsl) (compiled with `RENDER_3D=false`)
 
 ```wgsl
 @compute @workgroup_size(8, 8)
@@ -283,7 +284,7 @@ Despite each thread starting randomly and following an independent chaotic path,
 
 ### GPU Implementation (3D Mode)
 
-**Location:** [shaders/core/main_3d.wgsl](../../shaders/core/main_3d.wgsl)
+**Location:** [shaders/core/main_template.wgsl](../../shaders/core/main_template.wgsl) (compiled with `RENDER_3D=true`)
 
 **Key Differences from 2D:**
 ```wgsl
@@ -381,7 +382,7 @@ fn calc_phi(p: vec3<f32>) -> f32 {
 
 **Settings:**
 - `render_mode = RenderMode::TwoD`
-- Uses `main_2d.wgsl` shader
+- Uses `main_template.wgsl` compiled with `RENDER_3D=false`
 - Points are `vec2<f32>`
 - Projection: Direct 2D screen mapping
 
@@ -391,7 +392,7 @@ fn calc_phi(p: vec3<f32>) -> f32 {
 
 **Settings:**
 - `render_mode = RenderMode::ThreeD`
-- Uses `main_3d.wgsl` shader
+- Uses `main_template.wgsl` compiled with `RENDER_3D=true`
 - Points are `vec3<f32>`
 - Projection: Orthographic or Perspective
 

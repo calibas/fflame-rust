@@ -23,19 +23,28 @@ The shaders are **not monolithic files**. Instead, they're assembled at runtime 
 
 ```
 shaders/core/
-├── header.wgsl           - Structs, bind groups (66 lines)
-├── rng.wgsl              - Random number generation (34 lines)
-├── utilities.wgsl        - Helper functions (135 lines)
-├── variations_2d.wgsl    - 2D variation functions (152 lines)
-├── variations_3d.wgsl    - All variations including 3D (202 lines)
-├── main_2d.wgsl          - 2D entry point (75 lines)
-└── main_3d.wgsl          - 3D entry point (76 lines)
+├── header.wgsl             - Structs, bind groups (interactive)
+├── header_export.wgsl      - Header for headless export
+├── header_tiled.wgsl       - Header for high-res tiled rendering
+├── rng.wgsl                - Random number generation (PCG)
+├── utilities.wgsl          - Helper functions (r/θ/φ, projection)
+├── utilities_tiled.wgsl    - Utilities for tiled rendering
+├── affine.wgsl             - 2D affine transform application
+├── affine_3d.wgsl          - 3D affine transform with Z handling
+├── main_template.wgsl      - Main compute shader with {{VARIATIONS_CODE}} placeholder
+├── main_2d_export.wgsl     - 2D export entry point
+├── main_3d_export.wgsl     - 3D export entry point
+├── main_2d_tiled.wgsl      - 2D high-res tiled entry point
+├── main_3d_tiled.wgsl      - 3D high-res tiled entry point
+└── path_filter.wgsl        - Path filtering for density estimation
+(Note: Variation functions are GENERATED at runtime by ShaderBuilder, not stored as files)
 ```
 
-**At runtime**, ShaderBuilder combines:
-```
-[header] + [rng] + [variations] + [GENERATED apply_variations()] + [utilities] + [main]
-```
+**At runtime**, ShaderBuilder:
+1. Takes `main_template.wgsl` as the base
+2. Generates variation functions for only the active variations
+3. Replaces `{{VARIATIONS_CODE}}` placeholder with generated code
+4. Processes template conditionals (`{{#if RENDER_3D}}...{{/if}}`) for 2D/3D mode
 
 **Result:** A complete compute shader with only the active variations compiled in.
 
@@ -226,11 +235,12 @@ fn rotate_camera(p: vec3<f32>, pitch: f32, yaw: f32) -> vec3<f32> {
 }
 ```
 
-### variations_2d.wgsl - 2D Variation Functions
+### Variation Functions (Generated at Runtime)
 
-**Location:** [shaders/core/variations_2d.wgsl](../../shaders/core/variations_2d.wgsl)
+**Note:** Variation functions are **generated dynamically** by ShaderBuilder based on active variations.
+There are no `variations_2d.wgsl` or `variations_3d.wgsl` files - the code is generated in [src/shader_builder_v2.rs](../../src/shader_builder_v2.rs).
 
-**Contains:** All 2D variations (indices 0-15) plus parameterized 2D (24-25)
+**2D Mode:** All 2D variations (indices 0-15) plus parameterized 2D (24-25)
 
 **Function Signatures:**
 ```wgsl
@@ -263,11 +273,9 @@ fn variation_blob(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
 
 **Note:** 2D shaders only include variations 0-15 and 24-25 (ignores 3D variations 16-23).
 
-### variations_3d.wgsl - All Variations Including 3D
+### 3D Variation Functions (Generated at Runtime)
 
-**Location:** [shaders/core/variations_3d.wgsl](../../shaders/core/variations_3d.wgsl)
-
-**Contains:** All 2D variations (0-15, 24-25) PLUS 3D-specific variations (16-23)
+**3D Mode:** All 2D variations (0-15, 24-25) PLUS 3D-specific variations (16-23)
 
 **2D Variations in 3D Mode:**
 ```wgsl
@@ -345,11 +353,14 @@ fn variation_post_rotate_x(p: vec3<f32>, xform_id: u32) -> vec3<f32> {
 }
 ```
 
-### main_2d.wgsl - 2D Entry Point
+### main_template.wgsl - Compute Shader Entry Point
 
-**Location:** [shaders/core/main_2d.wgsl](../../shaders/core/main_2d.wgsl)
+**Location:** [shaders/core/main_template.wgsl](../../shaders/core/main_template.wgsl)
 
-**Compute Shader Entry:**
+**Note:** This is a template file with `{{VARIATIONS_CODE}}` placeholder and `{{#if RENDER_3D}}` conditionals.
+ShaderBuilder processes it to generate the final 2D or 3D shader.
+
+**Compute Shader Entry (2D Mode):**
 ```wgsl
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -408,9 +419,9 @@ fn apply_transform(
 // fn apply_variations(p: vec2<f32>, xform_id: u32, rng: ptr<function, RngState>) -> vec2<f32>
 ```
 
-### main_3d.wgsl - 3D Entry Point
+### 3D Mode Entry Point
 
-**Location:** [shaders/core/main_3d.wgsl](../../shaders/core/main_3d.wgsl)
+**Generated from:** [shaders/core/main_template.wgsl](../../shaders/core/main_template.wgsl) with `RENDER_3D=true`
 
 **Differences from 2D:**
 - Uses `vec3<f32>` for points
@@ -487,25 +498,23 @@ pub struct ShaderBuilder {
 }
 
 impl ShaderBuilder {
-    pub fn build_2d_shader(&self) -> String {
-        let mut shader = String::new();
+    pub fn build_compute_shader(&self, render_3d: bool) -> String {
+        // 1. Load main template
+        let template = include_str!("../shaders/core/main_template.wgsl");
 
-        // 1. Include modular components
-        shader.push_str(include_str!("../shaders/core/header.wgsl"));
-        shader.push_str(include_str!("../shaders/core/rng.wgsl"));
-        shader.push_str(include_str!("../shaders/core/variations_2d.wgsl"));
+        // 2. Generate variation functions for active variations only
+        let variations_code = self.generate_variation_code(&active_variations, render_3d);
 
-        // 2. Generate apply_variations() function
-        shader.push_str(&self.generate_apply_variations_2d());
+        // 3. Replace {{VARIATIONS_CODE}} placeholder
+        let shader = template.replace("{{VARIATIONS_CODE}}", &variations_code);
 
-        // 3. Include utilities and main
-        shader.push_str(include_str!("../shaders/core/utilities.wgsl"));
-        shader.push_str(include_str!("../shaders/core/main_2d.wgsl"));
-
-        shader
+        // 4. Process conditionals ({{#if RENDER_3D}}...{{/if}})
+        let processor = TemplateProcessor::new()
+            .set("RENDER_3D", render_3d);
+        processor.process(&shader)
     }
 
-    fn generate_apply_variations_2d(&self) -> String {
+    fn generate_variation_code(&self, active: &[(String, u32)], render_3d: bool) -> String {
         let mut code = String::from("fn apply_variations(\n");
         code.push_str("    p: vec2<f32>,\n");
         code.push_str("    xform_id: u32,\n");
@@ -651,9 +660,9 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
 | Task | Files to Modify |
 |------|-----------------|
-| Add new 2D variation | [variations_2d.wgsl](../../shaders/core/variations_2d.wgsl), [variations_3d.wgsl](../../shaders/core/variations_3d.wgsl), [variations/mod.rs](../../src/variations/mod.rs) |
-| Add new 3D variation | [variations_3d.wgsl](../../shaders/core/variations_3d.wgsl), [variations/mod.rs](../../src/variations/mod.rs) |
-| Change affine algorithm | [main_2d.wgsl](../../shaders/core/main_2d.wgsl) `apply_transform()`, [main_3d.wgsl](../../shaders/core/main_3d.wgsl) `apply_transform_3d()` |
+| Add new 2D variation | [variations/mod.rs](../../src/variations/mod.rs) (register), [shader_builder_v2.rs](../../src/shader_builder_v2.rs) (generate WGSL) |
+| Add new 3D variation | [variations/mod.rs](../../src/variations/mod.rs) (register), [shader_builder_v2.rs](../../src/shader_builder_v2.rs) (generate WGSL) |
+| Change affine algorithm | [affine.wgsl](../../shaders/core/affine.wgsl), [affine_3d.wgsl](../../shaders/core/affine_3d.wgsl) |
 | Modify ShaderBuilder | [shader_builder_v2.rs](../../src/shader_builder_v2.rs) |
 | Add new shader component | Create new .wgsl file in [shaders/core/](../../shaders/core/), include in ShaderBuilder |
 | Change tone mapping | [tonemap.wgsl](../../shaders/tonemap.wgsl) fragment shader |
@@ -662,7 +671,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 
 ---
 
-**Last Updated:** 2025-10-28
+**Last Updated:** 2026-01-24
 **Related Documentation:**
 - [ARCHITECTURE.md](../ARCHITECTURE.md) - Overall system design
 - [TRANSFORMS.md](TRANSFORMS.md) - Flame algorithm
