@@ -1,12 +1,12 @@
 # Fractals For All
 GPU-accelerated Fractal Flame Renderer
 
-See our [demo in your browser](https://calibas.github.io/) (mobile not supported yet).
+See our [demo in your browser](https://calibas.github.io/) (limited mobile support).
 
 ## Installation
 Clone this reposity, [install rust](https://rust-lang.org/tools/install/) and then run:
 ```
-cargo run
+cargo run --release
 ```
 
 ## Credits
@@ -27,6 +27,7 @@ Fractal renderers:
 - [Apophysis 7x](https://github.com/xyrus02/apophysis-7x)
 - [JWildfire](https://jwildfire.overwhale.com/)
 - [Chaotica](https://www.chaoticafractals.com/)
+- [Ultra Fractal](https://www.ultrafractal.com/)
 - [Mandelbulber](https://github.com/buddhi1980/mandelbulber2)
 - [GPU Mandelbulb Tracer](https://gmt-0-8-152535429025.us-west1.run.app/)
 - [Iterator.it](https://iterator.it/)
