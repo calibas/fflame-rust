@@ -257,6 +257,34 @@ pub fn render_view_content(
                 dof_blur.into()
             );
         }
+
+        // Depth Fog controls
+        ui.add_space(8.0);
+        ui.label(t!("view.fog_section").as_ref());
+
+        let mut fog_strength = config.fog_strength;
+        let response = ui.add(
+            egui::Slider::new(&mut fog_strength, 0.0..=5.0)
+                .text(t!("view.fog_strength").as_ref())
+        ).on_hover_text(t!("view.tooltip_fog_strength"));
+        if response.changed() {
+            let _ = config_manager.update_param(
+                ConfigPath::FogStrength,
+                fog_strength.into()
+            );
+        }
+
+        let mut fog_start = config.fog_start;
+        let response = ui.add(
+            egui::Slider::new(&mut fog_start, -5.0..=5.0)
+                .text(t!("view.fog_start").as_ref())
+        ).on_hover_text(t!("view.tooltip_fog_start"));
+        if response.changed() {
+            let _ = config_manager.update_param(
+                ConfigPath::FogStart,
+                fog_start.into()
+            );
+        }
     }
 
     ui.separator();
@@ -272,6 +300,8 @@ pub fn render_view_content(
                 (ConfigPath::CameraZ, 0.0.into()),
                 (ConfigPath::DofFocusDistance, crate::config::DEFAULT_DOF_FOCUS_DISTANCE.into()),
                 (ConfigPath::DofBlurStrength, crate::config::DEFAULT_DOF_BLUR_STRENGTH.into()),
+                (ConfigPath::FogStrength, crate::config::DEFAULT_FOG_STRENGTH.into()),
+                (ConfigPath::FogStart, crate::config::DEFAULT_FOG_START.into()),
             ],
             "history.action.reset_view".to_string()
         );

@@ -220,6 +220,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{/if}}
                 }
 
+{{#if RENDER_3D}}
+                // Apply depth fog (3D mode only, blend toward background color)
+                if (params.fog_strength > 0.0) {
+                    // Get camera-space depth
+                    // In camera space, objects in front have negative Z (looking down -Z axis)
+                    // Negate to get positive depth where larger = further from camera
+                    let camera_matrix = build_camera_matrix(params.camera_rotation_x, params.camera_rotation_y);
+                    let camera_space = camera_transform(final_pos, camera_matrix, params.camera_z);
+                    let fog_depth = -camera_space.z;  // Negate: distant objects have larger depth
+
+                    // Exponential fog: fog_factor increases with distance beyond fog_start
+                    let fog_distance = max(fog_depth - params.fog_start, 0.0);
+                    let fog_factor = 1.0 - exp(-params.fog_strength * fog_distance);
+
+                    // Blend toward background color
+                    let background = vec3<f32>(params.background_r, params.background_g, params.background_b);
+                    final_color = mix(final_color, background, fog_factor);
+                }
+{{/if}}
+
                 // Atomic accumulation to histogram buffer
                 // Write RGB as 4× u32 (unpacked, full 32-bit precision)
                 let base_idx = pixel_idx * 4u;  // 4 words per pixel (R, G, B, density)

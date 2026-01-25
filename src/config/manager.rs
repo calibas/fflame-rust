@@ -871,6 +871,8 @@ impl ConfigManager {
             ConfigPath::CameraZ => Ok(config.camera_z.into()),
             ConfigPath::DofFocusDistance => Ok(config.dof_focus_distance.into()),
             ConfigPath::DofBlurStrength => Ok(config.dof_blur_strength.into()),
+            ConfigPath::FogStrength => Ok(config.fog_strength.into()),
+            ConfigPath::FogStart => Ok(config.fog_start.into()),
 
             // Tone mapping
             ConfigPath::Exposure => Ok(config.exposure.into()),
@@ -1213,6 +1215,12 @@ impl ConfigManager {
             }
             ConfigPath::DofBlurStrength => {
                 self.current.dof_blur_strength = value.try_into()?;
+            }
+            ConfigPath::FogStrength => {
+                self.current.fog_strength = value.try_into()?;
+            }
+            ConfigPath::FogStart => {
+                self.current.fog_start = value.try_into()?;
             }
 
             // Tone mapping

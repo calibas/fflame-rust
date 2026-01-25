@@ -284,6 +284,11 @@ view:
   dof_focus_distance: "Focus Distance:"
   dof_blur_strength: "Blur Strength:"
 
+  # Depth Fog
+  fog_section: "Depth Fog"
+  fog_strength: "Fog Density:"
+  fog_start: "Fog Start:"
+
   reset: "🔄 Reset View"
 
   # Tooltips
@@ -299,6 +304,8 @@ view:
   tooltip_camera_z: "Camera Z position.\nMoves the viewpoint closer/further."
   tooltip_dof_focus_distance: "Distance from origin where image is sharpest.\nObjects at this depth appear in focus."
   tooltip_dof_blur_strength: "Amount of depth blur (0 = disabled).\nHigher values create stronger bokeh effect."
+  tooltip_fog_strength: "Exponential fog density (0 = disabled).\nHigher values create denser atmospheric fog."
+  tooltip_fog_start: "Depth where fog begins.\nNegative values start fog in front of origin."
 
 # Rendering Controls
 rendering:
@@ -468,6 +475,8 @@ history:
     camera_z: "Camera Z"
     dof_focus_distance: "DOF Focus Distance"
     dof_blur_strength: "DOF Blur Strength"
+    fog_strength: "Fog Density"
+    fog_start: "Fog Start"
 
     # Tone mapping
     exposure: "Exposure"
@@ -967,6 +976,8 @@ track_editor:
   param_camera_z: "Camera Z"
   param_dof_focus_distance: "DOF Focus Distance"
   param_dof_blur_strength: "DOF Blur Strength"
+  param_fog_strength: "Fog Density"
+  param_fog_start: "Fog Start"
 
   # Animatable parameter names (Tone Mapping)
   param_exposure: "Exposure"
