@@ -123,6 +123,17 @@ impl FlamePipelines {
                     },
                     count: None,
                 },
+                // Xaos weights buffer (storage, read-only for chaos-weighted transform selection)
+                BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -462,6 +473,11 @@ impl FlamePipelines {
                 BindGroupEntry {
                     binding: 8,
                     resource: buffers.get_filter_buffer_for_binding().as_entire_binding(),
+                },
+                // Xaos weights for chaos-weighted transform selection
+                BindGroupEntry {
+                    binding: 9,
+                    resource: buffers.get_xaos_buffer_for_binding().as_entire_binding(),
                 },
             ],
         })

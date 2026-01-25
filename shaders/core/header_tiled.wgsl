@@ -93,3 +93,6 @@ struct VariationParams {
 @group(0) @binding(6) var<storage, read_write> iteration_counts: array<atomic<u32>>;
 // New binding for tile params
 @group(0) @binding(7) var<uniform> tile_params: TileParams;
+// Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
+// Modifies probability of selecting dst transform when coming from src
+@group(0) @binding(8) var<storage, read> xaos_weights: array<f32>;

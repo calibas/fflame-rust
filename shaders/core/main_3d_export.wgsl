@@ -40,13 +40,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     // Path tracking for PathMap mode (using hash for export since no path buffer)
     var path_hash = 0u;
 
+    // Xaos tracking: previous transform index for xaos-weighted selection
+    var prev_xform_idx = 0u;
+
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
         let old_pos = current;
 
-        // Select random transform
+        // Select random transform with xaos weighting
         let rand_val = rng_nextf(&rng);
-        let xform_idx = select_transform(rand_val);
+        let xform_idx = select_transform_xaos(rand_val, prev_xform_idx);
+        prev_xform_idx = xform_idx;
         let xform = transforms[xform_idx];
 
         // Opacity check

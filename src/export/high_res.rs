@@ -90,6 +90,7 @@ pub struct HighResExporter {
     sample_buffer: Buffer,
     sample_counter_buffer: Buffer,
     variation_params_buffer: Buffer,
+    xaos_buffer: Buffer,  // Xaos transition weights (identity if not used)
     palette_texture: Texture,
     palette_sampler: Sampler,
 
@@ -253,6 +254,25 @@ impl HighResExporter {
         // Upload variation params
         queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&variation_params));
 
+        // Create xaos buffer (identity weights if not used)
+        let num_transforms = config.flame.transforms.len().max(1) as u32;
+        let xaos_size = (num_transforms * num_transforms * 4) as u64;
+        let xaos_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Export Xaos Buffer"),
+            size: xaos_size.max(4), // At least 4 bytes for empty buffer
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Initialize xaos buffer with weights
+        if let Some(flat_weights) = config.flame.xaos_flat() {
+            queue.write_buffer(&xaos_buffer, 0, bytemuck::cast_slice(&flat_weights));
+        } else {
+            // Fill with 1.0 (identity - no xaos modification)
+            let identity: Vec<f32> = vec![1.0; (num_transforms * num_transforms) as usize];
+            queue.write_buffer(&xaos_buffer, 0, bytemuck::cast_slice(&identity));
+        }
+
         // Create palette texture (palette is always present)
         let palette = &config.palette;
         let palette_data = palette.generate_texture_data(256);
@@ -409,6 +429,17 @@ impl HighResExporter {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 7: xaos weights
+                BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -603,6 +634,7 @@ impl HighResExporter {
             sample_buffer,
             sample_counter_buffer,
             variation_params_buffer,
+            xaos_buffer,
             palette_texture,
             palette_sampler,
             compute_pipeline,
@@ -664,6 +696,10 @@ impl HighResExporter {
                 BindGroupEntry {
                     binding: 6,
                     resource: self.sample_counter_buffer.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: self.xaos_buffer.as_entire_binding(),
                 },
             ],
         });
