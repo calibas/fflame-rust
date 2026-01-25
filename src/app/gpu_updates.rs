@@ -58,6 +58,11 @@ impl App {
                         update_config.camera_rotation_y,
                         update_config.camera_z,
                         update_config.speed_factor,
+                        update_config.dof_focus_distance,
+                        update_config.dof_blur_strength,
+                        update_config.fog_strength,
+                        update_config.fog_start,
+                        update_config.background_color,
                     );
                 }
 

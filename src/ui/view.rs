@@ -228,6 +228,68 @@ pub fn render_view_content(
             ui.label(t!("view.camera_z")).on_hover_text(t!("view.tooltip_camera_z"));
             let _ = ui.lazy_drag(config_manager, ConfigPath::CameraZ, 0.01, "");
         });
+
+        // Depth Effects (collapsible, hidden by default)
+        ui.separator();
+        egui::CollapsingHeader::new(t!("view.depth_effects").as_ref())
+            .default_open(false)
+            .show(ui, |ui| {
+                // Depth of Field controls
+                ui.label(t!("view.depth_of_field"));
+
+                let mut dof_focus = config.dof_focus_distance;
+                let response = ui.add(
+                    egui::Slider::new(&mut dof_focus, -5.0..=5.0)
+                        .text(t!("view.dof_focus_distance").as_ref())
+                ).on_hover_text(t!("view.tooltip_dof_focus_distance"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::DofFocusDistance,
+                        dof_focus.into()
+                    );
+                }
+
+                let mut dof_blur = config.dof_blur_strength;
+                let response = ui.add(
+                    egui::Slider::new(&mut dof_blur, 0.0..=1.0)
+                        .text(t!("view.dof_blur_strength").as_ref())
+                        .step_by(0.001)
+                ).on_hover_text(t!("view.tooltip_dof_blur_strength"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::DofBlurStrength,
+                        dof_blur.into()
+                    );
+                }
+
+                // Depth Fog controls
+                ui.add_space(8.0);
+                ui.label(t!("view.fog_section").as_ref());
+
+                let mut fog_strength = config.fog_strength;
+                let response = ui.add(
+                    egui::Slider::new(&mut fog_strength, 0.0..=5.0)
+                        .text(t!("view.fog_strength").as_ref())
+                ).on_hover_text(t!("view.tooltip_fog_strength"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::FogStrength,
+                        fog_strength.into()
+                    );
+                }
+
+                let mut fog_start = config.fog_start;
+                let response = ui.add(
+                    egui::Slider::new(&mut fog_start, -5.0..=5.0)
+                        .text(t!("view.fog_start").as_ref())
+                ).on_hover_text(t!("view.tooltip_fog_start"));
+                if response.changed() {
+                    let _ = config_manager.update_param(
+                        ConfigPath::FogStart,
+                        fog_start.into()
+                    );
+                }
+            });
     }
 
     ui.separator();
@@ -241,6 +303,10 @@ pub fn render_view_content(
                 (ConfigPath::CameraRotationX, 0.0.into()),
                 (ConfigPath::CameraRotationY, 0.0.into()),
                 (ConfigPath::CameraZ, 0.0.into()),
+                (ConfigPath::DofFocusDistance, crate::config::DEFAULT_DOF_FOCUS_DISTANCE.into()),
+                (ConfigPath::DofBlurStrength, crate::config::DEFAULT_DOF_BLUR_STRENGTH.into()),
+                (ConfigPath::FogStrength, crate::config::DEFAULT_FOG_STRENGTH.into()),
+                (ConfigPath::FogStart, crate::config::DEFAULT_FOG_START.into()),
             ],
             "history.action.reset_view".to_string()
         );

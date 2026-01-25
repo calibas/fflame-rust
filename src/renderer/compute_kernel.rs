@@ -139,6 +139,13 @@ pub struct FlameRenderer {
     deterministic_rng: bool,
     frame_counter: u32, // For deterministic seed progression
     histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
+    dof_focus_distance: f32, // DOF: Distance from origin where image is sharpest
+    dof_blur_strength: f32, // DOF: Blur amount (0.0 = disabled)
+    fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
+    fog_start: f32, // Depth fog: distance where fog begins
+    background_r: f32, // Background color R (for depth fog)
+    background_g: f32, // Background color G (for depth fog)
+    background_b: f32, // Background color B (for depth fog)
     burn_in: u32, // Burn-in iterations (for Depth gradient in PathMap mode)
     blend_factor: f32, // Accumulation blend rate: 0.01 (slow/smooth) to 1.0 (fast/flickery), default: 0.1
     use_dynamic_blend: bool, // true = exponential convergence (old), false = fixed blend rate (new)
@@ -233,6 +240,13 @@ impl FlameRenderer {
             deterministic_rng: true, // Default to deterministic for reproducible rendering
             frame_counter: 0,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
+            dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
+            dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
+            fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
+            fog_start: crate::config::DEFAULT_FOG_START,
+            background_r: 0.0,
+            background_g: 0.0,
+            background_b: 0.0,
             burn_in: 20, // Default burn-in iterations
             blend_factor: 0.1, // 10% blend rate - good balance between speed and smoothness
             use_dynamic_blend: true, // Default to clamped exponential (0.8 → 0.01)
@@ -357,6 +371,10 @@ impl FlameRenderer {
             camera_rotation_x,
             camera_rotation_y,
             camera_z,
+            dof_focus_distance: self.dof_focus_distance,
+            dof_blur_strength: self.dof_blur_strength,
+            fog_strength: self.fog_strength,
+            fog_start: self.fog_start,
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms, // Final transform is appended after regular transforms
@@ -366,6 +384,9 @@ impl FlameRenderer {
             path_tracking_mode: self.path_tracking_mode as u32,
             num_path_filters: self.path_filters.len() as u32,
             min_suffix_filter_length: self.min_suffix_filter_length,
+            background_r: self.background_r,
+            background_g: self.background_g,
+            background_b: self.background_b,
         };
         self.buffers.update_params(queue, &params);
 
@@ -611,6 +632,10 @@ impl FlameRenderer {
         self.current_render_mode = config.flame.render_mode;
         self.perspective_strength = config.flame.perspective_strength;
         self.histogram_color_scale = config.histogram_color_scale;
+        self.dof_focus_distance = config.dof_focus_distance;
+        self.dof_blur_strength = config.dof_blur_strength;
+        self.fog_strength = config.fog_strength;
+        self.fog_start = config.fog_start;
         self.burn_in = burn_in;
 
         // 5. Update palette with rotation and squeeze
@@ -646,6 +671,10 @@ impl FlameRenderer {
             camera_rotation_x: config.camera_rotation_x,
             camera_rotation_y: config.camera_rotation_y,
             camera_z: config.camera_z,
+            dof_focus_distance: config.dof_focus_distance,
+            dof_blur_strength: config.dof_blur_strength,
+            fog_strength: config.fog_strength,
+            fog_start: config.fog_start,
             histogram_color_scale: config.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
@@ -655,6 +684,9 @@ impl FlameRenderer {
             path_tracking_mode: self.path_tracking_mode as u32,
             num_path_filters: self.path_filters.len() as u32,
             min_suffix_filter_length: self.min_suffix_filter_length,
+            background_r: config.background_color[0],
+            background_g: config.background_color[1],
+            background_b: config.background_color[2],
         };
         self.buffers.update_params(queue, &params);
 
@@ -674,7 +706,7 @@ impl FlameRenderer {
     }
 
     /// Update the flame being rendered
-    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32) {
+    pub fn update_flame(&mut self, device: &Device, queue: &Queue, flame: &Flame, iterations_per_thread: u32, burn_in: u32, zoom: f32, pan_x: f32, pan_y: f32, rotation: f32, camera_rotation_x: f32, camera_rotation_y: f32, camera_z: f32, speed_factor: f32, dof_focus_distance: f32, dof_blur_strength: f32, fog_strength: f32, fog_start: f32, background_color: [f32; 3]) {
         // Check if shaders need to be recompiled (variations or constants changed)
         let constants = self.build_shader_constants(flame);
         let path_features_enabled = self.color_mode == ColorMode::PathMap
@@ -694,9 +726,16 @@ impl FlameRenderer {
         self.buffers.update_transforms(queue, flame);
         self.buffers.update_variation_params(queue, flame);
 
-        // Update render mode and perspective
+        // Update render mode, perspective, DOF, fog, and background color
         self.current_render_mode = flame.render_mode;
         self.perspective_strength = flame.perspective_strength;
+        self.dof_focus_distance = dof_focus_distance;
+        self.dof_blur_strength = dof_blur_strength;
+        self.fog_strength = fog_strength;
+        self.fog_start = fog_start;
+        self.background_r = background_color[0];
+        self.background_g = background_color[1];
+        self.background_b = background_color[2];
 
         // Update transform tracking
         self.num_transforms = flame.transforms.len() as u32;
@@ -724,6 +763,10 @@ impl FlameRenderer {
             camera_rotation_x,
             camera_rotation_y,
             camera_z,
+            dof_focus_distance: self.dof_focus_distance,
+            dof_blur_strength: self.dof_blur_strength,
+            fog_strength: self.fog_strength,
+            fog_start: self.fog_start,
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
@@ -733,6 +776,9 @@ impl FlameRenderer {
             path_tracking_mode: self.path_tracking_mode as u32,
             num_path_filters: self.path_filters.len() as u32,
             min_suffix_filter_length: self.min_suffix_filter_length,
+            background_r: self.background_r,
+            background_g: self.background_g,
+            background_b: self.background_b,
         };
 
         self.buffers.update_params(queue, &params);
@@ -929,6 +975,10 @@ impl FlameRenderer {
             camera_rotation_x,
             camera_rotation_y,
             camera_z,
+            dof_focus_distance: self.dof_focus_distance,
+            dof_blur_strength: self.dof_blur_strength,
+            fog_strength: self.fog_strength,
+            fog_start: self.fog_start,
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
@@ -938,6 +988,9 @@ impl FlameRenderer {
             path_tracking_mode: self.path_tracking_mode as u32,
             num_path_filters: self.path_filters.len() as u32,
             min_suffix_filter_length: self.min_suffix_filter_length,
+            background_r: self.background_r,
+            background_g: self.background_g,
+            background_b: self.background_b,
         };
         self.buffers.update_params(queue, &params);
     }
@@ -1224,6 +1277,10 @@ impl FlameRenderer {
             camera_rotation_x,
             camera_rotation_y,
             camera_z,
+            dof_focus_distance: self.dof_focus_distance,
+            dof_blur_strength: self.dof_blur_strength,
+            fog_strength: self.fog_strength,
+            fog_start: self.fog_start,
             histogram_color_scale: self.histogram_color_scale,
             has_final_transform: if self.has_final_transform { 1 } else { 0 },
             final_transform_index: self.num_transforms,
@@ -1233,6 +1290,9 @@ impl FlameRenderer {
             path_tracking_mode: self.path_tracking_mode as u32,
             num_path_filters: self.path_filters.len() as u32,
             min_suffix_filter_length: self.min_suffix_filter_length,
+            background_r: self.background_r,
+            background_g: self.background_g,
+            background_b: self.background_b,
         };
         self.buffers.update_params(queue, &params);
     }

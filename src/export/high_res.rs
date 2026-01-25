@@ -724,6 +724,10 @@ impl HighResExporter {
                 camera_rotation_x: config.camera_rotation_x,
                 camera_rotation_y: config.camera_rotation_y,
                 camera_z: config.camera_z,
+                dof_focus_distance: config.dof_focus_distance,
+                dof_blur_strength: config.dof_blur_strength,
+                fog_strength: config.fog_strength,
+                fog_start: config.fog_start,
                 histogram_color_scale: config.histogram_color_scale,
                 has_final_transform: if config.flame.final_transform.is_some() { 1 } else { 0 },
                 final_transform_index: config.flame.transforms.len() as u32,
@@ -733,6 +737,9 @@ impl HighResExporter {
                 path_tracking_mode: config.path_tracking_mode as u32,
                 num_path_filters: 0, // Path filters not supported in export mode
                 min_suffix_filter_length: 0,
+                background_r: config.background_color[0],
+                background_g: config.background_color[1],
+                background_b: config.background_color[2],
             };
             self.queue
                 .write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));

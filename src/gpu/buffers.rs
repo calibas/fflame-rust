@@ -155,6 +155,10 @@ pub struct GpuParams {
     pub camera_rotation_x: f32, // 3D camera pitch (rotation around X axis)
     pub camera_rotation_y: f32, // 3D camera yaw (rotation around Y axis)
     pub camera_z: f32, // 3D camera Z position (height)
+    pub dof_focus_distance: f32, // Depth of field: distance where image is sharpest (default: 1.0)
+    pub dof_blur_strength: f32, // Depth of field: blur amount (0.0 = disabled, default: 0.0)
+    pub fog_strength: f32, // Depth fog: exponential fog density (0.0 = disabled)
+    pub fog_start: f32, // Depth fog: distance where fog begins
     pub histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
     pub has_final_transform: u32, // 0 = disabled, 1 = enabled
     pub final_transform_index: u32, // Index in transform buffer (always last slot)
@@ -164,6 +168,9 @@ pub struct GpuParams {
     pub path_tracking_mode: u32, // 0=First (first 32 iterations), 1=Recent (rolling window of 32)
     pub num_path_filters: u32, // Number of active path filters (0 = disabled)
     pub min_suffix_filter_length: u32, // Minimum length among depth=0 filters (for optimization)
+    pub background_r: f32, // Background color R (for depth fog)
+    pub background_g: f32, // Background color G (for depth fog)
+    pub background_b: f32, // Background color B (for depth fog)
 }
 
 /// Maximum number of path filters supported
@@ -470,6 +477,10 @@ impl FlameBuffers {
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
             camera_z: 0.0,
+            dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
+            dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
+            fog_strength: crate::config::DEFAULT_FOG_STRENGTH,
+            fog_start: crate::config::DEFAULT_FOG_START,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             has_final_transform: if flame.final_transform.is_some() { 1 } else { 0 },
             final_transform_index: flame.transforms.len() as u32,
@@ -479,6 +490,9 @@ impl FlameBuffers {
             path_tracking_mode: 0, // First (first 32 iterations) by default
             num_path_filters: 0, // No filters by default
             min_suffix_filter_length: 0, // No filters by default
+            background_r: 0.0,
+            background_g: 0.0,
+            background_b: 0.0,
         };
 
         let params_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
