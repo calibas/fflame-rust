@@ -279,6 +279,9 @@ view:
   camera_yaw: "Yaw (Y):"
   camera_z: "Z Position:"
 
+  # Depth Effects (collapsible section)
+  depth_effects: "Depth Effects"
+
   # Depth of Field
   depth_of_field: "Depth of Field"
   dof_focus_distance: "Focus Distance:"
