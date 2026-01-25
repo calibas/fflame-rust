@@ -47,6 +47,10 @@ struct Params {
     camera_rotation_x: f32,  // 3D camera pitch (rotation around X)
     camera_rotation_y: f32,  // 3D camera yaw (rotation around Y)
     camera_z: f32,  // 3D camera Z position (height)
+    dof_focus_distance: f32,  // Depth of field: distance where image is sharpest
+    dof_blur_strength: f32,  // Depth of field: blur amount (0.0 = disabled)
+    fog_strength: f32,  // Depth fog: exponential fog density (0.0 = disabled)
+    fog_start: f32,  // Depth fog: distance where fog begins
     histogram_color_scale: f32,  // Precision vs overflow (default: 10.0)
     has_final_transform: u32,  // 0 = disabled, 1 = enabled
     final_transform_index: u32,  // Index in transform buffer (after regular transforms)
@@ -56,6 +60,9 @@ struct Params {
     path_tracking_mode: u32,  // 0=First (first 32 iterations), 1=Recent (rolling window of 32 most recent)
     num_path_filters: u32,  // Number of active path filters (0 = disabled)
     min_suffix_filter_length: u32,  // Minimum length among depth=0 filters (for optimization)
+    background_r: f32,  // Background color R (for depth fog)
+    background_g: f32,  // Background color G (for depth fog)
+    background_b: f32,  // Background color B (for depth fog)
 }
 
 // Variation parameters for one transform

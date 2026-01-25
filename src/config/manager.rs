@@ -869,6 +869,10 @@ impl ConfigManager {
             ConfigPath::CameraRotationX => Ok(config.camera_rotation_x.into()),
             ConfigPath::CameraRotationY => Ok(config.camera_rotation_y.into()),
             ConfigPath::CameraZ => Ok(config.camera_z.into()),
+            ConfigPath::DofFocusDistance => Ok(config.dof_focus_distance.into()),
+            ConfigPath::DofBlurStrength => Ok(config.dof_blur_strength.into()),
+            ConfigPath::FogStrength => Ok(config.fog_strength.into()),
+            ConfigPath::FogStart => Ok(config.fog_start.into()),
 
             // Tone mapping
             ConfigPath::Exposure => Ok(config.exposure.into()),
@@ -1205,6 +1209,18 @@ impl ConfigManager {
             }
             ConfigPath::CameraZ => {
                 self.current.camera_z = value.try_into()?;
+            }
+            ConfigPath::DofFocusDistance => {
+                self.current.dof_focus_distance = value.try_into()?;
+            }
+            ConfigPath::DofBlurStrength => {
+                self.current.dof_blur_strength = value.try_into()?;
+            }
+            ConfigPath::FogStrength => {
+                self.current.fog_strength = value.try_into()?;
+            }
+            ConfigPath::FogStart => {
+                self.current.fog_start = value.try_into()?;
             }
 
             // Tone mapping

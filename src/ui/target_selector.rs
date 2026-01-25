@@ -282,6 +282,10 @@ fn get_view_items() -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::CameraRotationX, "Camera Pitch"),
         TargetItem::new(ConfigPath::CameraRotationY, "Camera Yaw"),
         TargetItem::new(ConfigPath::CameraZ, "Camera Z"),
+        TargetItem::new(ConfigPath::DofFocusDistance, "DOF Focus Distance"),
+        TargetItem::new(ConfigPath::DofBlurStrength, "DOF Blur Strength"),
+        TargetItem::new(ConfigPath::FogStrength, "Fog Density"),
+        TargetItem::new(ConfigPath::FogStart, "Fog Start"),
     ]
 }
 

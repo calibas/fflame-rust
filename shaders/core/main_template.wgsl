@@ -152,7 +152,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
             // Convert to pixel coordinates
 {{#if RENDER_3D}}
-            let pixel = world_to_pixel_3d(final_pos);
+            var pixel = world_to_pixel_3d(final_pos);
+
+            // Apply depth of field blur (3D mode only)
+            if (params.dof_blur_strength > 0.0) {
+                // Transform to camera space to get depth along view direction
+                let camera_matrix = build_camera_matrix(params.camera_rotation_x, params.camera_rotation_y);
+                let camera_space = camera_transform(final_pos, camera_matrix, params.camera_z);
+                let depth = camera_space.z;  // Z in camera space = depth from camera
+
+                // Calculate blur amount based on distance from focus plane (in world units)
+                let blur_world = (depth - params.dof_focus_distance) * params.dof_blur_strength;
+
+                // Convert world-space blur to pixel-space blur
+                // Same scale factor as world_to_pixel_3d: min(width, height) * 0.25 * zoom
+                let pixel_scale = f32(min(params.width, params.height)) * 0.25 * params.zoom;
+                let blur_pixels = abs(blur_world) * pixel_scale;
+
+                // Generate random offset in disk shape (uniform disk distribution)
+                let angle = rng_nextf(&rng) * 6.28318530718;  // 2*PI
+                let radius = sqrt(rng_nextf(&rng)) * blur_pixels;
+                pixel = pixel + vec2<i32>(i32(cos(angle) * radius), i32(sin(angle) * radius));
+            }
 {{else}}
             let pixel = world_to_pixel(final_pos);
 {{/if}}
@@ -198,6 +219,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     final_color = vec3<f32>(1.0, 1.0, 1.0);
 {{/if}}
                 }
+
+{{#if RENDER_3D}}
+                // Apply depth fog (3D mode only, blend toward background color)
+                if (params.fog_strength > 0.0) {
+                    // Get camera-space depth
+                    // In camera space, objects in front have negative Z (looking down -Z axis)
+                    // Negate to get positive depth where larger = further from camera
+                    let camera_matrix = build_camera_matrix(params.camera_rotation_x, params.camera_rotation_y);
+                    let camera_space = camera_transform(final_pos, camera_matrix, params.camera_z);
+                    let fog_depth = -camera_space.z;  // Negate: distant objects have larger depth
+
+                    // Exponential fog: fog_factor increases with distance beyond fog_start
+                    let fog_distance = max(fog_depth - params.fog_start, 0.0);
+                    let fog_factor = 1.0 - exp(-params.fog_strength * fog_distance);
+
+                    // Blend toward background color
+                    let background = vec3<f32>(params.background_r, params.background_g, params.background_b);
+                    final_color = mix(final_color, background, fog_factor);
+                }
+{{/if}}
 
                 // Atomic accumulation to histogram buffer
                 // Write RGB as 4× u32 (unpacked, full 32-bit precision)
