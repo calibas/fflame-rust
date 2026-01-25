@@ -736,8 +736,8 @@ fn render_export_settings(
     ui.horizontal(|ui| {
         ui.label(t!("animation_panel.max_iterations"));
         ui.add(egui::DragValue::new(&mut settings.max_iterations)
-            .range(100_000..=1_000_000_000_000_u64)
-            .speed(100_000.0)
+            .range(10_000_000..=1_000_000_000_000_u64)
+            .speed(1_000_000.0)
             .custom_formatter(|n, _| {
                 let n = n as u64;
                 if n >= 1_000_000_000_000 {

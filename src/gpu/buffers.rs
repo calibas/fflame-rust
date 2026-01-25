@@ -863,20 +863,22 @@ impl FlameBuffers {
     }
 
     /// Get the previous accumulation texture view (for reading in accumulation shader)
+    /// This reads from the CURRENT buffer (what was last displayed/accumulated)
     pub fn previous_accumulation_view(&self) -> &TextureView {
         if self.current_is_a {
-            &self.accumulation_view_b
-        } else {
             &self.accumulation_view_a
+        } else {
+            &self.accumulation_view_b
         }
     }
 
     /// Get the output accumulation texture view (for writing in accumulation shader)
+    /// This writes to the BACK buffer (not current), which becomes current after swap
     pub fn output_accumulation_view(&self) -> &TextureView {
         if self.current_is_a {
-            &self.accumulation_view_a
-        } else {
             &self.accumulation_view_b
+        } else {
+            &self.accumulation_view_a
         }
     }
 
