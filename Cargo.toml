@@ -90,12 +90,13 @@ criterion = "0.5"
 name = "flame_bench"
 harness = false
 
-# [profile.release]
-# Optimize for size and performance in WASM
-# opt-level = 3
-# lto = true
-# codegen-units = 1
+[profile.release]
+incremental = true
 
-# [profile.release.package."*"]
-# Optimize dependencies
-# opt-level = 3
+[profile.dist]
+inherits = "release"
+incremental = false
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"  # if you don't need unwinding
