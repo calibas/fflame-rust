@@ -18,6 +18,7 @@ mod performance;
 mod random_generator;
 mod response;
 mod settings;
+mod target_selector;
 mod tone_mapping;
 pub mod track_editor;
 mod transforms;
@@ -28,10 +29,10 @@ mod variation_params;
 mod view;
 pub mod workspace;
 
-pub use animation_panel::ExportProgress;
+pub use animation_panel::{ExportProgress, ExportPanelState, TimelineLayout};
 pub use export_panel::PngExportProgress;
 pub use histogram::LevelsState;
-pub use track_editor::TrackEditorState;
+pub use track_editor::{TrackEditorState, TrackEditorResponse};
 pub use font_loader::{ensure_font_for_locale, initialize_default_fonts};
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
@@ -82,6 +83,9 @@ pub struct EguiLayer {
 
     // Animation export settings
     animation_export_settings: animation_panel::AnimationExportSettings,
+
+    // Export Animation panel state (Phase 5)
+    export_panel_state: animation_panel::ExportPanelState,
 
     // Track editor state
     track_editor_state: track_editor::TrackEditorState,
@@ -142,6 +146,7 @@ impl EguiLayer {
             fractal_texture_height: 0,
             selected_preset_config: None,
             animation_export_settings: animation_panel::AnimationExportSettings::default(),
+            export_panel_state: animation_panel::ExportPanelState::default(),
             track_editor_state: track_editor::TrackEditorState::default(),
             clicked_pixel: None,
             path_click_info: None,
@@ -331,6 +336,7 @@ impl EguiLayer {
         // Animation export
         let mut animation_export_requested: Option<animation_panel::AnimationExportSettings> = None;
         let mut animation_seek_changed = false;
+        let mut animation_seek_drag_stopped = false;
 
         // Path filters
         let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
@@ -476,11 +482,17 @@ impl EguiLayer {
                         animation_export_requested: &mut animation_export_requested,
                         animation_export_progress,
 
+                        // Export Animation panel state (Phase 5)
+                        export_panel_state: &mut self.export_panel_state,
+
                         // Track editor state
                         track_editor_state: &mut self.track_editor_state,
 
                         // Animation seek changed flag
                         animation_seek_changed: &mut animation_seek_changed,
+
+                        // Animation scrubber drag stopped - for reset accumulation
+                        animation_seek_drag_stopped: &mut animation_seek_drag_stopped,
 
                         // PathMap mode: clicked pixel and path info
                         hovered_pixel: &mut self.clicked_pixel,
@@ -514,6 +526,27 @@ impl EguiLayer {
                 config_manager,
                 &mut palette_save_to_library,
                 &mut palette_delete_from_library,
+            );
+
+            // Show Export Animation panel (Phase 5)
+            if let Some(export_settings) = animation_panel::render_export_panel(
+                ctx,
+                animation_controller,
+                &mut self.animation_export_settings,
+                animation_export_progress,
+                &mut self.export_panel_state,
+            ) {
+                animation_export_requested = Some(export_settings);
+            }
+
+            // Show Track Editor panel (unified Add/Edit track panel)
+            track_editor::render_track_editor_panel(
+                ctx,
+                animation_controller,
+                &mut self.track_editor_state,
+                &config_manager.active_config().flame,
+                config_manager.active_config(),
+                animation_controller.current_time,
             );
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
@@ -679,6 +712,7 @@ impl EguiLayer {
             file_browser_open_requested,
             animation_export_requested,
             animation_seek_changed,
+            animation_seek_drag_stopped,
             path_filters_changed,
             generated_flame,
             generated_batch,

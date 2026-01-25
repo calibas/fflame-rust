@@ -77,11 +77,17 @@ pub struct PanelContext<'a> {
     pub animation_export_requested: &'a mut Option<super::animation_panel::AnimationExportSettings>,
     pub animation_export_progress: &'a super::animation_panel::ExportProgress,
 
+    // Export Animation panel state (Phase 5)
+    pub export_panel_state: &'a mut super::animation_panel::ExportPanelState,
+
     // Track editor state
     pub track_editor_state: &'a mut super::track_editor::TrackEditorState,
 
     // Animation seek changed flag (timeline was scrubbed)
     pub animation_seek_changed: &'a mut bool,
+
+    // Animation scrubber drag stopped or discrete seek action (frame step) - reset accumulation
+    pub animation_seek_drag_stopped: &'a mut bool,
 
     // PathMap mode: hovered pixel coordinates and cached path info
     pub hovered_pixel: &'a mut Option<(u32, u32)>,
@@ -275,21 +281,66 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Animation panel (playback controls, timeline)
     fn render_animation_panel(&mut self, ui: &mut egui::Ui) {
-        let response = super::animation_panel::render_animation_content(
-            ui,
-            self.context.animation_controller,
-            self.context.animation_export_settings,
-            self.context.animation_export_progress,
-        );
-
-        // Handle new animation request
-        if response.new_animation {
+        // Ensure animation always exists (animation is always present with 0 tracks by default)
+        if self.context.animation_controller.animation.is_none() {
             let new_anim = crate::animation::Animation::new("New Animation".to_string(), 10.0);
             self.context.animation_controller.load(new_anim);
         }
 
+        let mut response = super::animation_panel::render_animation_content(
+            ui,
+            self.context.animation_controller,
+            self.context.animation_export_settings,
+        );
+
+        // Handle timeline scrubbing (from render_animation_content)
+        if response.seek_changed {
+            *self.context.animation_seek_changed = true;
+        }
+        if response.seek_drag_stopped {
+            *self.context.animation_seek_drag_stopped = true;
+        }
+
+        // Track editor section with visual bars aligned to timeline
+        ui.separator();
+        let track_response = super::track_editor::render_track_editor(
+            ui,
+            self.context.animation_controller,
+            self.context.track_editor_state,
+            self.context.config_manager.active_config(),
+            response.timeline_layout,
+        );
+
+        // Handle seek from clicking on track bars (Phase 3) - discrete action, needs reset
+        if let Some(time) = track_response.seek_to_time {
+            self.context.animation_controller.seek(time);
+            *self.context.animation_seek_changed = true;
+            *self.context.animation_seek_drag_stopped = true;
+        }
+
+        // Export progress (after tracks section)
+        if self.context.animation_export_progress.is_exporting {
+            ui.separator();
+            super::animation_panel::render_export_progress(ui, self.context.animation_export_progress);
+        }
+
+        // File controls (after tracks section)
+        ui.separator();
+        super::animation_panel::render_file_controls(ui, self.context.animation_controller, &mut response);
+
+        // Handle file control responses (must be after render_file_controls)
+        // Handle open export panel request (Phase 5)
+        if response.open_export_panel {
+            self.context.export_panel_state.is_open = true;
+            // Auto-fill export settings from current config
+            self.context.animation_export_settings.iterations_per_thread =
+                self.context.config_manager.system_settings().iterations_per_thread;
+            self.context.animation_export_settings.max_iterations =
+                self.context.config_manager.active_config().max_iterations;
+        }
+
         // Handle animation load response
-        if let Some(animation) = response.load_animation {
+        if let Some(animation) = response.load_animation.take() {
             // If animation has embedded config, load it via selected_preset_config
             // This ensures proper GPU sync and undo/redo handling
             if let Some(config) = animation.base_config.clone() {
@@ -355,23 +406,9 @@ impl<'a> PanelViewer<'a> {
         }
 
         // Handle animation export request
-        if let Some(settings) = response.export_animation {
+        if let Some(settings) = response.export_animation.take() {
             *self.context.animation_export_requested = Some(settings);
         }
-
-        // Handle timeline scrubbing
-        if response.seek_changed {
-            *self.context.animation_seek_changed = true;
-        }
-
-        // Track editor section
-        ui.separator();
-        super::track_editor::render_track_editor(
-            ui,
-            self.context.animation_controller,
-            self.context.track_editor_state,
-            self.context.config_manager.active_config(),
-        );
     }
 
     /// Render the Performance panel (stats and version info)
@@ -950,6 +987,7 @@ impl<'a> PanelViewer<'a> {
         super::effects_panel::render_effects_panel(
             ui,
             self.context.config_manager,
+            self.context.animation_controller,
         );
     }
 }

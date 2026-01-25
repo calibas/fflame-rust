@@ -984,12 +984,17 @@ pub async fn export_animation(
         .await
         .map_err(|e| AnimationExportError::GpuError(format!("Failed to find adapter: {:?}", e)))?;
 
+    // Request adapter's max storage buffer size (matches main app behavior)
+    let adapter_limits = adapter.limits();
+    let mut limits = egui_wgpu::wgpu::Limits::default();
+    limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+
     let (device, queue) = adapter
         .request_device(
             &egui_wgpu::wgpu::DeviceDescriptor {
                 label: Some("Animation Export Device"),
                 required_features: egui_wgpu::wgpu::Features::CLEAR_TEXTURE,
-                required_limits: egui_wgpu::wgpu::Limits::default(),
+                required_limits: limits,
                 memory_hints: egui_wgpu::wgpu::MemoryHints::Performance,
                 ..Default::default()
             },
@@ -1425,11 +1430,16 @@ pub async fn export_animation_fast(
         .await
         .map_err(|e| AnimationExportError::GpuError(format!("Failed to find adapter: {:?}", e)))?;
 
+    // Request adapter's max storage buffer size (matches main app behavior)
+    let adapter_limits = adapter.limits();
+    let mut limits = wgpu::Limits::default();
+    limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("Animation Export Device"),
             required_features: wgpu::Features::CLEAR_TEXTURE,
-            required_limits: wgpu::Limits::default(),
+            required_limits: limits,
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
         })
