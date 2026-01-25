@@ -71,6 +71,7 @@ pub struct TiledRenderer {
     histogram_buffer: Buffer,  // Large buffer for multiple tiles
     iteration_counts_buffer: Buffer,
     variation_params_buffer: Buffer,
+    xaos_buffer: Buffer,  // Xaos transition weights (dummy if not used)
     palette_texture: Texture,
     palette_sampler: Sampler,
 
@@ -243,6 +244,26 @@ impl TiledRenderer {
             mapped_at_creation: false,
         });
 
+        // Create xaos buffer (dummy if not used, real weights if xaos enabled)
+        // Size: N×N matrix of f32 weights (N = num_transforms)
+        let num_transforms = config.flame.transforms.len().max(1) as u32;
+        let xaos_size = (num_transforms * num_transforms * 4) as u64;
+        let xaos_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Xaos Buffer"),
+            size: xaos_size.max(4), // At least 4 bytes for empty buffer
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Initialize xaos buffer with weights (1.0 for each if no xaos, else actual weights)
+        if let Some(flat_weights) = config.flame.xaos_flat() {
+            queue.write_buffer(&xaos_buffer, 0, bytemuck::cast_slice(&flat_weights));
+        } else {
+            // Fill with 1.0 (identity - no xaos modification)
+            let identity: Vec<f32> = vec![1.0; (num_transforms * num_transforms) as usize];
+            queue.write_buffer(&xaos_buffer, 0, bytemuck::cast_slice(&identity));
+        }
+
         // Create palette texture (palette is always present)
         let palette = &config.palette;
         let palette_data = palette.generate_texture_data(256);
@@ -394,6 +415,17 @@ impl TiledRenderer {
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // binding 8: xaos weights
+                BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -727,6 +759,7 @@ impl TiledRenderer {
             histogram_buffer,
             iteration_counts_buffer,
             variation_params_buffer,
+            xaos_buffer,
             palette_texture,
             palette_sampler,
             tile_info_buffer,
@@ -783,6 +816,7 @@ impl TiledRenderer {
                 BindGroupEntry { binding: 5, resource: self.variation_params_buffer.as_entire_binding() },
                 BindGroupEntry { binding: 6, resource: self.iteration_counts_buffer.as_entire_binding() },
                 BindGroupEntry { binding: 7, resource: self.tile_params_buffer.as_entire_binding() },
+                BindGroupEntry { binding: 8, resource: self.xaos_buffer.as_entire_binding() },
             ],
         });
 

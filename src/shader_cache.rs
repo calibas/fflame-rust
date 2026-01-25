@@ -6,7 +6,8 @@ use crate::config::FractalConfig;
 
 /// Manages shader compilation and pipeline caching
 /// Only recompiles shaders when the set of active variations changes,
-/// path_features_enabled state changes, or shader constants change.
+/// path_features_enabled state changes, xaos_enabled state changes,
+/// or shader constants change.
 ///
 /// Optimizes by only building the shader for the current render mode.
 /// The unused mode's pipeline is a copy of the active one (valid but unused).
@@ -17,6 +18,10 @@ pub struct ShaderCache {
     /// Whether path features (PathMap mode or path filters) are enabled
     /// When false, uses simplified shaders without path tracking code
     path_features_enabled: bool,
+
+    /// Whether xaos (chaos-weighted transform selection) is enabled
+    /// When false, uses standard transform selection for better performance
+    xaos_enabled: bool,
 
     /// Hard-coded shader constants (trigger rebuild when changed)
     constants: ShaderConstants,
@@ -35,12 +40,13 @@ pub struct ShaderCache {
 
 impl ShaderCache {
     /// Create a new shader cache with initial flame configuration
-    /// Initially uses simplified shaders (path_features_enabled = false)
+    /// Initially uses simplified shaders (path_features_enabled = false, xaos_enabled = false)
     /// Only builds the shader for the flame's render mode (2D or 3D)
     pub fn new(device: &Device, flame: &Flame, bind_group_layout: &BindGroupLayout) -> Self {
         let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
         let active_variations = flame.extract_active_variations();
         let path_features_enabled = false;  // Start with simplified shaders
+        let xaos_enabled = flame.has_xaos();  // Enable xaos if flame uses it
 
         // Derive constants from actual flame (not defaults) to ensure shader matches initial state
         // This prevents mismatch when switching between presets with different transform counts
@@ -56,9 +62,10 @@ impl ShaderCache {
         let render_mode = flame.render_mode;
 
         log::info!(
-            "Initial shader compilation with {} active variations, path_features={}, mode={:?}",
+            "Initial shader compilation with {} active variations, path_features={}, xaos={}, mode={:?}",
             active_variations.len(),
             path_features_enabled,
+            xaos_enabled,
             render_mode
         );
 
@@ -68,6 +75,7 @@ impl ShaderCache {
             &active_variations,
             is_3d,
             path_features_enabled,
+            xaos_enabled,
             &constants,
         );
 
@@ -89,6 +97,7 @@ impl ShaderCache {
         Self {
             active_variations,
             path_features_enabled,
+            xaos_enabled,
             constants,
             current_render_mode: render_mode,
             shader_source_2d,
@@ -158,6 +167,7 @@ impl ShaderCache {
     ) -> bool {
         let needed = flame.extract_active_variations();
         let render_mode = flame.render_mode;
+        let xaos_enabled = flame.has_xaos();
 
         // Check if variations changed (only keys matter, not weights)
         let variations_changed = needed.keys().collect::<std::collections::HashSet<_>>()
@@ -166,13 +176,16 @@ impl ShaderCache {
         // Check if path features state changed
         let path_features_changed = path_features_enabled != self.path_features_enabled;
 
+        // Check if xaos state changed
+        let xaos_changed = xaos_enabled != self.xaos_enabled;
+
         // Check if hard-coded constants changed
         let constants_changed = constants != self.constants;
 
         // Check if render mode changed
         let mode_changed = render_mode != self.current_render_mode;
 
-        if !variations_changed && !path_features_changed && !constants_changed && !mode_changed {
+        if !variations_changed && !path_features_changed && !xaos_changed && !constants_changed && !mode_changed {
             return false; // No rebuild needed
         }
 
@@ -188,6 +201,13 @@ impl ShaderCache {
                 "Recompiling shaders: path_features changed from {} to {}",
                 self.path_features_enabled,
                 path_features_enabled
+            );
+        }
+        if xaos_changed {
+            log::info!(
+                "Recompiling shaders: xaos changed from {} to {}",
+                self.xaos_enabled,
+                xaos_enabled
             );
         }
         if constants_changed {
@@ -210,7 +230,7 @@ impl ShaderCache {
         let is_3d = render_mode == RenderMode::ThreeD;
 
         if is_3d {
-            self.shader_source_3d = builder.build_from_template(&needed, true, path_features_enabled, &constants);
+            self.shader_source_3d = builder.build_from_template(&needed, true, path_features_enabled, xaos_enabled, &constants);
             self.compute_pipeline_3d = Self::create_compute_pipeline(
                 device,
                 bind_group_layout,
@@ -221,7 +241,7 @@ impl ShaderCache {
             self.shader_source_2d = self.shader_source_3d.clone();
             self.compute_pipeline_2d = self.compute_pipeline_3d.clone();
         } else {
-            self.shader_source_2d = builder.build_from_template(&needed, false, path_features_enabled, &constants);
+            self.shader_source_2d = builder.build_from_template(&needed, false, path_features_enabled, xaos_enabled, &constants);
             self.compute_pipeline_2d = Self::create_compute_pipeline(
                 device,
                 bind_group_layout,
@@ -235,6 +255,7 @@ impl ShaderCache {
 
         self.active_variations = needed;
         self.path_features_enabled = path_features_enabled;
+        self.xaos_enabled = xaos_enabled;
         self.constants = constants;
         self.current_render_mode = render_mode;
 

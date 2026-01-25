@@ -97,3 +97,6 @@ struct SampleCounter {
 @group(0) @binding(4) var palette_sampler: sampler;
 @group(0) @binding(5) var<storage, read> variation_params: array<VariationParams>;
 @group(0) @binding(6) var<storage, read_write> sample_counter: SampleCounter;
+// Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
+// Modifies probability of selecting dst transform when coming from src
+@group(0) @binding(7) var<storage, read> xaos_weights: array<f32>;

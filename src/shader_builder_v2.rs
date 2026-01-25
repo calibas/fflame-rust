@@ -616,12 +616,14 @@ impl ShaderBuilder {
     /// - `active_variations`: Map of active variation names to weights
     /// - `render_3d`: true for 3D mode (vec3), false for 2D mode (vec2)
     /// - `path_features_enabled`: true to include path tracking code
+    /// - `xaos_enabled`: true to use xaos-weighted transform selection
     /// - `constants`: Hard-coded shader constants
     pub fn build_from_template(
         &self,
         active_variations: &HashMap<String, f32>,
         render_3d: bool,
         path_features_enabled: bool,
+        xaos_enabled: bool,
         constants: &ShaderConstants,
     ) -> String {
         use crate::variations::VariationCategory;
@@ -698,6 +700,7 @@ impl ShaderBuilder {
         let mut processor = TemplateProcessor::new();
         processor.set("RENDER_3D", render_3d);
         processor.set("PATH_TRACKING", path_features_enabled);
+        processor.set("XAOS_ENABLED", xaos_enabled);
         shader.push_str(&processor.process(template));
 
         // DEBUG: Write shader to file for analysis (enabled via --dump-shader CLI flag)
