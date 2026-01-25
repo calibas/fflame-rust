@@ -155,6 +155,8 @@ pub struct GpuParams {
     pub camera_rotation_x: f32, // 3D camera pitch (rotation around X axis)
     pub camera_rotation_y: f32, // 3D camera yaw (rotation around Y axis)
     pub camera_z: f32, // 3D camera Z position (height)
+    pub dof_focus_distance: f32, // Depth of field: distance where image is sharpest (default: 1.0)
+    pub dof_blur_strength: f32, // Depth of field: blur amount (0.0 = disabled, default: 0.0)
     pub histogram_color_scale: f32, // Precision vs overflow (default: 10.0)
     pub has_final_transform: u32, // 0 = disabled, 1 = enabled
     pub final_transform_index: u32, // Index in transform buffer (always last slot)
@@ -470,6 +472,8 @@ impl FlameBuffers {
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
             camera_z: 0.0,
+            dof_focus_distance: crate::config::DEFAULT_DOF_FOCUS_DISTANCE,
+            dof_blur_strength: crate::config::DEFAULT_DOF_BLUR_STRENGTH,
             histogram_color_scale: crate::config::DEFAULT_HISTOGRAM_COLOR_SCALE,
             has_final_transform: if flame.final_transform.is_some() { 1 } else { 0 },
             final_transform_index: flame.transforms.len() as u32,

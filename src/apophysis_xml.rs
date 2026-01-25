@@ -261,6 +261,8 @@ fn parse_flame_element(
         camera_rotation_x: cam_pitch,
         camera_rotation_y: cam_yaw,
         camera_z: cam_zpos,
+        dof_focus_distance: crate::config::defaults::DEFAULT_DOF_FOCUS_DISTANCE,
+        dof_blur_strength: crate::config::defaults::DEFAULT_DOF_BLUR_STRENGTH,
         density_scale: 1.0,  // Use default, brightness is handled by Apophysis brightness parameter
         speed_factor: 1.0,
         max_iterations: 1_000_000_000,

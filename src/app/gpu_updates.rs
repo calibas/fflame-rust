@@ -58,6 +58,8 @@ impl App {
                         update_config.camera_rotation_y,
                         update_config.camera_z,
                         update_config.speed_factor,
+                        update_config.dof_focus_distance,
+                        update_config.dof_blur_strength,
                     );
                 }
 

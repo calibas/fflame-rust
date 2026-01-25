@@ -228,6 +228,35 @@ pub fn render_view_content(
             ui.label(t!("view.camera_z")).on_hover_text(t!("view.tooltip_camera_z"));
             let _ = ui.lazy_drag(config_manager, ConfigPath::CameraZ, 0.01, "");
         });
+
+        // Depth of Field controls
+        ui.separator();
+        ui.label(t!("view.depth_of_field"));
+
+        let mut dof_focus = config.dof_focus_distance;
+        let response = ui.add(
+            egui::Slider::new(&mut dof_focus, 0.0..=5.0)
+                .text(t!("view.dof_focus_distance").as_ref())
+                .logarithmic(true)
+        ).on_hover_text(t!("view.tooltip_dof_focus_distance"));
+        if response.changed() {
+            let _ = config_manager.update_param(
+                ConfigPath::DofFocusDistance,
+                dof_focus.into()
+            );
+        }
+
+        let mut dof_blur = config.dof_blur_strength;
+        let response = ui.add(
+            egui::Slider::new(&mut dof_blur, 0.0..=20.0)
+                .text(t!("view.dof_blur_strength").as_ref())
+        ).on_hover_text(t!("view.tooltip_dof_blur_strength"));
+        if response.changed() {
+            let _ = config_manager.update_param(
+                ConfigPath::DofBlurStrength,
+                dof_blur.into()
+            );
+        }
     }
 
     ui.separator();
@@ -241,6 +270,8 @@ pub fn render_view_content(
                 (ConfigPath::CameraRotationX, 0.0.into()),
                 (ConfigPath::CameraRotationY, 0.0.into()),
                 (ConfigPath::CameraZ, 0.0.into()),
+                (ConfigPath::DofFocusDistance, crate::config::DEFAULT_DOF_FOCUS_DISTANCE.into()),
+                (ConfigPath::DofBlurStrength, crate::config::DEFAULT_DOF_BLUR_STRENGTH.into()),
             ],
             "history.action.reset_view".to_string()
         );

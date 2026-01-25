@@ -31,3 +31,4 @@ Fractal renderers:
 - [GPU Mandelbulb Tracer](https://gmt-0-8-152535429025.us-west1.run.app/)
 - [Iterator.it](https://iterator.it/)
 - [Fractility](https://sites.google.com/view/meltmixpix/fractility)
+- [GAPFix Fractal](https://github.com/bernds/GAPFixFractal)

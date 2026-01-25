@@ -25,6 +25,8 @@ pub enum ConfigPath {
     CameraRotationX,
     CameraRotationY,
     CameraZ,
+    DofFocusDistance,
+    DofBlurStrength,
 
     // ===== Tone mapping (no iteration reset needed) =====
     Exposure,
@@ -171,6 +173,8 @@ impl Display for ConfigPath {
             ConfigPath::CameraRotationX => write!(f, "Camera Pitch"),
             ConfigPath::CameraRotationY => write!(f, "Camera Yaw"),
             ConfigPath::CameraZ => write!(f, "Camera Z"),
+            ConfigPath::DofFocusDistance => write!(f, "DOF Focus Distance"),
+            ConfigPath::DofBlurStrength => write!(f, "DOF Blur Strength"),
 
             // Tone mapping
             ConfigPath::Exposure => write!(f, "Exposure"),
@@ -374,6 +378,8 @@ impl ConfigPath {
             ConfigPath::CameraRotationX => I18nKey::simple("history.param.camera_pitch"),
             ConfigPath::CameraRotationY => I18nKey::simple("history.param.camera_yaw"),
             ConfigPath::CameraZ => I18nKey::simple("history.param.camera_z"),
+            ConfigPath::DofFocusDistance => I18nKey::simple("history.param.dof_focus_distance"),
+            ConfigPath::DofBlurStrength => I18nKey::simple("history.param.dof_blur_strength"),
 
             // Tone mapping
             ConfigPath::Exposure => I18nKey::simple("history.param.exposure"),
@@ -1119,6 +1125,10 @@ impl ConfigPath {
             | ConfigPath::CameraRotationY
             | ConfigPath::CameraZ => UpdateType::ViewOnly,
 
+            // DOF changes affect pixel write positions, need iteration reset
+            ConfigPath::DofFocusDistance
+            | ConfigPath::DofBlurStrength => UpdateType::IterationReset,
+
             // Tone mapping - re-run tonemap shader
             ConfigPath::Exposure
             | ConfigPath::Gamma
@@ -1224,6 +1234,8 @@ impl ConfigPath {
             ConfigPath::CameraRotationX => "CameraRotationX".to_string(),
             ConfigPath::CameraRotationY => "CameraRotationY".to_string(),
             ConfigPath::CameraZ => "CameraZ".to_string(),
+            ConfigPath::DofFocusDistance => "DofFocusDistance".to_string(),
+            ConfigPath::DofBlurStrength => "DofBlurStrength".to_string(),
 
             // Tone mapping
             ConfigPath::Exposure => "Exposure".to_string(),
@@ -1343,6 +1355,8 @@ impl ConfigPath {
             "CameraRotationX" => return Some(ConfigPath::CameraRotationX),
             "CameraRotationY" => return Some(ConfigPath::CameraRotationY),
             "CameraZ" => return Some(ConfigPath::CameraZ),
+            "DofFocusDistance" => return Some(ConfigPath::DofFocusDistance),
+            "DofBlurStrength" => return Some(ConfigPath::DofBlurStrength),
 
             // Tone mapping
             "Exposure" => return Some(ConfigPath::Exposure),
@@ -1544,6 +1558,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::CameraRotationX
         | ConfigPath::CameraRotationY
         | ConfigPath::CameraZ
+        | ConfigPath::DofFocusDistance
+        | ConfigPath::DofBlurStrength
         | ConfigPath::Exposure
         | ConfigPath::Gamma
         | ConfigPath::GammaThreshold

@@ -32,6 +32,12 @@ pub struct FractalConfig {
     #[serde(default)]
     pub camera_z: f32,  // Camera Z position (height)
 
+    /// Depth of Field settings (3D mode)
+    #[serde(default = "default_dof_focus_distance")]
+    pub dof_focus_distance: f32,  // Distance from origin where image is sharpest
+    #[serde(default)]
+    pub dof_blur_strength: f32,  // Blur amount (0.0 = disabled)
+
     /// Rendering settings
     #[serde(default = "default_density_scale")]
     pub density_scale: f32,
@@ -200,6 +206,10 @@ fn default_alpha_blend_high() -> f32 {
     super::defaults::DEFAULT_ALPHA_BLEND_HIGH
 }
 
+fn default_dof_focus_distance() -> f32 {
+    super::defaults::DEFAULT_DOF_FOCUS_DISTANCE
+}
+
 fn default_levels_high() -> f32 {
     1000.0  // High value, will be auto-set from histogram
 }
@@ -268,6 +278,8 @@ impl Default for FractalConfig {
             camera_rotation_x: 0.0,
             camera_rotation_y: 0.0,
             camera_z: 0.0,
+            dof_focus_distance: default_dof_focus_distance(),
+            dof_blur_strength: 0.0,
             density_scale: 1.0,
             speed_factor: 0.5,
             max_iterations: default_max_iterations(),
@@ -347,6 +359,8 @@ impl FractalConfig {
         if config.camera_rotation_x == defaults.camera_rotation_x { obj.remove("camera_rotation_x"); }
         if config.camera_rotation_y == defaults.camera_rotation_y { obj.remove("camera_rotation_y"); }
         if config.camera_z == defaults.camera_z { obj.remove("camera_z"); }
+        if config.dof_focus_distance == defaults.dof_focus_distance { obj.remove("dof_focus_distance"); }
+        if config.dof_blur_strength == defaults.dof_blur_strength { obj.remove("dof_blur_strength"); }
 
         // Rendering settings
         if config.density_scale == defaults.density_scale { obj.remove("density_scale"); }
