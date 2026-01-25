@@ -724,6 +724,8 @@ impl HighResExporter {
                 camera_rotation_x: config.camera_rotation_x,
                 camera_rotation_y: config.camera_rotation_y,
                 camera_z: config.camera_z,
+                dof_focus_distance: config.dof_focus_distance,
+                dof_blur_strength: config.dof_blur_strength,
                 histogram_color_scale: config.histogram_color_scale,
                 has_final_transform: if config.flame.final_transform.is_some() { 1 } else { 0 },
                 final_transform_index: config.flame.transforms.len() as u32,

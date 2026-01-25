@@ -41,6 +41,10 @@ pub const DEFAULT_USE_DYNAMIC_BLEND: bool = true; // Clamped exponential: 0.8 â†
 pub const DEFAULT_ITERATIONS_PER_THREAD: u32 = 256;
 pub const DEFAULT_TARGET_ITERATIONS_PER_PIXEL: u64 = 0; // Disabled
 
+// Depth of Field
+pub const DEFAULT_DOF_FOCUS_DISTANCE: f32 = 1.0; // Distance from origin where image is sharpest
+pub const DEFAULT_DOF_BLUR_STRENGTH: f32 = 0.0; // 0.0 = disabled, up to ~10.0 for strong blur
+
 // Other
 pub const DEFAULT_MAX_ITERATIONS: u64 = 1_000_000_000;
 pub const DEFAULT_SPEED_FACTOR: f32 = 0.5;

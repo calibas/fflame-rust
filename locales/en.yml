@@ -278,6 +278,12 @@ view:
   camera_pitch: "Pitch (X):"
   camera_yaw: "Yaw (Y):"
   camera_z: "Z Position:"
+
+  # Depth of Field
+  depth_of_field: "Depth of Field"
+  dof_focus_distance: "Focus Distance:"
+  dof_blur_strength: "Blur Strength:"
+
   reset: "🔄 Reset View"
 
   # Tooltips
@@ -291,6 +297,8 @@ view:
   tooltip_camera_pitch: "3D camera rotation (up/down).\nTilts the view vertically."
   tooltip_camera_yaw: "3D camera rotation (left/right).\nRotates the view horizontally."
   tooltip_camera_z: "Camera Z position.\nMoves the viewpoint closer/further."
+  tooltip_dof_focus_distance: "Distance from origin where image is sharpest.\nObjects at this depth appear in focus."
+  tooltip_dof_blur_strength: "Amount of depth blur (0 = disabled).\nHigher values create stronger bokeh effect."
 
 # Rendering Controls
 rendering:
@@ -458,6 +466,8 @@ history:
     camera_pitch: "Camera Pitch"
     camera_yaw: "Camera Yaw"
     camera_z: "Camera Z"
+    dof_focus_distance: "DOF Focus Distance"
+    dof_blur_strength: "DOF Blur Strength"
 
     # Tone mapping
     exposure: "Exposure"
@@ -955,6 +965,8 @@ track_editor:
   param_camera_rotation_x: "Camera Rotation X"
   param_camera_rotation_y: "Camera Rotation Y"
   param_camera_z: "Camera Z"
+  param_dof_focus_distance: "DOF Focus Distance"
+  param_dof_blur_strength: "DOF Blur Strength"
 
   # Animatable parameter names (Tone Mapping)
   param_exposure: "Exposure"
