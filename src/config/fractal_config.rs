@@ -38,6 +38,12 @@ pub struct FractalConfig {
     #[serde(default)]
     pub dof_blur_strength: f32,  // Blur amount (0.0 = disabled)
 
+    /// Depth Fog settings (3D mode - atmospheric perspective)
+    #[serde(default)]
+    pub fog_strength: f32,  // Exponential fog density (0.0 = disabled)
+    #[serde(default)]
+    pub fog_start: f32,  // Depth where fog begins
+
     /// Rendering settings
     #[serde(default = "default_density_scale")]
     pub density_scale: f32,
@@ -280,6 +286,8 @@ impl Default for FractalConfig {
             camera_z: 0.0,
             dof_focus_distance: default_dof_focus_distance(),
             dof_blur_strength: 0.0,
+            fog_strength: 0.0,
+            fog_start: 0.0,
             density_scale: 1.0,
             speed_factor: 0.5,
             max_iterations: default_max_iterations(),
@@ -361,6 +369,8 @@ impl FractalConfig {
         if config.camera_z == defaults.camera_z { obj.remove("camera_z"); }
         if config.dof_focus_distance == defaults.dof_focus_distance { obj.remove("dof_focus_distance"); }
         if config.dof_blur_strength == defaults.dof_blur_strength { obj.remove("dof_blur_strength"); }
+        if config.fog_strength == defaults.fog_strength { obj.remove("fog_strength"); }
+        if config.fog_start == defaults.fog_start { obj.remove("fog_start"); }
 
         // Rendering settings
         if config.density_scale == defaults.density_scale { obj.remove("density_scale"); }

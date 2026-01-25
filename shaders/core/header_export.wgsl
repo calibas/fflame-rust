@@ -27,7 +27,7 @@ struct Transform {
     _padding: f32,
 }
 
-// Dispatch parameters
+// Dispatch parameters (must match GpuParams in buffers.rs exactly)
 struct Params {
     num_transforms: u32,
     iterations_per_thread: u32,
@@ -47,11 +47,22 @@ struct Params {
     camera_rotation_x: f32,
     camera_rotation_y: f32,
     camera_z: f32,
+    dof_focus_distance: f32,  // Depth of field: distance where image is sharpest
+    dof_blur_strength: f32,  // Depth of field: blur amount (0.0 = disabled)
+    fog_strength: f32,  // Depth fog: exponential fog density (0.0 = disabled)
+    fog_start: f32,  // Depth fog: distance where fog begins
     histogram_color_scale: f32,  // Not used for export, but kept for struct compatibility
     has_final_transform: u32,
     final_transform_index: u32,
     bits_per_transform: u32,  // Bits needed per transform index (1-5 based on num_transforms)
     path_map_style: u32,  // 0=Prefix, 1=Suffix, 2=ScrambledPrefix, 3=ScrambledSuffix
+    path_capture_mode: u32,  // 0=FirstHit, 1=FirstAfterBurnIn, 2=DeepestHit
+    path_tracking_mode: u32,  // 0=First (first 32 iterations), 1=Recent (rolling window of 32)
+    num_path_filters: u32,  // Number of active path filters (0 = disabled)
+    min_suffix_filter_length: u32,  // Minimum length among depth=0 filters (for optimization)
+    background_r: f32,  // Background color R (for depth fog)
+    background_g: f32,  // Background color G (for depth fog)
+    background_b: f32,  // Background color B (for depth fog)
 }
 
 // Variation parameters for one transform
