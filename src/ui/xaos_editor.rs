@@ -162,22 +162,22 @@ pub fn render_xaos_editor_content(
                 .min_col_width(36.0)
                 .show(ui, |ui| {
                     // First row: corner cell with both axis labels + column headers
-                    // Corner cell: "From" aligned right, "To" aligned bottom
+                    // Corner cell: axis labels in opposite corners
                     ui.allocate_ui(egui::vec2(44.0, 32.0), |ui| {
                         let rect = ui.available_rect_before_wrap();
-                        // Row axis label (From) - aligned to right edge
+                        // Column axis label (To) - top right corner
                         ui.painter().text(
-                            egui::pos2(rect.right() - 2.0, rect.center().y - 6.0),
-                            egui::Align2::RIGHT_CENTER,
-                            row_axis_label.as_ref(),
+                            egui::pos2(rect.right() - 2.0, rect.top() + 2.0),
+                            egui::Align2::RIGHT_TOP,
+                            col_axis_label.as_ref(),
                             egui::FontId::proportional(11.0),
                             ui.visuals().weak_text_color(),
                         );
-                        // Column axis label (To) - aligned to bottom edge
+                        // Row axis label (From) - bottom left corner
                         ui.painter().text(
-                            egui::pos2(rect.center().x, rect.bottom() - 2.0),
-                            egui::Align2::CENTER_BOTTOM,
-                            col_axis_label.as_ref(),
+                            egui::pos2(rect.left() + 2.0, rect.bottom() - 2.0),
+                            egui::Align2::LEFT_BOTTOM,
+                            row_axis_label.as_ref(),
                             egui::FontId::proportional(11.0),
                             ui.visuals().weak_text_color(),
                         );
