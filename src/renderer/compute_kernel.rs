@@ -272,7 +272,10 @@ impl FlameRenderer {
         let palette_size = self.buffers.palette_size();
         self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
 
-        // Recreate bind groups
+        // Restore xaos buffer if flame has xaos weights
+        self.update_xaos_buffer(device, queue, flame);
+
+        // Recreate bind groups (must be after xaos buffer is restored)
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
