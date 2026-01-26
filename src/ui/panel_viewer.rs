@@ -111,6 +111,9 @@ pub struct PanelContext<'a> {
 
     // Histogram for density visualization (levels now in ConfigManager)
     pub density_histogram: &'a crate::renderer::DensityHistogram,
+
+    // Xaos editor state
+    pub xaos_editor_state: &'a mut super::xaos_editor::XaosEditorState,
 }
 
 /// Viewer for rendering each panel type
@@ -180,6 +183,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::Effects => {
                 self.render_effects_panel(ui);
+            }
+            PanelType::XaosEditor => {
+                self.render_xaos_editor_panel(ui);
             }
         }
     }
@@ -988,6 +994,16 @@ impl<'a> PanelViewer<'a> {
             ui,
             self.context.config_manager,
             self.context.animation_controller,
+        );
+    }
+
+    /// Render Xaos Editor panel (chaos-weighted transform transitions)
+    fn render_xaos_editor_panel(&mut self, ui: &mut egui::Ui) {
+        let _ = super::xaos_editor::render_xaos_editor_content(
+            ui,
+            self.context.config_manager,
+            self.context.flame,
+            self.context.xaos_editor_state,
         );
     }
 }

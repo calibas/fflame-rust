@@ -51,14 +51,14 @@ fn select_transform_xaos(rand_val: f32, prev_xform: u32) -> u32 {
         return 0u;
     }
 
-    let target = rand_val * total_weight;
+    let threshold = rand_val * total_weight;
 
     // Select transform based on modified probabilities
     for (var i = 0u; i < params.num_transforms; i++) {
         let base_weight = transforms[i].weight;
         let xaos_modifier = xaos_weights[xaos_base + i];
         cumulative += base_weight * xaos_modifier;
-        if (target <= cumulative) {
+        if (threshold <= cumulative) {
             return i;
         }
     }
