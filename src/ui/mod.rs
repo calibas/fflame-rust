@@ -28,6 +28,7 @@ mod variation_controls;
 mod variation_params;
 mod view;
 pub mod workspace;
+mod xaos_editor;
 
 pub use animation_panel::{ExportProgress, ExportPanelState, TimelineLayout};
 pub use export_panel::PngExportProgress;
@@ -38,6 +39,7 @@ pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
 pub use workspace::Workspace;
+pub use xaos_editor::XaosEditorState;
 
 /// Information about a clicked pixel in PathMap mode
 /// Includes pixel coordinates, fractal space coordinates, path data, and a 5x5 color preview
@@ -108,6 +110,9 @@ pub struct EguiLayer {
 
     // Histogram for density visualization (levels now in ConfigManager)
     density_histogram: crate::renderer::DensityHistogram,
+
+    // Xaos editor state
+    xaos_editor_state: xaos_editor::XaosEditorState,
 }
 
 impl EguiLayer {
@@ -157,6 +162,7 @@ impl EguiLayer {
             generated_batch: None,
             fractal_browser_panel: None,
             density_histogram: crate::renderer::DensityHistogram::default(),
+            xaos_editor_state: xaos_editor::XaosEditorState::default(),
         }
     }
 
@@ -516,6 +522,9 @@ impl EguiLayer {
 
                         // Histogram for density visualization (levels now in ConfigManager)
                         density_histogram: &self.density_histogram,
+
+                        // Xaos editor state
+                        xaos_editor_state: &mut self.xaos_editor_state,
                     },
                 });
 

@@ -62,6 +62,7 @@ menu:
   window_path_editor: "🧪 Path Editor (Experimental)"
   window_random_generator: "🎲 Random Generator"
   window_effects: "✨ Effects"
+  window_xaos_editor: "🔀 Xaos Editor"
 
   # Window Menu - Workspace layouts
   workspace_layout: "📐 Workspace Layout"
@@ -116,6 +117,7 @@ panels:
   effects: "Effects"
   settings: "Settings"
   tone_mapping: "Tone Mapping"
+  xaos_editor: "Xaos Editor"
 
 # Random Generator Panel
 random_generator:
@@ -173,6 +175,24 @@ random_generator:
   batch_count: "Batch Count:"
   seed: "Seed:"
   randomize_seed: "Randomize seed"
+
+# Xaos Editor Panel
+xaos_editor:
+  title: "Xaos Editor"
+  view_mode: "View:"
+  view_to: "To"
+  view_from: "From"
+  view_to_tooltip: "Rows show which transforms each source can go TO"
+  view_from_tooltip: "Rows show which transforms each destination came FROM"
+  help: "Double-click: toggle 0/1 | Drag: adjust value"
+  enable: "Enable Xaos"
+  reset_all: "Reset All (1.0)"
+  reset_all_tooltip: "Reset all weights to 1.0 (default - no bias)"
+  isolate_all: "Isolate All"
+  isolate_all_tooltip: "Set all off-diagonal weights to 0 (self-only transitions)"
+  no_transforms: "No transforms available"
+  to_label: "To"
+  from_label: "From"
 
 # Export Panel
 export:
