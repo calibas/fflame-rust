@@ -4,11 +4,10 @@
 //! Features:
 //! - N×N grid showing transition weights between transforms
 //! - "View To" / "View From" toggle (like Apophysis)
-//! - Double-click to toggle between 0 and 1
-//! - Drag to adjust values
+//! - Direct editing of weight values
 //! - Reset all to 1.0 button
 
-use egui::{Color32, Sense, Stroke};
+use egui::Color32;
 use rust_i18n::t;
 
 use crate::config::{ConfigManager, ConfigPath, UpdateType};
@@ -20,10 +19,6 @@ pub struct XaosEditorState {
     /// View mode: true = "View To" (columns show where FROM can go TO)
     /// false = "View From" (rows show where TO came FROM)
     pub view_to_mode: bool,
-    /// Currently dragging cell (src, dst)
-    pub dragging_cell: Option<(usize, usize)>,
-    /// Last mouse Y position for drag calculation
-    pub last_drag_y: f32,
 }
 
 /// Get transform color for visual identification (matches transforms.rs)
@@ -73,13 +68,6 @@ pub fn render_xaos_editor_content(
     });
 
     ui.add_space(4.0);
-
-    // Help text
-    ui.label(egui::RichText::new(t!("xaos_editor.help"))
-        .small()
-        .color(ui.visuals().weak_text_color()));
-
-    ui.add_space(8.0);
 
     // Action buttons
     ui.horizontal(|ui| {
@@ -156,207 +144,148 @@ pub fn render_xaos_editor_content(
         return max_update;
     }
 
-    // Grid layout
-    let cell_size = 32.0;
-    let header_size = 24.0;
-    let total_width = header_size + (num_transforms as f32 * cell_size);
-    let total_height = header_size + (num_transforms as f32 * cell_size);
+    // Determine axis labels based on view mode
+    let (col_axis_label, row_axis_label) = if state.view_to_mode {
+        (t!("xaos_editor.to_label"), t!("xaos_editor.from_label"))
+    } else {
+        (t!("xaos_editor.from_label"), t!("xaos_editor.to_label"))
+    };
 
     // Scrollable area for large grids
     egui::ScrollArea::both()
         .max_width(ui.available_width())
         .max_height(ui.available_height())
         .show(ui, |ui| {
-            let (response, painter) = ui.allocate_painter(
-                egui::vec2(total_width, total_height),
-                Sense::click_and_drag(),
-            );
-            let rect = response.rect;
+            // Use Grid for layout
+            egui::Grid::new("xaos_grid")
+                .spacing([2.0, 2.0])
+                .min_col_width(36.0)
+                .show(ui, |ui| {
+                    // First row: corner cell with both axis labels + column headers
+                    // Corner cell: "From" aligned right, "To" aligned bottom
+                    ui.allocate_ui(egui::vec2(44.0, 32.0), |ui| {
+                        let rect = ui.available_rect_before_wrap();
+                        // Row axis label (From) - aligned to right edge
+                        ui.painter().text(
+                            egui::pos2(rect.right() - 2.0, rect.center().y - 6.0),
+                            egui::Align2::RIGHT_CENTER,
+                            row_axis_label.as_ref(),
+                            egui::FontId::proportional(11.0),
+                            ui.visuals().weak_text_color(),
+                        );
+                        // Column axis label (To) - aligned to bottom edge
+                        ui.painter().text(
+                            egui::pos2(rect.center().x, rect.bottom() - 2.0),
+                            egui::Align2::CENTER_BOTTOM,
+                            col_axis_label.as_ref(),
+                            egui::FontId::proportional(11.0),
+                            ui.visuals().weak_text_color(),
+                        );
+                    });
 
-            // Background
-            painter.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color);
-
-            // Column headers (destination transforms in "View To" mode)
-            let col_label = if state.view_to_mode {
-                t!("xaos_editor.to_label")
-            } else {
-                t!("xaos_editor.from_label")
-            };
-
-            // Corner label
-            painter.text(
-                rect.min + egui::vec2(header_size / 2.0, header_size / 2.0),
-                egui::Align2::CENTER_CENTER,
-                &col_label,
-                egui::FontId::proportional(10.0),
-                ui.visuals().weak_text_color(),
-            );
-
-            for i in 0..num_transforms {
-                let x = rect.min.x + header_size + (i as f32 * cell_size) + cell_size / 2.0;
-                let y = rect.min.y + header_size / 2.0;
-
-                // Draw colored indicator
-                let color = get_transform_color(i);
-                let indicator_rect = egui::Rect::from_center_size(
-                    egui::pos2(x, y - 4.0),
-                    egui::vec2(cell_size - 4.0, 4.0),
-                );
-                painter.rect_filled(indicator_rect, 2.0, color);
-
-                // Draw transform number
-                painter.text(
-                    egui::pos2(x, y + 4.0),
-                    egui::Align2::CENTER_CENTER,
-                    format!("{}", i + 1),
-                    egui::FontId::proportional(11.0),
-                    ui.visuals().text_color(),
-                );
-            }
-
-            // Row headers (source transforms in "View To" mode)
-            let row_label = if state.view_to_mode {
-                t!("xaos_editor.from_label")
-            } else {
-                t!("xaos_editor.to_label")
-            };
-
-            for i in 0..num_transforms {
-                let x = rect.min.x + header_size / 2.0;
-                let y = rect.min.y + header_size + (i as f32 * cell_size) + cell_size / 2.0;
-
-                // Draw colored indicator
-                let color = get_transform_color(i);
-                let indicator_rect = egui::Rect::from_center_size(
-                    egui::pos2(x - 4.0, y),
-                    egui::vec2(4.0, cell_size - 4.0),
-                );
-                painter.rect_filled(indicator_rect, 2.0, color);
-
-                // Draw transform number
-                painter.text(
-                    egui::pos2(x + 4.0, y),
-                    egui::Align2::CENTER_CENTER,
-                    format!("{}", i + 1),
-                    egui::FontId::proportional(11.0),
-                    ui.visuals().text_color(),
-                );
-            }
-
-            // Draw grid cells
-            for row in 0..num_transforms {
-                for col in 0..num_transforms {
-                    // In "View To" mode: row = src, col = dst
-                    // In "View From" mode: row = dst, col = src
-                    let (src, dst) = if state.view_to_mode {
-                        (row, col)
-                    } else {
-                        (col, row)
-                    };
-
-                    let cell_x = rect.min.x + header_size + (col as f32 * cell_size);
-                    let cell_y = rect.min.y + header_size + (row as f32 * cell_size);
-                    let cell_rect = egui::Rect::from_min_size(
-                        egui::pos2(cell_x, cell_y),
-                        egui::vec2(cell_size, cell_size),
-                    );
-
-                    let weight = flame.get_xaos(src, dst);
-
-                    // Cell background based on weight
-                    let bg_color = weight_to_color(weight);
-                    painter.rect_filled(cell_rect.shrink(1.0), 2.0, bg_color);
-
-                    // Cell border
-                    let border_color = if src == dst {
-                        // Diagonal cells (self-transition) have highlighted border
-                        Color32::from_rgb(150, 150, 150)
-                    } else {
-                        ui.visuals().widgets.noninteractive.bg_stroke.color
-                    };
-                    painter.rect_stroke(
-                        cell_rect.shrink(1.0),
-                        2.0,
-                        Stroke::new(1.0, border_color),
-                        egui::StrokeKind::Inside,
-                    );
-
-                    // Weight text
-                    let text_color = if weight > 0.5 {
-                        Color32::BLACK
-                    } else {
-                        Color32::WHITE
-                    };
-
-                    // Show "0" or "1" for exact values, otherwise show 1 decimal
-                    let text = if (weight - 0.0).abs() < 0.001 {
-                        "0".to_string()
-                    } else if (weight - 1.0).abs() < 0.001 {
-                        "1".to_string()
-                    } else {
-                        format!("{:.1}", weight)
-                    };
-
-                    painter.text(
-                        cell_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        text,
-                        egui::FontId::proportional(11.0),
-                        text_color,
-                    );
-                }
-            }
-
-            // Handle interactions
-            if let Some(pointer_pos) = response.interact_pointer_pos() {
-                // Calculate which cell is under the pointer
-                let rel_x = pointer_pos.x - rect.min.x - header_size;
-                let rel_y = pointer_pos.y - rect.min.y - header_size;
-
-                if rel_x >= 0.0 && rel_y >= 0.0 {
-                    let col = (rel_x / cell_size) as usize;
-                    let row = (rel_y / cell_size) as usize;
-
-                    if col < num_transforms && row < num_transforms {
-                        let (src, dst) = if state.view_to_mode {
-                            (row, col)
-                        } else {
-                            (col, row)
-                        };
-
-                        // Double-click to toggle between 0 and 1
-                        if response.double_clicked() {
-                            let current = flame.get_xaos(src, dst);
-                            let new_value = if current < 0.5 { 1.0 } else { 0.0 };
-                            if let Ok(update) = config_manager.update_param(
-                                ConfigPath::Xaos { src, dst },
-                                new_value.into(),
-                            ) {
-                                max_update = max_update.max(update);
-                            }
-                        }
-                        // Drag to adjust value
-                        else if response.dragged() {
-                            let delta = response.drag_delta();
-                            // Vertical drag: up = increase, down = decrease
-                            let current = flame.get_xaos(src, dst);
-                            let new_value = (current - delta.y * 0.01).clamp(0.0, 10.0);
-                            if let Ok(update) = config_manager.update_param(
-                                ConfigPath::Xaos { src, dst },
-                                new_value.into(),
-                            ) {
-                                max_update = max_update.max(update);
-                            }
-                        }
+                    // Column headers (transform numbers with colors)
+                    for col in 0..num_transforms {
+                        let color = get_transform_color(col);
+                        ui.vertical_centered(|ui| {
+                            // Color indicator bar
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(32.0, 4.0),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().rect_filled(rect, 2.0, color);
+                            // Transform number
+                            ui.label(format!("{}", col + 1));
+                        });
                     }
-                }
-            }
+                    ui.end_row();
 
-            // Commit on drag release
-            if response.drag_stopped() {
-                // Force commit the last change
-                // The ConfigManager will handle coalescing
-            }
+                    // Data rows
+                    for row in 0..num_transforms {
+                        // Row header with color indicator
+                        let row_color = get_transform_color(row);
+                        ui.horizontal(|ui| {
+                            // Color indicator
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(4.0, 20.0),
+                                egui::Sense::hover(),
+                            );
+                            ui.painter().rect_filled(rect, 2.0, row_color);
+                            ui.label(format!("{}", row + 1));
+                        });
+
+                        // Data cells
+                        for col in 0..num_transforms {
+                            // In "View To" mode: row = src, col = dst
+                            // In "View From" mode: row = dst, col = src
+                            let (src, dst) = if state.view_to_mode {
+                                (row, col)
+                            } else {
+                                (col, row)
+                            };
+
+                            let mut weight = flame.get_xaos(src, dst);
+                            let is_diagonal = src == dst;
+
+                            // Background color based on weight
+                            let bg_color = weight_to_color(weight);
+
+                            // Create a frame with the background color
+                            egui::Frame::new()
+                                .fill(bg_color)
+                                .corner_radius(2.0)
+                                .show(ui, |ui| {
+                                    ui.set_min_size(egui::vec2(36.0, 24.0));
+
+                                    // DragValue for editing
+                                    let response = ui.add(
+                                        egui::DragValue::new(&mut weight)
+                                            .range(0.0..=10.0)
+                                            .speed(0.01)
+                                            .fixed_decimals(2)
+                                            .custom_formatter(|v, _| {
+                                                if (v - 0.0).abs() < 0.001 {
+                                                    "0".to_string()
+                                                } else if (v - 1.0).abs() < 0.001 {
+                                                    "1".to_string()
+                                                } else {
+                                                    format!("{:.2}", v)
+                                                }
+                                            })
+                                    );
+
+                                    // Show tooltip with transition info
+                                    let tooltip = if state.view_to_mode {
+                                        format!("T{} > T{}", src + 1, dst + 1)
+                                    } else {
+                                        format!("T{} < T{}", dst + 1, src + 1)
+                                    };
+
+                                    // Highlight diagonal cells
+                                    if is_diagonal {
+                                        ui.painter().rect_stroke(
+                                            response.rect,
+                                            2.0,
+                                            egui::Stroke::new(1.5, Color32::from_rgb(200, 200, 200)),
+                                            egui::StrokeKind::Outside,
+                                        );
+                                    }
+
+                                    let changed = response.changed();
+                                    response.on_hover_text(tooltip);
+
+                                    if changed {
+                                        if let Ok(update) = config_manager.update_param(
+                                            ConfigPath::Xaos { src, dst },
+                                            weight.into(),
+                                        ) {
+                                            max_update = max_update.max(update);
+                                        }
+                                    }
+                                });
+                        }
+                        ui.end_row();
+                    }
+                });
         });
 
     max_update
