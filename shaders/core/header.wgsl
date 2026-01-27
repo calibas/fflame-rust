@@ -104,3 +104,6 @@ struct PathFilter {
 @group(0) @binding(6) var<storage, read_write> iteration_counts: array<atomic<u32>>;
 @group(0) @binding(7) var<storage, read_write> path_buffer: array<PathEntry>;
 @group(0) @binding(8) var<storage, read> path_filters: array<PathFilter>;
+// Xaos (chaos) transition weights: xaos_weights[src * num_transforms + dst]
+// Modifies probability of selecting dst transform when coming from src
+@group(0) @binding(9) var<storage, read> xaos_weights: array<f32>;

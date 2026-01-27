@@ -1158,6 +1158,12 @@ impl ConfigManager {
                 Err(ConfigError::InvalidOperation)
             }
 
+            // Xaos (chaos-weighted transform transitions)
+            ConfigPath::Xaos { src, dst } => {
+                let weight = config.flame.get_xaos(*src, *dst);
+                Ok(weight.into())
+            }
+
             // System Settings - These should NOT be called via get_value (they're not in FractalConfig)
             // Use config_manager.system_settings() instead
             ConfigPath::SystemIterationsPerThread
@@ -1653,6 +1659,12 @@ impl ConfigManager {
                     return Err(ConfigError::InvalidIndex);
                 }
                 self.current.density_effects.remove(*index);
+            }
+
+            // Xaos (chaos-weighted transform transitions)
+            ConfigPath::Xaos { src, dst } => {
+                let weight: f32 = value.try_into()?;
+                self.current.flame.set_xaos(*src, *dst, weight);
             }
 
             // System Settings - These should NOT be called via apply_value (they're not in FractalConfig)

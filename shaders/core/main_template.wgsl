@@ -1,11 +1,13 @@
 // Main compute shader template
-// This template generates 4 variants via conditional compilation:
+// This template generates variants via conditional compilation:
 //   - 2D mode (vec2 points) vs 3D mode (vec3 points)
 //   - Simple (no path tracking) vs Full (with path tracking)
+//   - Standard vs Xaos (chaos-weighted transform selection)
 //
 // Conditional markers:
 //   {{#if RENDER_3D}} ... {{else}} ... {{/if}}
 //   {{#if PATH_TRACKING}} ... {{/if}}
+//   {{#if XAOS_ENABLED}} ... {{else}} ... {{/if}}
 //
 // Uses hard-coded constants (compiled at shader build time):
 //   NUM_TRANSFORMS, COLOR_MODE, HAS_FINAL_TRANSFORM, FINAL_TRANSFORM_INDEX
@@ -59,14 +61,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var path_iteration = 0u;  // Count of iterations stored in path
 {{/if}}
 
+{{#if XAOS_ENABLED}}
+    // Track previous transform for xaos-weighted selection
+    var prev_xform_idx = 0u;
+{{/if}}
+
     // Iterate
     for (var i = 0u; i < params.iterations_per_thread; i++) {
         // Save old position for speed calculation
         let old_pos = current;
 
-        // Select random transform (uses hard-coded NUM_TRANSFORMS)
+        // Select random transform
         let rand_val = rng_nextf(&rng);
+{{#if XAOS_ENABLED}}
+        // Xaos: probability modified by transition weights from previous transform
+        let xform_idx = select_transform_xaos(rand_val, prev_xform_idx);
+        prev_xform_idx = xform_idx;
+{{else}}
+        // Standard: uses hard-coded NUM_TRANSFORMS for loop unrolling
         let xform_idx = select_transform_const(rand_val);
+{{/if}}
         let xform = transforms[xform_idx];
 
         // Opacity check (stochastic transparency)

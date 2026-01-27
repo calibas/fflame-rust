@@ -372,6 +372,13 @@ pub struct FlameBuffers {
     pub dummy_path_buffer: Buffer,
     pub dummy_filter_buffer: Buffer,
 
+    // Xaos (chaos) transition weights buffer (OPTIONAL)
+    // Layout: N × N matrix where N = num_transforms
+    // Index: xaos_weights[src * num_transforms + dst]
+    // None when all xaos weights are 1.0 (default behavior)
+    pub xaos_buffer: Option<Buffer>,
+    pub dummy_xaos_buffer: Buffer,
+
     // Per-pixel scale buffer for adaptive histogram scaling
     // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
 
@@ -615,6 +622,15 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
+        // Dummy xaos buffer for binding when xaos is disabled
+        // Minimum size: 4 bytes (single f32)
+        let dummy_xaos_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Dummy Xaos Buffer"),
+            size: 4,  // Single f32
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Note: scale_buffer removed - now using params.histogram_color_scale (global uniform)
 
         // Create palette texture (1D, dynamic size: 256-4096 samples)
@@ -750,6 +766,8 @@ impl FlameBuffers {
             path_filter_buffer,
             dummy_path_buffer,
             dummy_filter_buffer,
+            xaos_buffer: None,  // Created on demand when xaos is used
+            dummy_xaos_buffer,
             // scale_buffer removed - using params.histogram_color_scale instead
             palette_texture,
             palette_view,
@@ -1178,6 +1196,73 @@ impl FlameBuffers {
             let mut padded_filters = filters.to_vec();
             padded_filters.resize(MAX_PATH_FILTERS, GpuPathFilter::empty());
             queue.write_buffer(filter_buffer, 0, bytemuck::cast_slice(&padded_filters));
+        }
+    }
+
+    // ============================================================
+    // Xaos buffer management (optional buffer for memory savings)
+    // ============================================================
+
+    /// Check if xaos buffer is currently allocated
+    pub fn xaos_enabled(&self) -> bool {
+        self.xaos_buffer.is_some()
+    }
+
+    /// Create xaos buffer for given number of transforms
+    /// Call when flame has non-default xaos weights
+    /// Returns true if buffer was created (bind groups need rebuilding)
+    pub fn create_xaos_buffer(&mut self, device: &Device, num_transforms: u32) -> bool {
+        if self.xaos_buffer.is_some() {
+            return false;  // Already created
+        }
+
+        let buffer_size = (num_transforms * num_transforms * std::mem::size_of::<f32>() as u32) as u64;
+
+        log::info!(
+            "Creating xaos buffer: {}×{} transforms ({} bytes)",
+            num_transforms,
+            num_transforms,
+            buffer_size
+        );
+
+        self.xaos_buffer = Some(device.create_buffer(&BufferDescriptor {
+            label: Some("Xaos Buffer"),
+            size: buffer_size.max(4),  // Minimum 4 bytes
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+
+        true  // Bind groups need rebuilding
+    }
+
+    /// Drop xaos buffer to free memory
+    /// Call when flame has all default xaos weights (1.0)
+    /// Returns true if buffer was dropped (bind groups need rebuilding)
+    pub fn drop_xaos_buffer(&mut self) -> bool {
+        if self.xaos_buffer.is_none() {
+            return false;  // Already dropped
+        }
+
+        log::info!("Dropping xaos buffer");
+
+        self.xaos_buffer = None;
+
+        true  // Bind groups need rebuilding
+    }
+
+    /// Get the xaos buffer for binding (real or dummy)
+    /// Use this when creating bind groups
+    pub fn get_xaos_buffer_for_binding(&self) -> &Buffer {
+        self.xaos_buffer.as_ref().unwrap_or(&self.dummy_xaos_buffer)
+    }
+
+    /// Update xaos weights from flame
+    /// Only writes if xaos buffer is enabled
+    pub fn update_xaos(&self, queue: &Queue, flame: &Flame) {
+        if let Some(ref xaos_buffer) = self.xaos_buffer {
+            if let Some(flat) = flame.xaos_flat() {
+                queue.write_buffer(xaos_buffer, 0, bytemuck::cast_slice(&flat));
+            }
         }
     }
 }

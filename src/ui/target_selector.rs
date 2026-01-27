@@ -37,6 +37,7 @@ pub enum TargetCategory {
     ToneMapping,
     Rendering,
     Effects,
+    Xaos,
     Transform(usize),
     FinalTransform,
 }
@@ -49,6 +50,7 @@ impl TargetCategory {
             TargetCategory::ToneMapping => "Tone Mapping".to_string(),
             TargetCategory::Rendering => "Rendering".to_string(),
             TargetCategory::Effects => "Effects".to_string(),
+            TargetCategory::Xaos => "Xaos".to_string(),
             TargetCategory::Transform(i) => format!("Transform {}", i + 1),
             TargetCategory::FinalTransform => "Final Transform".to_string(),
         }
@@ -61,6 +63,7 @@ impl TargetCategory {
             TargetCategory::ToneMapping => "tonemapping".to_string(),
             TargetCategory::Rendering => "rendering".to_string(),
             TargetCategory::Effects => "effects".to_string(),
+            TargetCategory::Xaos => "xaos".to_string(),
             TargetCategory::Transform(i) => format!("transform_{}", i),
             TargetCategory::FinalTransform => "final_transform".to_string(),
         }
@@ -173,6 +176,22 @@ pub fn render_target_selector(
                     state,
                     TargetCategory::Effects,
                     &effects_items,
+                    &filter,
+                    has_filter,
+                    current_selection,
+                ) {
+                    selected = Some(path);
+                }
+            }
+
+            // Xaos category (only shown if flame has xaos enabled or multiple transforms)
+            let xaos_items = get_xaos_items(flame);
+            if !xaos_items.is_empty() {
+                if let Some(path) = render_category(
+                    ui,
+                    state,
+                    TargetCategory::Xaos,
+                    &xaos_items,
                     &filter,
                     has_filter,
                     current_selection,
@@ -325,6 +344,29 @@ fn get_rendering_items() -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::HistogramColorScale, "Histogram Color Scale"),
         TargetItem::new(ConfigPath::PerspectiveStrength, "Perspective Strength"),
     ]
+}
+
+/// Get xaos parameter items (dynamic based on number of transforms)
+fn get_xaos_items(flame: &Flame) -> Vec<TargetItem> {
+    let mut items = Vec::new();
+    let num_transforms = flame.transforms.len();
+
+    // Only show xaos items if there are transforms
+    if num_transforms == 0 {
+        return items;
+    }
+
+    // Add an item for each xaos cell (src → dst transition weight)
+    for src in 0..num_transforms {
+        for dst in 0..num_transforms {
+            items.push(TargetItem::new(
+                ConfigPath::Xaos { src, dst },
+                &format!("T{} > T{}", src + 1, dst + 1),
+            ));
+        }
+    }
+
+    items
 }
 
 /// Get effects parameter items (dynamic based on current effects in config)

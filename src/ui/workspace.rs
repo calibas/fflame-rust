@@ -46,6 +46,8 @@ pub enum PanelType {
     RandomGenerator,
     /// Post-processing effects panel (color and density effects)
     Effects,
+    /// Xaos editor panel (chaos-weighted transform transitions)
+    XaosEditor,
 }
 
 impl std::fmt::Display for PanelType {
@@ -69,6 +71,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Export => t!("panels.export"),
             PanelType::RandomGenerator => t!("panels.random_generator"),
             PanelType::Effects => t!("panels.effects"),
+            PanelType::XaosEditor => t!("panels.xaos_editor"),
         };
         write!(f, "{}", title)
     }

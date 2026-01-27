@@ -122,6 +122,9 @@ pub enum ConfigPath {
     // ===== Flame-level (require iteration reset) =====
     RenderMode,
     PerspectiveStrength,
+    /// Xaos (chaos) weight for transition from src transform to dst transform
+    /// Modifies the probability of selecting dst when coming from src
+    Xaos { src: usize, dst: usize },
 
     // ===== Effects (post-processing, no iteration reset needed) =====
     /// Enable/disable a density effect
@@ -287,6 +290,9 @@ impl Display for ConfigPath {
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
             ConfigPath::PerspectiveStrength => write!(f, "Perspective Strength"),
+            ConfigPath::Xaos { src, dst } => {
+                write!(f, "Xaos {} → {}", src + 1, dst + 1)
+            }
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => {
@@ -511,6 +517,13 @@ impl ConfigPath {
             // Flame
             ConfigPath::RenderMode => I18nKey::simple("history.param.render_mode"),
             ConfigPath::PerspectiveStrength => I18nKey::simple("history.param.perspective_strength"),
+            ConfigPath::Xaos { src, dst } => I18nKey::with_params(
+                "history.param.xaos",
+                vec![
+                    ("src", (src + 1).to_string()),
+                    ("dst", (dst + 1).to_string()),
+                ],
+            ),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => I18nKey::with_params(
@@ -1205,6 +1218,7 @@ impl ConfigPath {
             | ConfigPath::FinalTransformScale
             | ConfigPath::RenderMode
             | ConfigPath::PerspectiveStrength
+            | ConfigPath::Xaos { .. }
             | ConfigPath::MaxIterations
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
 
@@ -1328,6 +1342,7 @@ impl ConfigPath {
             // Flame
             ConfigPath::RenderMode => "RenderMode".to_string(),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
+            ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => format!("DensityEffect.{}.Enabled", index),
@@ -1513,6 +1528,13 @@ impl ConfigPath {
             }
         }
 
+        // Xaos paths: Xaos.{src}.{dst}
+        if parts.len() == 3 && parts[0] == "Xaos" {
+            if let (Ok(src), Ok(dst)) = (parts[1].parse::<usize>(), parts[2].parse::<usize>()) {
+                return Some(ConfigPath::Xaos { src, dst });
+            }
+        }
+
         None
     }
 }
@@ -1612,6 +1634,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::FinalTransformOriginY
         | ConfigPath::FinalTransformRotation
         | ConfigPath::FinalTransformScale
+        | ConfigPath::Xaos { .. }
         | ConfigPath::SystemTargetFps
         | ConfigPath::LevelsLow
         | ConfigPath::LevelsHigh

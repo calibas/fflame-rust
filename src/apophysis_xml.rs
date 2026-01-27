@@ -133,7 +133,7 @@ fn parse_flame_element(
     }
 
     // Parse child elements (xform, finalxform, and palette)
-    let mut transforms_with_indices = Vec::new();
+    let mut xform_results = Vec::new();
     let mut final_transform_with_index: Option<(Transform, Option<usize>)> = None;
     let mut palette = None;
     let mut buf = Vec::new();
@@ -143,8 +143,8 @@ fn parse_flame_element(
             Ok(Event::Start(e) | Event::Empty(e)) => {
                 match e.name().as_ref() {
                     b"xform" => {
-                        let (transform, color_index) = parse_xform_element(&e)?;
-                        transforms_with_indices.push((transform, color_index));
+                        let result = parse_xform_element(&e)?;
+                        xform_results.push(result);
                     }
                     b"finalxform" => {
                         let (transform, color_index) = parse_finalxform_element(&e)?;
@@ -171,11 +171,13 @@ fn parse_flame_element(
     // Always use Palette mode (ColorMode::Transform has been removed)
     let color_mode = ColorMode::Palette;
 
-    // Apply palette color coordinates to transforms (Palette mode)
-    // Or keep RGB colors as-is (Transform mode)
+    // Extract transforms, color indices, and chaos weights from parse results
     let mut transforms = Vec::new();
-    for (mut transform, color_index) in transforms_with_indices {
-        if let Some(idx) = color_index {
+    let mut all_chaos_weights: Vec<Option<Vec<f32>>> = Vec::new();
+
+    for result in xform_results {
+        let mut transform = result.transform;
+        if let Some(idx) = result.color_index {
             if palette.is_some() {
                 // Palette mode: Store color coordinate (0-1) as averaged RGB
                 // This will be used as palette position in shader
@@ -185,7 +187,29 @@ fn parse_flame_element(
             // Note: color_speed comes from XML parsing, don't override here
         }
         transforms.push(transform);
+        all_chaos_weights.push(result.chaos_weights);
     }
+
+    // Build xaos matrix if any transform has chaos weights
+    let xaos = if all_chaos_weights.iter().any(|w| w.is_some()) {
+        let n = transforms.len();
+        let mut matrix = vec![vec![1.0; n]; n];
+
+        for (src, weights_opt) in all_chaos_weights.iter().enumerate() {
+            if let Some(weights) = weights_opt {
+                for (dst, &weight) in weights.iter().enumerate() {
+                    if dst < n {
+                        matrix[src][dst] = weight;
+                    }
+                }
+            }
+            // If no chaos weights for this transform, row stays at 1.0 (identity)
+        }
+
+        Some(matrix)
+    } else {
+        None
+    };
 
     // Process final transform if present
     let final_transform = if let Some((mut final_xform, color_index)) = final_transform_with_index {
@@ -223,6 +247,7 @@ fn parse_flame_element(
         final_transform,
         render_mode,
         perspective_strength,
+        xaos,
     };
 
     // Convert Apophysis scale/center to our zoom/pan
@@ -307,12 +332,21 @@ fn parse_flame_element(
 
 /// Parse a single <xform> element (transform)
 /// Returns (Transform, color_index) where color_index is the palette position
+/// Result of parsing an xform element
+/// Contains the transform, optional color index, and optional chaos weights
+struct XformParseResult {
+    transform: Transform,
+    color_index: Option<usize>,
+    chaos_weights: Option<Vec<f32>>,
+}
+
 fn parse_xform_element(
     element: &quick_xml::events::BytesStart,
-) -> Result<(Transform, Option<usize>)> {
+) -> Result<XformParseResult> {
     let mut transform = Transform::new();
     let registry = global_registry();
     let mut color_index = None;
+    let mut chaos_weights = None;
 
     // Storage for variation parameters (applied after all attributes parsed)
     let mut pending_params: Vec<(String, String, f32)> = Vec::new(); // (var_name, param_name, value)
@@ -352,6 +386,16 @@ fn parse_xform_element(
                 // Parse opacity (0.0 to 1.0, default 1.0)
                 transform.opacity = value.parse().unwrap_or(1.0);
             }
+            "chaos" => {
+                // Parse chaos/xaos weights (space-separated floats)
+                // chaos="1.0 0.5 0.75" means P(this→0)=1.0, P(this→1)=0.5, P(this→2)=0.75
+                let weights: Vec<f32> = value.split_whitespace()
+                    .filter_map(|s| s.parse::<f32>().ok())
+                    .collect();
+                if !weights.is_empty() {
+                    chaos_weights = Some(weights);
+                }
+            }
             _ => {
                 // Try to parse as variation or variation parameter
                 if let Ok(parsed_value) = value.parse::<f32>() {
@@ -378,7 +422,11 @@ fn parse_xform_element(
         transform.set_variation_param(&var_name, &param_name, value);
     }
 
-    Ok((transform, color_index))
+    Ok(XformParseResult {
+        transform,
+        color_index,
+        chaos_weights,
+    })
 }
 
 /// Parse a <finalxform> element (same as xform but without weight/opacity)
