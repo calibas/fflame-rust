@@ -18,8 +18,6 @@
   - [EXPORT.md](docs/main/EXPORT.md) - PNG export, metadata, CLI batch mode
 - [docs/TESTING-GUIDE.md](docs/TESTING-GUIDE.md) - Unit tests, regression, benchmarks
 - [docs/WASM.md](docs/WASM.md) - WebAssembly build guide
-- [docs/STATUS.md](docs/STATUS.md) - Implementation status vs original design
-- [docs/outline.md](docs/outline.md) - Original design goals
 
 **Note:** Project history is tracked via git commits. Use `git log --oneline` to see recent changes.
 
@@ -911,17 +909,12 @@ cargo build --target aarch64-linux-android
 
 ## Optional/Future Features
 
-Features that could be added in future development (see [docs/STATUS.md](docs/STATUS.md) for detailed priority breakdown):
+Features to be added in future development:
 
 ### High Priority
-- **Async export progress UI** - Currently export blocks the UI during rendering
-- **Depth effects for 3D mode** - Optional visual enhancements:
-  - Depth-based coloring (Z → color heat map)
-  - Depth of field blur (focus plane + bokeh)
-  - Z-fog/atmospheric depth
-  - Depth buffer visualization
 
 ### Medium Priority
+- **Async export progress UI** - Currently export blocks the UI during rendering
 - **EXR/HDR export** - High dynamic range output formats for compositing
 - **More 3D variations** - Additional depth-manipulating variations (curl_3d, splits_3d, etc.)
 
@@ -929,9 +922,4 @@ Features that could be added in future development (see [docs/STATUS.md](docs/ST
 - **Layered compositing** - Multiple flames blended together
 - **Adaptive sampling** - Focus iterations on high-detail areas
 - **Denoising** - AI or traditional denoising for faster convergence
-
-### Nice to Have
-- ~~**Preset browser UI**~~ ✅ Implemented 2025-11-24 - See [PRESET-BROWSER.md](docs/main/PRESET-BROWSER.md)
 - **Batch export** - Render multiple configurations automatically
-
-See [docs/outline.md](docs/outline.md) Section 14 for more ambitious future expansion ideas.
