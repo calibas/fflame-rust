@@ -53,6 +53,39 @@ fn select_transform_const(rand_val: f32) -> u32 {
     return NUM_TRANSFORMS - 1u;
 }
 
+// Select transform with xaos (chaos) weighting
+// Uses hard-coded NUM_TRANSFORMS for loop unrolling
+// prev_xform: Index of the transform that was just applied
+// Xaos modifies probability: P(src→dst) = weight[dst] × xaos[src][dst]
+fn select_transform_xaos(rand_val: f32, prev_xform: u32) -> u32 {
+    var cumulative = 0.0;
+    var total_weight = 0.0;
+
+    // Base index into xaos_weights array for this source transform
+    let xaos_base = prev_xform * NUM_TRANSFORMS;
+
+    // Calculate total modified weight
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        let base_weight = transforms[i].weight;
+        let xaos_modifier = xaos_weights[xaos_base + i];
+        total_weight += base_weight * xaos_modifier;
+    }
+
+    let threshold = rand_val * total_weight;
+
+    // Select based on modified weights
+    for (var i = 0u; i < NUM_TRANSFORMS; i++) {
+        let base_weight = transforms[i].weight;
+        let xaos_modifier = xaos_weights[xaos_base + i];
+        cumulative += base_weight * xaos_modifier;
+        if (threshold <= cumulative) {
+            return i;
+        }
+    }
+
+    return NUM_TRANSFORMS - 1u;
+}
+
 // Convert speed to color using palette lookup
 fn speed_to_color(speed: f32) -> vec3<f32> {
     // Normalize speed to [0, 1] range

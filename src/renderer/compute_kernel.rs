@@ -272,7 +272,10 @@ impl FlameRenderer {
         let palette_size = self.buffers.palette_size();
         self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
 
-        // Recreate bind groups
+        // Restore xaos buffer if flame has xaos weights
+        self.update_xaos_buffer(device, queue, flame);
+
+        // Recreate bind groups (must be after xaos buffer is restored)
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
         self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
@@ -618,6 +621,13 @@ impl FlameRenderer {
         self.buffers.update_transforms(queue, &config.flame);
         self.buffers.update_variation_params(queue, &config.flame);
 
+        // 1b. Update xaos buffer (create/drop as needed)
+        let xaos_buffer_changed = self.update_xaos_buffer(device, queue, &config.flame);
+        if xaos_buffer_changed {
+            // Recreate bind group with new xaos buffer
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        }
+
         // 2. Update color mode, path map style, and capture mode
         self.color_mode = config.color_mode;
         self.path_map_style = config.path_map_style;
@@ -725,6 +735,13 @@ impl FlameRenderer {
 
         self.buffers.update_transforms(queue, flame);
         self.buffers.update_variation_params(queue, flame);
+
+        // Update xaos buffer (create/drop as needed)
+        let xaos_buffer_changed = self.update_xaos_buffer(device, queue, flame);
+        if xaos_buffer_changed {
+            // Recreate bind group with new xaos buffer
+            self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        }
 
         // Update render mode, perspective, DOF, fog, and background color
         self.current_render_mode = flame.render_mode;
@@ -1419,6 +1436,33 @@ impl FlameRenderer {
         }
 
         changed
+    }
+
+    /// Update xaos buffer based on flame state
+    /// Creates, updates, or drops the xaos buffer as needed
+    /// Returns true if the buffer was created or dropped (bind group needs rebuild)
+    fn update_xaos_buffer(&mut self, device: &Device, queue: &Queue, flame: &crate::scene::transforms::Flame) -> bool {
+        let needs_xaos = flame.has_xaos();
+        let has_xaos = self.buffers.xaos_enabled();
+
+        if needs_xaos && !has_xaos {
+            // Need to create xaos buffer
+            let num_transforms = flame.transforms.len() as u32;
+            if self.buffers.create_xaos_buffer(device, num_transforms) {
+                self.buffers.update_xaos(queue, flame);
+                return true;
+            }
+        } else if !needs_xaos && has_xaos {
+            // Can drop xaos buffer
+            if self.buffers.drop_xaos_buffer() {
+                return true;
+            }
+        } else if needs_xaos && has_xaos {
+            // Just update the data
+            self.buffers.update_xaos(queue, flame);
+        }
+
+        false
     }
 
     /// Read pixels from the fractal_texture (after tonemap_pass has rendered to it)

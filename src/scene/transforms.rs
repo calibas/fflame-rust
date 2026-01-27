@@ -776,6 +776,11 @@ pub struct Flame {
     pub render_mode: RenderMode,
     /// Perspective strength for 3D rendering (0.0 = flat/orthographic, 10.0 = strong perspective)
     pub perspective_strength: f32,
+    /// Xaos transition weights: xaos[src][dst] = modifier for src→dst transition
+    /// None when all weights are 1.0 (default behavior, no memory allocated)
+    /// When Some, outer Vec has len = transforms.len(), inner Vec has len = transforms.len()
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xaos: Option<Vec<Vec<f32>>>,
 }
 
 fn default_flame_name() -> String {
@@ -790,6 +795,7 @@ impl Default for Flame {
             final_transform: None,
             render_mode: RenderMode::default(),
             perspective_strength: 0.0,  // Default to orthographic (flat)
+            xaos: None,  // Default: no xaos (all weights implicitly 1.0)
         }
     }
 }
@@ -871,6 +877,105 @@ impl Flame {
         }
         self.transforms.len().saturating_sub(1)
     }
+
+    // === XAOS (WEIGHTED TRANSFORM TRANSITIONS) ===
+
+    /// Check if this flame has non-default xaos weights
+    /// Returns false if xaos is None or all weights are 1.0
+    pub fn has_xaos(&self) -> bool {
+        if let Some(ref xaos) = self.xaos {
+            // Check if any weight differs from 1.0
+            for row in xaos {
+                for &weight in row {
+                    if (weight - 1.0).abs() > 1e-6 {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Get xaos weight for transition from src to dst
+    /// Returns 1.0 if xaos is not enabled or indices are out of bounds
+    pub fn get_xaos(&self, src: usize, dst: usize) -> f32 {
+        if let Some(ref xaos) = self.xaos {
+            if src < xaos.len() && dst < xaos[src].len() {
+                return xaos[src][dst];
+            }
+        }
+        1.0
+    }
+
+    /// Set xaos weight for transition from src to dst
+    /// Automatically initializes xaos matrix if needed
+    pub fn set_xaos(&mut self, src: usize, dst: usize, weight: f32) {
+        self.ensure_xaos_size();
+        if let Some(ref mut xaos) = self.xaos {
+            if src < xaos.len() && dst < xaos[src].len() {
+                xaos[src][dst] = weight;
+            }
+        }
+    }
+
+    /// Ensure xaos matrix exists and has correct size for current transform count
+    /// Initializes all weights to 1.0 (default behavior)
+    pub fn ensure_xaos_size(&mut self) {
+        let n = self.transforms.len();
+        if n == 0 {
+            self.xaos = None;
+            return;
+        }
+
+        match &mut self.xaos {
+            None => {
+                // Initialize with all 1.0 weights
+                self.xaos = Some(vec![vec![1.0; n]; n]);
+            }
+            Some(xaos) => {
+                // Resize if needed
+                let current_size = xaos.len();
+                if current_size != n {
+                    // Resize rows
+                    xaos.resize(n, vec![1.0; n]);
+                    // Resize columns in each row
+                    for row in xaos.iter_mut() {
+                        row.resize(n, 1.0);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Clear xaos (set to None, reverting to default behavior)
+    pub fn clear_xaos(&mut self) {
+        self.xaos = None;
+    }
+
+    /// Reset all xaos weights to 1.0 (keeping the matrix allocated)
+    pub fn reset_xaos(&mut self) {
+        if let Some(ref mut xaos) = self.xaos {
+            for row in xaos.iter_mut() {
+                for weight in row.iter_mut() {
+                    *weight = 1.0;
+                }
+            }
+        }
+    }
+
+    /// Get xaos matrix as flat array for GPU upload
+    /// Returns None if xaos is not enabled
+    /// Layout: row-major, xaos_flat[src * n + dst] = weight for src→dst
+    pub fn xaos_flat(&self) -> Option<Vec<f32>> {
+        self.xaos.as_ref().map(|xaos| {
+            let n = xaos.len();
+            let mut flat = Vec::with_capacity(n * n);
+            for row in xaos {
+                flat.extend_from_slice(row);
+            }
+            flat
+        })
+    }
 }
 
 // Custom deserializer for Flame to handle backward compatibility with old ProjectionType enum
@@ -888,6 +993,7 @@ impl<'de> Deserialize<'de> for Flame {
             RenderMode,
             PerspectiveStrength,
             Projection, // Old field name for backward compatibility
+            Xaos,
         }
 
         struct FlameVisitor;
@@ -908,6 +1014,7 @@ impl<'de> Deserialize<'de> for Flame {
                 let mut final_transform = None;
                 let mut render_mode = None;
                 let mut perspective_strength = None;
+                let mut xaos = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -952,6 +1059,9 @@ impl<'de> Deserialize<'de> for Flame {
                                 _ => 0.0, // Default to orthographic
                             });
                         }
+                        Field::Xaos => {
+                            xaos = Some(map.next_value()?);
+                        }
                     }
                 }
 
@@ -961,11 +1071,12 @@ impl<'de> Deserialize<'de> for Flame {
                     final_transform: final_transform.unwrap_or(None),
                     render_mode: render_mode.unwrap_or_default(),
                     perspective_strength: perspective_strength.unwrap_or(0.0),
+                    xaos,
                 })
             }
         }
 
-        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "render_mode", "perspective_strength", "projection"];
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "render_mode", "perspective_strength", "projection", "xaos"];
         deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }
