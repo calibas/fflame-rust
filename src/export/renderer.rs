@@ -169,11 +169,8 @@ impl TiledRenderer {
             ));
         }
 
-        // Create transform buffer
-        let transforms: Vec<GpuTransform> = config.flame.transforms
-            .iter()
-            .map(|t| GpuTransform::from_transform(t, global_registry()))
-            .collect();
+        // Create transform buffer with solo mode handling
+        let transforms = GpuTransform::from_flame(&config.flame, global_registry());
 
         let transform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Transform Buffer"),

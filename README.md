@@ -33,3 +33,4 @@ Fractal renderers:
 - [Iterator.it](https://iterator.it/)
 - [Fractility](https://sites.google.com/view/meltmixpix/fractility)
 - [GAPFix Fractal](https://github.com/bernds/GAPFixFractal)
+- [Jux](https://xenodream.com/jux.htm)

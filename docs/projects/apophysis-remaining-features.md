@@ -246,7 +246,7 @@ Blends variation-modified color back: `c_final = c_base + direct_color × (vc - 
 
 ### 6. Xaos (Paths & Weights)
 
-**Status:** Not implemented
+**Status:** ✅ **COMPLETE** (2026-01-27)
 
 **Description:**
 Control the probability of transitioning from one transform to another.
@@ -258,20 +258,34 @@ Creates directed graphs instead of uniform random selection.
 - Default: uniform (1.0 for all)
 - Allows creating paths through transforms
 
-**What's Needed:**
-- Add xaos matrix to Flame structure: `Vec<Vec<f32>>`
-- Upload to GPU as storage buffer
-- Modify compute shader to use weighted selection
-- UI editor for xaos matrix (challenging)
-- XML import/export of xaos values
+**Implementation Complete:**
+- ✅ Xaos matrix in Flame structure: `Option<Vec<Vec<f32>>>`
+- ✅ GPU storage buffer with conditional compilation (XAOS_ENABLED)
+- ✅ Zero overhead when disabled (no buffer allocated, simpler shader)
+- ✅ Compute shader weighted selection (`select_transform_xaos()`)
+- ✅ XML import of `chaos` attribute from Apophysis
+- ✅ UI editor panel with N×N grid (View To/From toggle)
+- ✅ Animation support (each xaos cell can be animated)
+- ✅ All rendering paths supported (interactive, CLI, WASM, tiled, high-res)
+- ✅ ConfigManager integration (undo/redo)
 
-**Use Cases:**
-- Create specific paths through transforms
-- Disable certain transform transitions
-- Advanced flame design technique
-- Rarely used except by experts
+**Key Features:**
+- Grid-based editor with DragValue inputs
+- Transform color indicators matching transforms panel
+- Reset All (1.0) and Isolate All buttons
+- Axis labels positioned intuitively (To: top-right, From: bottom-left)
 
-**Estimated Effort:** 12-15 hours (complex UI + GPU changes)
+**Files Modified:**
+- `src/scene/transforms.rs` - Flame.xaos field and methods
+- `src/gpu/buffers.rs` - XaosBuffer (optional)
+- `src/renderer/compute_kernel.rs` - Buffer lifecycle management
+- `shaders/core/utilities.wgsl` - `select_transform_xaos()` function
+- `shaders/core/main_template.wgsl` - Conditional xaos tracking
+- `src/apophysis_xml.rs` - Parse chaos attribute
+- `src/ui/xaos_editor.rs` - New editor panel
+- `src/ui/target_selector.rs` - Animation targets
+
+**Actual Effort:** ~6 hours
 
 ---
 
@@ -488,18 +502,20 @@ Apophysis uses `double` (64-bit) for variation weights and parameters.
 
 ## Priority Order
 
-**High Priority (Planned):**
-1. 3D Controls Match Apophysis (2-3 hours) - Required for 3D flame import
-2. Direct Color Transforms (3-4 hours) - Some flames need this
+**Completed:**
+1. ✅ 3D Camera System Match Apophysis
+2. ✅ Versatile Transform Color System
+6. ✅ Xaos (Paths & Weights)
+7. ✅ Final Transform
+
+**High Priority (Remaining):**
 3. XML Export (6-8 hours) - Enables sharing and round-trip testing
 
 **Medium Priority (Nice to Have):**
-4. Final Transform (4-6 hours) - Common in Apophysis flames
-5. Separate RGB Tone Curves (6-8 hours) - Full curve compatibility
-6. Transform Solo Mode (2-3 hours) - Easy, high value for debugging
-7. Variation Preview (8-10 hours) - Educational, not critical
-8. Xaos (12-15 hours) - Advanced feature, rarely used
-9. Direct Color Variations (10-12 hours) - Part of plugin system, rarely used
+5. Direct Color Variations & Plugin Color Blending (10-14 hours) - Part of plugin system
+8. Separate RGB Tone Curves (6-8 hours) - Full curve compatibility
+9. Transform Solo Mode (2-3 hours) - Easy, high value for debugging
+4. Variation Preview (8-10 hours) - Educational, not critical
 
 **Low Priority (Experimental/Not Planned):**
 10. Two-Color System - Unused in practice
@@ -510,14 +526,14 @@ Apophysis uses `double` (64-bit) for variation weights and parameters.
 
 ## Estimated Total Effort
 
-**Planned Features:** 11-15 hours
-**Nice to Have:** 34-43 hours (if all implemented)
-**Total for Full Compatibility:** ~45-58 hours
+**Completed:** ~22 hours (3D camera, color system, xaos, final transform)
+**Remaining High Priority:** 6-8 hours (XML export)
+**Remaining Nice to Have:** 26-35 hours (if all implemented)
 
 **Realistic Next Steps:**
-- Focus on Planned features first (11-15 hours)
-- Add Transform Solo Mode (easy win, 2-3 hours)
-- Defer advanced features (Xaos, Variation Preview) for future
+- XML Export (6-8 hours) - Main remaining feature for round-trip compatibility
+- Transform Solo Mode (2-3 hours) - Easy win for debugging
+- Defer advanced features (Direct Color Variations, Variation Preview) for future
 - Skip experimental/not planned features
 
 ---
@@ -527,24 +543,25 @@ Apophysis uses `double` (64-bit) for variation weights and parameters.
 **Minimum Viable (Planned Complete):**
 - [x] Can import Apophysis 3D flames correctly
 - [x] Direct color transforms work
-- [x] Can export to .flame XML for sharing
+- [ ] Can export to .flame XML for sharing
 
 **Full Compatibility (All Nice-to-Have):**
 - [ ] Transform preview helps debugging
-- [ ] Xaos support for advanced flames
+- [x] Xaos support for advanced flames
 - [ ] Direct color variations for plugins
 - [ ] Solo mode for transform isolation
 
 **Current State:**
-- 90%+ compatibility for typical flames
-- All variations, color system, XML import complete
-- Missing: XML export, some 3D controls, advanced features
+- 95%+ compatibility for typical flames
+- All variations, color system, XML import, xaos, final transform complete
+- Missing: XML export, direct color variations, RGB tone curves
 
 ---
 
 ## Related Documentation
 
 - `docs/archive/apophysis-phase3/` - Completed Phase 3 documentation
+- `docs/archive/xaos/` - Xaos implementation documentation
 - `docs/main/COLOR.md` - Color system reference
 - `docs/main/TRANSFORMS.md` - Transform system reference
 - `docs/projects/apophysis-remaining-features.md` - This document
@@ -552,5 +569,6 @@ Apophysis uses `double` (64-bit) for variation weights and parameters.
 ---
 
 **Created:** 2025-01-07
+**Updated:** 2026-01-27
 **Status:** Active Planning
-**Next Steps:** Implement 3D camera controls, then direct color transforms, then XML export
+**Next Steps:** XML export is the main remaining high-priority feature

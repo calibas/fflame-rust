@@ -343,6 +343,7 @@ fn get_rendering_items() -> Vec<TargetItem> {
         TargetItem::new(ConfigPath::BlendFactor, "Blend Factor"),
         TargetItem::new(ConfigPath::HistogramColorScale, "Histogram Color Scale"),
         TargetItem::new(ConfigPath::PerspectiveStrength, "Perspective Strength"),
+        TargetItem::new(ConfigPath::SoloTransform, "Solo Transform"),
     ]
 }
 

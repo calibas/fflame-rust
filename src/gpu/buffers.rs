@@ -40,6 +40,11 @@ unsafe impl bytemuck::Zeroable for GpuTransform {}
 impl GpuTransform {
     /// Create from Transform using a VariationRegistry
     pub fn from_transform(xform: &Transform, registry: &crate::variations::VariationRegistry) -> Self {
+        Self::from_transform_with_opacity(xform, xform.opacity, registry)
+    }
+
+    /// Create from Transform with an explicit effective opacity (for solo mode)
+    pub fn from_transform_with_opacity(xform: &Transform, effective_opacity: f32, registry: &crate::variations::VariationRegistry) -> Self {
         Self {
             a: xform.a,
             b: xform.b,
@@ -52,9 +57,35 @@ impl GpuTransform {
             variations: xform.to_fixed_array(registry),
             color: xform.color,
             color_speed: xform.color_speed,
-            opacity: xform.opacity,
+            opacity: effective_opacity,
             _padding: 0.0,
         }
+    }
+
+    /// Create GPU transforms from a Flame, handling solo mode
+    /// When solo_transform is Some(idx), that transform keeps its opacity,
+    /// all others get opacity 0.0 (invisible)
+    pub fn from_flame(flame: &Flame, registry: &crate::variations::VariationRegistry) -> Vec<Self> {
+        let solo_idx = flame.solo_transform;
+
+        let mut gpu_transforms: Vec<Self> = flame.transforms
+            .iter()
+            .enumerate()
+            .map(|(i, xform)| {
+                let effective_opacity = match solo_idx {
+                    Some(solo) if i != solo => 0.0,
+                    _ => xform.opacity,
+                };
+                Self::from_transform_with_opacity(xform, effective_opacity, registry)
+            })
+            .collect();
+
+        // Append final transform if present (not affected by solo mode)
+        if let Some(ref final_xform) = flame.final_transform {
+            gpu_transforms.push(Self::from_transform(final_xform, registry));
+        }
+
+        gpu_transforms
     }
 }
 
@@ -430,17 +461,9 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Upload initial transforms (include final transform if present)
+        // Upload initial transforms with solo mode handling
         let registry = crate::variations::global_registry();
-        let mut gpu_transforms: Vec<GpuTransform> = flame
-            .transforms
-            .iter()
-            .map(|xform| GpuTransform::from_transform(xform, registry))
-            .collect();
-        // Append final transform if present (same as update_transforms)
-        if let Some(ref final_xform) = flame.final_transform {
-            gpu_transforms.push(GpuTransform::from_transform(final_xform, registry));
-        }
+        let gpu_transforms = GpuTransform::from_flame(flame, registry);
         queue.write_buffer(&transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
 
         // Create variation parameters storage buffer sized for MAX_TRANSFORMS
@@ -942,18 +965,9 @@ impl FlameBuffers {
             panic!("Flame has {} transforms (+ final) but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
         }
 
-        // Create a fixed-size array with all transforms, padding with zeroes
+        // Create transforms with solo mode handling
         let registry = crate::variations::global_registry();
-        let mut gpu_transforms: Vec<GpuTransform> = flame
-            .transforms
-            .iter()
-            .map(|xform| GpuTransform::from_transform(xform, registry))
-            .collect();
-
-        // Append final transform if present (always at end of regular transforms)
-        if let Some(final_xform) = &flame.final_transform {
-            gpu_transforms.push(GpuTransform::from_transform(final_xform, registry));
-        }
+        let mut gpu_transforms = GpuTransform::from_flame(flame, registry);
 
         // Pad with zeroed transforms to fill the buffer
         // This ensures old transforms don't remain in GPU memory when switching to fewer transforms
