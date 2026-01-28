@@ -1250,7 +1250,7 @@ tooltips:
   affine_g: "Z offset - depth in 3D mode"
   color_speed: "How fast the color index changes during iteration.\n-1 to 1, where 0 = no change."
   opacity: "Transparency of points from this transform.\n0 = invisible, 1 = fully opaque"
-  transform_solo: "Isolate this transform by setting its weight to 1.0\nand all others to 0.0. Click again to restore."
+  transform_solo: "Isolate this transform by hiding all others.\n Click again to restore."
 
   blend_rate: "How fast new samples blend with existing.\n0.01 = slow/smooth, 1.0 = fast/flickery"
   dynamic_blend: "Exponential convergence (old) vs fixed rate (new).\nFixed rate gives more consistent results."
