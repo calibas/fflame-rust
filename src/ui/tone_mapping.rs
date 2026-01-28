@@ -620,5 +620,12 @@ pub fn render_colors_content(
             ui.label(t!("tonemap.background_color"));
         });
 
+    ui.separator();
+
+    // Reset to Defaults button (excludes palette and background color)
+    if ui.button(t!("tonemap.reset_to_defaults").as_ref()).clicked() {
+        super::reset_colors_to_defaults(config_manager);
+    }
+
     max_update
 }

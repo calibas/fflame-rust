@@ -41,6 +41,7 @@ pub struct RenderingMenuActions {
     pub pause_toggle: bool,
     pub reset_accumulation: bool,
     pub set_iterations_per_thread: Option<u32>, // Iterations per thread (64, 128, 256, 512, 1024)
+    pub reset_to_defaults: bool,
 }
 
 /// Combined context for all menu actions

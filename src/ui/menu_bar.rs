@@ -137,10 +137,24 @@ pub fn render_menu_bar(
                         }
                     }
                 });
+
+                ui.separator();
+
+                // Reset Rendering to Defaults
+                if ui.button(t!("menu.reset_rendering")).clicked() {
+                    menu_actions.rendering.reset_to_defaults = true;
+                }
             });
 
             // Windows Menu
             ui.menu_button(t!("menu.window"), |ui| {
+                // Reset Workspace to Standard layout
+                if ui.button(t!("menu.reset_workspace")).clicked() {
+                    workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
+                }
+
+                ui.separator();
+
                 // Performance opens as floating window in docking system (only one instance)
                 let performance_open = workspace.panel_exists(super::workspace::PanelType::Performance);
                 if ui.selectable_label(performance_open, t!("menu.window_performance").as_ref()).clicked() {
