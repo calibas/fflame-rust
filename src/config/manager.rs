@@ -358,9 +358,11 @@ impl ConfigManager {
 
         for delta in &change.deltas {
             self.set_value(&delta.path, delta.new_value.clone())?;
+            // Record each delta's update type separately so all necessary actions are merged
+            // (e.g., batch with ColorMode + TonemapCurve needs both update_palette AND update_tone_curve)
+            self.record_action(delta.path.update_type());
         }
 
-        self.record_action(update_type);
         Ok(update_type)
     }
 

@@ -863,12 +863,13 @@ fn reset_rendering_to_defaults(config_manager: &mut crate::config::ConfigManager
 }
 
 /// Reset all color/tone mapping settings to their defaults (except palette and background)
-fn reset_colors_to_defaults(config_manager: &mut crate::config::ConfigManager) {
-    use crate::config::{ConfigPath, defaults};
+/// Returns the UpdateType so the caller can propagate GPU updates
+fn reset_colors_to_defaults(config_manager: &mut crate::config::ConfigManager) -> crate::config::UpdateType {
+    use crate::config::{ConfigPath, defaults, UpdateType};
     use crate::scene::tonemap::{ToneMapMode, ToneCurve};
     use crate::scene::palette::ColorMode;
 
-    let _ = config_manager.update_batch(
+    config_manager.update_batch(
         vec![
             // Color mode
             (ConfigPath::ColorMode, ColorMode::Palette.into()),
@@ -898,5 +899,5 @@ fn reset_colors_to_defaults(config_manager: &mut crate::config::ConfigManager) {
             (ConfigPath::PaletteSize, defaults::DEFAULT_PALETTE_SIZE.into()),
         ],
         "history.action.reset_colors".to_string()
-    );
+    ).unwrap_or(UpdateType::None)
 }

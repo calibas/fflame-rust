@@ -624,7 +624,8 @@ pub fn render_colors_content(
 
     // Reset to Defaults button (excludes palette and background color)
     if ui.button(t!("tonemap.reset_to_defaults").as_ref()).clicked() {
-        super::reset_colors_to_defaults(config_manager);
+        let update = super::reset_colors_to_defaults(config_manager);
+        max_update = max_update.max(update);
     }
 
     max_update
