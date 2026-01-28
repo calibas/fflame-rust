@@ -40,11 +40,11 @@ unsafe impl bytemuck::Zeroable for GpuTransform {}
 impl GpuTransform {
     /// Create from Transform using a VariationRegistry
     pub fn from_transform(xform: &Transform, registry: &crate::variations::VariationRegistry) -> Self {
-        Self::from_transform_with_weight(xform, xform.weight, registry)
+        Self::from_transform_with_opacity(xform, xform.opacity, registry)
     }
 
-    /// Create from Transform with an explicit effective weight (for solo mode)
-    pub fn from_transform_with_weight(xform: &Transform, effective_weight: f32, registry: &crate::variations::VariationRegistry) -> Self {
+    /// Create from Transform with an explicit effective opacity (for solo mode)
+    pub fn from_transform_with_opacity(xform: &Transform, effective_opacity: f32, registry: &crate::variations::VariationRegistry) -> Self {
         Self {
             a: xform.a,
             b: xform.b,
@@ -53,18 +53,18 @@ impl GpuTransform {
             e: xform.e,
             f: xform.f,
             g: xform.g,
-            weight: effective_weight,
+            weight: xform.weight,
             variations: xform.to_fixed_array(registry),
             color: xform.color,
             color_speed: xform.color_speed,
-            opacity: xform.opacity,
+            opacity: effective_opacity,
             _padding: 0.0,
         }
     }
 
     /// Create GPU transforms from a Flame, handling solo mode
-    /// When solo_transform is Some(idx), that transform gets its original weight,
-    /// all others get weight 0.0
+    /// When solo_transform is Some(idx), that transform keeps its opacity,
+    /// all others get opacity 0.0 (invisible)
     pub fn from_flame(flame: &Flame, registry: &crate::variations::VariationRegistry) -> Vec<Self> {
         let solo_idx = flame.solo_transform;
 
@@ -72,11 +72,11 @@ impl GpuTransform {
             .iter()
             .enumerate()
             .map(|(i, xform)| {
-                let effective_weight = match solo_idx {
+                let effective_opacity = match solo_idx {
                     Some(solo) if i != solo => 0.0,
-                    _ => xform.weight,
+                    _ => xform.opacity,
                 };
-                Self::from_transform_with_weight(xform, effective_weight, registry)
+                Self::from_transform_with_opacity(xform, effective_opacity, registry)
             })
             .collect();
 
