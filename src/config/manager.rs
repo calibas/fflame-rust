@@ -419,6 +419,10 @@ impl ConfigManager {
                 };
                 self.system_settings.language = value;
             }
+            ConfigPath::SystemShowHelpOnStartup => {
+                let value: bool = new_value.try_into()?;
+                self.system_settings.show_help_on_startup = value;
+            }
             _ => {
                 return Err(ConfigError::InvalidPath(
                     "Not a system setting path. Use update_param() for FractalConfig changes.".to_string()
@@ -1183,7 +1187,8 @@ impl ConfigManager {
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemLanguage
-            | ConfigPath::SystemBurnIn => {
+            | ConfigPath::SystemBurnIn
+            | ConfigPath::SystemShowHelpOnStartup => {
                 panic!("System settings should not be accessed via get_value(). Use config_manager.system_settings() instead.");
             }
         }
@@ -1696,7 +1701,8 @@ impl ConfigManager {
             | ConfigPath::SystemExportWidth
             | ConfigPath::SystemExportHeight
             | ConfigPath::SystemLanguage
-            | ConfigPath::SystemBurnIn => {
+            | ConfigPath::SystemBurnIn
+            | ConfigPath::SystemShowHelpOnStartup => {
                 panic!("System settings should not be modified via apply_value(). Use config_manager.update_system_setting() instead.");
             }
         }
