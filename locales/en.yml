@@ -43,6 +43,7 @@ menu:
   resume: "▶ Resume"
   reset_accumulation: "🔄 Reset Accumulation"
   iterations_per_thread: "Iterations per Thread"
+  reset_rendering: "🔄 Reset to Defaults"
 
   # Window Menu - Panel items
   window_performance: "📊 Performance"
@@ -65,6 +66,7 @@ menu:
   window_xaos_editor: "🔀 Xaos Editor"
 
   # Window Menu - Workspace layouts
+  reset_workspace: "🔄 Reset Workspace"
   workspace_layout: "📐 Workspace Layout"
   layout_beginner: "Beginner"
   layout_standard: "Standard"
@@ -421,6 +423,7 @@ tonemap:
   palette_size: "Palette Size"
   speed_blend_factor: "Speed Blend Factor"
   background_color: "Background Color"
+  reset_to_defaults: "🔄 Reset to Defaults"
 
   # Path Map
   path_style: "Path Style"
@@ -592,6 +595,8 @@ history:
   # Action descriptions (for batch updates and load operations)
   action:
     reset_view: "Reset View"
+    reset_rendering: "Reset Rendering to Defaults"
+    reset_colors: "Reset Colors to Defaults"
     triangle_edit_move: "Triangle Edit (Move Points)"
     triangle_edit_translate: "Triangle Edit (Translate)"
     triangle_edit_rotate: "Triangle Edit (Rotate)"
@@ -1154,6 +1159,7 @@ settings:
   target_fps: "Target FPS:"
   vsync_wasm: "VSync: Always Enabled (WebGPU limitation)"
   deterministic_rng: "Deterministic RNG"
+  reset_to_defaults: "🔄 Reset to Defaults"
 
   # Export Section
   export_section: "Export"

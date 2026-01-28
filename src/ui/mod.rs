@@ -682,6 +682,10 @@ impl EguiLayer {
             );
         }
 
+        if menu_actions.rendering.reset_to_defaults {
+            reset_rendering_to_defaults(config_manager);
+        }
+
         // Take selected preset config (reset to None after returning)
         let selected_preset_config = self.selected_preset_config.take();
 
@@ -819,4 +823,79 @@ impl EguiLayer {
     pub fn density_histogram(&self) -> &crate::renderer::DensityHistogram {
         &self.density_histogram
     }
+}
+
+/// Reset all rendering settings to their defaults
+fn reset_rendering_to_defaults(config_manager: &mut crate::config::ConfigManager) {
+    use crate::config::{ConfigPath, defaults};
+
+    // Reset fractal config rendering settings
+    let _ = config_manager.update_batch(
+        vec![
+            (ConfigPath::MaxIterations, defaults::DEFAULT_MAX_ITERATIONS.into()),
+            (ConfigPath::HistogramColorScale, defaults::DEFAULT_HISTOGRAM_COLOR_SCALE.into()),
+            (ConfigPath::BlendFactor, defaults::DEFAULT_BLEND_FACTOR.into()),
+            (ConfigPath::UseDynamicBlend, defaults::DEFAULT_USE_DYNAMIC_BLEND.into()),
+            (ConfigPath::TargetIterationsPerPixel, 0u64.into()),
+            (ConfigPath::DeterministicRng, false.into()),
+        ],
+        "history.action.reset_rendering".to_string()
+    );
+
+    // Reset system settings (these don't go through undo history)
+    let _ = config_manager.update_system_setting(
+        ConfigPath::SystemIterationsPerThread,
+        defaults::DEFAULT_ITERATIONS_PER_THREAD.into()
+    );
+    let _ = config_manager.update_system_setting(
+        ConfigPath::SystemBurnIn,
+        20u32.into() // Default burn-in
+    );
+    let _ = config_manager.update_system_setting(
+        ConfigPath::SystemVsyncEnabled,
+        true.into()
+    );
+    let _ = config_manager.update_system_setting(
+        ConfigPath::SystemTargetFps,
+        60.0f32.into()
+    );
+}
+
+/// Reset all color/tone mapping settings to their defaults (except palette and background)
+fn reset_colors_to_defaults(config_manager: &mut crate::config::ConfigManager) {
+    use crate::config::{ConfigPath, defaults};
+    use crate::scene::tonemap::{ToneMapMode, ToneCurve};
+    use crate::scene::palette::ColorMode;
+
+    let _ = config_manager.update_batch(
+        vec![
+            // Color mode
+            (ConfigPath::ColorMode, ColorMode::Palette.into()),
+            // Tone mapping mode
+            (ConfigPath::TonemapMode, ToneMapMode::Logarithmic.into()),
+            // Tone mapping settings
+            (ConfigPath::Exposure, defaults::DEFAULT_EXPOSURE.into()),
+            (ConfigPath::Gamma, 2.2f32.into()),
+            (ConfigPath::GammaThreshold, defaults::DEFAULT_GAMMA_THRESHOLD.into()),
+            (ConfigPath::Brightness, defaults::DEFAULT_BRIGHTNESS.into()),
+            (ConfigPath::Vibrancy, 1.0f32.into()),
+            (ConfigPath::Saturation, defaults::DEFAULT_SATURATION.into()),
+            (ConfigPath::HueShift, defaults::DEFAULT_HUE_SHIFT.into()),
+            (ConfigPath::AlphaBlendLow, defaults::DEFAULT_ALPHA_BLEND_LOW.into()),
+            (ConfigPath::AlphaBlendHigh, defaults::DEFAULT_ALPHA_BLEND_HIGH.into()),
+            (ConfigPath::DensityScale, defaults::DEFAULT_DENSITY_SCALE.into()),
+            // Tone curve
+            (ConfigPath::UseCurve, true.into()),
+            (ConfigPath::TonemapCurve, ToneCurve::default().into()),
+            // Levels
+            (ConfigPath::LevelsLow, 0.0f32.into()),
+            (ConfigPath::LevelsHigh, 1000.0f32.into()),
+            (ConfigPath::LevelsGamma, 1.0f32.into()),
+            // Palette settings (not the palette itself or background)
+            (ConfigPath::PaletteRotation, defaults::DEFAULT_PALETTE_ROTATION.into()),
+            (ConfigPath::PaletteSqueeze, defaults::DEFAULT_PALETTE_SQUEEZE.into()),
+            (ConfigPath::PaletteSize, defaults::DEFAULT_PALETTE_SIZE.into()),
+        ],
+        "history.action.reset_colors".to_string()
+    );
 }

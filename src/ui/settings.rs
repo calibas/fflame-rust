@@ -204,4 +204,10 @@ pub fn render_settings_content(
             .on_disabled_hover_text(t!("settings.tooltip_vsync_wasm"));
     }
 
+    ui.separator();
+
+    // Reset to Defaults button
+    if ui.button(t!("settings.reset_to_defaults").as_ref()).clicked() {
+        super::reset_rendering_to_defaults(config_manager);
+    }
 }
