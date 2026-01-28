@@ -684,6 +684,7 @@ impl EguiLayer {
 
         if menu_actions.rendering.reset_to_defaults {
             reset_rendering_to_defaults(config_manager);
+            *paused = false; // Resume rendering after reset
         }
 
         // Take selected preset config (reset to None after returning)
@@ -836,7 +837,7 @@ fn reset_rendering_to_defaults(config_manager: &mut crate::config::ConfigManager
             (ConfigPath::HistogramColorScale, defaults::DEFAULT_HISTOGRAM_COLOR_SCALE.into()),
             (ConfigPath::BlendFactor, defaults::DEFAULT_BLEND_FACTOR.into()),
             (ConfigPath::UseDynamicBlend, defaults::DEFAULT_USE_DYNAMIC_BLEND.into()),
-            (ConfigPath::TargetIterationsPerPixel, 0u64.into()),
+            (ConfigPath::TargetIterationsPerPixel, 0u32.into()),
             (ConfigPath::DeterministicRng, false.into()),
         ],
         "history.action.reset_rendering".to_string()

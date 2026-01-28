@@ -209,5 +209,6 @@ pub fn render_settings_content(
     // Reset to Defaults button
     if ui.button(t!("settings.reset_to_defaults").as_ref()).clicked() {
         super::reset_rendering_to_defaults(config_manager);
+        *paused = false; // Resume rendering after reset
     }
 }
