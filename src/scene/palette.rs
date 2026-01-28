@@ -29,6 +29,13 @@ pub enum PathCaptureMode {
     LastHit,
 }
 
+impl PathCaptureMode {
+    /// Check if this is the default value (for skip_serializing_if)
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// PathMap tracking mode - which iterations to store in the path
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PathTrackingMode {
@@ -37,6 +44,13 @@ pub enum PathTrackingMode {
     First,
     /// Store the 32 most recent iterations (rolling window)
     Recent,
+}
+
+impl PathTrackingMode {
+    /// Check if this is the default value (for skip_serializing_if)
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// PathMap coloring style - how path hash maps to colors
@@ -59,6 +73,13 @@ pub enum PathMapStyle {
     OriginHorizontal,
     /// Color by vertical position (-1 to 1), uses palette gradient
     OriginVertical,
+}
+
+impl PathMapStyle {
+    /// Check if this is the default value (for skip_serializing_if)
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// A single color stop in a gradient palette
