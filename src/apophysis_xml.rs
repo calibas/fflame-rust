@@ -77,6 +77,7 @@ fn parse_flame_element(
     let mut cam_zpos = 0.0;   // Camera Z position (height)
     let mut cam_perspective = 0.0;  // Perspective strength
     let mut curves: Option<Vec<f32>> = None;  // Tone curve data (48 floats)
+    let mut solo_xform: Option<usize> = None;  // Solo transform index (0-indexed)
 
     for attr in start_element.attributes() {
         let attr = attr?;
@@ -127,6 +128,10 @@ fn parse_flame_element(
                 if parsed.len() == 48 {
                     curves = Some(parsed);
                 }
+            }
+            "soloxform" => {
+                // Solo transform index (0-indexed in Apophysis)
+                solo_xform = value.parse::<usize>().ok();
             }
             _ => {} // Ignore unknown attributes for now
         }
@@ -248,6 +253,7 @@ fn parse_flame_element(
         render_mode,
         perspective_strength,
         xaos,
+        solo_transform: solo_xform,
     };
 
     // Convert Apophysis scale/center to our zoom/pan

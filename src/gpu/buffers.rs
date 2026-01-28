@@ -40,6 +40,11 @@ unsafe impl bytemuck::Zeroable for GpuTransform {}
 impl GpuTransform {
     /// Create from Transform using a VariationRegistry
     pub fn from_transform(xform: &Transform, registry: &crate::variations::VariationRegistry) -> Self {
+        Self::from_transform_with_weight(xform, xform.weight, registry)
+    }
+
+    /// Create from Transform with an explicit effective weight (for solo mode)
+    pub fn from_transform_with_weight(xform: &Transform, effective_weight: f32, registry: &crate::variations::VariationRegistry) -> Self {
         Self {
             a: xform.a,
             b: xform.b,
@@ -48,13 +53,39 @@ impl GpuTransform {
             e: xform.e,
             f: xform.f,
             g: xform.g,
-            weight: xform.weight,
+            weight: effective_weight,
             variations: xform.to_fixed_array(registry),
             color: xform.color,
             color_speed: xform.color_speed,
             opacity: xform.opacity,
             _padding: 0.0,
         }
+    }
+
+    /// Create GPU transforms from a Flame, handling solo mode
+    /// When solo_transform is Some(idx), that transform gets its original weight,
+    /// all others get weight 0.0
+    pub fn from_flame(flame: &Flame, registry: &crate::variations::VariationRegistry) -> Vec<Self> {
+        let solo_idx = flame.solo_transform;
+
+        let mut gpu_transforms: Vec<Self> = flame.transforms
+            .iter()
+            .enumerate()
+            .map(|(i, xform)| {
+                let effective_weight = match solo_idx {
+                    Some(solo) if i != solo => 0.0,
+                    _ => xform.weight,
+                };
+                Self::from_transform_with_weight(xform, effective_weight, registry)
+            })
+            .collect();
+
+        // Append final transform if present (not affected by solo mode)
+        if let Some(ref final_xform) = flame.final_transform {
+            gpu_transforms.push(Self::from_transform(final_xform, registry));
+        }
+
+        gpu_transforms
     }
 }
 
@@ -430,17 +461,9 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Upload initial transforms (include final transform if present)
+        // Upload initial transforms with solo mode handling
         let registry = crate::variations::global_registry();
-        let mut gpu_transforms: Vec<GpuTransform> = flame
-            .transforms
-            .iter()
-            .map(|xform| GpuTransform::from_transform(xform, registry))
-            .collect();
-        // Append final transform if present (same as update_transforms)
-        if let Some(ref final_xform) = flame.final_transform {
-            gpu_transforms.push(GpuTransform::from_transform(final_xform, registry));
-        }
+        let gpu_transforms = GpuTransform::from_flame(flame, registry);
         queue.write_buffer(&transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
 
         // Create variation parameters storage buffer sized for MAX_TRANSFORMS
@@ -942,18 +965,9 @@ impl FlameBuffers {
             panic!("Flame has {} transforms (+ final) but MAX_TRANSFORMS is {}", flame.transforms.len(), MAX_TRANSFORMS);
         }
 
-        // Create a fixed-size array with all transforms, padding with zeroes
+        // Create transforms with solo mode handling
         let registry = crate::variations::global_registry();
-        let mut gpu_transforms: Vec<GpuTransform> = flame
-            .transforms
-            .iter()
-            .map(|xform| GpuTransform::from_transform(xform, registry))
-            .collect();
-
-        // Append final transform if present (always at end of regular transforms)
-        if let Some(final_xform) = &flame.final_transform {
-            gpu_transforms.push(GpuTransform::from_transform(final_xform, registry));
-        }
+        let mut gpu_transforms = GpuTransform::from_flame(flame, registry);
 
         // Pad with zeroed transforms to fill the buffer
         // This ensures old transforms don't remain in GPU memory when switching to fewer transforms

@@ -781,6 +781,12 @@ pub struct Flame {
     /// When Some, outer Vec has len = transforms.len(), inner Vec has len = transforms.len()
     #[serde(skip_serializing_if = "Option::is_none")]
     pub xaos: Option<Vec<Vec<f32>>>,
+
+    /// Solo transform index (0-indexed). When Some(n), only transform n has weight,
+    /// all others effectively have weight 0. Used for debugging individual transforms.
+    /// Matches Apophysis XML attribute: soloxform="N"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub solo_transform: Option<usize>,
 }
 
 fn default_flame_name() -> String {
@@ -796,6 +802,7 @@ impl Default for Flame {
             render_mode: RenderMode::default(),
             perspective_strength: 0.0,  // Default to orthographic (flat)
             xaos: None,  // Default: no xaos (all weights implicitly 1.0)
+            solo_transform: None,  // Default: no solo (all transforms active)
         }
     }
 }
@@ -994,6 +1001,7 @@ impl<'de> Deserialize<'de> for Flame {
             PerspectiveStrength,
             Projection, // Old field name for backward compatibility
             Xaos,
+            SoloTransform,
         }
 
         struct FlameVisitor;
@@ -1015,6 +1023,7 @@ impl<'de> Deserialize<'de> for Flame {
                 let mut render_mode = None;
                 let mut perspective_strength = None;
                 let mut xaos = None;
+                let mut solo_transform = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -1062,6 +1071,9 @@ impl<'de> Deserialize<'de> for Flame {
                         Field::Xaos => {
                             xaos = Some(map.next_value()?);
                         }
+                        Field::SoloTransform => {
+                            solo_transform = Some(map.next_value()?);
+                        }
                     }
                 }
 
@@ -1072,11 +1084,12 @@ impl<'de> Deserialize<'de> for Flame {
                     render_mode: render_mode.unwrap_or_default(),
                     perspective_strength: perspective_strength.unwrap_or(0.0),
                     xaos,
+                    solo_transform: solo_transform.unwrap_or(None),
                 })
             }
         }
 
-        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "render_mode", "perspective_strength", "projection", "xaos"];
+        const FIELDS: &[&str] = &["name", "transforms", "final_transform", "render_mode", "perspective_strength", "projection", "xaos", "solo_transform"];
         deserializer.deserialize_struct("Flame", FIELDS, FlameVisitor)
     }
 }

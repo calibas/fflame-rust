@@ -234,14 +234,40 @@ fn render_affine_controls(
     max_update
 }
 
-/// Render advanced settings (color speed, opacity)
+/// Render advanced settings (color speed, opacity, solo toggle)
 fn render_advanced_settings(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
     index: usize,
     transform: &mut crate::scene::transforms::Transform,
+    solo_transform: Option<usize>,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
+
+    // Solo toggle - only this transform gets weight, all others = 0
+    let is_solo = solo_transform == Some(index);
+    let mut solo_checked = is_solo;
+
+    if ui.checkbox(&mut solo_checked, t!("transform.solo"))
+        .on_hover_text(t!("tooltips.transform_solo"))
+        .changed()
+    {
+        // -1 = None (no solo), 0+ = Some(index)
+        let new_value = if solo_checked { index as i32 } else { -1 };
+        if let Ok(update_type) = config_manager.update_param(
+            ConfigPath::SoloTransform,
+            new_value.into()
+        ) {
+            max_update = max_update.max(update_type);
+        }
+    }
+
+    // Show "(muted)" indicator if another transform is solo'd
+    if solo_transform.is_some() && !is_solo {
+        ui.label(egui::RichText::new("(muted)").weak().italics());
+    }
+
+    ui.add_space(4.0);
 
     // Color Speed (Symmetry)
     let mut temp_speed = transform.color_speed;
@@ -605,8 +631,9 @@ pub fn render_transforms_content(
 
                             ui.add_space(4.0);
 
-                            // Color Speed and Opacity
-                            let advanced_update = render_advanced_settings(ui, config_manager, i, transform);
+                            // Color Speed, Opacity, and Solo toggle
+                            let solo_transform = config_manager.active_config().flame.solo_transform;
+                            let advanced_update = render_advanced_settings(ui, config_manager, i, transform, solo_transform);
                             max_update = max_update.max(advanced_update);
                         });
 
