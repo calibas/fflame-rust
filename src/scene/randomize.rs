@@ -198,6 +198,7 @@ pub fn generate_random_flame_with_rng<R: Rng>(settings: &RandomGeneratorSettings
         render_mode,
         perspective_strength,
         xaos: None,
+        solo_transform: None,
     }
 }
 

@@ -1164,6 +1164,15 @@ impl ConfigManager {
                 Ok(weight.into())
             }
 
+            // Solo transform (-1 = None, 0+ = Some(index))
+            ConfigPath::SoloTransform => {
+                let value = match config.flame.solo_transform {
+                    None => -1i32,
+                    Some(idx) => idx as i32,
+                };
+                Ok(value.into())
+            }
+
             // System Settings - These should NOT be called via get_value (they're not in FractalConfig)
             // Use config_manager.system_settings() instead
             ConfigPath::SystemIterationsPerThread
@@ -1665,6 +1674,16 @@ impl ConfigManager {
             ConfigPath::Xaos { src, dst } => {
                 let weight: f32 = value.try_into()?;
                 self.current.flame.set_xaos(*src, *dst, weight);
+            }
+
+            // Solo transform (-1 = None, 0+ = Some(index))
+            ConfigPath::SoloTransform => {
+                let idx: i32 = value.try_into()?;
+                self.current.flame.solo_transform = if idx < 0 {
+                    None
+                } else {
+                    Some(idx as usize)
+                };
             }
 
             // System Settings - These should NOT be called via apply_value (they're not in FractalConfig)
