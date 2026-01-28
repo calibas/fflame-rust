@@ -69,13 +69,13 @@ pub struct FractalConfig {
     #[serde(default)]
     pub color_mode: ColorMode,
     /// PathMap coloring style (Prefix = color by path start, Suffix = color by path end)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "PathMapStyle::is_default")]
     pub path_map_style: PathMapStyle,
     /// PathMap capture mode (FirstHit, FirstAfterBurnIn, LastHit)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "PathCaptureMode::is_default")]
     pub path_capture_mode: PathCaptureMode,
     /// PathMap tracking mode (First = first 32 iterations, Recent = rolling window of 32 most recent)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "PathTrackingMode::is_default")]
     pub path_tracking_mode: PathTrackingMode,
     /// The palette data - always present (required)
     /// This is the single source of truth for the active palette
@@ -127,26 +127,26 @@ pub struct FractalConfig {
 
     /// Alpha blend low threshold: start blending toward linear alpha at this gamma-corrected value
     /// Lower = more gamma-corrected (no halos), Higher = more linear (more detail at edges)
-    #[serde(default = "default_alpha_blend_low")]
+    #[serde(default = "default_alpha_blend_low", skip_serializing_if = "is_default_alpha_blend_low")]
     pub alpha_blend_low: f32,
 
     /// Alpha blend high threshold: fully linear alpha above this gamma-corrected value
     /// Controls when mid-range density areas get full linear alpha (preserves detail)
-    #[serde(default = "default_alpha_blend_high")]
+    #[serde(default = "default_alpha_blend_high", skip_serializing_if = "is_default_alpha_blend_high")]
     pub alpha_blend_high: f32,
 
     /// Levels: density threshold for background/transparency
     /// Pixels with density below this become fully transparent (show background)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_default_levels_low")]
     pub levels_low: f32,
 
     /// Levels: density threshold for full opacity
     /// Pixels with density above this become fully opaque (show fractal color)
-    #[serde(default = "default_levels_high")]
+    #[serde(default = "default_levels_high", skip_serializing_if = "is_default_levels_high")]
     pub levels_high: f32,
 
     /// Levels: gamma/midpoint for density curve (1.0 = linear)
-    #[serde(default = "default_levels_gamma")]
+    #[serde(default = "default_levels_gamma", skip_serializing_if = "is_default_levels_gamma")]
     pub levels_gamma: f32,
 
     /// Density effects chain (run before tonemap, have access to density in alpha)
@@ -256,6 +256,31 @@ fn default_true() -> bool {
 
 fn default_max_iterations() -> u64 {
     super::defaults::DEFAULT_MAX_ITERATIONS
+}
+
+// === Helper functions for skip_serializing_if with approximate float comparison ===
+// These handle f32 precision issues (e.g., 0.8 becomes 0.800000011920929)
+
+const FLOAT_EPSILON: f32 = 1e-5;
+
+fn is_default_alpha_blend_low(v: &f32) -> bool {
+    (*v - super::defaults::DEFAULT_ALPHA_BLEND_LOW).abs() < FLOAT_EPSILON
+}
+
+fn is_default_alpha_blend_high(v: &f32) -> bool {
+    (*v - super::defaults::DEFAULT_ALPHA_BLEND_HIGH).abs() < FLOAT_EPSILON
+}
+
+fn is_default_levels_low(v: &f32) -> bool {
+    v.abs() < FLOAT_EPSILON  // Default is 0.0
+}
+
+fn is_default_levels_high(v: &f32) -> bool {
+    (*v - 1000.0).abs() < FLOAT_EPSILON  // Default is 1000.0
+}
+
+fn is_default_levels_gamma(v: &f32) -> bool {
+    (*v - 1.0).abs() < FLOAT_EPSILON  // Default is 1.0
 }
 
 fn default_histogram_color_scale() -> f32 {
