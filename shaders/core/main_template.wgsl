@@ -84,9 +84,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let xform = transforms[xform_idx];
 
         // Opacity check (stochastic transparency)
-        if (rng_nextf(&rng) >= xform.opacity) {
-            continue;  // Skip this iteration (don't plot)
-        }
+        // Note: We still apply the transform even when opacity=0 - opacity affects
+        // visibility only, not IFS dynamics. Transform must update position for correct chaos game.
+        let should_plot = rng_nextf(&rng) < xform.opacity;
 
         // Apply affine + variations
         let affine_p = apply_affine(xform, current);
@@ -192,9 +192,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let pixel = world_to_pixel(final_pos);
 {{/if}}
 
-            // Check bounds
+            // Check bounds and opacity (only plot if both pass)
             if (pixel.x >= 0 && pixel.x < i32(params.width) &&
-                pixel.y >= 0 && pixel.y < i32(params.height)) {
+                pixel.y >= 0 && pixel.y < i32(params.height) && should_plot) {
 
                 let pixel_idx = u32(pixel.y) * params.width + u32(pixel.x);
 
