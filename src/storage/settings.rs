@@ -47,6 +47,10 @@ pub struct SystemSettings {
     #[serde(default = "default_language")]
     pub language: String,
 
+    /// Show the Help panel on startup (default: true)
+    #[serde(default = "default_show_help_on_startup")]
+    pub show_help_on_startup: bool,
+
     // Export Defaults
     /// Default export width in pixels
     #[serde(default = "default_export_width")]
@@ -94,6 +98,10 @@ fn default_language() -> String {
     "en".to_string()
 }
 
+fn default_show_help_on_startup() -> bool {
+    true
+}
+
 fn default_export_width() -> u32 {
     1920
 }
@@ -110,6 +118,7 @@ impl Default for SystemSettings {
             iterations_per_thread: default_iterations_per_thread(),
             burn_in: default_burn_in(),
             language: default_language(),
+            show_help_on_startup: default_show_help_on_startup(),
             default_export_width: default_export_width(),
             default_export_height: default_export_height(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -171,6 +180,9 @@ impl SystemSettings {
         // UI/UX
         if current.language == defaults.language {
             obj.remove("language");
+        }
+        if current.show_help_on_startup == defaults.show_help_on_startup {
+            obj.remove("show_help_on_startup");
         }
 
         // Export Defaults
@@ -322,6 +334,7 @@ mod tests {
         assert_eq!(settings.target_fps, 60.0);
         assert_eq!(settings.iterations_per_thread, 256);
         assert_eq!(settings.language, "en");
+        assert_eq!(settings.show_help_on_startup, true);
         assert_eq!(settings.default_export_width, 1920);
         assert_eq!(settings.default_export_height, 1080);
     }
@@ -340,6 +353,7 @@ mod tests {
         assert!(!json.contains("\"target_fps\""), "default target_fps should be omitted");
         assert!(!json.contains("\"iterations_per_thread\""), "default iterations_per_thread should be omitted");
         assert!(!json.contains("\"language\""), "default language should be omitted");
+        assert!(!json.contains("\"show_help_on_startup\""), "default show_help_on_startup should be omitted");
         assert!(!json.contains("\"default_export_width\""), "default export_width should be omitted");
         assert!(!json.contains("\"default_export_height\""), "default export_height should be omitted");
     }
@@ -399,6 +413,7 @@ mod tests {
         assert_eq!(settings.target_fps, 60.0);
         assert_eq!(settings.iterations_per_thread, 256);
         assert_eq!(settings.language, "en");
+        assert_eq!(settings.show_help_on_startup, true);
         assert_eq!(settings.default_export_width, 1920);
         assert_eq!(settings.default_export_height, 1080);
     }

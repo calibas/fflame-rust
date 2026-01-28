@@ -33,6 +33,7 @@ pub struct PanelContext<'a> {
     pub open_palette_library: &'a mut bool,
     pub open_triangle_editor: &'a mut bool,
     pub open_preset_library: &'a mut bool,
+    pub open_random_generator: &'a mut bool,
 
     // UI state
     pub paused: &'a mut bool,
@@ -427,9 +428,14 @@ impl<'a> PanelViewer<'a> {
         );
     }
 
-    /// Render Help panel (keyboard shortcuts and documentation)
+    /// Render Help panel (intro, links, and keyboard shortcuts)
     fn render_help_panel(&mut self, ui: &mut egui::Ui) {
-        super::help::render_help_content(ui);
+        super::help::render_help_panel_content(
+            ui,
+            self.context.config_manager,
+            self.context.open_preset_library,
+            self.context.open_random_generator,
+        );
     }
 
     /// Render Config Dialog panel (import/export configuration)

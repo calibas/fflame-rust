@@ -346,6 +346,12 @@ impl App {
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
         app.import_config(initial_config);
 
+        // Open Help panel on startup if setting is enabled
+        if app.config_manager.system_settings().show_help_on_startup {
+            use crate::ui::workspace::PanelType;
+            app.workspace.open_floating_panel(PanelType::Help);
+        }
+
         #[allow(deprecated)]
         event_loop.run(move |event, elwt| {
             match event {

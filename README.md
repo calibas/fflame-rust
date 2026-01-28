@@ -1,10 +1,10 @@
-# Fractals For All
+# Fractals for All Renderer [FAR]
 GPU-accelerated Fractal Flame Renderer
 
 See our [demo in your browser](https://calibas.github.io/) (limited mobile support).
 
 ## Installation
-Clone this reposity, [install rust](https://rust-lang.org/tools/install/) and then run:
+Download or clone this reposity, [install Rust](https://rust-lang.org/tools/install/) and then run:
 ```
 cargo run --release
 ```
