@@ -125,6 +125,10 @@ pub enum ConfigPath {
     /// Xaos (chaos) weight for transition from src transform to dst transform
     /// Modifies the probability of selecting dst when coming from src
     Xaos { src: usize, dst: usize },
+    /// Solo transform index (0-indexed). When Some(n), only transform n is active,
+    /// all others effectively have weight 0. Used for debugging.
+    /// Matches Apophysis XML: soloxform="N"
+    SoloTransform,
 
     // ===== Effects (post-processing, no iteration reset needed) =====
     /// Enable/disable a density effect
@@ -293,6 +297,7 @@ impl Display for ConfigPath {
             ConfigPath::Xaos { src, dst } => {
                 write!(f, "Xaos {} → {}", src + 1, dst + 1)
             }
+            ConfigPath::SoloTransform => write!(f, "Solo Transform"),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => {
@@ -524,6 +529,7 @@ impl ConfigPath {
                     ("dst", (dst + 1).to_string()),
                 ],
             ),
+            ConfigPath::SoloTransform => I18nKey::simple("history.param.solo_transform"),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => I18nKey::with_params(
@@ -1219,6 +1225,7 @@ impl ConfigPath {
             | ConfigPath::RenderMode
             | ConfigPath::PerspectiveStrength
             | ConfigPath::Xaos { .. }
+            | ConfigPath::SoloTransform
             | ConfigPath::MaxIterations
             | ConfigPath::DeterministicRng => UpdateType::IterationReset,
 
@@ -1343,6 +1350,7 @@ impl ConfigPath {
             ConfigPath::RenderMode => "RenderMode".to_string(),
             ConfigPath::PerspectiveStrength => "PerspectiveStrength".to_string(),
             ConfigPath::Xaos { src, dst } => format!("Xaos.{}.{}", src, dst),
+            ConfigPath::SoloTransform => "SoloTransform".to_string(),
 
             // Effects
             ConfigPath::DensityEffectEnabled { index } => format!("DensityEffect.{}.Enabled", index),
@@ -1425,6 +1433,7 @@ impl ConfigPath {
             "TransformCount" => return Some(ConfigPath::TransformCount),
             "RenderMode" => return Some(ConfigPath::RenderMode),
             "PerspectiveStrength" => return Some(ConfigPath::PerspectiveStrength),
+            "SoloTransform" => return Some(ConfigPath::SoloTransform),
 
             _ => {}
         }
@@ -1690,6 +1699,11 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         // UInt64 parameters
         ConfigPath::MaxIterations => {
             json.as_u64().map(ConfigValue::UInt64)
+        }
+
+        // Optional usize as Int (-1 = None, 0+ = Some(index))
+        ConfigPath::SoloTransform => {
+            json.as_i64().map(|i| ConfigValue::Int(i as i32))
         }
 
         // String parameters

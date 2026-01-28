@@ -184,18 +184,8 @@ impl HighResExporter {
             width, height, workgroups, samples_per_dispatch, buffer_size_mb
         );
 
-        // Create transform buffer (include final transform if present)
-        let mut transforms: Vec<GpuTransform> = config
-            .flame
-            .transforms
-            .iter()
-            .map(|t| GpuTransform::from_transform(t, global_registry()))
-            .collect();
-
-        // Append final transform if present (same as FlameBuffers::update_transforms)
-        if let Some(ref final_xform) = config.flame.final_transform {
-            transforms.push(GpuTransform::from_transform(final_xform, global_registry()));
-        }
+        // Create transform buffer with solo mode handling
+        let transforms = GpuTransform::from_flame(&config.flame, global_registry());
 
         let transform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Export Transform Buffer"),
