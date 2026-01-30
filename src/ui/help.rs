@@ -2,7 +2,7 @@ use rust_i18n::t;
 
 use crate::config::{ConfigManager, ConfigPath};
 
-/// Render the main Help panel with intro, links, and keyboard shortcuts
+/// Render the main Help panel with intro and links
 pub fn render_help_panel_content(
     ui: &mut egui::Ui,
     config_manager: &mut ConfigManager,
@@ -49,32 +49,11 @@ pub fn render_help_panel_content(
                 (!hide_on_startup).into(),
             );
         }
-        ui.add_space(12.0);
-
-        // Keyboard Shortcuts section
-        ui.heading(t!("help.keyboard_shortcuts_heading"));
-        ui.separator();
-
-        ui.label(t!("help.view_navigation"));
-        ui.label(t!("help.pan_view"));
-        ui.label(t!("help.zoom_plus_minus"));
-        ui.label(t!("help.zoom_numpad"));
-        ui.label(t!("help.full_screen"));
-
-        ui.separator();
-        ui.label(t!("help.editing"));
-        ui.label(t!("help.undo_shortcut"));
-        ui.label(t!("help.redo_shortcut"));
-
-        ui.separator();
-        ui.label(t!("help.mouse_controls"));
-        ui.label(t!("help.drag_pan"));
-        ui.label(t!("help.wheel_zoom"));
     });
 }
 
-/// Render only keyboard shortcuts (for backward compatibility if needed)
-pub fn render_help_content(ui: &mut egui::Ui) {
+/// Render keyboard shortcuts panel content
+pub fn render_keyboard_shortcuts_content(ui: &mut egui::Ui) {
     ui.heading(t!("help.keyboard_shortcuts_heading"));
     ui.separator();
 

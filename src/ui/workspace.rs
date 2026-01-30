@@ -34,8 +34,10 @@ pub enum PanelType {
     Animation,
     /// Performance stats and version info
     Performance,
-    /// Help and keyboard shortcuts
+    /// Help intro panel
     Help,
+    /// Keyboard shortcuts reference
+    KeyboardShortcuts,
     /// Config import/export dialog
     ConfigDialog,
     /// Path filter editor (block specific transform sequences)
@@ -66,6 +68,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Animation => t!("panels.animation"),
             PanelType::Performance => t!("panels.performance"),
             PanelType::Help => t!("panels.help"),
+            PanelType::KeyboardShortcuts => t!("panels.keyboard_shortcuts"),
             PanelType::ConfigDialog => t!("panels.config_dialog"),
             PanelType::PathEditor => t!("panels.path_editor"),
             PanelType::Export => t!("panels.export"),
@@ -130,6 +133,32 @@ impl Workspace {
     pub fn open_floating_panel(&mut self, panel_type: PanelType) {
         if !self.panel_exists(panel_type) {
             self.dock_state.add_window(vec![panel_type]);
+        }
+    }
+
+    /// Open a panel as a floating window with specific size and centered position
+    /// Size is (width, height), window will be centered on screen
+    pub fn open_floating_panel_centered(&mut self, panel_type: PanelType, size: egui::Vec2, screen_size: egui::Vec2) {
+        if !self.panel_exists(panel_type) {
+            self.dock_state.add_window(vec![panel_type]);
+
+            // Find the newly created window surface and set its position/size
+            // Windows are added at the end of the surfaces list
+            let surface_count = self.dock_state.iter_surfaces().count();
+            if surface_count > 0 {
+                let surface_index = egui_dock::SurfaceIndex(surface_count - 1);
+                if let Some(surface) = self.dock_state.get_surface_mut(surface_index) {
+                    // Surface::Window(Tree, WindowState)
+                    if let egui_dock::Surface::Window(_, state) = surface {
+                        let pos = egui::pos2(
+                            (screen_size.x - size.x) / 2.0,
+                            (screen_size.y - size.y) / 2.0,
+                        );
+                        state.set_position(pos);
+                        state.set_size(size);
+                    }
+                }
+            }
         }
     }
 

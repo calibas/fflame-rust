@@ -167,6 +167,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             PanelType::Help => {
                 self.render_help_panel(ui);
             }
+            PanelType::KeyboardShortcuts => {
+                self.render_keyboard_shortcuts_panel(ui);
+            }
             PanelType::ConfigDialog => {
                 self.render_config_dialog_panel(ui);
             }
@@ -428,7 +431,7 @@ impl<'a> PanelViewer<'a> {
         );
     }
 
-    /// Render Help panel (intro, links, and keyboard shortcuts)
+    /// Render Help panel (intro and links)
     fn render_help_panel(&mut self, ui: &mut egui::Ui) {
         super::help::render_help_panel_content(
             ui,
@@ -436,6 +439,11 @@ impl<'a> PanelViewer<'a> {
             self.context.open_preset_library,
             self.context.open_random_generator,
         );
+    }
+
+    /// Render Keyboard Shortcuts panel
+    fn render_keyboard_shortcuts_panel(&mut self, ui: &mut egui::Ui) {
+        super::help::render_keyboard_shortcuts_content(ui);
     }
 
     /// Render Config Dialog panel (import/export configuration)
