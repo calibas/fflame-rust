@@ -16,8 +16,6 @@ pub fn render_help_panel_content(
 
         ui.label(t!("help.intro_fractal_flames"));
         ui.add_space(4.0);
-        ui.label(t!("help.intro_program"));
-        ui.add_space(12.0);
 
         // Getting Started section
         ui.heading(t!("help.getting_started_heading"));
@@ -25,7 +23,6 @@ pub fn render_help_panel_content(
         ui.add_space(4.0);
 
         // Presets explanation
-        ui.strong(t!("help.presets_title"));
         ui.label(t!("help.presets_description"));
         if ui.link(t!("help.open_preset_browser")).clicked() {
             *open_preset_library = true;
@@ -33,9 +30,14 @@ pub fn render_help_panel_content(
         ui.add_space(8.0);
 
         // Random Generator explanation
-        ui.strong(t!("help.random_title"));
         ui.label(t!("help.random_description"));
         if ui.link(t!("help.open_random_generator")).clicked() {
+            *open_random_generator = true;
+        }
+        ui.add_space(8.0);
+
+        ui.label(t!("help.tutorial_description"));
+        if ui.link(t!("help.view_tutorial")).clicked() {
             *open_random_generator = true;
         }
         ui.add_space(12.0);
