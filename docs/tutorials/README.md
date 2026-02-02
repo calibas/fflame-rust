@@ -4,6 +4,7 @@ Here you can learn the basics of creating fractals with the Fractals for All Ren
 ## Tutorials
 
 1. [Understanding Fractal Flames](./understanding-fractal-flames.md)
+2. [Colors and Tone Mapping](./colors-and-tonemapping.md)
 
 ## Advanced
 

@@ -1,13 +1,17 @@
 # Fractals for All Renderer [FAR]
 GPU-accelerated Fractal Flame Renderer
 
-See our [demo in your browser](https://calibas.github.io/) (limited mobile support).
+See our [demo in your browser](https://calibas.github.io/) (limited mobile support, Chrome recommended).
 
 ## Installation
 Download or clone this reposity, [install Rust](https://rust-lang.org/tools/install/) and then run:
 ```
 cargo run --release
 ```
+
+## Learn
+
+We have a set of [tutorials](./docs/tutorials/README.md) on how to use FAR.
 
 ## Credits
 Thanks to [Scott Draves](https://flam3.com/) for the Fractal Flame algorithm.
