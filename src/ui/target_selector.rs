@@ -490,6 +490,28 @@ fn get_transform_items(index: usize, transform: &crate::scene::transforms::Trans
         ));
     }
 
+    // Post-affine parameters (only when enabled)
+    if transform.post_affine_enabled {
+        items.push(TargetItem::new(
+            ConfigPath::TransformPostAffineEnabled { index },
+            "Post-Affine Enabled",
+        ));
+        for param in [
+            AffineParam::A,
+            AffineParam::B,
+            AffineParam::C,
+            AffineParam::D,
+            AffineParam::E,
+            AffineParam::F,
+            AffineParam::G,
+        ] {
+            items.push(TargetItem::new(
+                ConfigPath::TransformPostAffine { index, param },
+                &format!("Post-Affine {}", param.to_char()),
+            ));
+        }
+    }
+
     // Active variations and their parameters
     let registry = global_registry();
     for (var_name, weight) in &transform.variations {
@@ -552,6 +574,30 @@ fn get_final_transform_items(final_transform: Option<&crate::scene::transforms::
             ConfigPath::FinalTransformAffine { param },
             &format!("Affine {}", param.to_char()),
         ));
+    }
+
+    // Post-affine parameters (only when enabled on final transform)
+    if let Some(transform) = final_transform {
+        if transform.post_affine_enabled {
+            items.push(TargetItem::new(
+                ConfigPath::FinalTransformPostAffineEnabled,
+                "Post-Affine Enabled",
+            ));
+            for param in [
+                AffineParam::A,
+                AffineParam::B,
+                AffineParam::C,
+                AffineParam::D,
+                AffineParam::E,
+                AffineParam::F,
+                AffineParam::G,
+            ] {
+                items.push(TargetItem::new(
+                    ConfigPath::FinalTransformPostAffine { param },
+                    &format!("Post-Affine {}", param.to_char()),
+                ));
+            }
+        }
     }
 
     // Active variations (if final transform exists)

@@ -984,6 +984,31 @@ impl ConfigManager {
                 };
                 Ok(value.into())
             }
+            ConfigPath::TransformPostAffineEnabled { index } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.post_affine_enabled.into())
+            }
+            ConfigPath::TransformPostAffine { index, param } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let value = match param {
+                    AffineParam::A => xform.post_a,
+                    AffineParam::B => xform.post_b,
+                    AffineParam::C => xform.post_c,
+                    AffineParam::D => xform.post_d,
+                    AffineParam::E => xform.post_e,
+                    AffineParam::F => xform.post_f,
+                    AffineParam::G => xform.post_g,
+                };
+                Ok(value.into())
+            }
             ConfigPath::TransformVariation { index, variation } => {
                 let xform = config
                     .flame
@@ -1064,6 +1089,31 @@ impl ConfigManager {
                     AffineParam::E => final_xform.e,
                     AffineParam::F => final_xform.f,
                     AffineParam::G => final_xform.g,
+                };
+                Ok(value.into())
+            }
+            ConfigPath::FinalTransformPostAffineEnabled => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(final_xform.post_affine_enabled.into())
+            }
+            ConfigPath::FinalTransformPostAffine { param } => {
+                let final_xform = config
+                    .flame
+                    .final_transform
+                    .as_ref()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let value = match param {
+                    AffineParam::A => final_xform.post_a,
+                    AffineParam::B => final_xform.post_b,
+                    AffineParam::C => final_xform.post_c,
+                    AffineParam::D => final_xform.post_d,
+                    AffineParam::E => final_xform.post_e,
+                    AffineParam::F => final_xform.post_f,
+                    AffineParam::G => final_xform.post_g,
                 };
                 Ok(value.into())
             }
@@ -1440,6 +1490,33 @@ impl ConfigManager {
                     AffineParam::G => xform.g = new_value,
                 }
             }
+            ConfigPath::TransformPostAffineEnabled { index } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                xform.post_affine_enabled = value.try_into()?;
+            }
+            ConfigPath::TransformPostAffine { index, param } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                match param {
+                    AffineParam::A => xform.post_a = new_value,
+                    AffineParam::B => xform.post_b = new_value,
+                    AffineParam::C => xform.post_c = new_value,
+                    AffineParam::D => xform.post_d = new_value,
+                    AffineParam::E => xform.post_e = new_value,
+                    AffineParam::F => xform.post_f = new_value,
+                    AffineParam::G => xform.post_g = new_value,
+                }
+            }
             ConfigPath::TransformVariation { index, variation } => {
                 let xform = self
                     .current
@@ -1543,6 +1620,33 @@ impl ConfigManager {
                     AffineParam::E => final_xform.e = new_value,
                     AffineParam::F => final_xform.f = new_value,
                     AffineParam::G => final_xform.g = new_value,
+                }
+            }
+            ConfigPath::FinalTransformPostAffineEnabled => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                final_xform.post_affine_enabled = value.try_into()?;
+            }
+            ConfigPath::FinalTransformPostAffine { param } => {
+                let final_xform = self
+                    .current
+                    .flame
+                    .final_transform
+                    .as_mut()
+                    .ok_or(ConfigError::InvalidIndex)?;
+                let new_value: f32 = value.try_into()?;
+                match param {
+                    AffineParam::A => final_xform.post_a = new_value,
+                    AffineParam::B => final_xform.post_b = new_value,
+                    AffineParam::C => final_xform.post_c = new_value,
+                    AffineParam::D => final_xform.post_d = new_value,
+                    AffineParam::E => final_xform.post_e = new_value,
+                    AffineParam::F => final_xform.post_f = new_value,
+                    AffineParam::G => final_xform.post_g = new_value,
                 }
             }
             ConfigPath::FinalTransformVariation { variation } => {

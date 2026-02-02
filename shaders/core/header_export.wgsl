@@ -17,6 +17,16 @@ struct Transform {
     // Probability weight
     weight: f32,
 
+    // Post-affine matrix (applied after variations)
+    post_a: f32,
+    post_b: f32,
+    post_c: f32,
+    post_d: f32,
+    post_e: f32,
+    post_f: f32,
+    post_g: f32,
+    post_enabled: f32, // 0.0 = disabled, 1.0 = enabled
+
     // Variation weights (100 slots: supports all Apophysis 7X + future expansion)
     variations: array<f32, 100>,
 
