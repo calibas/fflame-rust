@@ -56,6 +56,11 @@ web-sys = { version = "0.3", features = [
     "FileReader",
     "Event",
     "InputEvent",
+    # Clipboard bridge (copy/paste between browser and egui)
+    "ClipboardEvent",
+    "DataTransfer",
+    "Clipboard",
+    "KeyboardEvent",
     # HTTP Fetch API (for resources module)
     "Request",
     "RequestInit",

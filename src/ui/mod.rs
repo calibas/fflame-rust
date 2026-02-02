@@ -113,6 +113,10 @@ pub struct EguiLayer {
 
     // Xaos editor state
     xaos_editor_state: xaos_editor::XaosEditorState,
+
+    // WASM clipboard bridge
+    #[cfg(target_arch = "wasm32")]
+    web_clipboard: crate::web_clipboard::WebClipboard,
 }
 
 impl EguiLayer {
@@ -163,6 +167,8 @@ impl EguiLayer {
             fractal_browser_panel: None,
             density_histogram: crate::renderer::DensityHistogram::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
+            #[cfg(target_arch = "wasm32")]
+            web_clipboard: crate::web_clipboard::WebClipboard::install(),
         }
     }
 
@@ -291,7 +297,13 @@ impl EguiLayer {
         png_export_progress: &export_panel::PngExportProgress,
         fullscreen_mode: bool,
     ) -> UiResponse {
-        let raw_input = self.state.take_egui_input(window);
+        let mut raw_input = self.state.take_egui_input(window);
+
+        // Inject clipboard paste events from the browser (WASM only)
+        #[cfg(target_arch = "wasm32")]
+        if let Some(text) = self.web_clipboard.take_paste() {
+            raw_input.events.push(egui_dock::egui::Event::Paste(text));
+        }
 
         // Note: Config change tracking now handled by ConfigManager.get_pending_actions()
         // Only non-config actions tracked here (file I/O, palette library, transforms, etc.)
@@ -565,6 +577,14 @@ impl EguiLayer {
 
         // Log egui repaint requests for performance investigation
         let needs_repaint = self.ctx.has_requested_repaint();
+
+        // Write copied text to browser clipboard (WASM only)
+        #[cfg(target_arch = "wasm32")]
+        for cmd in &full_output.platform_output.commands {
+            if let egui_dock::egui::OutputCommand::CopyText(text) = cmd {
+                crate::web_clipboard::WebClipboard::copy_text(text);
+            }
+        }
 
         self.state
             .handle_platform_output(window, full_output.platform_output);
