@@ -86,6 +86,10 @@ pub enum ConfigPath {
         variation: String,
         param: String,
     },
+    /// Post-affine enabled flag for a transform
+    TransformPostAffineEnabled { index: usize },
+    /// Post-affine transformation parameter for a transform
+    TransformPostAffine { index: usize, param: AffineParam },
     /// High-level transform origin X (translate X)
     /// Computed from affine: origin_x = e
     TransformOriginX { index: usize },
@@ -110,6 +114,10 @@ pub enum ConfigPath {
         variation: String,
         param: String,
     },
+    /// Post-affine enabled flag for the final transform
+    FinalTransformPostAffineEnabled,
+    /// Post-affine transformation parameter for the final transform
+    FinalTransformPostAffine { param: AffineParam },
     /// High-level final transform origin X (translate X)
     FinalTransformOriginX,
     /// High-level final transform origin Y (translate Y)
@@ -275,6 +283,12 @@ impl Display for ConfigPath {
             ConfigPath::TransformScale { index } => {
                 write!(f, "Transform {} → Scale", index + 1)
             }
+            ConfigPath::TransformPostAffineEnabled { index } => {
+                write!(f, "Transform {} → Post-Affine Enabled", index + 1)
+            }
+            ConfigPath::TransformPostAffine { index, param } => {
+                write!(f, "Transform {} → Post-Affine {:?}", index + 1, param)
+            }
 
             // Final Transform
             ConfigPath::FinalTransformEnabled => write!(f, "Final Transform → Enabled"),
@@ -291,6 +305,10 @@ impl Display for ConfigPath {
             ConfigPath::FinalTransformOriginY => write!(f, "Final Transform → Origin Y"),
             ConfigPath::FinalTransformRotation => write!(f, "Final Transform → Rotation"),
             ConfigPath::FinalTransformScale => write!(f, "Final Transform → Scale"),
+            ConfigPath::FinalTransformPostAffineEnabled => write!(f, "Final Transform → Post-Affine Enabled"),
+            ConfigPath::FinalTransformPostAffine { param } => {
+                write!(f, "Final Transform → Post-Affine {:?}", param)
+            }
 
             // Flame
             ConfigPath::RenderMode => write!(f, "Render Mode"),
@@ -498,6 +516,14 @@ impl ConfigPath {
                 "history.param.transform_scale",
                 vec![("index", (index + 1).to_string())],
             ),
+            ConfigPath::TransformPostAffineEnabled { index } => I18nKey::with_params(
+                "history.param.transform_post_affine_enabled",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformPostAffine { index, param } => I18nKey::with_params(
+                "history.param.transform_post_affine",
+                vec![("index", (index + 1).to_string()), ("param", format!("{:?}", param))],
+            ),
 
             // Final Transform
             ConfigPath::FinalTransformEnabled => I18nKey::simple("history.param.final_transform_enabled"),
@@ -520,6 +546,11 @@ impl ConfigPath {
             ConfigPath::FinalTransformOriginY => I18nKey::simple("history.param.final_transform_origin_y"),
             ConfigPath::FinalTransformRotation => I18nKey::simple("history.param.final_transform_rotation"),
             ConfigPath::FinalTransformScale => I18nKey::simple("history.param.final_transform_scale"),
+            ConfigPath::FinalTransformPostAffineEnabled => I18nKey::simple("history.param.final_transform_post_affine_enabled"),
+            ConfigPath::FinalTransformPostAffine { param } => I18nKey::with_params(
+                "history.param.final_transform_post_affine",
+                vec![("param", format!("{:?}", param))],
+            ),
 
             // Flame
             ConfigPath::RenderMode => I18nKey::simple("history.param.render_mode"),
@@ -1211,6 +1242,8 @@ impl ConfigPath {
             | ConfigPath::TransformColorSpeed { .. }
             | ConfigPath::TransformOpacity { .. }
             | ConfigPath::TransformAffine { .. }
+            | ConfigPath::TransformPostAffineEnabled { .. }
+            | ConfigPath::TransformPostAffine { .. }
             | ConfigPath::TransformVariation { .. }
             | ConfigPath::TransformVariationParam { .. }
             | ConfigPath::TransformOriginX { .. }
@@ -1219,6 +1252,8 @@ impl ConfigPath {
             | ConfigPath::TransformScale { .. }
             | ConfigPath::FinalTransformEnabled
             | ConfigPath::FinalTransformAffine { .. }
+            | ConfigPath::FinalTransformPostAffineEnabled
+            | ConfigPath::FinalTransformPostAffine { .. }
             | ConfigPath::FinalTransformVariation { .. }
             | ConfigPath::FinalTransformVariationParam { .. }
             | ConfigPath::FinalTransformOriginX
@@ -1332,6 +1367,10 @@ impl ConfigPath {
             ConfigPath::TransformOriginY { index } => format!("Transform.{}.OriginY", index),
             ConfigPath::TransformRotation { index } => format!("Transform.{}.Rotation", index),
             ConfigPath::TransformScale { index } => format!("Transform.{}.Scale", index),
+            ConfigPath::TransformPostAffineEnabled { index } => format!("Transform.{}.PostAffineEnabled", index),
+            ConfigPath::TransformPostAffine { index, param } => {
+                format!("Transform.{}.PostAffine.{}", index, param.to_char())
+            }
 
             // Final Transform
             ConfigPath::FinalTransformEnabled => "FinalTransform.Enabled".to_string(),
@@ -1348,6 +1387,10 @@ impl ConfigPath {
             ConfigPath::FinalTransformOriginY => "FinalTransform.OriginY".to_string(),
             ConfigPath::FinalTransformRotation => "FinalTransform.Rotation".to_string(),
             ConfigPath::FinalTransformScale => "FinalTransform.Scale".to_string(),
+            ConfigPath::FinalTransformPostAffineEnabled => "FinalTransform.PostAffineEnabled".to_string(),
+            ConfigPath::FinalTransformPostAffine { param } => {
+                format!("FinalTransform.PostAffine.{}", param.to_char())
+            }
 
             // Flame
             ConfigPath::RenderMode => "RenderMode".to_string(),
@@ -1471,6 +1514,11 @@ impl ConfigPath {
                         param: parts[4].to_string(),
                     });
                 }
+                "PostAffineEnabled" => return Some(ConfigPath::TransformPostAffineEnabled { index }),
+                "PostAffine" if parts.len() == 4 => {
+                    let param = AffineParam::from_char(parts[3].chars().next()?)?;
+                    return Some(ConfigPath::TransformPostAffine { index, param });
+                }
                 "OriginX" => return Some(ConfigPath::TransformOriginX { index }),
                 "OriginY" => return Some(ConfigPath::TransformOriginY { index }),
                 "Rotation" => return Some(ConfigPath::TransformRotation { index }),
@@ -1497,6 +1545,11 @@ impl ConfigPath {
                         variation: parts[2].to_string(),
                         param: parts[3].to_string(),
                     });
+                }
+                "PostAffineEnabled" => return Some(ConfigPath::FinalTransformPostAffineEnabled),
+                "PostAffine" if parts.len() == 3 => {
+                    let param = AffineParam::from_char(parts[2].chars().next()?)?;
+                    return Some(ConfigPath::FinalTransformPostAffine { param });
                 }
                 "OriginX" => return Some(ConfigPath::FinalTransformOriginX),
                 "OriginY" => return Some(ConfigPath::FinalTransformOriginY),
@@ -1635,6 +1688,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TransformColorSpeed { .. }
         | ConfigPath::TransformOpacity { .. }
         | ConfigPath::TransformAffine { .. }
+        | ConfigPath::TransformPostAffine { .. }
         | ConfigPath::TransformVariation { .. }
         | ConfigPath::TransformVariationParam { .. }
         | ConfigPath::TransformOriginX { .. }
@@ -1642,6 +1696,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TransformRotation { .. }
         | ConfigPath::TransformScale { .. }
         | ConfigPath::FinalTransformAffine { .. }
+        | ConfigPath::FinalTransformPostAffine { .. }
         | ConfigPath::FinalTransformVariation { .. }
         | ConfigPath::FinalTransformVariationParam { .. }
         | ConfigPath::FinalTransformOriginX
@@ -1685,7 +1740,9 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         ConfigPath::UseCurve
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
+        | ConfigPath::TransformPostAffineEnabled { .. }
         | ConfigPath::FinalTransformEnabled
+        | ConfigPath::FinalTransformPostAffineEnabled
         | ConfigPath::SystemVsyncEnabled
         | ConfigPath::SystemShowHelpOnStartup => {
             json.as_bool().map(ConfigValue::Bool)

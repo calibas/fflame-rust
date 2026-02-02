@@ -1,12 +1,22 @@
 // Affine transformations for 3D mode
 
-// Apply affine transformation (3D)
+// Apply pre-affine transformation (3D)
 // Standard affine formula: x' = ax + by + e, y' = cx + dy + f, z' = z + g
 fn apply_affine(xform: Transform, p: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(
         xform.a * p.x + xform.b * p.y + xform.e,
         xform.c * p.x + xform.d * p.y + xform.f,
         p.z + xform.g  // Z is just offset
+    );
+}
+
+// Apply post-affine transformation (3D)
+// Same simultaneous affine formula, applied after variations
+fn apply_post_affine(xform: Transform, p: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        xform.post_a * p.x + xform.post_b * p.y + xform.post_e,
+        xform.post_c * p.x + xform.post_d * p.y + xform.post_f,
+        p.z + xform.post_g
     );
 }
 

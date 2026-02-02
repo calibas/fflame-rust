@@ -57,6 +57,26 @@ pub struct Transform {
     /// 1.0 = always plot (default), 0.0 = never plot (invisible)
     /// NOTE: Ignored for final transforms.
     pub opacity: f32,
+
+    // Post-affine transformation matrix (optional, applied after variations)
+    // Same formula as pre-affine: x' = ax + by + e, y' = cx + dy + f, z' = z + g
+    // When disabled, post-affine is skipped entirely (zero shader cost).
+    /// Whether post-affine is enabled for this transform
+    pub post_affine_enabled: bool,
+    /// Post-affine matrix coefficient a (default: 1.0 = identity)
+    pub post_a: f32,
+    /// Post-affine matrix coefficient b (default: 0.0 = identity)
+    pub post_b: f32,
+    /// Post-affine matrix coefficient c (default: 0.0 = identity)
+    pub post_c: f32,
+    /// Post-affine matrix coefficient d (default: 1.0 = identity)
+    pub post_d: f32,
+    /// Post-affine translation X (default: 0.0 = identity)
+    pub post_e: f32,
+    /// Post-affine translation Y (default: 0.0 = identity)
+    pub post_f: f32,
+    /// Post-affine Z offset for 3D mode (default: 0.0 = identity)
+    pub post_g: f32,
 }
 
 impl Default for Transform {
@@ -75,6 +95,14 @@ impl Default for Transform {
             color: 0.5,        // Mid-palette position (neutral default)
             color_speed: 0.0,  // Apophysis default: 50/50 blend
             opacity: 1.0,      // Apophysis default: always visible
+            post_affine_enabled: false,
+            post_a: 1.0,
+            post_b: 0.0,
+            post_c: 0.0,
+            post_d: 1.0,
+            post_e: 0.0,
+            post_f: 0.0,
+            post_g: 0.0,
         }
     }
 }
@@ -242,6 +270,38 @@ impl Transform {
         self.c = o[1] - x[1];
         self.b = o[0] - y[0];
         self.d = y[1] - o[1];
+    }
+
+    // === POST-AFFINE TRIANGLE EDITOR METHODS ===
+
+    /// Convert post-affine coefficients to triangle using Apophysis sign convention
+    pub fn post_to_triangle_apophysis(&self) -> ([f32; 2], [f32; 2], [f32; 2]) {
+        let display_f = -self.post_f;
+        let o = [self.post_e, display_f];
+        let x = [self.post_e + self.post_a, display_f - self.post_c];
+        let y = [self.post_e - self.post_b, display_f + self.post_d];
+        (o, x, y)
+    }
+
+    /// Update post-affine coefficients from triangle using Apophysis sign convention
+    pub fn post_from_triangle_apophysis(&mut self, o: [f32; 2], x: [f32; 2], y: [f32; 2]) {
+        self.post_e = o[0];
+        self.post_f = -o[1];
+        self.post_a = x[0] - o[0];
+        self.post_c = o[1] - x[1];
+        self.post_b = o[0] - y[0];
+        self.post_d = y[1] - o[1];
+    }
+
+    /// Reset post-affine to identity (no-op transform)
+    pub fn reset_post_affine_to_identity(&mut self) {
+        self.post_a = 1.0;
+        self.post_b = 0.0;
+        self.post_c = 0.0;
+        self.post_d = 1.0;
+        self.post_e = 0.0;
+        self.post_f = 0.0;
+        self.post_g = 0.0;
     }
 
     /// Reset transform to identity (unit triangle at origin)
@@ -417,7 +477,11 @@ impl Serialize for Transform {
         let variations_sorted: BTreeMap<_, _> = self.variations.iter().collect();
         let params_sorted: BTreeMap<_, _> = self.variation_params.iter().collect();
 
-        let mut state = serializer.serialize_struct("Transform", 14)?;
+        // Count fields: 13 base + up to 8 post-affine
+        let has_post = self.post_affine_enabled;
+        let field_count = 13 + if has_post { 8 } else { 0 };
+
+        let mut state = serializer.serialize_struct("Transform", field_count)?;
         state.serialize_field("a", &self.a)?;
         state.serialize_field("b", &self.b)?;
         state.serialize_field("c", &self.c)?;
@@ -431,6 +495,17 @@ impl Serialize for Transform {
         state.serialize_field("color", &self.color)?;
         state.serialize_field("color_speed", &self.color_speed)?;
         state.serialize_field("opacity", &self.opacity)?;
+        // Only serialize post-affine fields when enabled (keeps .fflame files clean)
+        if has_post {
+            state.serialize_field("post_affine_enabled", &self.post_affine_enabled)?;
+            state.serialize_field("post_a", &self.post_a)?;
+            state.serialize_field("post_b", &self.post_b)?;
+            state.serialize_field("post_c", &self.post_c)?;
+            state.serialize_field("post_d", &self.post_d)?;
+            state.serialize_field("post_e", &self.post_e)?;
+            state.serialize_field("post_f", &self.post_f)?;
+            state.serialize_field("post_g", &self.post_g)?;
+        }
         state.end()
     }
 }
@@ -445,6 +520,7 @@ impl<'de> Deserialize<'de> for Transform {
         #[serde(field_identifier, rename_all = "snake_case")]
         enum Field {
             A, B, C, D, E, F, G, Weight, Variations, VariationParams, Color, ColorSpeed, Opacity,
+            PostAffineEnabled, PostA, PostB, PostC, PostD, PostE, PostF, PostG,
         }
 
         struct TransformVisitor;
@@ -473,6 +549,14 @@ impl<'de> Deserialize<'de> for Transform {
                 let mut color = None;
                 let mut color_speed = None;
                 let mut opacity = None;
+                let mut post_affine_enabled = None;
+                let mut post_a = None;
+                let mut post_b = None;
+                let mut post_c = None;
+                let mut post_d = None;
+                let mut post_e = None;
+                let mut post_f = None;
+                let mut post_g = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -554,6 +638,14 @@ impl<'de> Deserialize<'de> for Transform {
                         }
                         Field::ColorSpeed => color_speed = Some(map.next_value()?),
                         Field::Opacity => opacity = Some(map.next_value()?),
+                        Field::PostAffineEnabled => post_affine_enabled = Some(map.next_value()?),
+                        Field::PostA => post_a = Some(map.next_value()?),
+                        Field::PostB => post_b = Some(map.next_value()?),
+                        Field::PostC => post_c = Some(map.next_value()?),
+                        Field::PostD => post_d = Some(map.next_value()?),
+                        Field::PostE => post_e = Some(map.next_value()?),
+                        Field::PostF => post_f = Some(map.next_value()?),
+                        Field::PostG => post_g = Some(map.next_value()?),
                     }
                 }
 
@@ -571,11 +663,20 @@ impl<'de> Deserialize<'de> for Transform {
                     color: color.ok_or_else(|| de::Error::missing_field("color"))?,
                     color_speed: color_speed.unwrap_or(0.0), // Default to 0.0 for backward compatibility
                     opacity: opacity.unwrap_or(1.0), // Default to 1.0 for backward compatibility
+                    // Post-affine defaults to disabled + identity (backward compatible)
+                    post_affine_enabled: post_affine_enabled.unwrap_or(false),
+                    post_a: post_a.unwrap_or(1.0),
+                    post_b: post_b.unwrap_or(0.0),
+                    post_c: post_c.unwrap_or(0.0),
+                    post_d: post_d.unwrap_or(1.0),
+                    post_e: post_e.unwrap_or(0.0),
+                    post_f: post_f.unwrap_or(0.0),
+                    post_g: post_g.unwrap_or(0.0),
                 })
             }
         }
 
-        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "color", "color_speed", "opacity"];
+        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "color", "color_speed", "opacity", "post_affine_enabled", "post_a", "post_b", "post_c", "post_d", "post_e", "post_f", "post_g"];
         deserializer.deserialize_struct("Transform", FIELDS, TransformVisitor)
     }
 }
@@ -842,6 +943,21 @@ impl Flame {
         }
 
         all_variations
+    }
+
+    /// Check if any transform (regular or final) has post-affine enabled
+    pub fn has_post_affine(&self) -> bool {
+        for xform in &self.transforms {
+            if xform.post_affine_enabled {
+                return true;
+            }
+        }
+        if let Some(ref final_xform) = self.final_transform {
+            if final_xform.post_affine_enabled {
+                return true;
+            }
+        }
+        false
     }
 
     /// Get runtime ID mapping for active variations

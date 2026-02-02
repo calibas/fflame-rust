@@ -234,6 +234,165 @@ fn render_affine_controls(
     max_update
 }
 
+/// Render post-affine controls: enable checkbox + matrix (in Advanced section)
+fn render_post_affine_controls(
+    ui: &mut egui::Ui,
+    config_manager: &mut ConfigManager,
+    index: usize,
+    transform: &mut crate::scene::transforms::Transform,
+    render_mode: RenderMode,
+) -> UpdateType {
+    let mut max_update = UpdateType::None;
+
+    // Enable checkbox
+    let mut temp_enabled = transform.post_affine_enabled;
+    if ui.checkbox(&mut temp_enabled, t!("transform.post_affine_enabled"))
+        .on_hover_text(t!("tooltips.post_affine_enabled"))
+        .changed()
+    {
+        if let Ok(update_type) = config_manager.update_param(
+            ConfigPath::TransformPostAffineEnabled { index },
+            temp_enabled.into()
+        ) {
+            transform.post_affine_enabled = config_manager.active_config().flame.transforms[index].post_affine_enabled;
+            max_update = max_update.max(update_type);
+        }
+    }
+
+    // Show matrix controls only when enabled
+    if transform.post_affine_enabled {
+        ui.label(t!("transform.post_affine_matrix"));
+
+        // Row 1: a, b
+        ui.horizontal(|ui| {
+            ui.label(t!("transform.affine_a")).on_hover_text(t!("tooltips.affine_a"));
+            let mut temp_a = transform.post_a;
+            let response_a = ui.add(egui::DragValue::new(&mut temp_a).speed(0.01)).on_hover_text(t!("tooltips.affine_a"));
+            if response_a.changed() {
+                if let Ok(update_type) = config_manager.update_param(
+                    ConfigPath::TransformPostAffine { index, param: AffineParam::A },
+                    temp_a.into()
+                ) {
+                    transform.post_a = config_manager.active_config().flame.transforms[index].post_a;
+                    max_update = max_update.max(update_type);
+                }
+            }
+            if response_a.drag_stopped() {
+                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::A });
+            }
+
+            ui.label(t!("transform.affine_b")).on_hover_text(t!("tooltips.affine_b"));
+            let mut temp_b = transform.post_b;
+            let response_b = ui.add(egui::DragValue::new(&mut temp_b).speed(0.01)).on_hover_text(t!("tooltips.affine_b"));
+            if response_b.changed() {
+                if let Ok(update_type) = config_manager.update_param(
+                    ConfigPath::TransformPostAffine { index, param: AffineParam::B },
+                    temp_b.into()
+                ) {
+                    transform.post_b = config_manager.active_config().flame.transforms[index].post_b;
+                    max_update = max_update.max(update_type);
+                }
+            }
+            if response_b.drag_stopped() {
+                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::B });
+            }
+        });
+
+        // Row 2: c, d
+        ui.horizontal(|ui| {
+            ui.label(t!("transform.affine_c")).on_hover_text(t!("tooltips.affine_c"));
+            let mut temp_c = transform.post_c;
+            let response_c = ui.add(egui::DragValue::new(&mut temp_c).speed(0.01)).on_hover_text(t!("tooltips.affine_c"));
+            if response_c.changed() {
+                if let Ok(update_type) = config_manager.update_param(
+                    ConfigPath::TransformPostAffine { index, param: AffineParam::C },
+                    temp_c.into()
+                ) {
+                    transform.post_c = config_manager.active_config().flame.transforms[index].post_c;
+                    max_update = max_update.max(update_type);
+                }
+            }
+            if response_c.drag_stopped() {
+                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::C });
+            }
+
+            ui.label(t!("transform.affine_d")).on_hover_text(t!("tooltips.affine_d"));
+            let mut temp_d = transform.post_d;
+            let response_d = ui.add(egui::DragValue::new(&mut temp_d).speed(0.01)).on_hover_text(t!("tooltips.affine_d"));
+            if response_d.changed() {
+                if let Ok(update_type) = config_manager.update_param(
+                    ConfigPath::TransformPostAffine { index, param: AffineParam::D },
+                    temp_d.into()
+                ) {
+                    transform.post_d = config_manager.active_config().flame.transforms[index].post_d;
+                    max_update = max_update.max(update_type);
+                }
+            }
+            if response_d.drag_stopped() {
+                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::D });
+            }
+        });
+
+        // Row 3: e, f
+        ui.horizontal(|ui| {
+            ui.label(t!("transform.affine_e")).on_hover_text(t!("tooltips.affine_e"));
+            let mut temp_e = transform.post_e;
+            let response_e = ui.add(egui::DragValue::new(&mut temp_e).speed(0.01)).on_hover_text(t!("tooltips.affine_e"));
+            if response_e.changed() {
+                if let Ok(update_type) = config_manager.update_param(
+                    ConfigPath::TransformPostAffine { index, param: AffineParam::E },
+                    temp_e.into()
+                ) {
+                    transform.post_e = config_manager.active_config().flame.transforms[index].post_e;
+                    max_update = max_update.max(update_type);
+                }
+            }
+            if response_e.drag_stopped() {
+                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::E });
+            }
+
+            ui.label(t!("transform.affine_f")).on_hover_text(t!("tooltips.affine_f"));
+            let mut temp_f = transform.post_f;
+            let response_f = ui.add(egui::DragValue::new(&mut temp_f).speed(0.01)).on_hover_text(t!("tooltips.affine_f"));
+            if response_f.changed() {
+                if let Ok(update_type) = config_manager.update_param(
+                    ConfigPath::TransformPostAffine { index, param: AffineParam::F },
+                    temp_f.into()
+                ) {
+                    transform.post_f = config_manager.active_config().flame.transforms[index].post_f;
+                    max_update = max_update.max(update_type);
+                }
+            }
+            if response_f.drag_stopped() {
+                let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::F });
+            }
+        });
+
+        // Z offset (only in 3D mode)
+        if matches!(render_mode, RenderMode::ThreeD) {
+            ui.horizontal(|ui| {
+                ui.label(t!("transform.affine_g")).on_hover_text(t!("tooltips.affine_g"));
+                let mut temp_g = transform.post_g;
+                let response_g = ui.add(egui::DragValue::new(&mut temp_g).speed(0.01)).on_hover_text(t!("tooltips.affine_g"));
+                if response_g.changed() {
+                    if let Ok(update_type) = config_manager.update_param(
+                        ConfigPath::TransformPostAffine { index, param: AffineParam::G },
+                        temp_g.into()
+                    ) {
+                        transform.post_g = config_manager.active_config().flame.transforms[index].post_g;
+                        max_update = max_update.max(update_type);
+                    }
+                }
+                if response_g.drag_stopped() {
+                    let _ = config_manager.force_commit_preview(&ConfigPath::TransformPostAffine { index, param: AffineParam::G });
+                }
+            });
+        }
+    }
+
+    max_update
+}
+
 /// Render advanced settings (color speed, opacity, solo toggle)
 fn render_advanced_settings(
     ui: &mut egui::Ui,
@@ -631,6 +790,12 @@ pub fn render_transforms_content(
 
                             ui.add_space(4.0);
 
+                            // Post-Affine
+                            let post_affine_update = render_post_affine_controls(ui, config_manager, i, transform, render_mode);
+                            max_update = max_update.max(post_affine_update);
+
+                            ui.add_space(4.0);
+
                             // Color Speed, Opacity, and Solo toggle
                             let solo_transform = config_manager.active_config().flame.solo_transform;
                             let advanced_update = render_advanced_settings(ui, config_manager, i, transform, solo_transform);
@@ -791,6 +956,60 @@ fn render_final_transform(
 
                         if matches!(render_mode, RenderMode::ThreeD) {
                             affine_param_final!(t!("transform.affine_g"), t!("tooltips.affine_g"), g, G);
+                        }
+
+                        ui.add_space(4.0);
+
+                        // Post-Affine for final transform
+                        let mut temp_post_enabled = final_xform.post_affine_enabled;
+                        if ui.checkbox(&mut temp_post_enabled, t!("transform.post_affine_enabled"))
+                            .on_hover_text(t!("tooltips.post_affine_enabled"))
+                            .changed()
+                        {
+                            if let Ok(update_type) = config_manager.update_param(
+                                ConfigPath::FinalTransformPostAffineEnabled,
+                                temp_post_enabled.into()
+                            ) {
+                                final_xform.post_affine_enabled = config_manager.active_config().flame.final_transform.as_ref().unwrap().post_affine_enabled;
+                                *max_update = (*max_update).max(update_type);
+                            }
+                        }
+
+                        if final_xform.post_affine_enabled {
+                            ui.label(t!("transform.post_affine_matrix"));
+
+                            macro_rules! post_affine_param_final {
+                                ($label:expr, $tooltip:expr, $field:ident, $param:ident) => {
+                                    ui.horizontal(|ui| {
+                                        ui.label($label).on_hover_text($tooltip);
+                                        let mut temp = final_xform.$field;
+                                        let response = ui.add(egui::DragValue::new(&mut temp).speed(0.01)).on_hover_text($tooltip);
+                                        if response.changed() {
+                                            if let Ok(update_type) = config_manager.update_param(
+                                                ConfigPath::FinalTransformPostAffine { param: AffineParam::$param },
+                                                temp.into()
+                                            ) {
+                                                final_xform.$field = config_manager.active_config().flame.final_transform.as_ref().unwrap().$field;
+                                                *max_update = (*max_update).max(update_type);
+                                            }
+                                        }
+                                        if response.drag_stopped() {
+                                            let _ = config_manager.force_commit_preview(&ConfigPath::FinalTransformPostAffine { param: AffineParam::$param });
+                                        }
+                                    });
+                                };
+                            }
+
+                            post_affine_param_final!(t!("transform.affine_a"), t!("tooltips.affine_a"), post_a, A);
+                            post_affine_param_final!(t!("transform.affine_b"), t!("tooltips.affine_b"), post_b, B);
+                            post_affine_param_final!(t!("transform.affine_c"), t!("tooltips.affine_c"), post_c, C);
+                            post_affine_param_final!(t!("transform.affine_d"), t!("tooltips.affine_d"), post_d, D);
+                            post_affine_param_final!(t!("transform.affine_e"), t!("tooltips.affine_e"), post_e, E);
+                            post_affine_param_final!(t!("transform.affine_f"), t!("tooltips.affine_f"), post_f, F);
+
+                            if matches!(render_mode, RenderMode::ThreeD) {
+                                post_affine_param_final!(t!("transform.affine_g"), t!("tooltips.affine_g"), post_g, G);
+                            }
                         }
 
                         // Note: Color, Color Speed, Opacity, and Weight are NOT used by the final transform.

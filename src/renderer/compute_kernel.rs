@@ -322,6 +322,7 @@ impl FlameRenderer {
             color_mode: self.color_mode as u32,
             has_final_transform: flame.final_transform.is_some(),
             final_transform_index: flame.transforms.len() as u32,
+            has_post_affine: flame.has_post_affine(),
             // No inlining for incremental updates (would trigger too many shader rebuilds)
             inlined_transforms: None,
             cumulative_weights: None,
