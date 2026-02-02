@@ -159,7 +159,7 @@ fn render_palette_editor_core_impl(
                         ui.horizontal(|ui| {
                             let stop = &mut palette.stops[i];
 
-                            ui.label(t!("palette_editor.stop_label", index = i));
+                            ui.label(t!("palette_editor.stop_label", index = i + 1));
 
                             // Position slider - locked in fixed mode
                             let mut pos_int = (stop.position * 255.0) as i32;

@@ -12,6 +12,8 @@ The **Variations** are responsible for more complex functions, like the wave and
 
 An [infinity mirror](https://en.wikipedia.org/wiki/Infinity_mirror) has two mirrors reflecting each other, the image bounces back and forth, and shrinks slightly with each reflection. You can create this same effect in fractal flames through a single Transform with its Affine Coefficients set to scale the image down on each "reflection".
 
+[<img src="../images/infinity-mirror.jpg">](#)
+
 A Fractal Flame repeats the same process over and over again, usually millions of times, and each time it's repeated that's called an **iteration**. The number of iterations performed is closely connected to the visual quality of the fractal produced.
 
 That's enough theory for now, let's get started on actually making something.
@@ -28,9 +30,11 @@ Then click the **Add Transform** button at the top of the Transforms panel on th
 
 Now we're going to modify the transformation affines so we get something other than just a square. However, to make things easier, we're not going to modify the affine values directly. FAR has something called a **Triangle Editor**, which displays affines as colored triangles. 
 
+> **Note**: If you make any mistakes, you can always use Ctrl-Z to Undo.  
+
 Click the **Edit 🔺** button under Transform 1 in the Transforms panel on the left. This will open the Triangle Editor with Transform 1 selected.
 
-In the **Quick Actions** below the triangles, click **>** twice to move the transform to the right 0.2. Then click **Scale Down** twice, each time will shrink the transform by 10%. The fractal should now look something like the image below.
+In the **Quick Actions** below the triangles, click **>** twice to move the transform to the right by 0.2 units. Then click **Scale Down** twice, each time will shrink the transform by 10%. The fractal should now look something like the image below.
 
 [<img src="../images/FAR-Tutorial1-2.png">](#)
 
@@ -46,11 +50,11 @@ You can use this to explore the fractal a little bit, move the camera around unt
 
 You'll notice the entire fractal is the same color, this is because the **Color** option for both Transforms is set to 0.5. The Color option is the position in the palette where each Transform gets its color from. A setting of 0.5 means the transform gets the color that's exactly halfway through the palette.
 
-To make things more colorful, the Transforms need to use different position on the palette. In the Transforms Panel, go to the **Color slider** under Transform 1 and set it to 0.15. Then go to the **Color slider** under Transform 2 and set it to 1.0. See the image below for reference.
+To make things more colorful, the Transforms need to use different positions on the palette. In the Transforms Panel, go to the **Color slider** under Transform 1 and set it to 0.15. Then go to the **Color slider** under Transform 2 and set it to 1.0. See the image below for reference.
 
 [<img src="../images/FAR-Tutorial1-4.png">](#)
 
-If you fractal doesn't look like the one above, you can copy over the following settings in the Transforms panel. To edit the transform affines, click **Advanced**:
+If your fractal doesn't look like the one above, you can copy over the following settings in the Transforms panel. To edit the transform affines, click **Advanced**:
 
 [<img src="../images/FAR-Tutorial1-5.png">](#)
 
