@@ -977,6 +977,65 @@ mod tests {
         // After unlinking, no linked pairs should exist
         let pairs = test_flame.detect_linked_pairs();
         assert!(pairs.is_empty(), "Expected no linked pairs after unlink, got: {:?}", pairs);
+
+        // Verify all chain members have all weights restored to 1.0
+        for &idx in &chains[0] {
+            for dst in 0..3 {
+                assert!((test_flame.get_xaos(idx, dst) - 1.0).abs() < 1e-6,
+                    "Expected weight 1.0 for xaos[{}][{}], got {}", idx, dst, test_flame.get_xaos(idx, dst));
+            }
+        }
+    }
+
+    #[test]
+    fn test_unlink_restores_pre_to_post_weight() {
+        // Regression: linking T1->T2 then unlinking left xaos[T1][T2] = 0.0
+        let mut flame = make_flame_with_xaos(3, vec![
+            vec![1.0, 1.0, 1.0],
+            vec![1.0, 1.0, 1.0],
+            vec![1.0, 1.0, 1.0],
+        ]);
+
+        // Link T1 -> T2 (indices 1 -> 2)
+        let link_changes = flame.link_transforms_changes(1, 2);
+        for (path, value) in &link_changes {
+            if let crate::config::ConfigPath::Xaos { src, dst } = path {
+                let weight: f32 = match value {
+                    crate::config::ConfigValue::Float(v) => *v,
+                    _ => panic!("Expected float"),
+                };
+                flame.set_xaos(*src, *dst, weight);
+            }
+        }
+
+        // Verify link exists
+        let pairs = flame.detect_linked_pairs();
+        assert_eq!(pairs.len(), 1);
+
+        // Unlink
+        let chains = flame.detect_linked_chains();
+        let unlink_changes = flame.unlink_chain_changes(&chains[0]);
+        for (path, value) in &unlink_changes {
+            if let crate::config::ConfigPath::Xaos { src, dst } = path {
+                let weight: f32 = match value {
+                    crate::config::ConfigValue::Float(v) => *v,
+                    _ => panic!("Expected float"),
+                };
+                flame.set_xaos(*src, *dst, weight);
+            }
+        }
+
+        // THE BUG: xaos[1][2] was 0.0 instead of 1.0
+        assert!((flame.get_xaos(1, 2) - 1.0).abs() < 1e-6,
+            "xaos[1][2] should be 1.0 after unlink, got {}", flame.get_xaos(1, 2));
+
+        // All weights should be 1.0
+        for src in 0..3 {
+            for dst in 0..3 {
+                assert!((flame.get_xaos(src, dst) - 1.0).abs() < 1e-6,
+                    "xaos[{}][{}] should be 1.0, got {}", src, dst, flame.get_xaos(src, dst));
+            }
+        }
     }
 
     #[test]
@@ -1602,37 +1661,21 @@ impl Flame {
         }
 
         let mut changes = Vec::new();
-        let first = chain[0];
-        let last = chain[chain.len() - 1];
 
-        // 1. Copy last element's outgoing weights to first element's row
-        for dst in 0..n {
-            let weight = self.get_xaos(last, dst);
-            changes.push((
-                ConfigPath::Xaos { src: first, dst },
-                ConfigValue::Float(weight),
-            ));
-        }
-
-        // 2. Restore first element's self-weight to 1.0
-        changes.push((
-            ConfigPath::Xaos { src: first, dst: first },
-            ConfigValue::Float(1.0),
-        ));
-
-        // 3. For all non-first elements in the chain: make them freely reachable
-        for &idx in &chain[1..] {
-            // Set all incoming weights to this transform to 1.0
-            for src in 0..n {
-                changes.push((
-                    ConfigPath::Xaos { src, dst: idx },
-                    ConfigValue::Float(1.0),
-                ));
-            }
-            // Set all outgoing weights from this transform to 1.0
+        // Restore all chain members to normal routing (all weights = 1.0).
+        // The old algorithm copied last's outgoing to first's row, but that
+        // produced duplicate keys (first→last = 0.0 from copy, then 1.0 from
+        // restore) and the first write won in the batch delta, leaving a stale 0.
+        for &idx in chain {
             for dst in 0..n {
                 changes.push((
                     ConfigPath::Xaos { src: idx, dst },
+                    ConfigValue::Float(1.0),
+                ));
+            }
+            for src in 0..n {
+                changes.push((
+                    ConfigPath::Xaos { src, dst: idx },
                     ConfigValue::Float(1.0),
                 ));
             }
