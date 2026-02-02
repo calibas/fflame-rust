@@ -509,6 +509,7 @@ impl ConfigManager {
                     log::debug!("  Undoing add transform at index {}", index);
                     if *index < self.current.flame.transforms.len() {
                         self.current.flame.transforms.remove(*index);
+                        self.current.flame.on_transform_deleted(*index);
                     }
                     return Ok(UpdateType::IterationReset);
                 }
@@ -516,6 +517,7 @@ impl ConfigManager {
                 crate::config::SnapshotData::DeleteTransform { index, transform } => {
                     log::debug!("  Undoing delete transform (re-insert at index {})", index);
                     if *index <= self.current.flame.transforms.len() {
+                        self.current.flame.on_transform_added(*index);
                         self.current.flame.transforms.insert(*index, transform.clone());
                     }
                     return Ok(UpdateType::IterationReset);
@@ -635,6 +637,7 @@ impl ConfigManager {
                 crate::config::SnapshotData::AddTransform { index, transform } => {
                     log::debug!("  Redoing add transform at index {}", index);
                     if *index <= self.current.flame.transforms.len() {
+                        self.current.flame.on_transform_added(*index);
                         self.current.flame.transforms.insert(*index, transform.clone());
                     }
                     self.position += 1;
@@ -645,6 +648,7 @@ impl ConfigManager {
                     log::debug!("  Redoing delete transform (remove at index {})", index);
                     if *index < self.current.flame.transforms.len() {
                         self.current.flame.transforms.remove(*index);
+                        self.current.flame.on_transform_deleted(*index);
                     }
                     self.position += 1;
                     return Ok(UpdateType::IterationReset);
@@ -1970,6 +1974,8 @@ impl ConfigManager {
             match snapshot {
                 crate::config::SnapshotData::AddTransform { index, transform } => {
                     if *index <= self.current.flame.transforms.len() {
+                        // Update xaos matrix before inserting (needs old transform list for detection)
+                        self.current.flame.on_transform_added(*index);
                         self.current.flame.transforms.insert(*index, transform.clone());
                     } else {
                         return Err(ConfigError::InvalidIndex);
@@ -1978,6 +1984,8 @@ impl ConfigManager {
                 crate::config::SnapshotData::DeleteTransform { index, .. } => {
                     if *index < self.current.flame.transforms.len() {
                         self.current.flame.transforms.remove(*index);
+                        // Update xaos matrix after removing (needs new transform list)
+                        self.current.flame.on_transform_deleted(*index);
                     } else {
                         return Err(ConfigError::InvalidIndex);
                     }

@@ -19,6 +19,12 @@ pub struct XaosEditorState {
     /// View mode: true = "View To" (columns show where FROM can go TO)
     /// false = "View From" (rows show where TO came FROM)
     pub view_to_mode: bool,
+    /// Whether the "Link Transforms" dialog is open
+    pub link_dialog_open: bool,
+    /// Selected pre-transform index for linking (1-based in UI, 0-based here)
+    pub link_pre: usize,
+    /// Selected post-transform index for linking (1-based in UI, 0-based here)
+    pub link_post: usize,
 }
 
 /// Get transform color for visual identification (matches transforms.rs)
@@ -274,6 +280,149 @@ pub fn render_xaos_editor_content(
                     }
                 });
         });
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.add_space(4.0);
+
+    // === LINKED TRANSFORMS SECTION ===
+    ui.horizontal(|ui| {
+        ui.heading(t!("xaos_editor.linked_transforms"));
+        ui.add_space(10.0);
+        if ui.button(t!("xaos_editor.link_action"))
+            .on_hover_text(t!("xaos_editor.link_action_tooltip"))
+            .clicked()
+        {
+            state.link_dialog_open = !state.link_dialog_open;
+            // Initialize with first two different transforms
+            state.link_pre = 0;
+            state.link_post = if num_transforms > 1 { 1 } else { 0 };
+        }
+    });
+
+    ui.add_space(4.0);
+
+    // Link dialog
+    if state.link_dialog_open && num_transforms >= 2 {
+        egui::Frame::new()
+            .fill(ui.visuals().extreme_bg_color)
+            .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color))
+            .inner_margin(8.0)
+            .corner_radius(4.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(t!("xaos_editor.select_pre"));
+                    egui::ComboBox::from_id_salt("link_pre_combo")
+                        .selected_text(format!("T{}", state.link_pre + 1))
+                        .show_ui(ui, |ui| {
+                            for i in 0..num_transforms {
+                                let color = get_transform_color(i);
+                                ui.horizontal(|ui| {
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(8.0, 14.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(rect, 2.0, color);
+                                    ui.selectable_value(&mut state.link_pre, i, format!("T{}", i + 1));
+                                });
+                            }
+                        });
+
+                    ui.add_space(8.0);
+
+                    ui.label(t!("xaos_editor.select_post"));
+                    egui::ComboBox::from_id_salt("link_post_combo")
+                        .selected_text(format!("T{}", state.link_post + 1))
+                        .show_ui(ui, |ui| {
+                            for i in 0..num_transforms {
+                                let color = get_transform_color(i);
+                                ui.horizontal(|ui| {
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(8.0, 14.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(rect, 2.0, color);
+                                    ui.selectable_value(&mut state.link_post, i, format!("T{}", i + 1));
+                                });
+                            }
+                        });
+                });
+
+                ui.add_space(4.0);
+
+                ui.horizontal(|ui| {
+                    let can_link = state.link_pre != state.link_post;
+
+                    if ui.add_enabled(can_link, egui::Button::new(t!("xaos_editor.link_confirm"))).clicked() {
+                        let changes = flame.link_transforms_changes(state.link_pre, state.link_post);
+                        if !changes.is_empty() {
+                            if let Ok(update) = config_manager.update_batch(
+                                changes,
+                                format!("Link T{} -> T{}", state.link_pre + 1, state.link_post + 1),
+                            ) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        state.link_dialog_open = false;
+                    }
+
+                    if ui.button(t!("xaos_editor.link_cancel")).clicked() {
+                        state.link_dialog_open = false;
+                    }
+
+                    if !can_link {
+                        ui.colored_label(Color32::from_rgb(255, 150, 100), t!("xaos_editor.link_error_same"));
+                    }
+                });
+            });
+
+        ui.add_space(4.0);
+    }
+
+    // Display detected chains/links
+    let chains = flame.detect_linked_chains();
+    if chains.is_empty() {
+        ui.colored_label(ui.visuals().weak_text_color(), t!("xaos_editor.no_links"));
+    } else {
+        for chain in &chains {
+            ui.horizontal(|ui| {
+                // Label: "Chain" for 3+, "Link" for pairs
+                let label = if chain.len() > 2 {
+                    t!("xaos_editor.chain_label")
+                } else {
+                    t!("xaos_editor.link_label")
+                };
+                ui.label(format!("{}:", label));
+
+                // Show chain with colored transform numbers and arrows
+                for (i, &idx) in chain.iter().enumerate() {
+                    let color = get_transform_color(idx);
+                    ui.colored_label(color, format!("T{}", idx + 1));
+                    if i < chain.len() - 1 {
+                        ui.label("->");
+                    }
+                }
+
+                ui.add_space(8.0);
+
+                // Unlink button
+                if ui.button(t!("xaos_editor.unlink"))
+                    .on_hover_text(t!("xaos_editor.unlink_tooltip"))
+                    .clicked()
+                {
+                    let changes = flame.unlink_chain_changes(chain);
+                    if !changes.is_empty() {
+                        if let Ok(update) = config_manager.update_batch(
+                            changes,
+                            format!("Unlink chain T{}", chain.iter().map(|i| format!("{}", i + 1)).collect::<Vec<_>>().join("->")),
+                        ) {
+                            max_update = max_update.max(update);
+                        }
+                    }
+                }
+            });
+        }
+    }
 
     max_update
 }
