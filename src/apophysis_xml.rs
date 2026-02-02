@@ -392,6 +392,19 @@ fn parse_xform_element(
                 // Parse opacity (0.0 to 1.0, default 1.0)
                 transform.opacity = value.parse().unwrap_or(1.0);
             }
+            "post" => {
+                // Parse post-affine: "pa pc pb pd pe pf" (same column-major order as coefs)
+                let parts: Vec<&str> = value.split_whitespace().collect();
+                if parts.len() >= 6 {
+                    transform.post_affine_enabled = true;
+                    transform.post_a = parts[0].parse().unwrap_or(1.0);  // c[0,0]
+                    transform.post_c = parts[1].parse().unwrap_or(0.0);  // c[0,1]
+                    transform.post_b = parts[2].parse().unwrap_or(0.0);  // c[1,0]
+                    transform.post_d = parts[3].parse().unwrap_or(1.0);  // c[1,1]
+                    transform.post_e = parts[4].parse().unwrap_or(0.0);  // c[2,0]
+                    transform.post_f = parts[5].parse().unwrap_or(0.0);  // c[2,1]
+                }
+            }
             "chaos" => {
                 // Parse chaos/xaos weights (space-separated floats)
                 // chaos="1.0 0.5 0.75" means P(this→0)=1.0, P(this→1)=0.5, P(this→2)=0.75
@@ -474,6 +487,19 @@ fn parse_finalxform_element(
                     transform.d = parts[3].parse().unwrap_or(1.0);
                     transform.e = parts[4].parse().unwrap_or(0.0);
                     transform.f = parts[5].parse().unwrap_or(0.0);
+                }
+            }
+            "post" => {
+                // Parse post-affine: "pa pc pb pd pe pf" (same column-major order as coefs)
+                let parts: Vec<&str> = value.split_whitespace().collect();
+                if parts.len() >= 6 {
+                    transform.post_affine_enabled = true;
+                    transform.post_a = parts[0].parse().unwrap_or(1.0);
+                    transform.post_c = parts[1].parse().unwrap_or(0.0);
+                    transform.post_b = parts[2].parse().unwrap_or(0.0);
+                    transform.post_d = parts[3].parse().unwrap_or(1.0);
+                    transform.post_e = parts[4].parse().unwrap_or(0.0);
+                    transform.post_f = parts[5].parse().unwrap_or(0.0);
                 }
             }
             _ => {
@@ -774,6 +800,52 @@ mod tests {
         assert_eq!(xform2.get_variation_param_or_default("blob", "high", &global_registry()), 1.5);
         assert_eq!(xform2.get_variation_param_or_default("blob", "low", &global_registry()), 0.8);
         assert_eq!(xform2.get_variation_param_or_default("blob", "waves", &global_registry()), 6.0);
+    }
+
+    #[test]
+    fn test_post_affine_import() {
+        // Test that post attribute is parsed correctly
+        let xml = r#"
+<flames name="test">
+<flame name="Post-Affine Test" size="800 600" center="0 0" scale="200">
+   <xform weight="0.5" color="1" bubble="0.2" pre_blur="10" coefs="1 0 0 1 0 0" post="0.8 0 0 1 0 0" opacity="1" />
+   <xform weight="1" color="0" linear="1" coefs="0.9 0 0 0.9 0 0" opacity="1" />
+   <finalxform color="0" linear="1" coefs="1 0 0 1 0 0" post="0.5 0.1 -0.1 0.5 0.2 0.3" />
+</flame>
+</flames>
+        "#;
+
+        let result = parse_flame_xml(xml);
+        assert!(result.is_ok(), "Failed to parse XML: {:?}", result.err());
+
+        let config = &result.unwrap()[0];
+        assert_eq!(config.flame.transforms.len(), 2);
+
+        // First transform has post-affine
+        let xform0 = &config.flame.transforms[0];
+        assert!(xform0.post_affine_enabled);
+        assert_eq!(xform0.post_a, 0.8);   // parts[0]
+        assert_eq!(xform0.post_c, 0.0);   // parts[1]
+        assert_eq!(xform0.post_b, 0.0);   // parts[2]
+        assert_eq!(xform0.post_d, 1.0);   // parts[3]
+        assert_eq!(xform0.post_e, 0.0);   // parts[4]
+        assert_eq!(xform0.post_f, 0.0);   // parts[5]
+
+        // Second transform has no post-affine
+        let xform1 = &config.flame.transforms[1];
+        assert!(!xform1.post_affine_enabled);
+        assert_eq!(xform1.post_a, 1.0);   // identity
+        assert_eq!(xform1.post_d, 1.0);   // identity
+
+        // Final transform has post-affine
+        let final_xform = config.flame.final_transform.as_ref().unwrap();
+        assert!(final_xform.post_affine_enabled);
+        assert_eq!(final_xform.post_a, 0.5);
+        assert_eq!(final_xform.post_c, 0.1);   // parts[1]
+        assert_eq!(final_xform.post_b, -0.1);  // parts[2]
+        assert_eq!(final_xform.post_d, 0.5);
+        assert_eq!(final_xform.post_e, 0.2);
+        assert_eq!(final_xform.post_f, 0.3);
     }
 
     #[test]
