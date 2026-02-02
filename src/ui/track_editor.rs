@@ -1215,6 +1215,22 @@ pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f6
                 }
             })
         }
+        ConfigPath::TransformPostAffineEnabled { index } => {
+            config.flame.transforms.get(*index).map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
+        }
+        ConfigPath::TransformPostAffine { index, param } => {
+            config.flame.transforms.get(*index).map(|t| {
+                match param {
+                    AffineParam::A => t.post_a as f64,
+                    AffineParam::B => t.post_b as f64,
+                    AffineParam::C => t.post_c as f64,
+                    AffineParam::D => t.post_d as f64,
+                    AffineParam::E => t.post_e as f64,
+                    AffineParam::F => t.post_f as f64,
+                    AffineParam::G => t.post_g as f64,
+                }
+            })
+        }
         ConfigPath::TransformOriginX { index } => {
             config.flame.transforms.get(*index).map(|t| t.e as f64)
         }
@@ -1244,6 +1260,22 @@ pub fn get_current_value(config: &FractalConfig, path: &ConfigPath) -> Option<f6
                     AffineParam::E => t.e as f64,
                     AffineParam::F => t.f as f64,
                     AffineParam::G => t.g as f64,
+                }
+            })
+        }
+        ConfigPath::FinalTransformPostAffineEnabled => {
+            config.flame.final_transform.as_ref().map(|t| if t.post_affine_enabled { 1.0 } else { 0.0 })
+        }
+        ConfigPath::FinalTransformPostAffine { param } => {
+            config.flame.final_transform.as_ref().map(|t| {
+                match param {
+                    AffineParam::A => t.post_a as f64,
+                    AffineParam::B => t.post_b as f64,
+                    AffineParam::C => t.post_c as f64,
+                    AffineParam::D => t.post_d as f64,
+                    AffineParam::E => t.post_e as f64,
+                    AffineParam::F => t.post_f as f64,
+                    AffineParam::G => t.post_g as f64,
                 }
             })
         }
