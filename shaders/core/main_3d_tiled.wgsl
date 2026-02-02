@@ -62,8 +62,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
 
         // Apply affine + variations (3D)
-        let affine_p = apply_affine_3d(xform, current);
-        current = apply_variations_3d(xform, xform_idx, affine_p, &rng);
+        let affine_p = apply_affine(xform, current);
+        current = apply_variations(xform, xform_idx, affine_p, &rng);
+
+        // Apply post-affine if enabled for this transform
+        if (xform.post_enabled > 0.5) {
+            current = apply_post_affine(xform, current);
+        }
 
         // Calculate speed
         let speed = length(current - old_pos);
@@ -88,8 +93,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             var final_pos = current;
             if (params.has_final_transform != 0u) {
                 let final_xform = transforms[params.final_transform_index];
-                let affine_p = apply_affine_3d(final_xform, current);
-                final_pos = apply_variations_3d(final_xform, params.final_transform_index, affine_p, &rng);
+                let affine_p = apply_affine(final_xform, current);
+                final_pos = apply_variations(final_xform, params.final_transform_index, affine_p, &rng);
+                // Post-affine on final transform
+                if (final_xform.post_enabled > 0.5) {
+                    final_pos = apply_post_affine(final_xform, final_pos);
+                }
             }
 
             // Convert to FULL-RESOLUTION pixel coordinates (3D projection)

@@ -247,6 +247,8 @@ transform:
   affine_e: "e:"
   affine_f: "f:"
   affine_g: "g (Z):"
+  post_affine_enabled: "Post-Affine"
+  post_affine_matrix: "Post-Affine Matrix"
 
 # Variation Controls
 variations:
@@ -572,6 +574,8 @@ history:
     transform_color_speed: "Transform %{index} → Color Speed"
     transform_opacity: "Transform %{index} → Opacity"
     transform_affine: "Transform %{index} → Affine %{param}"
+    transform_post_affine_enabled: "Transform %{index} → Post-Affine Enabled"
+    transform_post_affine: "Transform %{index} → Post-Affine %{param}"
     transform_variation: "Transform %{index} → %{variation} variation"
     transform_variation_param: "Transform %{index} → %{variation} → %{param}"
     transform_origin_x: "Transform %{index} → Origin X"
@@ -582,6 +586,8 @@ history:
     # Final Transform
     final_transform_enabled: "Final Transform → Enabled"
     final_transform_affine: "Final Transform → Affine %{param}"
+    final_transform_post_affine_enabled: "Final Transform → Post-Affine Enabled"
+    final_transform_post_affine: "Final Transform → Post-Affine %{param}"
     final_transform_variation: "Final Transform → %{variation} variation"
     final_transform_variation_param: "Final Transform → %{variation} → %{param}"
     final_transform_origin_x: "Final Transform → Origin X"
@@ -672,8 +678,14 @@ triangle_editor:
   scale_up: "Scale Up"
   scale_down: "Scale Down"
 
+  # Affine target (pre/post toggle)
+  affine_target: "Editing:"
+  affine_pre: "Affine"
+  affine_post: "Post-Affine"
+
   # Affine coefficients
   affine_coefficients: "Affine Coefficients:"
+  post_affine_coefficients: "Post-Affine Coefficients:"
   reset_identity: "Reset to Identity"
 
   # Tooltips
@@ -694,6 +706,8 @@ triangle_editor:
   tooltip_scale_up: "Scale triangle up by 10% from origin"
   tooltip_scale_down: "Scale triangle down by 10% from origin"
   tooltip_reset_identity: "Reset to identity transform (no scaling, rotation, or translation)"
+  tooltip_affine_pre: "Edit the pre-affine transform (applied before variations)"
+  tooltip_affine_post: "Edit the post-affine transform (applied after variations)"
   tooltip_affine_a: "Horizontal scale. 1.0 = no change.\nAffects X component of X-axis vector."
   tooltip_affine_b: "Horizontal shear. Skews shape horizontally.\nAffects Y component of X-axis vector."
   tooltip_affine_c: "X translation. Moves transform horizontally.\nOrigin X coordinate."
@@ -1265,6 +1279,8 @@ tooltips:
   affine_e: "X offset - horizontal translation"
   affine_f: "Y offset - vertical translation"
   affine_g: "Z offset - depth in 3D mode"
+  post_affine_enabled: "Enable a second affine transform applied after variations.\nUsed for fine-tuning shape and position independently of the pre-affine."
+  post_affine_matrix: "Post-affine coefficients applied after variations."
   color_speed: "How fast the color index changes during iteration.\n-1 to 1, where 0 = no change."
   opacity: "Transparency of points from this transform.\n0 = invisible, 1 = fully opaque"
   transform_solo: "Isolate this transform by hiding all others.\n Click again to restore."

@@ -92,6 +92,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let affine_p = apply_affine(xform, current);
         current = apply_variations(xform, xform_idx, affine_p, &rng);
 
+        // Apply post-affine (compile-time gated for zero cost when unused)
+        if (HAS_POST_AFFINE) {
+            if (xform.post_enabled > 0.5) {
+                current = apply_post_affine(xform, current);
+            }
+        }
+
         // Calculate speed (distance traveled)
         let speed = length(current - old_pos);
 
@@ -162,6 +169,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 let affine_p = apply_affine(final_xform, current);
                 final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng);
 {{/if}}
+                // Post-affine on final transform
+                if (HAS_POST_AFFINE) {
+                    if (final_xform.post_enabled > 0.5) {
+                        final_pos = apply_post_affine(final_xform, final_pos);
+                    }
+                }
             }
 
             // Convert to pixel coordinates

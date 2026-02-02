@@ -19,6 +19,19 @@ impl Default for MouseMode {
     }
 }
 
+/// Which affine to edit in the triangle editor
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+enum AffineTarget {
+    Pre,
+    Post,
+}
+
+impl Default for AffineTarget {
+    fn default() -> Self {
+        AffineTarget::Pre
+    }
+}
+
 /// Core triangle editor rendering (shared by window and panel)
 fn render_triangle_editor_core(
     ui: &mut egui::Ui,
@@ -114,6 +127,38 @@ fn render_triangle_editor_core(
             };
             ui.label(egui::RichText::new(mode_desc.as_ref()).italics().small());
 
+            // Pre/Post affine toggle - only show when selected transform has post-affine enabled
+            let selected_has_post_affine = match selected_transform {
+                Some(idx) => flame.transforms.get(idx).map(|t| t.post_affine_enabled).unwrap_or(false),
+                None => flame.final_transform.as_ref().map(|t| t.post_affine_enabled).unwrap_or(false),
+            };
+
+            let mut affine_target = ui.ctx().data_mut(|d| {
+                d.get_persisted::<AffineTarget>(egui::Id::new("triangle_editor_affine_target"))
+                    .unwrap_or_default()
+            });
+
+            // Reset to Pre if post-affine not enabled
+            if !selected_has_post_affine {
+                affine_target = AffineTarget::Pre;
+            }
+
+            if selected_has_post_affine {
+                ui.horizontal(|ui| {
+                    ui.label(t!("triangle_editor.affine_target"));
+                    let old_target = affine_target;
+                    ui.selectable_value(&mut affine_target, AffineTarget::Pre, t!("triangle_editor.affine_pre"))
+                        .on_hover_text(t!("triangle_editor.tooltip_affine_pre"));
+                    ui.selectable_value(&mut affine_target, AffineTarget::Post, t!("triangle_editor.affine_post"))
+                        .on_hover_text(t!("triangle_editor.tooltip_affine_post"));
+                    if affine_target != old_target {
+                        ui.ctx().data_mut(|d| {
+                            d.insert_persisted(egui::Id::new("triangle_editor_affine_target"), affine_target);
+                        });
+                    }
+                });
+            }
+
             ui.separator();
 
             // Canvas for drawing triangles
@@ -133,6 +178,14 @@ fn render_triangle_editor_core(
                     .max(x[1].abs())
                     .max(y[0].abs())
                     .max(y[1].abs());
+                // Include post-affine triangle vertices in bounds
+                if transform.post_affine_enabled {
+                    let (po, px, py) = transform.post_to_triangle_apophysis();
+                    max_extent = max_extent
+                        .max(po[0].abs()).max(po[1].abs())
+                        .max(px[0].abs()).max(px[1].abs())
+                        .max(py[0].abs()).max(py[1].abs());
+                }
             }
             // Also check final transform if it exists
             if let Some(ref final_xform) = flame.final_transform {
@@ -144,6 +197,13 @@ fn render_triangle_editor_core(
                     .max(x[1].abs())
                     .max(y[0].abs())
                     .max(y[1].abs());
+                if final_xform.post_affine_enabled {
+                    let (po, px, py) = final_xform.post_to_triangle_apophysis();
+                    max_extent = max_extent
+                        .max(po[0].abs()).max(po[1].abs())
+                        .max(px[0].abs()).max(px[1].abs())
+                        .max(py[0].abs()).max(py[1].abs());
+                }
             }
             // Add flat padding (not percentage) to prevent feedback loop when dragging near edge
             // Using percentage (e.g., * 1.2) causes: drag → extent grows → point moves → extent grows more
@@ -226,9 +286,10 @@ fn render_triangle_editor_core(
             });
 
             // Helper to create affine changes for either regular or final transform
+            // Supports both pre-affine and post-affine based on affine_target
             let make_affine_changes = |xform: &crate::scene::transforms::Transform| -> Vec<(ConfigPath, crate::config::ConfigValue)> {
-                match selected_transform {
-                    Some(index) => vec![
+                match (selected_transform, affine_target) {
+                    (Some(index), AffineTarget::Pre) => vec![
                         (ConfigPath::TransformAffine { index, param: AffineParam::A }, xform.a.into()),
                         (ConfigPath::TransformAffine { index, param: AffineParam::B }, xform.b.into()),
                         (ConfigPath::TransformAffine { index, param: AffineParam::C }, xform.c.into()),
@@ -236,13 +297,29 @@ fn render_triangle_editor_core(
                         (ConfigPath::TransformAffine { index, param: AffineParam::E }, xform.e.into()),
                         (ConfigPath::TransformAffine { index, param: AffineParam::F }, xform.f.into()),
                     ],
-                    None => vec![
+                    (Some(index), AffineTarget::Post) => vec![
+                        (ConfigPath::TransformPostAffine { index, param: AffineParam::A }, xform.post_a.into()),
+                        (ConfigPath::TransformPostAffine { index, param: AffineParam::B }, xform.post_b.into()),
+                        (ConfigPath::TransformPostAffine { index, param: AffineParam::C }, xform.post_c.into()),
+                        (ConfigPath::TransformPostAffine { index, param: AffineParam::D }, xform.post_d.into()),
+                        (ConfigPath::TransformPostAffine { index, param: AffineParam::E }, xform.post_e.into()),
+                        (ConfigPath::TransformPostAffine { index, param: AffineParam::F }, xform.post_f.into()),
+                    ],
+                    (None, AffineTarget::Pre) => vec![
                         (ConfigPath::FinalTransformAffine { param: AffineParam::A }, xform.a.into()),
                         (ConfigPath::FinalTransformAffine { param: AffineParam::B }, xform.b.into()),
                         (ConfigPath::FinalTransformAffine { param: AffineParam::C }, xform.c.into()),
                         (ConfigPath::FinalTransformAffine { param: AffineParam::D }, xform.d.into()),
                         (ConfigPath::FinalTransformAffine { param: AffineParam::E }, xform.e.into()),
                         (ConfigPath::FinalTransformAffine { param: AffineParam::F }, xform.f.into()),
+                    ],
+                    (None, AffineTarget::Post) => vec![
+                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::A }, xform.post_a.into()),
+                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::B }, xform.post_b.into()),
+                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::C }, xform.post_c.into()),
+                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::D }, xform.post_d.into()),
+                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::E }, xform.post_e.into()),
+                        (ConfigPath::FinalTransformPostAffine { param: AffineParam::F }, xform.post_f.into()),
                     ],
                 }
             };
@@ -268,7 +345,10 @@ fn render_triangle_editor_core(
             };
 
             if let Some(transform) = transform_mut {
-                let (mut o, mut x, mut y) = transform.to_triangle_apophysis();
+                let (mut o, mut x, mut y) = match affine_target {
+                    AffineTarget::Pre => transform.to_triangle_apophysis(),
+                    AffineTarget::Post => transform.post_to_triangle_apophysis(),
+                };
 
                 let o_pos = to_canvas(o);
                 let x_pos = to_canvas(x);
@@ -312,7 +392,10 @@ fn render_triangle_editor_core(
                                 }
 
                                 // Apply triangle changes via update_batch
-                                transform.from_triangle_apophysis(o, x, y);
+                                match affine_target {
+                                    AffineTarget::Pre => transform.from_triangle_apophysis(o, x, y),
+                                    AffineTarget::Post => transform.post_from_triangle_apophysis(o, x, y),
+                                }
                                 let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_move".to_string()) {
                                     // Sync transform from active_config for live preview
@@ -350,7 +433,10 @@ fn render_triangle_editor_core(
                                 y[1] += world_delta[1];
 
                                 // Apply triangle changes via update_batch
-                                transform.from_triangle_apophysis(o, x, y);
+                                match affine_target {
+                                    AffineTarget::Pre => transform.from_triangle_apophysis(o, x, y),
+                                    AffineTarget::Post => transform.post_from_triangle_apophysis(o, x, y),
+                                }
                                 let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_translate".to_string()) {
                                     sync_transform(transform, config_manager);
@@ -403,7 +489,10 @@ fn render_triangle_editor_core(
                                 y = [o[0] + y_rot[0], o[1] + y_rot[1]];
 
                                 // Apply triangle changes via update_batch
-                                transform.from_triangle_apophysis(o, x, y);
+                                match affine_target {
+                                    AffineTarget::Pre => transform.from_triangle_apophysis(o, x, y),
+                                    AffineTarget::Post => transform.post_from_triangle_apophysis(o, x, y),
+                                }
                                 let changes = make_affine_changes(transform);
                                 if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_rotate".to_string()) {
                                     sync_transform(transform, config_manager);
@@ -464,7 +553,10 @@ fn render_triangle_editor_core(
                                         y = [o[0] + y_vec[0] * scale_factor, o[1] + y_vec[1] * scale_factor];
 
                                         // Apply triangle changes via update_batch
-                                        transform.from_triangle_apophysis(o, x, y);
+                                        match affine_target {
+                                            AffineTarget::Pre => transform.from_triangle_apophysis(o, x, y),
+                                            AffineTarget::Post => transform.post_from_triangle_apophysis(o, x, y),
+                                        }
                                         let changes = make_affine_changes(transform);
                                         if let Ok(update_type) = config_manager.update_batch(changes, "history.action.triangle_edit_scale".to_string()) {
                                             sync_transform(transform, config_manager);
@@ -590,6 +682,74 @@ fn render_triangle_editor_core(
                 }
             }
 
+            // Draw post-affine triangles for transforms that have post-affine enabled
+            for (i, transform) in flame.transforms.iter().enumerate() {
+                if !transform.post_affine_enabled {
+                    continue;
+                }
+                let (o, x, y) = transform.post_to_triangle_apophysis();
+
+                let o_pos = to_canvas(o);
+                let x_pos = to_canvas(x);
+                let y_pos = to_canvas(y);
+
+                let base_color = get_transform_color(i);
+                // Dimmer than pre-affine, brighter when selected in post mode
+                let is_active_post = Some(i) == selected_transform && affine_target == AffineTarget::Post;
+                let alpha: u8 = if is_active_post { 200 } else { 50 };
+                let color = Color32::from_rgba_unmultiplied(
+                    base_color.r(),
+                    base_color.g(),
+                    base_color.b(),
+                    alpha,
+                );
+
+                // Draw dashed lines for post-affine triangles
+                let draw_dashed = |start: Pos2, end: Pos2| {
+                    let dash_length = 6.0;
+                    let gap_length = 4.0;
+                    let total_length = start.distance(end);
+                    if total_length < 0.001 { return; }
+                    let direction = (end - start) / total_length;
+                    let mut pos = 0.0;
+                    while pos < total_length {
+                        let dash_start = start + direction * pos;
+                        let dash_end_pos = (pos + dash_length).min(total_length);
+                        let dash_end = start + direction * dash_end_pos;
+                        painter.line_segment([dash_start, dash_end], Stroke::new(1.5, color));
+                        pos += dash_length + gap_length;
+                    }
+                };
+
+                draw_dashed(o_pos, x_pos);
+                draw_dashed(o_pos, y_pos);
+                draw_dashed(x_pos, y_pos);
+
+                // Draw small square points for post-affine (to distinguish from pre-affine circles)
+                let point_size = if is_active_post { 5.0 } else { 3.0 };
+                let half = point_size / 2.0;
+                for pos in [o_pos, x_pos, y_pos] {
+                    painter.rect_filled(
+                        egui::Rect::from_min_size(Pos2::new(pos.x - half, pos.y - half), Vec2::splat(point_size)),
+                        0.0,
+                        color,
+                    );
+                }
+
+                // Labels for selected post-affine
+                if is_active_post {
+                    for (pos, label) in [(o_pos, "O'"), (x_pos, "X'"), (y_pos, "Y'")] {
+                        painter.text(
+                            pos + Vec2::new(-15.0, -15.0),
+                            egui::Align2::CENTER_CENTER,
+                            label,
+                            egui::FontId::proportional(12.0),
+                            color,
+                        );
+                    }
+                }
+            }
+
             // Draw final transform if present (light grey, distinct style)
             if let Some(final_xform) = &flame.final_transform {
                 let (o, x, y) = final_xform.to_triangle_apophysis();
@@ -672,7 +832,10 @@ fn render_triangle_editor_core(
             };
 
             if let Some(transform) = transform_for_coords {
-                let (mut o, mut x, mut y) = transform.to_triangle_apophysis();
+                let (mut o, mut x, mut y) = match affine_target {
+                    AffineTarget::Pre => transform.to_triangle_apophysis(),
+                    AffineTarget::Post => transform.post_to_triangle_apophysis(),
+                };
 
                 ui.label(t!("triangle_editor.triangle_coords", name = transform_name.as_str()));
 
@@ -718,33 +881,29 @@ fn render_triangle_editor_core(
                                                            o: [f32; 2], x: [f32; 2], y: [f32; 2],
                                                            description: &str| {
                             let mut temp = transform_ref.clone();
-                            temp.from_triangle_apophysis(o, x, y);
-                            let changes = match selected_transform {
-                                Some(index) => vec![
-                                    (ConfigPath::TransformAffine { index, param: AffineParam::A }, temp.a.into()),
-                                    (ConfigPath::TransformAffine { index, param: AffineParam::B }, temp.b.into()),
-                                    (ConfigPath::TransformAffine { index, param: AffineParam::C }, temp.c.into()),
-                                    (ConfigPath::TransformAffine { index, param: AffineParam::D }, temp.d.into()),
-                                    (ConfigPath::TransformAffine { index, param: AffineParam::E }, temp.e.into()),
-                                    (ConfigPath::TransformAffine { index, param: AffineParam::F }, temp.f.into()),
-                                ],
-                                None => vec![
-                                    (ConfigPath::FinalTransformAffine { param: AffineParam::A }, temp.a.into()),
-                                    (ConfigPath::FinalTransformAffine { param: AffineParam::B }, temp.b.into()),
-                                    (ConfigPath::FinalTransformAffine { param: AffineParam::C }, temp.c.into()),
-                                    (ConfigPath::FinalTransformAffine { param: AffineParam::D }, temp.d.into()),
-                                    (ConfigPath::FinalTransformAffine { param: AffineParam::E }, temp.e.into()),
-                                    (ConfigPath::FinalTransformAffine { param: AffineParam::F }, temp.f.into()),
-                                ],
-                            };
+                            match affine_target {
+                                AffineTarget::Pre => temp.from_triangle_apophysis(o, x, y),
+                                AffineTarget::Post => temp.post_from_triangle_apophysis(o, x, y),
+                            }
+                            let changes = make_affine_changes(&temp);
                             config_manager.update_batch(changes, description.to_string())
                         };
+
+                        // Helper macro to get current triangle based on affine target
+                        macro_rules! get_triangle {
+                            ($t:expr) => {
+                                match affine_target {
+                                    AffineTarget::Pre => $t.to_triangle_apophysis(),
+                                    AffineTarget::Post => $t.post_to_triangle_apophysis(),
+                                }
+                            };
+                        }
 
                         // Translate arrow keys layout (matching View panel)
                         ui.horizontal(|ui| {
                             ui.add_space(30.0);
                             if ui.button("  ^  ").on_hover_text(t!("triangle_editor.tooltip_translate_up")).clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle_apophysis();
+                                let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
                                 o_new[1] += 0.1;
                                 x_new[1] += 0.1;
                                 y_new[1] += 0.1;
@@ -756,7 +915,7 @@ fn render_triangle_editor_core(
                         });
                         ui.horizontal(|ui| {
                             if ui.button("  <  ").on_hover_text(t!("triangle_editor.tooltip_translate_left")).clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle_apophysis();
+                                let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
                                 o_new[0] -= 0.1;
                                 x_new[0] -= 0.1;
                                 y_new[0] -= 0.1;
@@ -766,7 +925,7 @@ fn render_triangle_editor_core(
                                 }
                             }
                             if ui.button("  v  ").on_hover_text(t!("triangle_editor.tooltip_translate_down")).clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle_apophysis();
+                                let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
                                 o_new[1] -= 0.1;
                                 x_new[1] -= 0.1;
                                 y_new[1] -= 0.1;
@@ -776,7 +935,7 @@ fn render_triangle_editor_core(
                                 }
                             }
                             if ui.button("  >  ").on_hover_text(t!("triangle_editor.tooltip_translate_right")).clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = transform.to_triangle_apophysis();
+                                let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
                                 o_new[0] += 0.1;
                                 x_new[0] += 0.1;
                                 y_new[0] += 0.1;
@@ -798,7 +957,7 @@ fn render_triangle_editor_core(
                                 let angle = -15.0_f32.to_radians();
                                 let cos_a = angle.cos();
                                 let sin_a = angle.sin();
-                                let (o_curr, x_curr, y_curr) = transform.to_triangle_apophysis();
+                                let (o_curr, x_curr, y_curr) = get_triangle!(transform);
 
                                 let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
                                 let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
@@ -821,7 +980,7 @@ fn render_triangle_editor_core(
                                 let angle = 15.0_f32.to_radians();
                                 let cos_a = angle.cos();
                                 let sin_a = angle.sin();
-                                let (o_curr, x_curr, y_curr) = transform.to_triangle_apophysis();
+                                let (o_curr, x_curr, y_curr) = get_triangle!(transform);
 
                                 let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
                                 let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
@@ -845,7 +1004,7 @@ fn render_triangle_editor_core(
                                 .on_hover_text(t!("triangle_editor.tooltip_scale_up"))
                                 .clicked()
                             {
-                                let (o_curr, x_curr, y_curr) = transform.to_triangle_apophysis();
+                                let (o_curr, x_curr, y_curr) = get_triangle!(transform);
                                 let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
                                 let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
 
@@ -861,7 +1020,7 @@ fn render_triangle_editor_core(
                                 .on_hover_text(t!("triangle_editor.tooltip_scale_down"))
                                 .clicked()
                             {
-                                let (o_curr, x_curr, y_curr) = transform.to_triangle_apophysis();
+                                let (o_curr, x_curr, y_curr) = get_triangle!(transform);
                                 let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
                                 let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
 
@@ -880,7 +1039,10 @@ fn render_triangle_editor_core(
                 if coords_changed {
                     // Convert triangle coords to affine parameters
                     let mut temp_transform = transform.clone();
-                    temp_transform.from_triangle_apophysis(o, x, y);
+                    match affine_target {
+                        AffineTarget::Pre => temp_transform.from_triangle_apophysis(o, x, y),
+                        AffineTarget::Post => temp_transform.post_from_triangle_apophysis(o, x, y),
+                    }
 
                     // Batch update all affine parameters via ConfigManager
                     let changes = make_affine_changes(&temp_transform);
@@ -896,29 +1058,45 @@ fn render_triangle_editor_core(
 
                 ui.separator();
 
-                ui.label(t!("triangle_editor.affine_coefficients"));
+                // Label changes based on target
+                ui.label(match affine_target {
+                    AffineTarget::Pre => t!("triangle_editor.affine_coefficients"),
+                    AffineTarget::Post => t!("triangle_editor.post_affine_coefficients"),
+                });
 
                 // Track drag state for preview mode
                 let mut dragging = false;
                 let mut drag_stopped = false;
 
+                // Helper to construct the right ConfigPath based on affine target
+                let make_coeff_path = |param: AffineParam| -> ConfigPath {
+                    match (selected_transform, affine_target) {
+                        (Some(index), AffineTarget::Pre) => ConfigPath::TransformAffine { index, param },
+                        (Some(index), AffineTarget::Post) => ConfigPath::TransformPostAffine { index, param },
+                        (None, AffineTarget::Pre) => ConfigPath::FinalTransformAffine { param },
+                        (None, AffineTarget::Post) => ConfigPath::FinalTransformPostAffine { param },
+                    }
+                };
+
+                // Get current values based on affine target
+                let (mut val_a, mut val_b, mut val_c, mut val_d, mut val_e, mut val_f) = match affine_target {
+                    AffineTarget::Pre => (transform.a, transform.b, transform.c, transform.d, transform.e, transform.f),
+                    AffineTarget::Post => (transform.post_a, transform.post_b, transform.post_c, transform.post_d, transform.post_e, transform.post_f),
+                };
+
                 // Display variables with Apophysis-compatible signs
                 // Apophysis displays b, c, f with opposite sign
-                let mut display_b = -transform.b;
-                let mut display_c = -transform.c;
-                let mut display_f = -transform.f;
+                let mut display_b = -val_b;
+                let mut display_c = -val_c;
+                let mut display_f = -val_f;
 
                 ui.horizontal(|ui| {
-                    let a_resp = ui.add(egui::DragValue::new(&mut transform.a).speed(0.01).prefix("a: "))
+                    let a_resp = ui.add(egui::DragValue::new(&mut val_a).speed(0.01).prefix("a: "))
                         .on_hover_text(t!("triangle_editor.tooltip_affine_a"));
                     if a_resp.changed() {
-                        let path = match selected_transform {
-                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::A },
-                            None => ConfigPath::FinalTransformAffine { param: AffineParam::A },
-                        };
                         if let Ok(update) = config_manager.update_param(
-                            path,
-                            transform.a.into()
+                            make_coeff_path(AffineParam::A),
+                            val_a.into()
                         ) {
                             max_update = max_update.max(update);
                         }
@@ -930,14 +1108,10 @@ fn render_triangle_editor_core(
                         .on_hover_text(t!("triangle_editor.tooltip_affine_b"));
                     if b_resp.changed() {
                         // Negate back to internal representation
-                        transform.b = -display_b;
-                        let path = match selected_transform {
-                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::B },
-                            None => ConfigPath::FinalTransformAffine { param: AffineParam::B },
-                        };
+                        val_b = -display_b;
                         if let Ok(update) = config_manager.update_param(
-                            path,
-                            transform.b.into()
+                            make_coeff_path(AffineParam::B),
+                            val_b.into()
                         ) {
                             max_update = max_update.max(update);
                         }
@@ -945,16 +1119,12 @@ fn render_triangle_editor_core(
                     dragging |= b_resp.dragged();
                     drag_stopped |= b_resp.drag_stopped();
 
-                    let e_resp = ui.add(egui::DragValue::new(&mut transform.e).speed(0.01).prefix("e: "))
+                    let e_resp = ui.add(egui::DragValue::new(&mut val_e).speed(0.01).prefix("e: "))
                         .on_hover_text(t!("triangle_editor.tooltip_affine_e"));
                     if e_resp.changed() {
-                        let path = match selected_transform {
-                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::E },
-                            None => ConfigPath::FinalTransformAffine { param: AffineParam::E },
-                        };
                         if let Ok(update) = config_manager.update_param(
-                            path,
-                            transform.e.into()
+                            make_coeff_path(AffineParam::E),
+                            val_e.into()
                         ) {
                             max_update = max_update.max(update);
                         }
@@ -967,14 +1137,10 @@ fn render_triangle_editor_core(
                         .on_hover_text(t!("triangle_editor.tooltip_affine_c"));
                     if c_resp.changed() {
                         // Negate back to internal representation
-                        transform.c = -display_c;
-                        let path = match selected_transform {
-                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::C },
-                            None => ConfigPath::FinalTransformAffine { param: AffineParam::C },
-                        };
+                        val_c = -display_c;
                         if let Ok(update) = config_manager.update_param(
-                            path,
-                            transform.c.into()
+                            make_coeff_path(AffineParam::C),
+                            val_c.into()
                         ) {
                             max_update = max_update.max(update);
                         }
@@ -982,16 +1148,12 @@ fn render_triangle_editor_core(
                     dragging |= c_resp.dragged();
                     drag_stopped |= c_resp.drag_stopped();
 
-                    let d_resp = ui.add(egui::DragValue::new(&mut transform.d).speed(0.01).prefix("d: "))
+                    let d_resp = ui.add(egui::DragValue::new(&mut val_d).speed(0.01).prefix("d: "))
                         .on_hover_text(t!("triangle_editor.tooltip_affine_d"));
                     if d_resp.changed() {
-                        let path = match selected_transform {
-                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::D },
-                            None => ConfigPath::FinalTransformAffine { param: AffineParam::D },
-                        };
                         if let Ok(update) = config_manager.update_param(
-                            path,
-                            transform.d.into()
+                            make_coeff_path(AffineParam::D),
+                            val_d.into()
                         ) {
                             max_update = max_update.max(update);
                         }
@@ -1003,14 +1165,10 @@ fn render_triangle_editor_core(
                         .on_hover_text(t!("triangle_editor.tooltip_affine_f"));
                     if f_resp.changed() {
                         // Negate back to internal representation
-                        transform.f = -display_f;
-                        let path = match selected_transform {
-                            Some(index) => ConfigPath::TransformAffine { index, param: AffineParam::F },
-                            None => ConfigPath::FinalTransformAffine { param: AffineParam::F },
-                        };
+                        val_f = -display_f;
                         if let Ok(update) = config_manager.update_param(
-                            path,
-                            transform.f.into()
+                            make_coeff_path(AffineParam::F),
+                            val_f.into()
                         ) {
                             max_update = max_update.max(update);
                         }
