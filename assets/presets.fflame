@@ -1,7 +1,5 @@
 [
 {
-  "alpha_blend_high": 0.800000011920929,
-  "alpha_blend_low": 0.30000001192092896,
   "brightness": 30.0,
   "exposure": 0.019999999552965164,
   "flame": {
@@ -99,9 +97,6 @@
     "locked": true,
     "name": "Imported from Apophysis"
   },
-  "path_capture_mode": "FirstHit",
-  "path_map_style": "Prefix",
-  "path_tracking_mode": "First",
   "rotation": -0.7853981852531433,
   "saturation": 1.7999999523162842,
   "speed_factor": 1.0,
@@ -134,8 +129,6 @@
   "zoom": 1.7949999570846558
 },
 {
-  "alpha_blend_high": 0.800000011920929,
-  "alpha_blend_low": 0.30000001192092896,
   "brightness": 10.0,
   "flame": {
     "name": "Julian Disc",
@@ -191,9 +184,6 @@
   "palette_rotation": 8.78948974609375,
   "pan_x": -0.007401135750114918,
   "pan_y": -0.0032124659046530724,
-  "path_capture_mode": "FirstHit",
-  "path_map_style": "Prefix",
-  "path_tracking_mode": "First",
   "rotation": -0.06981316953897476,
   "saturation": 3.0,
   "speed_factor": 1.0,
@@ -201,8 +191,6 @@
   "zoom": 18.468196868896484
 },
 {
-  "alpha_blend_high": 0.800000011920929,
-  "alpha_blend_low": 0.30000001192092896,
   "flame": {
     "name": "Plastic",
     "perspective_strength": 0.0,
@@ -258,9 +246,6 @@
   "palette_rotation": 0.7799999713897705,
   "pan_x": 0.06708957254886627,
   "pan_y": -0.27204668521881104,
-  "path_capture_mode": "FirstHit",
-  "path_map_style": "Prefix",
-  "path_tracking_mode": "First",
   "saturation": 1.5,
   "speed_factor": 1.0,
   "version": 1,
@@ -268,8 +253,6 @@
   "zoom": 0.8747009634971619
 },
 {
-  "alpha_blend_high": 0.800000011920929,
-  "alpha_blend_low": 0.30000001192092896,
   "brightness": 8.0,
   "flame": {
     "name": "Spherical3",
@@ -357,9 +340,6 @@
     "locked": true,
     "name": "Imported from Apophysis"
   },
-  "path_capture_mode": "FirstHit",
-  "path_map_style": "Prefix",
-  "path_tracking_mode": "First",
   "saturation": 2.0999999046325684,
   "speed_factor": 1.0,
   "tonemap_curve": {
@@ -390,8 +370,6 @@
   "zoom": 1.875
 },
 {
-  "alpha_blend_high": 0.800000011920929,
-  "alpha_blend_low": 0.30000001192092896,
   "brightness": 0.05999999865889549,
   "exposure": 0.009999999776482582,
   "flame": {
@@ -498,9 +476,6 @@
     "locked": true,
     "name": "Imported from Apophysis"
   },
-  "path_capture_mode": "FirstHit",
-  "path_map_style": "Prefix",
-  "path_tracking_mode": "First",
   "saturation": 1.5,
   "speed_factor": 1.0,
   "tonemap_curve": {
@@ -531,8 +506,6 @@
   "zoom": 0.6198344230651855
 },
   {
-    "alpha_blend_high": 0.800000011920929,
-    "alpha_blend_low": 0.30000001192092896,
     "camera_rotation_x": 0.8726646304130554,
     "flame": {
       "name": "Cup (3D)",
@@ -659,16 +632,11 @@
     "palette_rotation": 0.5099999904632568,
     "pan_x": 0.02201191335916519,
     "pan_y": -0.07539859414100647,
-    "path_capture_mode": "FirstHit",
-    "path_map_style": "Prefix",
-    "path_tracking_mode": "First",
     "rotation": 3.1415927410125732,
     "version": 1,
     "zoom": 1.2570000886917114
   },
     {
-  "alpha_blend_high": 0.800000011920929,
-  "alpha_blend_low": 0.30000001192092896,
   "brightness": 15.0,
   "camera_rotation_x": 1.3962633609771729,
   "deterministic_rng": true,
@@ -766,9 +734,6 @@
   },
   "pan_x": -0.012884646654129028,
   "pan_y": -0.05038411170244217,
-  "path_capture_mode": "FirstHit",
-  "path_map_style": "Prefix",
-  "path_tracking_mode": "First",
   "saturation": 1.5,
   "speed_factor": 1.0,
   "tonemap_curve": {
@@ -799,8 +764,6 @@
   "zoom": 4.863264083862305
 },
 {
-  "alpha_blend_high": 0.800000011920929,
-  "alpha_blend_low": 0.30000001192092896,
   "brightness": 2.0,
   "exposure": 0.5,
   "flame": {
@@ -920,16 +883,11 @@
   "palette_squeeze": 2.5,
   "pan_x": 0.0014531855704262853,
   "pan_y": 0.05721458047628403,
-  "path_capture_mode": "FirstHit",
-  "path_map_style": "Prefix",
-  "path_tracking_mode": "First",
   "saturation": 1.0499999523162842,
   "version": 1,
   "zoom": 4.298416614532471
 },
 {
-  "alpha_blend_high": 0.800000011920929,
-  "alpha_blend_low": 0.30000001192092896,
   "camera_rotation_x": 1.1344640254974365,
   "camera_rotation_y": 2.094395160675049,
   "flame": {
@@ -1047,9 +1005,6 @@
   "palette_rotation": 0.44999998807907104,
   "pan_x": -0.11697059124708176,
   "pan_y": 0.048466019332408905,
-  "path_capture_mode": "FirstHit",
-  "path_map_style": "Prefix",
-  "path_tracking_mode": "First",
   "version": 1,
   "zoom": 1.4204298257827759
 }

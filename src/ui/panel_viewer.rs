@@ -33,6 +33,7 @@ pub struct PanelContext<'a> {
     pub open_palette_library: &'a mut bool,
     pub open_triangle_editor: &'a mut bool,
     pub open_preset_library: &'a mut bool,
+    pub open_random_generator: &'a mut bool,
 
     // UI state
     pub paused: &'a mut bool,
@@ -165,6 +166,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::Help => {
                 self.render_help_panel(ui);
+            }
+            PanelType::KeyboardShortcuts => {
+                self.render_keyboard_shortcuts_panel(ui);
             }
             PanelType::ConfigDialog => {
                 self.render_config_dialog_panel(ui);
@@ -427,9 +431,19 @@ impl<'a> PanelViewer<'a> {
         );
     }
 
-    /// Render Help panel (keyboard shortcuts and documentation)
+    /// Render Help panel (intro and links)
     fn render_help_panel(&mut self, ui: &mut egui::Ui) {
-        super::help::render_help_content(ui);
+        super::help::render_help_panel_content(
+            ui,
+            self.context.config_manager,
+            self.context.open_preset_library,
+            self.context.open_random_generator,
+        );
+    }
+
+    /// Render Keyboard Shortcuts panel
+    fn render_keyboard_shortcuts_panel(&mut self, ui: &mut egui::Ui) {
+        super::help::render_keyboard_shortcuts_content(ui);
     }
 
     /// Render Config Dialog panel (import/export configuration)

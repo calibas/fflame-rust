@@ -332,6 +332,7 @@ impl EguiLayer {
         let mut open_config_dialog = false;
         let mut open_triangle_editor = false;
         let mut open_preset_library = false;
+        let mut open_random_generator = false;
 
         // Fractal viewport size tracking
         let mut fractal_viewport_size = None;
@@ -444,6 +445,7 @@ impl EguiLayer {
                         open_palette_library: &mut open_palette_library,
                         open_triangle_editor: &mut open_triangle_editor,
                         open_preset_library: &mut open_preset_library,
+                        open_random_generator: &mut open_random_generator,
 
                         // UI state
                         paused,
@@ -720,6 +722,7 @@ impl EguiLayer {
             open_config_dialog,
             open_triangle_editor,
             open_preset_library,
+            open_random_generator,
             fractal_viewport_size,
             needs_repaint,
             selected_preset_config,
