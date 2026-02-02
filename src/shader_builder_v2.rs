@@ -273,6 +273,9 @@ pub struct ShaderConstants {
     /// When None, transform data is read from buffers (legacy behavior)
     pub inlined_transforms: Option<Vec<InlinedTransform>>,
 
+    /// Whether any transform uses post-affine (eliminates branch if false)
+    pub has_post_affine: bool,
+
     /// Precomputed cumulative weights for transform selection
     /// Eliminates the weight accumulation loops in select_transform
     pub cumulative_weights: Option<Vec<f32>>,
@@ -285,6 +288,7 @@ impl Default for ShaderConstants {
             color_mode: 0,
             has_final_transform: false,
             final_transform_index: 0,
+            has_post_affine: false,
             inlined_transforms: None,
             cumulative_weights: None,
         }
@@ -433,6 +437,7 @@ impl ShaderConstants {
             color_mode,
             has_final_transform: has_final,
             final_transform_index: final_idx,
+            has_post_affine: flame.has_post_affine(),
             inlined_transforms: Some(inlined),
             cumulative_weights: Some(cumulative),
         }
@@ -447,11 +452,13 @@ impl ShaderConstants {
              const NUM_TRANSFORMS: u32 = {}u;\n\
              const COLOR_MODE: u32 = {}u;\n\
              const HAS_FINAL_TRANSFORM: bool = {};\n\
-             const FINAL_TRANSFORM_INDEX: u32 = {}u;\n",
+             const FINAL_TRANSFORM_INDEX: u32 = {}u;\n\
+             const HAS_POST_AFFINE: bool = {};\n",
             self.num_transforms,
             self.color_mode,
             self.has_final_transform,
             self.final_transform_index,
+            self.has_post_affine,
         );
 
         // Generate cumulative weights for fast transform selection

@@ -56,6 +56,7 @@ impl ShaderCache {
             color_mode: 0,  // Will be updated via ensure_current_full when config loads
             has_final_transform: flame.final_transform.is_some(),
             final_transform_index: flame.transforms.len() as u32,
+            has_post_affine: flame.has_post_affine(),
             inlined_transforms: None,
             cumulative_weights: None,
         };
@@ -130,6 +131,7 @@ impl ShaderCache {
                 color_mode: config.color_mode as u32,
                 has_final_transform: config.flame.final_transform.is_some(),
                 final_transform_index: config.flame.transforms.len() as u32,
+                has_post_affine: config.flame.has_post_affine(),
                 inlined_transforms: None,
                 cumulative_weights: None,
             }
@@ -212,10 +214,11 @@ impl ShaderCache {
         }
         if constants_changed {
             log::info!(
-                "Recompiling shaders: constants changed (num_transforms: {}->{}, color_mode: {}->{}, has_final: {}->{})",
+                "Recompiling shaders: constants changed (num_transforms: {}->{}, color_mode: {}->{}, has_final: {}->{}, has_post_affine: {}->{})",
                 self.constants.num_transforms, constants.num_transforms,
                 self.constants.color_mode, constants.color_mode,
                 self.constants.has_final_transform, constants.has_final_transform,
+                self.constants.has_post_affine, constants.has_post_affine,
             );
         }
         if mode_changed {

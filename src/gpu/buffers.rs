@@ -13,7 +13,7 @@ pub const MAX_PARAMS_PER_VARIATION: usize = 12;
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct GpuTransform {
-    // Affine matrix
+    // Pre-affine matrix
     pub a: f32,
     pub b: f32,
     pub c: f32,
@@ -22,6 +22,16 @@ pub struct GpuTransform {
     pub f: f32,
     pub g: f32, // Z offset for 3D mode
     pub weight: f32,
+
+    // Post-affine matrix (applied after variations)
+    pub post_a: f32,
+    pub post_b: f32,
+    pub post_c: f32,
+    pub post_d: f32,
+    pub post_e: f32,
+    pub post_f: f32,
+    pub post_g: f32,
+    pub post_enabled: f32, // 0.0 = disabled, 1.0 = enabled (f32 for GPU alignment)
 
     // Variations (100 floats: supports all Apophysis 7X + future expansion)
     pub variations: [f32; 100],
@@ -54,6 +64,14 @@ impl GpuTransform {
             f: xform.f,
             g: xform.g,
             weight: xform.weight,
+            post_a: xform.post_a,
+            post_b: xform.post_b,
+            post_c: xform.post_c,
+            post_d: xform.post_d,
+            post_e: xform.post_e,
+            post_f: xform.post_f,
+            post_g: xform.post_g,
+            post_enabled: if xform.post_affine_enabled { 1.0 } else { 0.0 },
             variations: xform.to_fixed_array(registry),
             color: xform.color,
             color_speed: xform.color_speed,
