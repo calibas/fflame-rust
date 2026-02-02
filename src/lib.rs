@@ -29,6 +29,8 @@ mod shader_cache;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm_api;
+#[cfg(target_arch = "wasm32")]
+mod web_clipboard;
 
 // Prelude for convenient imports
 pub mod prelude {
