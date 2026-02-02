@@ -71,20 +71,7 @@ pub fn render_xaos_editor_content(
 
     // Action buttons
     ui.horizontal(|ui| {
-        // Enable xaos button (if not already enabled)
-        if !flame.has_xaos() {
-            if ui.button(t!("xaos_editor.enable")).clicked() {
-                // Set one weight to trigger xaos initialization
-                if let Ok(update) = config_manager.update_param(
-                    ConfigPath::Xaos { src: 0, dst: 0 },
-                    1.0f32.into(),
-                ) {
-                    max_update = max_update.max(update);
-                }
-            }
-        }
-
-        // Reset all to 1.0 button
+        // Reset all to 1.0 button (effectively disables xaos)
         if ui.button(t!("xaos_editor.reset_all"))
             .on_hover_text(t!("xaos_editor.reset_all_tooltip"))
             .clicked()

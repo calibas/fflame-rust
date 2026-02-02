@@ -156,6 +156,7 @@ pub enum ConfigPath {
     SystemExportWidth,
     SystemExportHeight,
     SystemLanguage,
+    SystemShowHelpOnStartup,
 }
 
 /// Affine transformation parameter (a, b, c, d, e, f, g)
@@ -333,6 +334,7 @@ impl Display for ConfigPath {
             ConfigPath::SystemExportWidth => write!(f, "System: Export Width"),
             ConfigPath::SystemExportHeight => write!(f, "System: Export Height"),
             ConfigPath::SystemLanguage => write!(f, "System: Language"),
+            ConfigPath::SystemShowHelpOnStartup => write!(f, "System: Show Help On Startup"),
         }
     }
 }
@@ -579,6 +581,7 @@ impl ConfigPath {
             ConfigPath::SystemExportWidth => I18nKey::simple("history.param.system_export_width"),
             ConfigPath::SystemExportHeight => I18nKey::simple("history.param.system_export_height"),
             ConfigPath::SystemLanguage => I18nKey::simple("history.param.system_language"),
+            ConfigPath::SystemShowHelpOnStartup => I18nKey::simple("history.param.system_show_help_on_startup"),
         }
     }
 }
@@ -1242,7 +1245,7 @@ impl ConfigPath {
             // System Settings
             ConfigPath::SystemIterationsPerThread | ConfigPath::SystemBurnIn => UpdateType::IterationReset,
             ConfigPath::SystemVsyncEnabled | ConfigPath::SystemTargetFps => UpdateType::ViewOnly,
-            ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage => UpdateType::None,
+            ConfigPath::SystemExportWidth | ConfigPath::SystemExportHeight | ConfigPath::SystemLanguage | ConfigPath::SystemShowHelpOnStartup => UpdateType::None,
         }
     }
 
@@ -1370,6 +1373,7 @@ impl ConfigPath {
             ConfigPath::SystemExportWidth => "System.ExportWidth".to_string(),
             ConfigPath::SystemExportHeight => "System.ExportHeight".to_string(),
             ConfigPath::SystemLanguage => "System.Language".to_string(),
+            ConfigPath::SystemShowHelpOnStartup => "System.ShowHelpOnStartup".to_string(),
         }
     }
 
@@ -1512,6 +1516,7 @@ impl ConfigPath {
                 "ExportWidth" => return Some(ConfigPath::SystemExportWidth),
                 "ExportHeight" => return Some(ConfigPath::SystemExportHeight),
                 "Language" => return Some(ConfigPath::SystemLanguage),
+                "ShowHelpOnStartup" => return Some(ConfigPath::SystemShowHelpOnStartup),
                 _ => {}
             }
         }
@@ -1681,7 +1686,8 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::UseDynamicBlend
         | ConfigPath::DeterministicRng
         | ConfigPath::FinalTransformEnabled
-        | ConfigPath::SystemVsyncEnabled => {
+        | ConfigPath::SystemVsyncEnabled
+        | ConfigPath::SystemShowHelpOnStartup => {
             json.as_bool().map(ConfigValue::Bool)
         }
 

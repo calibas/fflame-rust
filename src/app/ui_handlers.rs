@@ -621,6 +621,10 @@ impl App {
             use crate::ui::workspace::PanelType;
             self.workspace.open_floating_panel(PanelType::FractalBrowser);
         }
+        if ui_response.open_random_generator {
+            use crate::ui::workspace::PanelType;
+            self.workspace.open_floating_panel(PanelType::RandomGenerator);
+        }
     }
 
     /// Handle preset selection from Preset Library panel

@@ -372,7 +372,7 @@ pub fn render_colors_content(
                     }
                 }
 
-                egui::ComboBox::from_id_salt("palette_selector")
+                egui::ComboBox::from_label(t!("tonemap.palette"))
                     .selected_text(&current_palette_name)
                     .show_ui(ui, |ui| {
                         ui.label(t!("tonemap.palette"));

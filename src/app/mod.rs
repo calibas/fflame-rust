@@ -346,6 +346,14 @@ impl App {
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
         app.import_config(initial_config);
 
+        // Open Help panel on startup if setting is enabled (centered, minimum 350px wide)
+        if app.config_manager.system_settings().show_help_on_startup {
+            use crate::ui::workspace::PanelType;
+            let screen_size = egui::vec2(app.gpu.size.width as f32, app.gpu.size.height as f32);
+            let help_size = egui::vec2(400.0, 450.0); // Fixed size for Help panel
+            app.workspace.open_floating_panel_centered(PanelType::Help, help_size, screen_size);
+        }
+
         #[allow(deprecated)]
         event_loop.run(move |event, elwt| {
             match event {

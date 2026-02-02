@@ -281,8 +281,9 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::Help);
                 }
 
-                if ui.selectable_label(help_open, t!("menu.keyboard_shortcuts").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Help);
+                let shortcuts_open = workspace.panel_exists(super::workspace::PanelType::KeyboardShortcuts);
+                if ui.selectable_label(shortcuts_open, t!("menu.keyboard_shortcuts").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::KeyboardShortcuts);
                 }
 
                 ui.separator();
