@@ -158,17 +158,48 @@ impl Workspace {
     /// Open a panel as a floating window, or focus it if it already exists
     pub fn open_floating_panel(&mut self, panel_type: PanelType, ctx: &egui::Context) {
         if let Some((surface_index, node_index, tab_index)) = self.find_tab(panel_type) {
-            // Panel exists - activate it and bring window to front
+            // Panel exists - check if collapsed
+            let is_collapsed = self.dock_state[surface_index][node_index].is_collapsed();
 
-            // Bring floating window to front using move_to_top
-            if !surface_index.is_main() {
-                let window_id = egui::Id::new(format!("window {surface_index:?}"));
-                let layer_id = egui::LayerId::new(egui::Order::Middle, window_id);
-                ctx.move_to_top(layer_id);
+            if is_collapsed {
+                // Nuclear option: remove collapsed window and recreate it fresh
+                self.dock_state.remove_surface(surface_index);
+
+                // Create new window
+                self.dock_state.add_window(vec![panel_type]);
+
+                // Find the newly created window (surface indices may have shifted after removal!)
+                if let Some((new_surface_index, new_node_index, new_tab_index)) = self.find_tab(panel_type) {
+                    // Set initial size based on panel type
+                    let initial_size = Self::default_size_for_panel(panel_type);
+                    if let Some(surface) = self.dock_state.get_surface_mut(new_surface_index) {
+                        if let egui_dock::Surface::Window(_, state) = surface {
+                            state.set_size(initial_size);
+                        }
+                    }
+
+                    // Bring new window to front and activate it
+                    if !new_surface_index.is_main() {
+                        let window_id = egui::Id::new(format!("window {new_surface_index:?}"));
+                        let layer_id = egui::LayerId::new(egui::Order::Middle, window_id);
+                        ctx.move_to_top(layer_id);
+                    }
+
+                    // Focus the newly created window
+                    self.dock_state.set_focused_node_and_surface((new_surface_index, new_node_index));
+                    self.dock_state.set_active_tab((new_surface_index, new_node_index, new_tab_index));
+                }
+            } else {
+                // Not collapsed - just bring to front and activate
+                if !surface_index.is_main() {
+                    let window_id = egui::Id::new(format!("window {surface_index:?}"));
+                    let layer_id = egui::LayerId::new(egui::Order::Middle, window_id);
+                    ctx.move_to_top(layer_id);
+                }
+
+                self.dock_state.set_focused_node_and_surface((surface_index, node_index));
+                self.dock_state.set_active_tab((surface_index, node_index, tab_index));
             }
-
-            self.dock_state.set_focused_node_and_surface((surface_index, node_index));
-            self.dock_state.set_active_tab((surface_index, node_index, tab_index));
         } else {
             // Panel doesn't exist - create new floating window
             self.dock_state.add_window(vec![panel_type]);
