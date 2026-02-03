@@ -619,6 +619,8 @@ impl App {
         }
         if ui_response.open_preset_library {
             use crate::ui::workspace::PanelType;
+            use crate::ui::fractal_browser::BrowserTab;
+            self.egui_layer.switch_fractal_browser_tab(BrowserTab::Presets);
             self.workspace.open_floating_panel(PanelType::FractalBrowser);
         }
         if ui_response.open_random_generator {

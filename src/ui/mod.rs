@@ -676,6 +676,7 @@ impl EguiLayer {
         apophysis_import_file |= menu_actions.file.import_apophysis;
         new_flame_requested |= menu_actions.file.new_flame;
         random_flame_requested |= menu_actions.file.random_flame;
+        open_preset_library |= menu_actions.file.open_preset_library;
         if menu_actions.file.export_png {
             png_export_with_background = true;
         }
@@ -834,6 +835,18 @@ impl EguiLayer {
 
         if let Some(ref mut panel) = self.fractal_browser_panel {
             panel.load_json(json, source_name);
+        }
+    }
+
+    /// Switch Fractal Browser to a specific tab
+    pub fn switch_fractal_browser_tab(&mut self, tab: fractal_browser::BrowserTab) {
+        // Initialize panel if not already created
+        if self.fractal_browser_panel.is_none() {
+            self.fractal_browser_panel = Some(fractal_browser::FractalBrowserPanel::new());
+        }
+
+        if let Some(ref mut panel) = self.fractal_browser_panel {
+            panel.switch_to_tab(tab);
         }
     }
 

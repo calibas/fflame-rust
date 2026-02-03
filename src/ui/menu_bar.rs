@@ -28,7 +28,7 @@ pub fn render_menu_bar(
 
                 // Fractal Browser (presets, batch results, files)
                 if ui.button(t!("menu.from_preset_library")).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::FractalBrowser);
+                    menu_actions.file.open_preset_library = true;
                 }
 
                 if ui.button(t!("menu.random_flame")).clicked() {
