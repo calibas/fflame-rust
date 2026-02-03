@@ -36,13 +36,13 @@ pub fn render_menu_bar(
                 }
 
                 if ui.button(t!("menu.random_batch")).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator);
+                    workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator, ctx);
                 }
 
                 ui.separator();
 
                 if ui.button(t!("menu.export")).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Export);
+                    workspace.open_floating_panel(super::workspace::PanelType::Export, ctx);
                 }
 
                 ui.separator();
@@ -55,7 +55,7 @@ pub fn render_menu_bar(
                 ui.separator();
 
                 if ui.button(t!("menu.config_import_export")).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog);
+                    workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog, ctx);
                 }
 
 
@@ -158,37 +158,37 @@ pub fn render_menu_bar(
                 // Performance opens as floating window in docking system (only one instance)
                 let performance_open = workspace.panel_exists(super::workspace::PanelType::Performance);
                 if ui.selectable_label(performance_open, t!("menu.window_performance").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Performance);
+                    workspace.open_floating_panel(super::workspace::PanelType::Performance, ctx);
                 }
 
                 // Settings opens Rendering panel as floating window (Settings was renamed to Rendering)
                 let rendering_open = workspace.panel_exists(super::workspace::PanelType::Rendering);
                 if ui.selectable_label(rendering_open, t!("menu.window_rendering").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Rendering);
+                    workspace.open_floating_panel(super::workspace::PanelType::Rendering, ctx);
                 }
 
                 // View opens as floating window in docking system
                 let view_open = workspace.panel_exists(super::workspace::PanelType::View);
                 if ui.selectable_label(view_open, t!("menu.window_view").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::View);
+                    workspace.open_floating_panel(super::workspace::PanelType::View, ctx);
                 }
 
                 // Transforms opens as floating window in docking system
                 let transforms_open = workspace.panel_exists(super::workspace::PanelType::Transforms);
                 if ui.selectable_label(transforms_open, t!("menu.window_transforms").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Transforms);
+                    workspace.open_floating_panel(super::workspace::PanelType::Transforms, ctx);
                 }
 
                 // Triangle Editor opens as floating window in docking system
                 let triangle_editor_open = workspace.panel_exists(super::workspace::PanelType::TriangleEditor);
                 if ui.selectable_label(triangle_editor_open, t!("menu.window_triangle_editor").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor);
+                    workspace.open_floating_panel(super::workspace::PanelType::TriangleEditor, ctx);
                 }
 
                 // Tone Mapping & Colors opens Colors panel as floating window
                 let colors_open = workspace.panel_exists(super::workspace::PanelType::Colors);
                 if ui.selectable_label(colors_open, t!("menu.window_colors").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Colors);
+                    workspace.open_floating_panel(super::workspace::PanelType::Colors, ctx);
                 }
 
                 ui.separator();
@@ -196,59 +196,59 @@ pub fn render_menu_bar(
                 // Palette Editor opens as floating window in docking system
                 let palette_editor_open = workspace.panel_exists(super::workspace::PanelType::PaletteEditor);
                 if ui.selectable_label(palette_editor_open, t!("menu.window_palette_editor").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor);
+                    workspace.open_floating_panel(super::workspace::PanelType::PaletteEditor, ctx);
                 }
 
                 let palette_library_open = workspace.panel_exists(super::workspace::PanelType::PaletteLibrary);
                 if ui.selectable_label(palette_library_open, t!("menu.window_palette_library").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PaletteLibrary);
+                    workspace.open_floating_panel(super::workspace::PanelType::PaletteLibrary, ctx);
                 }
 
                 let fractal_browser_open = workspace.panel_exists(super::workspace::PanelType::FractalBrowser);
                 if ui.selectable_label(fractal_browser_open, t!("menu.window_fractal_browser").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::FractalBrowser);
+                    workspace.open_floating_panel(super::workspace::PanelType::FractalBrowser, ctx);
                 }
 
                 // Config Import/Export opens as floating window in docking system
                 let config_dialog_open = workspace.panel_exists(super::workspace::PanelType::ConfigDialog);
                 if ui.selectable_label(config_dialog_open, t!("menu.window_config_dialog").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog);
+                    workspace.open_floating_panel(super::workspace::PanelType::ConfigDialog, ctx);
                 }
 
                 // Undo/Redo History opens as floating window in docking system
                 let history_open = workspace.panel_exists(super::workspace::PanelType::History);
                 if ui.selectable_label(history_open, t!("menu.window_history").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::History);
+                    workspace.open_floating_panel(super::workspace::PanelType::History, ctx);
                 }
 
                 // Animation panel
                 let animation_open = workspace.panel_exists(super::workspace::PanelType::Animation);
                 if ui.selectable_label(animation_open, t!("menu.window_animation").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Animation);
+                    workspace.open_floating_panel(super::workspace::PanelType::Animation, ctx);
                 }
 
                 // Path Editor panel (experimental feature)
                 let path_editor_open = workspace.panel_exists(super::workspace::PanelType::PathEditor);
                 if ui.selectable_label(path_editor_open, t!("menu.window_path_editor").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::PathEditor);
+                    workspace.open_floating_panel(super::workspace::PanelType::PathEditor, ctx);
                 }
 
                 // Random Generator panel
                 let random_generator_open = workspace.panel_exists(super::workspace::PanelType::RandomGenerator);
                 if ui.selectable_label(random_generator_open, t!("menu.window_random_generator").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator);
+                    workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator, ctx);
                 }
 
                 // Effects panel
                 let effects_open = workspace.panel_exists(super::workspace::PanelType::Effects);
                 if ui.selectable_label(effects_open, t!("menu.window_effects").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Effects);
+                    workspace.open_floating_panel(super::workspace::PanelType::Effects, ctx);
                 }
 
                 // Xaos Editor panel
                 let xaos_editor_open = workspace.panel_exists(super::workspace::PanelType::XaosEditor);
                 if ui.selectable_label(xaos_editor_open, t!("menu.window_xaos_editor").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::XaosEditor);
+                    workspace.open_floating_panel(super::workspace::PanelType::XaosEditor, ctx);
                 }
 
                 ui.separator();
@@ -278,12 +278,12 @@ pub fn render_menu_bar(
                 // Help panel opens as floating window in docking system
                 let help_open = workspace.panel_exists(super::workspace::PanelType::Help);
                 if ui.selectable_label(help_open, t!("menu.help_panel").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::Help);
+                    workspace.open_floating_panel(super::workspace::PanelType::Help, ctx);
                 }
 
                 let shortcuts_open = workspace.panel_exists(super::workspace::PanelType::KeyboardShortcuts);
                 if ui.selectable_label(shortcuts_open, t!("menu.keyboard_shortcuts").as_ref()).clicked() {
-                    workspace.open_floating_panel(super::workspace::PanelType::KeyboardShortcuts);
+                    workspace.open_floating_panel(super::workspace::PanelType::KeyboardShortcuts, ctx);
                 }
 
                 ui.separator();
