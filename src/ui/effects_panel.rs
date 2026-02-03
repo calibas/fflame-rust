@@ -178,11 +178,9 @@ pub fn render_effects_panel(
             }
         }
 
-        // Add effect button with dropdown
+        // Add effect dropdown
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Add effect:");
-
             // Get available color effects
             let registry = global_effect_registry();
             let available: Vec<_> = registry
@@ -197,23 +195,27 @@ pub fn render_effects_panel(
                         .color(egui::Color32::GRAY),
                 );
             } else {
-                // Show buttons for each available effect
-                for info in available {
-                    let translated = info.translated_name();
-                    if ui.button(&translated).clicked() {
-                        let effect = EffectInstance::new(&info.name);
-                        let index = config_manager.active_config().color_effects.len();
-                        let change = ConfigChange::add_color_effect_snapshot(
-                            index,
-                            effect,
-                            format!("Add Effect: {}", translated),
-                        );
-                        if let Err(e) = config_manager.apply_structural_change(change) {
-                            log::error!("Failed to add effect: {}", e);
+                // Dropdown for adding effects
+                egui::ComboBox::from_label("Add effect")
+                    .selected_text("Select...")
+                    .show_ui(ui, |ui| {
+                        for info in available {
+                            let translated = info.translated_name();
+                            if ui.selectable_label(false, &translated).clicked() {
+                                let effect = EffectInstance::new(&info.name);
+                                let index = config_manager.active_config().color_effects.len();
+                                let change = ConfigChange::add_color_effect_snapshot(
+                                    index,
+                                    effect,
+                                    format!("Add Effect: {}", translated),
+                                );
+                                if let Err(e) = config_manager.apply_structural_change(change) {
+                                    log::error!("Failed to add effect: {}", e);
+                                }
+                                max_update = max_update.max(UpdateType::ToneMappingOnly);
+                            }
                         }
-                        max_update = max_update.max(UpdateType::ToneMappingOnly);
-                    }
-                }
+                    });
             }
         });
     });
@@ -360,26 +362,29 @@ pub fn render_effects_panel(
                 }
             }
 
-            // Add density effect buttons
+            // Add density effect dropdown
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("Add effect:");
-                for info in density_effects_available {
-                    let translated = info.translated_name();
-                    if ui.button(&translated).clicked() {
-                        let effect = EffectInstance::new(&info.name);
-                        let index = config_manager.active_config().density_effects.len();
-                        let change = ConfigChange::add_density_effect_snapshot(
-                            index,
-                            effect,
-                            format!("Add Effect: {}", translated),
-                        );
-                        if let Err(e) = config_manager.apply_structural_change(change) {
-                            log::error!("Failed to add effect: {}", e);
+                egui::ComboBox::from_label("Add effect")
+                    .selected_text("Select...")
+                    .show_ui(ui, |ui| {
+                        for info in density_effects_available {
+                            let translated = info.translated_name();
+                            if ui.selectable_label(false, &translated).clicked() {
+                                let effect = EffectInstance::new(&info.name);
+                                let index = config_manager.active_config().density_effects.len();
+                                let change = ConfigChange::add_density_effect_snapshot(
+                                    index,
+                                    effect,
+                                    format!("Add Effect: {}", translated),
+                                );
+                                if let Err(e) = config_manager.apply_structural_change(change) {
+                                    log::error!("Failed to add effect: {}", e);
+                                }
+                                max_update = max_update.max(UpdateType::ToneMappingOnly);
+                            }
                         }
-                        max_update = max_update.max(UpdateType::ToneMappingOnly);
-                    }
-                }
+                    });
             });
         }
     });
