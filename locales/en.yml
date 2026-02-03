@@ -205,6 +205,20 @@ xaos_editor:
   no_transforms: "No transforms available"
   to_label: "To"
   from_label: "From"
+  linked_transforms: "Linked Transforms"
+  linked_transforms_tooltip: "Linked transforms create deterministic chains via xaos routing"
+  link_action: "Link Transforms"
+  link_action_tooltip: "Create a linked pair: pre routes exclusively to post"
+  unlink: "Unlink"
+  unlink_tooltip: "Remove this link and restore normal xaos routing"
+  select_pre: "Pre:"
+  select_post: "Post:"
+  chain_label: "Chain"
+  link_label: "Link"
+  no_links: "No linked transforms detected"
+  link_confirm: "Link"
+  link_cancel: "Cancel"
+  link_error_same: "Pre and Post must be different transforms"
 
 # Export Panel
 export:
