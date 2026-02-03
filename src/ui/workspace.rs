@@ -129,10 +129,27 @@ impl Workspace {
         self.dock_state.iter_all_tabs().any(|(_, tab)| *tab == panel_type)
     }
 
-    /// Open a panel as a floating window (only if it doesn't already exist)
+    /// Open a panel as a floating window, or focus it if it already exists
     pub fn open_floating_panel(&mut self, panel_type: PanelType) {
-        if !self.panel_exists(panel_type) {
+        if let Some((surface_index, node_index, tab_index)) = self.find_tab(panel_type) {
+            // Panel exists - activate/focus it
+            self.dock_state.set_active_tab((surface_index, node_index, tab_index));
+        } else {
+            // Panel doesn't exist - create new floating window
             self.dock_state.add_window(vec![panel_type]);
+
+            // Set initial size for the newly created window
+            // This ensures panels open at a reasonable size (not collapsed)
+            let initial_size = egui::vec2(350.0, 300.0);
+            let surface_count = self.dock_state.iter_surfaces().count();
+            if surface_count > 0 {
+                let surface_index = egui_dock::SurfaceIndex(surface_count - 1);
+                if let Some(surface) = self.dock_state.get_surface_mut(surface_index) {
+                    if let egui_dock::Surface::Window(_, state) = surface {
+                        state.set_size(initial_size);
+                    }
+                }
+            }
         }
     }
 
