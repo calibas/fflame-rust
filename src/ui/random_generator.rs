@@ -54,7 +54,7 @@ impl RandomGeneratorPanel {
 
             // Variations section
             egui::CollapsingHeader::new(t!("random_generator.variations"))
-                .default_open(true)
+                .default_open(false)
                 .show(ui, |ui| {
                     self.render_variations_section(ui);
                 });
