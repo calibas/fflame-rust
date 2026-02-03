@@ -156,9 +156,18 @@ impl Workspace {
     }
 
     /// Open a panel as a floating window, or focus it if it already exists
-    pub fn open_floating_panel(&mut self, panel_type: PanelType) {
+    pub fn open_floating_panel(&mut self, panel_type: PanelType, ctx: &egui::Context) {
         if let Some((surface_index, node_index, tab_index)) = self.find_tab(panel_type) {
-            // Panel exists - activate/focus it
+            // Panel exists - activate it and bring window to front
+
+            // Bring floating window to front using move_to_top
+            if !surface_index.is_main() {
+                let window_id = egui::Id::new(format!("window {surface_index:?}"));
+                let layer_id = egui::LayerId::new(egui::Order::Middle, window_id);
+                ctx.move_to_top(layer_id);
+            }
+
+            self.dock_state.set_focused_node_and_surface((surface_index, node_index));
             self.dock_state.set_active_tab((surface_index, node_index, tab_index));
         } else {
             // Panel doesn't exist - create new floating window

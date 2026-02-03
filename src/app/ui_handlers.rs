@@ -246,7 +246,7 @@ impl App {
 
                 // Open the Fractal Browser panel (auto-switches to Batch tab)
                 use crate::ui::workspace::PanelType;
-                self.workspace.open_floating_panel(PanelType::FractalBrowser);
+                let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
             }
         }
     }
@@ -481,7 +481,7 @@ impl App {
 
                                 // Open the Fractal Browser panel
                                 use crate::ui::workspace::PanelType;
-                                self.workspace.open_floating_panel(PanelType::FractalBrowser);
+                                let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
                             }
                         }
                         Err(e) => {
@@ -541,7 +541,7 @@ impl App {
 
                                         // Open the Fractal Browser panel
                                         use crate::ui::workspace::PanelType;
-                                        self.workspace.open_floating_panel(PanelType::FractalBrowser);
+                                        let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
                                     }
                                 }
                                 Err(e) => {
@@ -576,7 +576,7 @@ impl App {
                     self.egui_layer.load_file_into_fractal_browser(path);
                     // Open the Fractal Browser panel (auto-switches to Files tab)
                     use crate::ui::workspace::PanelType;
-                    self.workspace.open_floating_panel(PanelType::FractalBrowser);
+                    let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
                 }
             }
 
@@ -603,15 +603,15 @@ impl App {
     fn handle_panel_requests(&mut self, ui_response: &UiResponse) {
         if ui_response.open_palette_editor {
             use crate::ui::workspace::PanelType;
-            self.workspace.open_floating_panel(PanelType::PaletteEditor);
+            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::PaletteEditor, ctx);
         }
         if ui_response.open_palette_library {
             use crate::ui::workspace::PanelType;
-            self.workspace.open_floating_panel(PanelType::PaletteLibrary);
+            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::PaletteLibrary, ctx);
         }
         if ui_response.open_config_dialog {
             use crate::ui::workspace::PanelType;
-            self.workspace.open_floating_panel(PanelType::ConfigDialog);
+            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::ConfigDialog, ctx);
         }
         if ui_response.open_triangle_editor {
             use crate::ui::workspace::PanelType;
@@ -621,11 +621,11 @@ impl App {
             use crate::ui::workspace::PanelType;
             use crate::ui::fractal_browser::BrowserTab;
             self.egui_layer.switch_fractal_browser_tab(BrowserTab::Presets);
-            self.workspace.open_floating_panel(PanelType::FractalBrowser);
+            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
         }
         if ui_response.open_random_generator {
             use crate::ui::workspace::PanelType;
-            self.workspace.open_floating_panel(PanelType::RandomGenerator);
+            let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::RandomGenerator, ctx);
         }
     }
 
@@ -716,7 +716,7 @@ impl App {
                 self.egui_layer.load_json_into_fractal_browser(&json, "file");
                 // Open the Fractal Browser panel
                 use crate::ui::workspace::PanelType;
-                self.workspace.open_floating_panel(PanelType::FractalBrowser);
+                let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
             }
         }
     }
