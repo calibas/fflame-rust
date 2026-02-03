@@ -112,6 +112,32 @@ impl Workspace {
         }
     }
 
+    /// Get the default size for a panel type
+    fn default_size_for_panel(panel_type: PanelType) -> egui::Vec2 {
+        match panel_type {
+            PanelType::FractalViewport => egui::vec2(800.0, 600.0),
+            PanelType::Transforms => egui::vec2(350.0, 500.0),
+            PanelType::TriangleEditor => egui::vec2(450.0, 450.0),
+            PanelType::Colors => egui::vec2(350.0, 400.0),
+            PanelType::PaletteEditor => egui::vec2(350.0, 450.0),
+            PanelType::PaletteLibrary => egui::vec2(500.0, 500.0),
+            PanelType::FractalBrowser => egui::vec2(600.0, 500.0),
+            PanelType::View => egui::vec2(350.0, 350.0),
+            PanelType::Rendering => egui::vec2(350.0, 350.0),
+            PanelType::History => egui::vec2(350.0, 400.0),
+            PanelType::Animation => egui::vec2(600.0, 300.0),
+            PanelType::Performance => egui::vec2(350.0, 300.0),
+            PanelType::Help => egui::vec2(400.0, 350.0),
+            PanelType::KeyboardShortcuts => egui::vec2(400.0, 500.0),
+            PanelType::ConfigDialog => egui::vec2(350.0, 300.0),
+            PanelType::PathEditor => egui::vec2(350.0, 350.0),
+            PanelType::Export => egui::vec2(350.0, 400.0),
+            PanelType::RandomGenerator => egui::vec2(400.0, 450.0),
+            PanelType::Effects => egui::vec2(350.0, 400.0),
+            PanelType::XaosEditor => egui::vec2(500.0, 450.0),
+        }
+    }
+
     /// Apply a predefined layout
     pub fn apply_layout(&mut self, layout: WorkspaceLayout) {
         self.dock_state = match layout {
@@ -138,9 +164,9 @@ impl Workspace {
             // Panel doesn't exist - create new floating window
             self.dock_state.add_window(vec![panel_type]);
 
-            // Set initial size for the newly created window
+            // Set initial size based on panel type
             // This ensures panels open at a reasonable size (not collapsed)
-            let initial_size = egui::vec2(350.0, 300.0);
+            let initial_size = Self::default_size_for_panel(panel_type);
             let surface_count = self.dock_state.iter_surfaces().count();
             if surface_count > 0 {
                 let surface_index = egui_dock::SurfaceIndex(surface_count - 1);
