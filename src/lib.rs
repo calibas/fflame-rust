@@ -218,6 +218,7 @@ async fn export_animation_async(
         fps,
         iterations_per_thread,
         video_settings,
+        audio: None, // Audio can be added via CLI flag in the future
     };
 
     // Run export (pipes directly to FFmpeg)

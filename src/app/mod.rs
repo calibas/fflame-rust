@@ -1248,6 +1248,7 @@ impl App {
                         preset: export_settings.preset,
                         tune: export_settings.tune,
                     },
+                    audio: None, // TODO: Add audio export UI in animation panel
                 };
 
                 println!("Starting animation export (background thread)...");

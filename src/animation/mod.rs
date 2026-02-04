@@ -14,6 +14,7 @@ pub mod export;
 
 pub use controller::AnimationController;
 pub use interpolation::{EasingFunction, Interpolation};
+pub use export::AudioExportConfig;
 
 /// Complete animation definition with parameter tracks
 #[derive(Debug, Clone, Serialize, Deserialize)]
