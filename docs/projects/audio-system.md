@@ -17,10 +17,14 @@ Add optional audio integration to the fractal flame renderer, enabling:
 ### Module Structure
 
 ```
+src/signal/
+  mod.rs              - Signal struct, SignalType, SignalManager
+  file.rs             - .signal binary file format (read/write)
+  producer.rs         - SignalProducer trait
+
 src/audio/
-  mod.rs              - Public API, AudioManager, feature flags
+  mod.rs              - Public API, AudioManager (implements SignalProducer)
   analyzer.rs         - STFT, mel spectrogram, onset detection (ported from existing code)
-  signals.rs          - AudioSignal types, time-indexed data, track integration
   playback.rs         - Audio file playback with timeline sync
   capture.rs          - Live audio input (platform-agnostic interface)
   capture_native.rs   - Desktop capture via cpal
@@ -55,7 +59,175 @@ audio = ["cpal", "symphonia", "rustfft", "ringbuf", "microdsp"]
 
 ---
 
+## Generalized Signal System
+
+Signals are the **universal intermediate representation** for time-varying data that drives animation.
+The animation system doesn't care where signals come from - it just consumes them.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Signal Sources                          │
+│                                                             │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────┐  │
+│  │  Audio   │  │  .signal │  │  MIDI    │  │  External  │  │
+│  │ Analysis │  │   File   │  │ (future) │  │  (future)  │  │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └─────┬──────┘  │
+│       │             │             │              │          │
+└───────┼─────────────┼─────────────┼──────────────┼──────────┘
+        │             │             │              │
+        ▼             ▼             ▼              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                         Signal                               │
+│                                                             │
+│  • name: String                                             │
+│  • sample_rate: f64                                         │
+│  • signal_type: SignalType                                  │
+│  • data: Vec<f32>                                           │
+│  • metadata: Option<SignalMetadata>                         │
+│                                                             │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   TrackSource::Signal                        │
+│                                                             │
+│  • signal: String (name or file path)                       │
+│  • output_min/max, smoothing, trigger params                │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Signal Struct
+
+```rust
+/// A time-indexed signal that can drive animation parameters.
+/// Source-agnostic - could come from audio, MIDI, sensors, files, etc.
+#[derive(Clone)]
+pub struct Signal {
+    /// Human-readable name (e.g., "energy_low", "kick_trigger")
+    pub name: String,
+
+    /// Sample rate in Hz (how many values per second)
+    pub sample_rate: f64,
+
+    /// Type of signal (affects how it's interpreted)
+    pub signal_type: SignalType,
+
+    /// Time-indexed values, starting at t=0
+    pub data: Vec<f32>,
+
+    /// Optional metadata about signal origin
+    pub metadata: Option<SignalMetadata>,
+}
+
+pub enum SignalType {
+    /// Continuous value, typically 0.0-1.0
+    Continuous,
+    /// Binary trigger (1.0 = triggered, 0.0 = not)
+    Trigger,
+    /// Scalar with units (e.g., BPM, Hz)
+    Scalar { unit: String },
+}
+
+pub struct SignalMetadata {
+    /// What produced this signal ("audio", "midi", "external", etc.)
+    pub source_type: String,
+    /// Source-specific info (audio file hash, analysis params, etc.)
+    pub source_info: serde_json::Value,
+}
+```
+
+### Signal File Format (`.signal`)
+
+Binary format for storing/exchanging signals:
+
+```
+Header (fixed size):
+  magic: [u8; 4] = "FSIG"           // 4 bytes
+  version: u16                       // 2 bytes (currently 1)
+  signal_type: u8                    // 1 byte (0=Continuous, 1=Trigger, 2=Scalar)
+  flags: u8                          // 1 byte (reserved)
+  sample_rate: f64                   // 8 bytes
+  data_len: u64                      // 8 bytes (number of f32 values)
+  name_len: u16                      // 2 bytes
+  metadata_len: u32                  // 4 bytes (0 if no metadata)
+                                     // Total header: 30 bytes
+
+Variable sections:
+  name: [u8; name_len]               // UTF-8 encoded name
+  data: [f32; data_len]              // Little-endian f32 values
+  metadata: [u8; metadata_len]       // Optional JSON blob (UTF-8)
+```
+
+**File size estimate:**
+- 3 minute signal @ 100 Hz = 18,000 samples = ~72 KB per signal
+- 10 signals = ~720 KB total (very compact)
+
+### Signal Manager
+
+```rust
+/// Manages all signal sources and provides unified access
+pub struct SignalManager {
+    /// Loaded signals (from files or generated)
+    signals: HashMap<String, Signal>,
+
+    /// Live signal producers (audio capture, etc.)
+    live_producers: Vec<Box<dyn SignalProducer>>,
+}
+
+impl SignalManager {
+    /// Get signal value at specific time
+    pub fn get_value(&self, signal_name: &str, time: f64) -> Option<f32>;
+
+    /// Get current live value (for real-time sources)
+    pub fn get_live_value(&self, signal_name: &str) -> Option<f32>;
+
+    /// Load signal from .signal file
+    pub fn load_signal_file(&mut self, path: &Path) -> Result<()>;
+
+    /// Save signal to .signal file
+    pub fn save_signal_file(&self, signal_name: &str, path: &Path) -> Result<()>;
+
+    /// Register a live signal producer
+    pub fn register_producer(&mut self, producer: Box<dyn SignalProducer>);
+
+    /// List all available signals
+    pub fn list_signals(&self) -> Vec<&str>;
+}
+
+/// Trait for things that produce signals (audio analyzer, MIDI, etc.)
+pub trait SignalProducer: Send {
+    /// Get the names of signals this producer provides
+    fn signal_names(&self) -> Vec<String>;
+
+    /// Get current live value for a signal
+    fn get_live_value(&self, name: &str) -> Option<f32>;
+
+    /// Get computed signal data (for offline analysis)
+    fn get_signal(&self, name: &str) -> Option<Signal>;
+}
+```
+
+### Future Signal Sources
+
+| Source | Status | Description |
+|--------|--------|-------------|
+| Audio file analysis | Planned (this doc) | FFT, onset detection, ML |
+| Audio live capture | Planned (this doc) | Real-time mic/loopback |
+| .signal file | Planned (this doc) | Pre-computed, portable |
+| MIDI file | Future | Note events → triggers |
+| MIDI live | Future | Real-time MIDI input |
+| CSV/JSON import | Future | External data sources |
+| OSC network | Future | Live data from other apps |
+| Procedural | Future | Math expressions (sin, noise) |
+
+---
+
 ## Audio Signals
+
+Audio analysis is one **signal producer**. It generates signals from audio files or live input.
 
 ### Signal Types
 
@@ -303,7 +475,7 @@ Heavier models (section detection, key) only run offline.
 {
   "target": "Saturation",
   "source": {
-    "type": "Audio",
+    "type": "Signal",
     "signal": "vocal_presence",  // ML-derived signal
     "output_min": 0.5,
     "output_max": 1.0,
@@ -389,9 +561,11 @@ pub enum TrackSource {
     Keyframes { keyframes: Vec<Keyframe> },
     Oscillator { /* existing */ },
 
-    /// Audio-driven track - value comes from analyzed audio signal
-    Audio {
-        /// Name of the audio signal (e.g., "energy_low", "onset_any")
+    /// Signal-driven track - value comes from any signal source
+    /// (audio analysis, .signal file, MIDI, external data, etc.)
+    Signal {
+        /// Name of the signal (e.g., "energy_low", "onset_any")
+        /// Can also be a path to a .signal file
         signal: String,
         /// Output range mapping
         output_min: f64,
@@ -407,7 +581,7 @@ pub enum TrackSource {
 }
 ```
 
-### Example Animation with Audio Track
+### Example Animation with Signal Track
 
 ```json
 {
@@ -423,7 +597,7 @@ pub enum TrackSource {
     {
       "target": "Zoom",
       "source": {
-        "type": "Audio",
+        "type": "Signal",
         "signal": "energy_low",
         "output_min": 1.0,
         "output_max": 2.0,
@@ -434,7 +608,7 @@ pub enum TrackSource {
     {
       "target": "Exposure",
       "source": {
-        "type": "Audio",
+        "type": "Signal",
         "signal": "onset_any",
         "output_min": 1.0,
         "output_max": 1.5,
@@ -448,15 +622,15 @@ pub enum TrackSource {
 }
 ```
 
-### Audio Track Evaluation
+### Signal Track Evaluation
 
 ```rust
 impl Track {
-    pub fn evaluate_at(&self, time: f64, audio_manager: Option<&AudioManager>) -> Option<f64> {
+    pub fn evaluate_at(&self, time: f64, signal_manager: Option<&SignalManager>) -> Option<f64> {
         match &self.source {
-            TrackSource::Audio { signal, output_min, output_max, smoothing, .. } => {
-                let manager = audio_manager?;
-                let raw_value = manager.get_signal_at(signal, time)?;
+            TrackSource::Signal { signal, output_min, output_max, smoothing, .. } => {
+                let manager = signal_manager?;
+                let raw_value = manager.get_value(signal, time)?;
 
                 // Apply smoothing (exponential moving average against previous frame)
                 let smoothed = self.apply_smoothing(raw_value, *smoothing);
@@ -980,11 +1154,19 @@ web-sys = { version = "0.3", features = [
 
 ## Implementation Phases
 
-### Phase 1: Core Infrastructure
+### Phase 0: Signal System Foundation
+- [ ] Create `src/signal/mod.rs` with `Signal` struct
+- [ ] Implement `SignalType` enum (Continuous, Trigger, Scalar)
+- [ ] Implement `.signal` binary file format (read/write)
+- [ ] Create `SignalManager` with basic load/save/get operations
+- [ ] Add `TrackSource::Signal` variant to animation system
+- [ ] Signal evaluation in `Track::evaluate_at()`
+
+### Phase 1: Audio Infrastructure
 - [ ] Add `audio` feature flag and dependencies
-- [ ] Create `src/audio/mod.rs` with `AudioManager` skeleton
+- [ ] Create `src/audio/mod.rs` with `AudioManager` (implements `SignalProducer`)
 - [ ] Implement `decode.rs` with symphonia (MP3/WAV decode)
-- [ ] Basic `AudioSignal` type and storage
+- [ ] Wire AudioManager to SignalManager
 
 ### Phase 2: Offline Analysis
 - [ ] Port mel spectrogram processor (remove Godot dependencies)
@@ -995,7 +1177,7 @@ web-sys = { version = "0.3", features = [
 - [ ] Background thread analysis with progress
 
 ### Phase 3: Animation Integration
-- [ ] Add `TrackSource::Audio` variant
+- [ ] Add `TrackSource::Signal` variant
 - [ ] Implement audio track evaluation in `Track::evaluate_at()`
 - [ ] Signal smoothing and trigger envelope
 - [ ] Update animation serialization (load/save audio tracks)
@@ -1052,6 +1234,15 @@ web-sys = { version = "0.3", features = [
 
 ## Resolved Decisions
 
+### Signal Architecture
+- **Generalized signals:** Signals are source-agnostic - audio is just one producer
+- **TrackSource::Signal:** Replaces `TrackSource::Audio` - works with any signal source
+- **Binary file format:** `.signal` files for storing/exchanging signals (compact, not human-readable)
+- **SignalManager:** Central coordinator for all signal sources
+- **SignalProducer trait:** Audio, MIDI, external sources all implement this
+- **Live recording:** Optional, low-priority feature (capture live signals for later replay)
+
+### Audio System
 - **microdsp:** Confirmed available on crates.io - will use for spectral flux detection
 - **Multiple audio files:** Single file per animation (may revisit for layering in future)
 - **WASM live capture:** Will implement via web-sys + AudioWorklet (cpal doesn't support WASM input)
