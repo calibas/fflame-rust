@@ -16,7 +16,7 @@
 //! - `decode` - Audio file decoding via symphonia (MP3, WAV, FLAC, OGG)
 //! - `analyzer` - STFT analysis, mel spectrogram, onset detection
 //! - `playback` - Audio playback synced to animation timeline
-//! - `capture` - Live audio input (future)
+//! - `capture` - Live audio input with real-time analysis
 //!
 //! ## Available Signals
 //!
@@ -30,10 +30,12 @@
 //! - `onset` - Transient/beat detection (0 or 1)
 
 mod analyzer;
+mod capture;
 mod decode;
 mod playback;
 
 pub use analyzer::{AnalysisConfig, AudioAnalyzer};
+pub use capture::{AudioCapture, CaptureConfig, CaptureError, CaptureState};
 pub use decode::{AudioData, AudioDecoder, DecodeError};
 pub use playback::{AudioPlayer, PlaybackError, PlaybackState};
 
