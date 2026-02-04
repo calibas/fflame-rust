@@ -91,7 +91,8 @@ impl App {
 
     /// Apply animated values from current frame to ConfigManager.
     fn apply_animated_values(&mut self) {
-        let frame_values = self.animation_controller.evaluate_frame();
+        // TODO: Pass SignalManager reference when available
+        let frame_values = self.animation_controller.evaluate_frame(None);
 
         for (path_str, json_value) in frame_values {
             // Parse the string key back to ConfigPath

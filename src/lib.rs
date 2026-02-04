@@ -19,6 +19,7 @@ pub mod png_metadata;
 pub mod apophysis_xml;
 pub mod i18n;
 pub mod animation;
+pub mod signal;
 pub mod storage;
 pub mod export;
 pub mod resources;

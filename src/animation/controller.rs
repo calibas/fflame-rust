@@ -1,6 +1,7 @@
 //! Animation playback controller
 
 use super::{Animation, Interpolation, Keyframe, LoopMode, OscillatorType, PlaybackState, Track, TrackSource};
+use crate::signal::SignalManager;
 
 /// Controls animation playback and evaluates frame values
 pub struct AnimationController {
@@ -18,6 +19,10 @@ pub struct AnimationController {
 
     /// Direction for PingPong mode (1.0 = forward, -1.0 = backward)
     direction: f64,
+
+    /// Smoothed signal values for tracks with smoothing enabled
+    /// Key: (track_index, signal_name), Value: smoothed value
+    signal_smoothed: std::collections::HashMap<(usize, String), f32>,
 }
 
 impl AnimationController {
@@ -29,6 +34,7 @@ impl AnimationController {
             current_time: 0.0,
             speed: 1.0,
             direction: 1.0,
+            signal_smoothed: std::collections::HashMap::new(),
         }
     }
 
@@ -38,6 +44,7 @@ impl AnimationController {
         self.current_time = 0.0;
         self.state = PlaybackState::Stopped;
         self.direction = 1.0;
+        self.signal_smoothed.clear();
     }
 
     /// Start playback
@@ -128,14 +135,15 @@ impl AnimationController {
     /// Evaluate all tracks at current time
     ///
     /// Returns vec of (path_string, value) pairs for parameters that should be updated
-    pub fn evaluate_frame(&self) -> Vec<(String, serde_json::Value)> {
-        self.evaluate_at_time(self.current_time)
+    pub fn evaluate_frame(&mut self, signal_manager: Option<&SignalManager>) -> Vec<(String, serde_json::Value)> {
+        self.evaluate_at_time_with_signals(self.current_time, signal_manager)
     }
 
-    /// Evaluate all tracks at a specific time (for export)
+    /// Evaluate all tracks at a specific time (for export, no signal support)
     ///
     /// This is the core evaluation function used by both real-time playback
     /// and animation export. Returns vec of (path_string, value) pairs.
+    /// Signal tracks are skipped when no SignalManager is provided.
     pub fn evaluate_at_time(&self, time: f64) -> Vec<(String, serde_json::Value)> {
         let Some(ref animation) = self.animation else {
             return Vec::new();
@@ -143,9 +151,12 @@ impl AnimationController {
 
         let mut values = Vec::new();
 
-        // Evaluate regular tracks
+        // Evaluate regular tracks (skip Signal tracks without manager)
         for track in &animation.tracks {
-            if let Some(value) = self.evaluate_track(track, time) {
+            if matches!(track.source, TrackSource::Signal { .. }) {
+                continue; // Skip signal tracks when no manager available
+            }
+            if let Some(value) = Self::evaluate_track_pure(track, time) {
                 values.push((track.target.clone(), value));
             }
         }
@@ -160,21 +171,138 @@ impl AnimationController {
         values
     }
 
-    /// Evaluate single track at specific time
-    fn evaluate_track(&self, track: &Track, time: f64) -> Option<serde_json::Value> {
+    /// Evaluate all tracks at a specific time with signal support
+    ///
+    /// This version supports Signal tracks when a SignalManager is provided.
+    pub fn evaluate_at_time_with_signals(
+        &mut self,
+        time: f64,
+        signal_manager: Option<&SignalManager>,
+    ) -> Vec<(String, serde_json::Value)> {
+        let Some(ref animation) = self.animation else {
+            return Vec::new();
+        };
+
+        // Clone track info to avoid borrow conflicts with signal smoothing
+        let track_info: Vec<_> = animation
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(idx, track)| (idx, track.target.clone(), track.source.clone(), track.interpolation))
+            .collect();
+
+        let circular_info: Vec<_> = animation
+            .circular_tracks
+            .iter()
+            .map(|c| (c.target_x.clone(), c.target_y.clone(), c.evaluate(time)))
+            .collect();
+
+        let mut values = Vec::new();
+
+        // Evaluate regular tracks
+        for (track_idx, target, source, interpolation) in track_info {
+            if let Some(value) = self.evaluate_source(
+                &source,
+                interpolation,
+                time,
+                signal_manager,
+                Some(track_idx),
+            ) {
+                values.push((target, value));
+            }
+        }
+
+        // Evaluate circular tracks (output X and Y)
+        for (target_x, target_y, (x, y)) in circular_info {
+            values.push((target_x, serde_json::json!(x)));
+            values.push((target_y, serde_json::json!(y)));
+        }
+
+        values
+    }
+
+    /// Evaluate single track at specific time (pure - no state mutation)
+    /// Used for non-signal tracks where no smoothing is needed.
+    fn evaluate_track_pure(track: &Track, time: f64) -> Option<serde_json::Value> {
         match &track.source {
             TrackSource::Keyframes { keyframes } => {
-                self.evaluate_keyframes(keyframes, time, track.interpolation)
+                Self::evaluate_keyframes_pure(keyframes, time, track.interpolation)
             }
             TrackSource::Oscillator { oscillator_type, center, amplitude, frequency, phase } => {
-                Some(self.evaluate_oscillator(*oscillator_type, *center, *amplitude, *frequency, *phase, time))
+                Some(Self::evaluate_oscillator_pure(*oscillator_type, *center, *amplitude, *frequency, *phase, time))
+            }
+            TrackSource::Signal { .. } => {
+                None // Signal tracks require SignalManager
             }
         }
     }
 
-    /// Evaluate oscillator at given time
-    fn evaluate_oscillator(
-        &self,
+    /// Evaluate a track source with signal support (may mutate smoothing state)
+    fn evaluate_source(
+        &mut self,
+        source: &TrackSource,
+        interpolation: Interpolation,
+        time: f64,
+        signal_manager: Option<&SignalManager>,
+        track_idx: Option<usize>,
+    ) -> Option<serde_json::Value> {
+        match source {
+            TrackSource::Keyframes { keyframes } => {
+                Self::evaluate_keyframes_pure(keyframes, time, interpolation)
+            }
+            TrackSource::Oscillator { oscillator_type, center, amplitude, frequency, phase } => {
+                Some(Self::evaluate_oscillator_pure(*oscillator_type, *center, *amplitude, *frequency, *phase, time))
+            }
+            TrackSource::Signal { signal_name, min_output, max_output, smoothing } => {
+                self.evaluate_signal(
+                    signal_name,
+                    *min_output,
+                    *max_output,
+                    *smoothing,
+                    time,
+                    signal_manager,
+                    track_idx,
+                )
+            }
+        }
+    }
+
+    /// Evaluate signal-driven track
+    fn evaluate_signal(
+        &mut self,
+        signal_name: &str,
+        min_output: f64,
+        max_output: f64,
+        smoothing: f64,
+        time: f64,
+        signal_manager: Option<&SignalManager>,
+        track_idx: Option<usize>,
+    ) -> Option<serde_json::Value> {
+        let manager = signal_manager?;
+        let raw_value = manager.get_value_at(signal_name, time)?;
+
+        // Apply smoothing if enabled
+        let value = if smoothing > 0.0 && track_idx.is_some() {
+            let key = (track_idx.unwrap(), signal_name.to_string());
+            let prev = self.signal_smoothed.get(&key).copied().unwrap_or(raw_value);
+
+            // Exponential smoothing: new = prev + alpha * (raw - prev)
+            // Higher smoothing = lower alpha = more smoothing
+            let alpha = 1.0 - smoothing.clamp(0.0, 0.99) as f32;
+            let smoothed = prev + alpha * (raw_value - prev);
+            self.signal_smoothed.insert(key, smoothed);
+            smoothed
+        } else {
+            raw_value
+        };
+
+        // Map signal value (assumed 0-1 range) to output range
+        let mapped = min_output + (max_output - min_output) * value as f64;
+        Some(serde_json::json!(mapped))
+    }
+
+    /// Evaluate oscillator at given time (pure function)
+    fn evaluate_oscillator_pure(
         oscillator_type: OscillatorType,
         center: f64,
         amplitude: f64,
@@ -209,8 +337,8 @@ impl AnimationController {
         serde_json::json!(center + amplitude * wave)
     }
 
-    /// Evaluate keyframe track at specific time
-    fn evaluate_keyframes(&self, keyframes: &[Keyframe], time: f64, interpolation: Interpolation) -> Option<serde_json::Value> {
+    /// Evaluate keyframe track at specific time (pure function)
+    fn evaluate_keyframes_pure(keyframes: &[Keyframe], time: f64, interpolation: Interpolation) -> Option<serde_json::Value> {
         if keyframes.is_empty() {
             return None;
         }
@@ -403,7 +531,7 @@ mod tests {
 
     #[test]
     fn test_track_evaluation_keyframes() {
-        let controller = AnimationController::new();
+        let mut controller = AnimationController::new();
         let track = Track::linear(
             "Test".into(),
             serde_json::json!(0.0),
@@ -411,53 +539,111 @@ mod tests {
             10.0,
         );
 
+        let mut animation = Animation::new("Test".into(), 10.0);
+        animation.add_track(track);
+        controller.load(animation);
+
         // At start
-        let val = controller.evaluate_track(&track, 0.0).unwrap();
-        assert_eq!(val.as_f64().unwrap(), 0.0);
+        let values = controller.evaluate_at_time(0.0);
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert_eq!(val, 0.0);
 
         // At middle
-        let val = controller.evaluate_track(&track, 5.0).unwrap();
-        assert_eq!(val.as_f64().unwrap(), 5.0);
+        let values = controller.evaluate_at_time(5.0);
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert_eq!(val, 5.0);
 
         // At end
-        let val = controller.evaluate_track(&track, 10.0).unwrap();
-        assert_eq!(val.as_f64().unwrap(), 10.0);
+        let values = controller.evaluate_at_time(10.0);
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert_eq!(val, 10.0);
     }
 
     #[test]
     fn test_oscillator_sine() {
-        let controller = AnimationController::new();
+        let mut controller = AnimationController::new();
         let track = Track::oscillator("Test".into(), OscillatorType::Sine, 5.0, 2.0, 1.0);
 
+        let mut animation = Animation::new("Test".into(), 10.0);
+        animation.add_track(track);
+        controller.load(animation);
+
         // At t=0, sine(0) = 0, so value = center = 5.0
-        let val = controller.evaluate_track(&track, 0.0).unwrap();
-        assert!((val.as_f64().unwrap() - 5.0).abs() < 0.01);
+        let values = controller.evaluate_at_time(0.0);
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert!((val - 5.0).abs() < 0.01);
 
         // At t=0.25, sine(π/2) = 1, so value = 5.0 + 2.0 = 7.0
-        let val = controller.evaluate_track(&track, 0.25).unwrap();
-        assert!((val.as_f64().unwrap() - 7.0).abs() < 0.01);
+        let values = controller.evaluate_at_time(0.25);
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert!((val - 7.0).abs() < 0.01);
 
         // At t=0.5, sine(π) = 0, so value = 5.0
-        let val = controller.evaluate_track(&track, 0.5).unwrap();
-        assert!((val.as_f64().unwrap() - 5.0).abs() < 0.01);
+        let values = controller.evaluate_at_time(0.5);
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert!((val - 5.0).abs() < 0.01);
 
         // At t=0.75, sine(3π/2) = -1, so value = 5.0 - 2.0 = 3.0
-        let val = controller.evaluate_track(&track, 0.75).unwrap();
-        assert!((val.as_f64().unwrap() - 3.0).abs() < 0.01);
+        let values = controller.evaluate_at_time(0.75);
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert!((val - 3.0).abs() < 0.01);
     }
 
     #[test]
     fn test_oscillator_square() {
-        let controller = AnimationController::new();
+        let mut controller = AnimationController::new();
         let track = Track::oscillator("Test".into(), OscillatorType::Square, 0.0, 1.0, 1.0);
 
+        let mut animation = Animation::new("Test".into(), 10.0);
+        animation.add_track(track);
+        controller.load(animation);
+
         // First half of cycle: -1
-        let val = controller.evaluate_track(&track, 0.25).unwrap();
-        assert_eq!(val.as_f64().unwrap(), -1.0);
+        let values = controller.evaluate_at_time(0.25);
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert_eq!(val, -1.0);
 
         // Second half of cycle: +1
-        let val = controller.evaluate_track(&track, 0.75).unwrap();
-        assert_eq!(val.as_f64().unwrap(), 1.0);
+        let values = controller.evaluate_at_time(0.75);
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert_eq!(val, 1.0);
+    }
+
+    #[test]
+    fn test_signal_track() {
+        use crate::signal::{Signal, SignalManager, SignalType};
+
+        let mut controller = AnimationController::new();
+        let track = Track::signal("Test".into(), "energy".into(), 0.0, 10.0);
+
+        let mut animation = Animation::new("Test".into(), 10.0);
+        animation.add_track(track);
+        controller.load(animation);
+
+        // Create signal manager with test signal
+        let mut signal_manager = SignalManager::new();
+        signal_manager.insert(Signal::new(
+            "energy".into(),
+            10.0, // 10 Hz
+            SignalType::Continuous,
+            vec![0.0, 0.5, 1.0, 0.5, 0.0], // Peaks at 0.2s
+        ));
+
+        // Test signal evaluation at different times
+        // At t=0.0, signal=0.0, output=0.0
+        let values = controller.evaluate_at_time_with_signals(0.0, Some(&signal_manager));
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert!((val - 0.0).abs() < 0.01);
+
+        // At t=0.2, signal=1.0, output=10.0
+        let values = controller.evaluate_at_time_with_signals(0.2, Some(&signal_manager));
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert!((val - 10.0).abs() < 0.01);
+
+        // At t=0.1, signal=0.5, output=5.0
+        let values = controller.evaluate_at_time_with_signals(0.1, Some(&signal_manager));
+        let val = values.iter().find(|(k, _)| k == "Test").unwrap().1.as_f64().unwrap();
+        assert!((val - 5.0).abs() < 0.01);
     }
 
     #[test]
@@ -502,7 +688,7 @@ mod tests {
         controller.load(animation);
         controller.current_time = 0.0;
 
-        let values = controller.evaluate_frame();
+        let values = controller.evaluate_frame(None);
         assert_eq!(values.len(), 2); // X and Y
 
         // Find X and Y values
