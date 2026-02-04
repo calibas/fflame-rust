@@ -587,6 +587,39 @@ impl App {
                 super::trigger_browser_file_picker(".fflame", ctx, "pending_file_browser_json_raw");
             }
         }
+
+        // Handle audio file loading (optional feature)
+        #[cfg(feature = "audio")]
+        if ui_response.load_audio_file {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Desktop: synchronous file dialog
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Audio Files", &["mp3", "wav", "flac", "ogg"])
+                    .pick_file()
+                {
+                    match self.audio_manager.load_file(&path) {
+                        Ok(()) => {
+                            log::info!("Loaded audio file: {}", path.display());
+                            // Auto-analyze after loading
+                            self.audio_manager.analyze();
+                            log::info!("Audio analysis complete: {} signals available",
+                                self.audio_manager.available_signals().len());
+                        }
+                        Err(e) => {
+                            log::error!("Failed to load audio file: {}", e);
+                        }
+                    }
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // WASM: use native file picker
+                let ctx = self.egui_layer.ctx.clone();
+                super::trigger_browser_file_picker(".mp3,.wav,.flac,.ogg", ctx, "pending_audio_load_raw");
+            }
+        }
     }
 
     /// Handle undo/redo from UI buttons
