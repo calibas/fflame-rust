@@ -30,14 +30,24 @@
 //! - `onset` - Transient/beat detection (0 or 1)
 
 mod analyzer;
-mod capture;
 mod decode;
 mod playback;
 
+// Platform-specific audio capture implementations
+#[cfg(not(target_arch = "wasm32"))]
+mod capture_native;
+#[cfg(target_arch = "wasm32")]
+mod capture_wasm;
+
 pub use analyzer::{AnalysisConfig, AudioAnalyzer};
-pub use capture::{AudioCapture, CaptureConfig, CaptureError, CaptureState};
 pub use decode::{AudioData, AudioDecoder, DecodeError};
 pub use playback::{AudioPlayer, PlaybackError, PlaybackState};
+
+// Re-export platform-specific capture types
+#[cfg(not(target_arch = "wasm32"))]
+pub use capture_native::{AtomicSignals, AudioCapture, CaptureConfig, CaptureError, CaptureState};
+#[cfg(target_arch = "wasm32")]
+pub use capture_wasm::{AtomicSignals, AudioCapture, CaptureConfig, CaptureError, CaptureState};
 
 use crate::signal::{Signal, SignalProducer};
 use std::collections::HashMap;
