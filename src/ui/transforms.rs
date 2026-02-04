@@ -486,8 +486,10 @@ fn render_enabled_variation(
         // Weight slider
         let mut value = current_weight;
         let response = ui.add(
-            egui::Slider::new(&mut value, -10.0..=10.0)
+            egui::Slider::new(&mut value, -5.0..=5.0)
                 .text(display_name)
+                .drag_value_speed(0.1)
+                .step_by(0.1)
                 .clamping(egui::SliderClamping::Never)
         );
 
@@ -586,7 +588,7 @@ fn render_variations_section(
     }
 
     // Variation picker popup
-    egui::popup_below_widget(ui, add_variation_popup_id, &add_btn, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+    egui::popup_below_widget(ui, add_variation_popup_id, &add_btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
         ui.set_min_width(250.0);
         ui.set_max_height(300.0);
 
@@ -1045,8 +1047,10 @@ fn render_final_transform(
                                 ui.horizontal(|ui| {
                                     let mut value = *weight;
                                     let response = ui.add(
-                                        egui::Slider::new(&mut value, -10.0..=10.0)
+                                        egui::Slider::new(&mut value, -5.0..=5.0)
                                             .text(display_name)
+                                            .drag_value_speed(0.1)
+                                            .step_by(0.1)
                                             .clamping(egui::SliderClamping::Never)
                                     );
 
@@ -1107,7 +1111,7 @@ fn render_final_transform(
                             ui.memory_mut(|mem| mem.toggle_popup(popup_id));
                         }
 
-                        egui::popup_below_widget(ui, popup_id, &add_btn, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                        egui::popup_below_widget(ui, popup_id, &add_btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
                             ui.set_min_width(250.0);
                             ui.set_max_height(300.0);
 
