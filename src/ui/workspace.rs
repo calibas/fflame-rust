@@ -83,16 +83,10 @@ impl std::fmt::Display for PanelType {
 /// Workspace layout presets
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceLayout {
-    /// Beginner: Fractal + Appearance only
-    Beginner,
     /// Standard: Fractal + Transform Editor + Appearance + View
     Standard,
     /// Animation: Standard layout with Animation panel at bottom
     Animation,
-    /// Advanced: All panels visible, split layout
-    Advanced,
-    /// Export: Rendering + Appearance focused
-    Export,
 }
 
 /// Manages the docking workspace state
@@ -141,11 +135,8 @@ impl Workspace {
     /// Apply a predefined layout
     pub fn apply_layout(&mut self, layout: WorkspaceLayout) {
         self.dock_state = match layout {
-            WorkspaceLayout::Beginner => Self::create_beginner_layout(),
             WorkspaceLayout::Standard => Self::create_standard_layout(),
             WorkspaceLayout::Animation => Self::create_animation_layout(),
-            WorkspaceLayout::Advanced => Self::create_advanced_layout(),
-            WorkspaceLayout::Export => Self::create_export_layout(),
         };
         self.current_layout = layout;
     }
@@ -262,14 +253,6 @@ impl Workspace {
         self.dock_state.find_tab(&panel_type)
     }
 
-    /// Create Beginner layout: Simple tabbed panel with Colors and Transforms
-    fn create_beginner_layout() -> DockState<PanelType> {
-        let mut state = DockState::new(vec![PanelType::Colors]);
-        let root = state.main_surface_mut();
-        root.push_to_focused_leaf(PanelType::Transforms);
-        state
-    }
-
     /// Create Standard layout: Fractal in center, controls on sides
     fn create_standard_layout() -> DockState<PanelType> {
         // Start with FractalViewport in the center
@@ -318,27 +301,6 @@ impl Workspace {
             vec![PanelType::Colors, PanelType::View, PanelType::TriangleEditor, PanelType::Rendering, PanelType::History],
         );
 
-        state
-    }
-
-    /// Create Advanced layout: All panels visible in tabs
-    fn create_advanced_layout() -> DockState<PanelType> {
-        let mut state = DockState::new(vec![PanelType::Transforms]);
-        let root = state.main_surface_mut();
-        root.push_to_focused_leaf(PanelType::TriangleEditor);
-        root.push_to_focused_leaf(PanelType::Colors);
-        root.push_to_focused_leaf(PanelType::PaletteEditor);
-        root.push_to_focused_leaf(PanelType::View);
-        root.push_to_focused_leaf(PanelType::Rendering);
-        root.push_to_focused_leaf(PanelType::History);
-        state
-    }
-
-    /// Create Export layout: Focus on rendering and colors
-    fn create_export_layout() -> DockState<PanelType> {
-        let mut state = DockState::new(vec![PanelType::Rendering]);
-        let root = state.main_surface_mut();
-        root.push_to_focused_leaf(PanelType::Colors);
         state
     }
 

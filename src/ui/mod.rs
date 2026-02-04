@@ -24,7 +24,6 @@ pub mod track_editor;
 mod transforms;
 mod triangle_editor;
 mod undo_history;
-mod variation_controls;
 mod variation_params;
 mod view;
 pub mod workspace;
@@ -607,7 +606,7 @@ impl EguiLayer {
             .update_buffers(device, queue, encoder, &tris, &screen_descriptor);
 
         {
-            let mut rpass = encoder.begin_render_pass(&egui_wgpu::wgpu::RenderPassDescriptor {
+            let rpass = encoder.begin_render_pass(&egui_wgpu::wgpu::RenderPassDescriptor {
                 label: Some("egui render pass"),
                 color_attachments: &[Some(egui_wgpu::wgpu::RenderPassColorAttachment {
                     view: target_view,
