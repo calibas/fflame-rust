@@ -73,6 +73,21 @@ web-sys = { version = "0.3", features = [
     "RequestMode",
     "Response",
     "Headers",
+    # Web Audio API (for live audio capture)
+    "AudioContext",
+    "AudioContextOptions",
+    "AudioContextState",
+    "AudioNode",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamAudioSourceNode",
+    "MediaStreamConstraints",
+    "Navigator",
+    "ScriptProcessorNode",
+    "AudioProcessingEvent",
+    "AudioBuffer",
+    "ChannelCountMode",
+    "ChannelInterpretation",
 ] }
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
