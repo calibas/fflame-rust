@@ -1124,6 +1124,15 @@ track_editor:
   circ_speed: "Speed:"
   circ_phase: "Phase:"
 
+  # Signal track type and parameters
+  type_signal: "Signal"
+  signal_section: "Signal Mapping"
+  signal_name: "Signal Name:"
+  signal_min_output: "Min Output:"
+  signal_max_output: "Max Output:"
+  signal_smoothing: "Smoothing:"
+  signal_help: "Enter the name of a signal from the Signal Manager"
+
   # Action buttons
   update_track: "Update Track"
   replace_track: "Replace Track"

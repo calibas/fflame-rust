@@ -37,6 +37,8 @@ pub struct TrackEditorState {
     pub oscillator_params: OscillatorParams,
     /// Circular track parameters for editing
     pub circular_params: CircularParams,
+    /// Signal track parameters for editing
+    pub signal_params: SignalParams,
     /// Preview keyframes for Add Track mode (before track is created)
     pub preview_keyframes: Vec<Keyframe>,
     /// Interpolation mode for preview keyframes
@@ -87,6 +89,26 @@ impl Default for CircularParams {
     }
 }
 
+/// Signal track parameters for track editor
+#[derive(Clone)]
+pub struct SignalParams {
+    pub signal_name: String,
+    pub min_output: f64,
+    pub max_output: f64,
+    pub smoothing: f64,
+}
+
+impl Default for SignalParams {
+    fn default() -> Self {
+        Self {
+            signal_name: String::new(),
+            min_output: 0.0,
+            max_output: 1.0,
+            smoothing: 0.0,
+        }
+    }
+}
+
 /// Response from track editor rendering (Phase 3)
 #[derive(Default)]
 pub struct TrackEditorResponse {
@@ -101,6 +123,7 @@ pub enum NewTrackType {
     Keyframe,
     Oscillator,
     Circular,
+    Signal,
 }
 
 /// Convert internal 0-based path string to 1-based display string
@@ -221,8 +244,8 @@ fn render_tracks_visual(
                         (first, last)
                     }
                 }
-                TrackSource::Oscillator { .. } => {
-                    // Oscillators span full duration
+                TrackSource::Oscillator { .. } | TrackSource::Signal { .. } => {
+                    // Oscillators and signals span full duration
                     (0.0, layout.duration)
                 }
             };
@@ -525,11 +548,13 @@ fn render_track_editor_panel_content(
                     NewTrackType::Keyframe => t!("track_editor.type_keyframe"),
                     NewTrackType::Oscillator => t!("track_editor.type_oscillator"),
                     NewTrackType::Circular => t!("track_editor.type_circular"),
+                    NewTrackType::Signal => t!("track_editor.type_signal"),
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut state.new_track_type, NewTrackType::Keyframe, t!("track_editor.type_keyframe").as_ref());
                     ui.selectable_value(&mut state.new_track_type, NewTrackType::Oscillator, t!("track_editor.type_oscillator").as_ref());
                     ui.selectable_value(&mut state.new_track_type, NewTrackType::Circular, t!("track_editor.type_circular").as_ref());
+                    ui.selectable_value(&mut state.new_track_type, NewTrackType::Signal, t!("track_editor.type_signal").as_ref());
                 });
         });
 
@@ -587,6 +612,9 @@ fn render_track_editor_panel_content(
                         }
                         NewTrackType::Circular => {
                             initialize_circular_centers(state, config);
+                        }
+                        NewTrackType::Signal => {
+                            // Signal tracks don't need initialization from config
                         }
                     }
                 }
@@ -655,6 +683,9 @@ fn render_track_editor_panel_content(
         }
         NewTrackType::Circular => {
             render_circular_subpanel(ui, state);
+        }
+        NewTrackType::Signal => {
+            render_signal_subpanel(ui, state);
         }
     }
 
@@ -977,6 +1008,34 @@ fn render_circular_subpanel(ui: &mut Ui, state: &mut TrackEditorState) {
     });
 }
 
+/// Render signal track-specific options subpanel
+fn render_signal_subpanel(ui: &mut Ui, state: &mut TrackEditorState) {
+    ui.label(t!("track_editor.signal_section"));
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.signal_name"));
+        ui.text_edit_singleline(&mut state.signal_params.signal_name);
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.signal_min_output"));
+        ui.add(egui::DragValue::new(&mut state.signal_params.min_output).speed(0.01));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.signal_max_output"));
+        ui.add(egui::DragValue::new(&mut state.signal_params.max_output).speed(0.01));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t!("track_editor.signal_smoothing"));
+        ui.add(egui::DragValue::new(&mut state.signal_params.smoothing).speed(0.01).range(0.0..=0.99));
+    });
+
+    ui.add_space(4.0);
+    ui.label(t!("track_editor.signal_help"));
+}
+
 /// Create or update a track based on current state
 /// Returns the index of the created/updated track (for switching to edit mode)
 fn update_or_create_track(
@@ -1087,6 +1146,34 @@ fn update_or_create_track(
             // Return encoded index for circular tracks
             Some(usize::MAX - new_index)
         }
+        NewTrackType::Signal => {
+            if let Some(track_index) = state.editing_track_index {
+                // Update existing track
+                if let Some(track) = animation.get_track_mut(track_index) {
+                    track.target = state.new_track_target.clone();
+                    track.source = TrackSource::Signal {
+                        signal_name: state.signal_params.signal_name.clone(),
+                        min_output: state.signal_params.min_output,
+                        max_output: state.signal_params.max_output,
+                        smoothing: state.signal_params.smoothing,
+                    };
+                }
+                Some(track_index)
+            } else {
+                // Create new track
+                let track = Track::new(
+                    state.new_track_target.clone(),
+                    TrackSource::Signal {
+                        signal_name: state.signal_params.signal_name.clone(),
+                        min_output: state.signal_params.min_output,
+                        max_output: state.signal_params.max_output,
+                        smoothing: state.signal_params.smoothing,
+                    },
+                );
+                let new_index = animation.add_track(track);
+                Some(new_index)
+            }
+        }
     }
 }
 
@@ -1133,6 +1220,15 @@ pub fn open_edit_track_panel(state: &mut TrackEditorState, track_index: usize, t
                 phase: *phase,
             };
             NewTrackType::Oscillator
+        }
+        TrackSource::Signal { signal_name, min_output, max_output, smoothing } => {
+            state.signal_params = SignalParams {
+                signal_name: signal_name.clone(),
+                min_output: *min_output,
+                max_output: *max_output,
+                smoothing: *smoothing,
+            };
+            NewTrackType::Signal
         }
     };
     state.target_selector_state = TargetSelectorState::default();
