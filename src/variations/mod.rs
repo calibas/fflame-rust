@@ -214,29 +214,6 @@ impl VariationRegistry {
         self.variations.insert(info.name.clone(), info);
     }
 
-    /// Register a plugin variation
-    pub fn register_plugin(&mut self, name: String, display_name: String, category: VariationCategory, phase: VariationPhase, wgsl_source: String, needs_rng: bool) {
-        let wgsl_function = format!("variation_{}", name);
-
-        let info = VariationInfo {
-            name: name.clone(),
-            display_name,
-            category,
-            phase,
-            wgsl_function,
-            needs_rng,
-            is_core: false,
-            wgsl_source: Some(wgsl_source),
-            wgsl_source_3d: None, // Plugin 3D source can be added separately
-            parameters: Vec::new(),  // Parameters can be added later
-        };
-
-        self.variations.insert(name.clone(), info);
-        if !self.ordered_names.contains(&name) {
-            self.ordered_names.push(name);
-        }
-    }
-
     /// Get variation info by name
     pub fn get(&self, name: &str) -> Option<&VariationInfo> {
         self.variations.get(name)
