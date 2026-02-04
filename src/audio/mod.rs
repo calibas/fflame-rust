@@ -15,7 +15,7 @@
 //! - `AudioManager` - Central coordinator implementing `SignalProducer`
 //! - `decode` - Audio file decoding via symphonia (MP3, WAV, FLAC, OGG)
 //! - `analyzer` - STFT analysis, mel spectrogram, onset detection
-//! - `playback` - Audio playback synced to timeline (future)
+//! - `playback` - Audio playback synced to animation timeline
 //! - `capture` - Live audio input (future)
 //!
 //! ## Available Signals
@@ -31,18 +31,23 @@
 
 mod analyzer;
 mod decode;
+mod playback;
 
 pub use analyzer::{AnalysisConfig, AudioAnalyzer};
 pub use decode::{AudioData, AudioDecoder, DecodeError};
+pub use playback::{AudioPlayer, PlaybackError, PlaybackState};
 
 use crate::signal::{Signal, SignalProducer};
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Central coordinator for audio functionality.
+/// Central coordinator for audio analysis functionality.
 ///
 /// Implements `SignalProducer` to provide audio-derived signals to the animation system.
 /// Signals are source-agnostic - the animation system doesn't know they come from audio.
+///
+/// Note: Audio playback is handled separately by `AudioPlayer` due to threading constraints.
+/// The cpal `Stream` type is not `Send`-safe, so it cannot be embedded in `SignalProducer`.
 pub struct AudioManager {
     /// Decoded audio data (if file loaded)
     audio_data: Option<AudioData>,
