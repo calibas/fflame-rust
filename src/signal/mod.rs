@@ -447,6 +447,18 @@ impl SignalManager {
         self.signals.get(name).and_then(|s| s.value_at(time))
     }
 
+    /// Import all signals from a producer into the manager
+    ///
+    /// This is useful for offline analysis - compute signals from audio,
+    /// then import them into the manager for animation playback/export.
+    pub fn import_from_producer(&mut self, producer: &dyn SignalProducer) {
+        for name in producer.signal_names() {
+            if let Some(signal) = producer.get_signal(&name) {
+                self.signals.insert(name, signal);
+            }
+        }
+    }
+
     /// Clear all signals and producers
     pub fn clear(&mut self) {
         self.signals.clear();
