@@ -64,6 +64,7 @@ menu:
   window_random_generator: "🎲 Random Generator"
   window_effects: "✨ Effects"
   window_xaos_editor: "🔀 Xaos Editor"
+  window_audio: "🎵 Audio"
 
   # Window Menu - Workspace layouts
   reset_workspace: "🔄 Reset Workspace"
@@ -131,6 +132,7 @@ panels:
   settings: "Settings"
   tone_mapping: "Tone Mapping"
   xaos_editor: "Xaos Editor"
+  audio: "Audio"
 
 # Random Generator Panel
 random_generator:
@@ -1487,6 +1489,49 @@ effects:
       color_mode: "Color Mode"
       intensity: "Intensity"
       blend_mode: "Blend Mode"
+
+# Audio Panel (optional feature)
+audio:
+  # Section headers
+  file_section: "Audio File"
+  playback_section: "Playback"
+  live_section: "Live Capture"
+  signals_section: "Signal Monitor"
+
+  # File section
+  file_label: "File:"
+  no_file_loaded: "No file loaded"
+  load_button: "Load Audio..."
+  analyze_button: "Analyze"
+  analyzing: "Analyzing..."
+  analysis_complete: "Analysis complete"
+  signals_available: "signals available"
+
+  # Playback section
+  play: "▶ Play"
+  pause: "⏸ Pause"
+  stop: "⏹ Stop"
+
+  # Live capture section
+  refresh_devices: "🔄 Refresh"
+  start_capture: "🎤 Start Capture"
+  stop_capture: "⏹ Stop Capture"
+  capturing: "Capturing..."
+  stopped: "Stopped"
+  requesting_permission: "Requesting permission..."
+  capture_error: "Capture error"
+  level: "Level:"
+
+  # Signal monitor
+  show_all_signals: "Show all signals"
+  no_signals: "No signals available. Load audio or start capture."
+  signal_name: "Signal"
+  signal_value: "Value"
+  signal_meter: "Meter"
+
+  # Feature disabled
+  feature_disabled: "Audio feature is not enabled."
+  enable_feature_hint: "Enable with: cargo build --features audio"
 
 # Errors
 errors:

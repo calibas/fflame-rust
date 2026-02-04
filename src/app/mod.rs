@@ -251,6 +251,14 @@ pub struct App {
     // Fullscreen state (two-stage: window fullscreen, then hide UI)
     pub(super) window_fullscreen: bool,  // Window is in fullscreen mode
     pub(super) ui_hidden: bool,          // UI panels are hidden (only in fullscreen)
+
+    // Audio system (optional feature)
+    #[cfg(feature = "audio")]
+    pub(super) audio_manager: crate::audio::AudioManager,
+    #[cfg(feature = "audio")]
+    pub(super) audio_player: crate::audio::AudioPlayer,
+    #[cfg(feature = "audio")]
+    pub(super) audio_capture: crate::audio::AudioCapture,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -341,6 +349,12 @@ impl App {
             was_video_exporting: false,
             window_fullscreen: false,
             ui_hidden: false,
+            #[cfg(feature = "audio")]
+            audio_manager: crate::audio::AudioManager::new(),
+            #[cfg(feature = "audio")]
+            audio_player: crate::audio::AudioPlayer::new(),
+            #[cfg(feature = "audio")]
+            audio_capture: crate::audio::AudioCapture::new(),
         };
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
@@ -674,6 +688,12 @@ impl App {
             &export_progress,
             &png_export_progress,
             self.ui_hidden,
+            #[cfg(feature = "audio")]
+            &mut self.audio_manager,
+            #[cfg(feature = "audio")]
+            &mut self.audio_player,
+            #[cfg(feature = "audio")]
+            &mut self.audio_capture,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
