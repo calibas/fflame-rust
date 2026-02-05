@@ -266,6 +266,12 @@ fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, r
         } else {
             ui.label("--");
         }
+
+        ui.separator();
+
+        // Sync audio checkbox
+        ui.checkbox(&mut controller.sync_audio, t!("animation_panel.sync_audio"))
+            .on_hover_text(t!("animation_panel.sync_audio_tooltip"));
     });
 }
 

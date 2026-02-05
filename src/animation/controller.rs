@@ -23,6 +23,9 @@ pub struct AnimationController {
     /// Smoothed signal values for tracks with smoothing enabled
     /// Key: (track_index, signal_name), Value: smoothed value
     signal_smoothed: std::collections::HashMap<(usize, String), f32>,
+
+    /// Whether to sync audio playback with animation timeline
+    pub sync_audio: bool,
 }
 
 impl AnimationController {
@@ -35,6 +38,7 @@ impl AnimationController {
             speed: 1.0,
             direction: 1.0,
             signal_smoothed: std::collections::HashMap::new(),
+            sync_audio: false,
         }
     }
 

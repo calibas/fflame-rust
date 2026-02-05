@@ -45,6 +45,15 @@ impl App {
             // Enable animation mode in ConfigManager - UI changes become silent (no undo)
             self.config_manager.set_animation_mode(true);
             // Note: Overwrite mode is automatically enabled during animation (see should_use_overwrite)
+
+            // Start audio playback if sync is enabled
+            if self.animation_controller.sync_audio && self.audio_player.has_audio() {
+                // Seek audio to current animation time before playing
+                self.audio_player.seek(self.animation_controller.current_time);
+                if let Err(e) = self.audio_player.play() {
+                    log::warn!("Failed to start audio playback: {:?}", e);
+                }
+            }
         }
     }
 
@@ -57,6 +66,16 @@ impl App {
             // Disable animation mode before exit so undo entry creation works
             self.config_manager.set_animation_mode(false);
             self.handle_animation_exit();
+
+            // Sync audio state with animation
+            if self.animation_controller.sync_audio && self.audio_player.has_audio() {
+                if self.animation_controller.state == PlaybackState::Stopped {
+                    self.audio_player.stop();
+                } else {
+                    // Paused
+                    self.audio_player.pause();
+                }
+            }
 
             // Only restore base config when animation is STOPPED (not paused)
             // When paused, the fractal should stay at the current timeline position
@@ -73,6 +92,11 @@ impl App {
         // Update animation time
         self.animation_controller.update(delta_time);
 
+        // Sync audio position with animation time
+        if self.animation_controller.sync_audio && self.audio_player.has_audio() {
+            self.audio_player.sync_to_time(self.animation_controller.current_time);
+        }
+
         // Check if animation auto-stopped (LoopMode::Once reached end)
         let auto_stopped = self.animation_controller.state != PlaybackState::Playing;
         if auto_stopped {
@@ -80,6 +104,11 @@ impl App {
             self.config_manager.set_animation_mode(false);
             // Animation finished naturally - exit animation mode and create undo snapshot
             self.handle_animation_exit();
+
+            // Stop audio when animation auto-stops
+            if self.animation_controller.sync_audio && self.audio_player.has_audio() {
+                self.audio_player.stop();
+            }
 
             // Restore base config when animation stops (returns to original state)
             self.restore_base_config();
