@@ -38,6 +38,9 @@ pub struct AudioPlayer {
     /// Whether playback should continue
     playing: Arc<AtomicBool>,
 
+    /// Set to true when playback reaches the end
+    ended: Arc<AtomicBool>,
+
     /// Web Audio context
     audio_context: Option<AudioContext>,
 
@@ -68,6 +71,7 @@ impl AudioPlayer {
             state: PlaybackState::Stopped,
             position: Arc::new(AtomicU64::new(0)),
             playing: Arc::new(AtomicBool::new(false)),
+            ended: Arc::new(AtomicBool::new(false)),
             audio_context: None,
             source_node: None,
             audio_buffer: None,
@@ -135,16 +139,35 @@ impl AudioPlayer {
     }
 
     /// Get the current playback state.
-    pub fn state(&self) -> PlaybackState {
+    pub fn state(&mut self) -> PlaybackState {
+        // Check if playback ended naturally
+        if self.state == PlaybackState::Playing && self.ended.load(Ordering::SeqCst) {
+            self.state = PlaybackState::Stopped;
+            self.playing.store(false, Ordering::SeqCst);
+            self.start_offset = 0.0;
+            self.source_node = None;
+            log::info!("Playback ended");
+        }
         self.state
     }
 
     /// Get the current playback position in seconds.
     pub fn position_seconds(&self) -> f64 {
+        // If ended, return 0 (will be at start for next play)
+        if self.ended.load(Ordering::SeqCst) {
+            return 0.0;
+        }
+
         if self.state == PlaybackState::Playing {
             if let Some(ref context) = self.audio_context {
                 let current_time = context.current_time();
-                return self.start_offset + (current_time - self.start_time);
+                let position = self.start_offset + (current_time - self.start_time);
+
+                // Clamp to duration
+                if let Some(duration) = self.duration() {
+                    return position.min(duration);
+                }
+                return position;
             }
         }
         self.start_offset
@@ -165,6 +188,9 @@ impl AudioPlayer {
             return Ok(()); // Already playing
         }
 
+        // Reset ended flag
+        self.ended.store(false, Ordering::SeqCst);
+
         // Ensure context exists
         self.ensure_context()?;
 
@@ -181,6 +207,14 @@ impl AudioPlayer {
             .map_err(|e| PlaybackError::StreamError(format!("{:?}", e)))?;
 
         source.set_buffer(self.audio_buffer.as_ref());
+
+        // Set up onended callback to detect when playback finishes
+        let ended_flag = self.ended.clone();
+        let onended = Closure::wrap(Box::new(move || {
+            ended_flag.store(true, Ordering::SeqCst);
+        }) as Box<dyn Fn()>);
+        source.set_onended(Some(onended.as_ref().unchecked_ref()));
+        onended.forget(); // Leak closure - will be cleaned up when source is dropped
 
         // Connect to destination
         source.connect_with_audio_node(&context.destination())
@@ -226,6 +260,7 @@ impl AudioPlayer {
         self.source_node = None;
 
         self.playing.store(false, Ordering::SeqCst);
+        self.ended.store(false, Ordering::SeqCst);
         self.position.store(0, Ordering::SeqCst);
         self.start_offset = 0.0;
         self.start_time = 0.0;
