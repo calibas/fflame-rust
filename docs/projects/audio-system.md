@@ -1155,60 +1155,69 @@ web-sys = { version = "0.3", features = [
 ## Implementation Phases
 
 ### Phase 0: Signal System Foundation
-- [ ] Create `src/signal/mod.rs` with `Signal` struct
-- [ ] Implement `SignalType` enum (Continuous, Trigger, Scalar)
-- [ ] Implement `.signal` binary file format (read/write)
-- [ ] Create `SignalManager` with basic load/save/get operations
-- [ ] Add `TrackSource::Signal` variant to animation system
-- [ ] Signal evaluation in `Track::evaluate_at()`
+- [x] Create `src/signal/mod.rs` with `Signal` struct
+- [x] Implement `SignalType` enum (Continuous, Trigger, Scalar)
+- [x] Implement `.signal` binary file format (read/write)
+- [x] Create `SignalManager` with basic load/save/get operations
+- [x] Add `TrackSource::Signal` variant to animation system
+- [x] Signal evaluation in `Track::evaluate_at()`
+- [x] Wire SignalManager to App and pass to animation evaluation
 
 ### Phase 1: Audio Infrastructure
-- [ ] Add `audio` feature flag and dependencies
-- [ ] Create `src/audio/mod.rs` with `AudioManager` (implements `SignalProducer`)
-- [ ] Implement `decode.rs` with symphonia (MP3/WAV decode)
-- [ ] Wire AudioManager to SignalManager
+- [x] Add `audio` feature flag and dependencies
+- [x] Create `src/audio/mod.rs` with `AudioManager` (implements `SignalProducer`)
+- [x] Implement `decode.rs` with symphonia (MP3/WAV decode)
+- [x] Wire AudioManager to SignalManager (via `import_from_producer()`)
 
 ### Phase 2: Offline Analysis
-- [ ] Port mel spectrogram processor (remove Godot dependencies)
-- [ ] Implement tiered analysis pipeline
-- [ ] Add `amplitude`, `energy_*`, `onset_*` signals
-- [ ] Add `spectral_centroid`, `spectral_flux` signals
-- [ ] Implement BPM detection and `beat_phase`
-- [ ] Background thread analysis with progress
+- [x] Port mel spectrogram processor (from Godot project)
+- [x] Implement tiered analysis pipeline (STFT-based)
+- [x] Add `amplitude`, `energy_*` signals
+- [x] Add `spectral_centroid`, `spectral_flux` signals
+- [x] Add `onset` signal (transient detection)
+- [ ] Implement BPM detection and `beat_phase` (future)
+- [ ] Background thread analysis with progress (future - currently synchronous)
 
 ### Phase 3: Animation Integration
-- [ ] Add `TrackSource::Signal` variant
-- [ ] Implement audio track evaluation in `Track::evaluate_at()`
-- [ ] Signal smoothing and trigger envelope
-- [ ] Update animation serialization (load/save audio tracks)
+- [x] Add `TrackSource::Signal` variant
+- [x] Implement signal track evaluation in `Track::evaluate_at()`
+- [x] Signal smoothing (exponential)
+- [x] Update animation serialization (load/save signal tracks)
+- [ ] Trigger envelope (attack/decay) for onset signals (future)
 
 ### Phase 4: Audio Playback
-- [ ] Implement cpal output stream
-- [ ] Sync with animation timeline
-- [ ] Seek support
+- [x] Implement cpal output stream (desktop: `playback.rs`)
+- [x] Implement Web Audio API playback (WASM: `playback_wasm.rs`)
+- [x] Sync with animation timeline
+- [x] Seek support
+- [x] Play/pause/stop controls
+- [x] End detection (both platforms)
 
 ### Phase 5: Live Capture (Desktop)
-- [ ] Implement cpal input stream (capture_native.rs)
-- [ ] Lock-free signal transfer (atomics)
-- [ ] Device selection UI
-- [ ] Low-latency Tier 1+2 analysis
+- [x] Implement cpal input stream (`capture_native.rs`)
+- [x] Lock-free signal transfer (AtomicSignals)
+- [x] Device selection UI
+- [x] Low-latency Tier 1+2 analysis (real-time FFT)
 
 ### Phase 5b: Live Capture (WASM)
-- [ ] AudioWorklet processor JavaScript code
-- [ ] web-sys bindings for getUserMedia + AudioWorklet
-- [ ] Message port → ring buffer bridging
-- [ ] Permission request UI flow
-- [ ] Same analysis pipeline as desktop
+- [x] ScriptProcessorNode-based capture (`capture_wasm.rs`)
+- [x] web-sys bindings for getUserMedia
+- [x] Ring buffer bridging
+- [x] Permission request UI flow
+- [x] Same analysis pipeline as desktop
 
 ### Phase 6: Export Integration
-- [ ] Modify FFmpeg pipeline to include audio input
-- [ ] Handle duration mismatches
-- [ ] Progress indication for audio muxing
+- [x] Audio-aware export path (signals available during export)
+- [ ] Modify FFmpeg pipeline to include audio in MP4 (future)
+- [ ] Handle duration mismatches (future)
+- [ ] Progress indication for audio muxing (future)
 
 ### Phase 7: UI
-- [ ] Audio panel (file info, waveform, signal meters)
-- [ ] Animation panel integration (audio track editor)
-- [ ] Live capture controls
+- [x] Audio panel (file info, playback controls, signal meters)
+- [x] Live capture controls (start/stop, device selection)
+- [x] Signal monitor (real-time values for all signals)
+- [ ] Animation panel integration (waveform display above tracks) (future)
+- [ ] Full audio track editor UI (future)
 
 ### Phase 8: Polish
 - [ ] WASM compatibility testing (both live capture and offline)

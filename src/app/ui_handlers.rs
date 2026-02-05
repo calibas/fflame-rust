@@ -612,6 +612,11 @@ impl App {
                             self.audio_manager.analyze();
                             log::info!("Audio analysis complete: {} signals available",
                                 self.audio_manager.available_signals().len());
+
+                            // Import signals into SignalManager for animation access
+                            self.signal_manager.import_from_producer(&self.audio_manager);
+                            log::info!("Imported {} signals into SignalManager",
+                                self.signal_manager.len());
                         }
                         Err(e) => {
                             log::error!("Failed to load audio file: {}", e);
@@ -778,6 +783,11 @@ impl App {
                         self.audio_manager.analyze();
                         log::info!("Audio analysis complete: {} signals available",
                             self.audio_manager.available_signals().len());
+
+                        // Import signals into SignalManager for animation access
+                        self.signal_manager.import_from_producer(&self.audio_manager);
+                        log::info!("Imported {} signals into SignalManager",
+                            self.signal_manager.len());
                     }
                     Err(e) => {
                         log::error!("Failed to load audio file: {}", e);
@@ -791,7 +801,10 @@ impl App {
     fn handle_animation_seek(&mut self, ui_response: &UiResponse) {
         if ui_response.animation_seek_changed {
             // Evaluate current frame and apply values
-            // TODO: Pass SignalManager reference when available
+            // Pass SignalManager when audio feature is enabled
+            #[cfg(feature = "audio")]
+            let frame_values = self.animation_controller.evaluate_frame(Some(&self.signal_manager));
+            #[cfg(not(feature = "audio"))]
             let frame_values = self.animation_controller.evaluate_frame(None);
 
             for (path_str, json_value) in frame_values {

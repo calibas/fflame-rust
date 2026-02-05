@@ -359,6 +359,8 @@ pub struct App {
     pub(super) audio_player: crate::audio::AudioPlayer,
     #[cfg(feature = "audio")]
     pub(super) audio_capture: crate::audio::AudioCapture,
+    #[cfg(feature = "audio")]
+    pub(super) signal_manager: crate::signal::SignalManager,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -455,6 +457,8 @@ impl App {
             audio_player: crate::audio::AudioPlayer::new(),
             #[cfg(feature = "audio")]
             audio_capture: crate::audio::AudioCapture::new(),
+            #[cfg(feature = "audio")]
+            signal_manager: crate::signal::SignalManager::new(),
         };
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
