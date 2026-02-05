@@ -303,6 +303,7 @@ impl EguiLayer {
         audio_manager: &mut crate::audio::AudioManager,
         audio_player: &mut crate::audio::AudioPlayer,
         audio_capture: &mut crate::audio::AudioCapture,
+        signal_names: &[String],
     ) -> UiResponse {
         let mut raw_input = self.state.take_egui_input(window);
 
@@ -587,6 +588,7 @@ impl EguiLayer {
                 &config_manager.active_config().flame,
                 config_manager.active_config(),
                 animation_controller.current_time,
+                signal_names,
             );
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown

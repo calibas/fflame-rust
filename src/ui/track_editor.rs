@@ -488,6 +488,7 @@ pub fn render_track_editor_panel(
     flame: &Flame,
     config: &FractalConfig,
     current_time: f64,
+    signal_names: &[String],
 ) {
     if !state.track_editor_panel_open {
         return;
@@ -513,7 +514,7 @@ pub fn render_track_editor_panel(
         .default_height(450.0)
         .frame(highlight_frame)
         .show(ctx, |ui| {
-            render_track_editor_panel_content(ui, controller, state, flame, config, current_time);
+            render_track_editor_panel_content(ui, controller, state, flame, config, current_time, signal_names);
         });
 
     // Close if either X button clicked (open=false) or explicitly closed by code
@@ -528,6 +529,7 @@ fn render_track_editor_panel_content(
     flame: &Flame,
     config: &FractalConfig,
     current_time: f64,
+    signal_names: &[String],
 ) {
     let Some(ref mut animation) = controller.animation else {
         ui.label(t!("track_editor.no_animation"));
@@ -685,7 +687,7 @@ fn render_track_editor_panel_content(
             render_circular_subpanel(ui, state);
         }
         NewTrackType::Signal => {
-            render_signal_subpanel(ui, state);
+            render_signal_subpanel(ui, state, signal_names);
         }
     }
 
@@ -1009,12 +1011,34 @@ fn render_circular_subpanel(ui: &mut Ui, state: &mut TrackEditorState) {
 }
 
 /// Render signal track-specific options subpanel
-fn render_signal_subpanel(ui: &mut Ui, state: &mut TrackEditorState) {
+fn render_signal_subpanel(ui: &mut Ui, state: &mut TrackEditorState, signal_names: &[String]) {
     ui.label(t!("track_editor.signal_section"));
 
     ui.horizontal(|ui| {
         ui.label(t!("track_editor.signal_name"));
-        ui.text_edit_singleline(&mut state.signal_params.signal_name);
+
+        if signal_names.is_empty() {
+            ui.label(t!("track_editor.no_signals_available"));
+        } else {
+            let selected_text = if state.signal_params.signal_name.is_empty() {
+                t!("track_editor.select_signal").to_string()
+            } else {
+                state.signal_params.signal_name.clone()
+            };
+
+            egui::ComboBox::from_id_salt("signal_name_selector")
+                .selected_text(selected_text)
+                .show_ui(ui, |ui| {
+                    for name in signal_names {
+                        if ui.selectable_label(
+                            state.signal_params.signal_name == *name,
+                            name,
+                        ).clicked() {
+                            state.signal_params.signal_name = name.clone();
+                        }
+                    }
+                });
+        }
     });
 
     ui.horizontal(|ui| {
@@ -1031,9 +1055,6 @@ fn render_signal_subpanel(ui: &mut Ui, state: &mut TrackEditorState) {
         ui.label(t!("track_editor.signal_smoothing"));
         ui.add(egui::DragValue::new(&mut state.signal_params.smoothing).speed(0.01).range(0.0..=0.99));
     });
-
-    ui.add_space(4.0);
-    ui.label(t!("track_editor.signal_help"));
 }
 
 /// Create or update a track based on current state

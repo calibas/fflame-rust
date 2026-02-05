@@ -1133,11 +1133,12 @@ track_editor:
   # Signal track type and parameters
   type_signal: "Signal"
   signal_section: "Signal Mapping"
-  signal_name: "Signal Name:"
+  signal_name: "Signal:"
+  select_signal: "Select signal..."
+  no_signals_available: "No signals (load audio first)"
   signal_min_output: "Min Output:"
   signal_max_output: "Max Output:"
   signal_smoothing: "Smoothing:"
-  signal_help: "Enter the name of a signal from the Signal Manager"
 
   # Action buttons
   update_track: "Update Track"
