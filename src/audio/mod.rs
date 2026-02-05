@@ -31,7 +31,12 @@
 
 mod analyzer;
 mod decode;
+
+// Platform-specific audio playback implementations
+#[cfg(not(target_arch = "wasm32"))]
 mod playback;
+#[cfg(target_arch = "wasm32")]
+mod playback_wasm;
 
 // Platform-specific audio capture implementations
 #[cfg(not(target_arch = "wasm32"))]
@@ -41,7 +46,12 @@ mod capture_wasm;
 
 pub use analyzer::{AnalysisConfig, AudioAnalyzer};
 pub use decode::{AudioData, AudioDecoder, DecodeError};
+
+// Re-export platform-specific playback types
+#[cfg(not(target_arch = "wasm32"))]
 pub use playback::{AudioPlayer, PlaybackError, PlaybackState};
+#[cfg(target_arch = "wasm32")]
+pub use playback_wasm::{AudioPlayer, PlaybackError, PlaybackState};
 
 // Re-export platform-specific capture types
 #[cfg(not(target_arch = "wasm32"))]
