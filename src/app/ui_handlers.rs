@@ -601,6 +601,13 @@ impl App {
                     match self.audio_manager.load_file(&path) {
                         Ok(()) => {
                             log::info!("Loaded audio file: {}", path.display());
+
+                            // Also load into AudioPlayer for playback
+                            if let Some(audio_data) = self.audio_manager.audio_data() {
+                                self.audio_player.load(audio_data.clone());
+                                log::info!("Audio loaded into player for playback");
+                            }
+
                             // Auto-analyze after loading
                             self.audio_manager.analyze();
                             log::info!("Audio analysis complete: {} signals available",
@@ -615,9 +622,9 @@ impl App {
 
             #[cfg(target_arch = "wasm32")]
             {
-                // WASM: use native file picker
+                // WASM: use native file picker (binary variant for audio)
                 let ctx = self.egui_layer.ctx.clone();
-                super::trigger_browser_file_picker(".mp3,.wav,.flac,.ogg", ctx, "pending_audio_load_raw");
+                super::trigger_browser_file_picker_binary(".mp3,.wav,.flac,.ogg", ctx, "pending_audio_load_bytes");
             }
         }
     }
@@ -750,6 +757,32 @@ impl App {
                 // Open the Fractal Browser panel
                 use crate::ui::workspace::PanelType;
                 let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
+            }
+
+            // Check for pending audio file (binary bytes from native file picker)
+            #[cfg(feature = "audio")]
+            if let Some(bytes) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<Vec<u8>>(egui::Id::new("pending_audio_load_bytes"))
+            }) {
+                match self.audio_manager.load_bytes(&bytes) {
+                    Ok(()) => {
+                        log::info!("Loaded audio file ({} bytes)", bytes.len());
+
+                        // Also load into AudioPlayer for playback
+                        if let Some(audio_data) = self.audio_manager.audio_data() {
+                            self.audio_player.load(audio_data.clone());
+                            log::info!("Audio loaded into player for playback");
+                        }
+
+                        // Auto-analyze after loading
+                        self.audio_manager.analyze();
+                        log::info!("Audio analysis complete: {} signals available",
+                            self.audio_manager.available_signals().len());
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load audio file: {}", e);
+                    }
+                }
             }
         }
     }

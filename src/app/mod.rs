@@ -158,6 +158,106 @@ pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: 
     input.click();
 }
 
+/// Trigger a native browser file picker for binary files (WASM only)
+/// Stores raw bytes instead of converting to String (for audio, images, etc.)
+#[cfg(target_arch = "wasm32")]
+pub fn trigger_browser_file_picker_binary(accept: &str, ctx: egui::Context, result_id: &'static str) {
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::JsCast;
+    use web_sys::{HtmlInputElement, FileReader};
+
+    let window = match web_sys::window() {
+        Some(w) => w,
+        None => { log::error!("No window"); return; }
+    };
+    let document = match window.document() {
+        Some(d) => d,
+        None => { log::error!("No document"); return; }
+    };
+
+    // Create hidden file input
+    let input: HtmlInputElement = match document.create_element("input") {
+        Ok(el) => match el.dyn_into::<HtmlInputElement>() {
+            Ok(input) => input,
+            Err(_) => { log::error!("Failed to cast to input"); return; }
+        },
+        Err(_) => { log::error!("Failed to create input"); return; }
+    };
+
+    input.set_type("file");
+    input.set_accept(accept);
+    input.style().set_property("display", "none").ok();
+
+    // Append to body temporarily
+    if let Some(body) = document.body() {
+        let _ = body.append_child(&input);
+    }
+
+    // Set up change handler
+    let input_clone = input.clone();
+    let ctx_clone = ctx.clone();
+    let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+        let files = match input_clone.files() {
+            Some(f) => f,
+            None => return,
+        };
+
+        if files.length() == 0 {
+            return;
+        }
+
+        let file = match files.get(0) {
+            Some(f) => f,
+            None => return,
+        };
+
+        let reader = match FileReader::new() {
+            Ok(r) => r,
+            Err(_) => { log::error!("Failed to create FileReader"); return; }
+        };
+
+        let reader_clone = reader.clone();
+        let ctx_for_load = ctx_clone.clone();
+        let onload = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+            let result = match reader_clone.result() {
+                Ok(r) => r,
+                Err(_) => return,
+            };
+
+            let array_buffer = match result.dyn_into::<js_sys::ArrayBuffer>() {
+                Ok(ab) => ab,
+                Err(_) => return,
+            };
+
+            let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+            let mut contents = vec![0u8; uint8_array.length() as usize];
+            uint8_array.copy_to(&mut contents);
+
+            // Store raw bytes in egui temp storage for pickup
+            ctx_for_load.data_mut(|data| {
+                data.insert_temp(egui::Id::new(result_id), contents);
+            });
+            ctx_for_load.request_repaint();
+        }) as Box<dyn FnMut(_)>);
+
+        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+        onload.forget(); // Leak closure - it will be cleaned up when reader is done
+
+        let _ = reader.read_as_array_buffer(&file);
+
+        // Clean up input element
+        if let Some(parent) = input_clone.parent_node() {
+            let _ = parent.remove_child(&input_clone);
+        }
+    }) as Box<dyn FnMut(_)>);
+
+    input.set_onchange(Some(closure.as_ref().unchecked_ref()));
+    closure.forget(); // Leak closure - it will be called when file is selected
+
+    // Trigger file picker
+    input.click();
+}
+
 use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, window::Window};
 use egui_wgpu::wgpu::SurfaceError;
 use std::sync::{Arc, Mutex};
