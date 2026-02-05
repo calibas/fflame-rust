@@ -24,7 +24,6 @@ pub mod storage;
 pub mod export;
 pub mod resources;
 pub mod effects;
-#[cfg(feature = "audio")]
 pub mod audio;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
 mod shader_builder_v2;

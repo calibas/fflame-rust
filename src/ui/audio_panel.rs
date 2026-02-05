@@ -6,7 +6,6 @@
 //! - Signal monitoring (meters and values)
 //! - Audio export settings
 
-#[cfg(feature = "audio")]
 use crate::audio::{
     AudioCapture, AudioManager, AudioPlayer, CaptureState, PlaybackState,
 };
@@ -31,7 +30,6 @@ impl AudioPanelState {
     }
 
     /// Refresh the list of available audio devices
-    #[cfg(feature = "audio")]
     pub fn refresh_device_list(&mut self) {
         self.device_list = AudioCapture::list_devices();
         if self.device_list.is_empty() {
@@ -41,7 +39,6 @@ impl AudioPanelState {
 }
 
 /// Render the audio panel content
-#[cfg(feature = "audio")]
 pub fn render_audio_panel(
     ui: &mut egui::Ui,
     audio_manager: &mut AudioManager,
@@ -88,7 +85,6 @@ pub fn render_audio_panel(
 }
 
 /// Render audio file loading section
-#[cfg(feature = "audio")]
 fn render_file_section(
     ui: &mut egui::Ui,
     audio_manager: &AudioManager,
@@ -148,7 +144,6 @@ fn render_file_section(
 }
 
 /// Render playback controls
-#[cfg(feature = "audio")]
 fn render_playback_section(
     ui: &mut egui::Ui,
     audio_player: &mut AudioPlayer,
@@ -194,7 +189,6 @@ fn render_playback_section(
 }
 
 /// Render live capture controls
-#[cfg(feature = "audio")]
 fn render_live_capture_section(
     ui: &mut egui::Ui,
     audio_capture: &mut AudioCapture,
@@ -278,7 +272,6 @@ fn render_live_capture_section(
 }
 
 /// Render signal monitor section
-#[cfg(feature = "audio")]
 fn render_signal_monitor(
     ui: &mut egui::Ui,
     audio_manager: &AudioManager,
@@ -359,7 +352,6 @@ fn render_signal_monitor(
 }
 
 /// Render a single signal row in the monitor grid
-#[cfg(feature = "audio")]
 fn render_signal_row(ui: &mut egui::Ui, name: &str, value: f32, is_trigger: bool) {
     // Signal name
     ui.label(name);
@@ -389,9 +381,3 @@ fn render_signal_row(ui: &mut egui::Ui, name: &str, value: f32, is_trigger: bool
     ui.end_row();
 }
 
-/// Placeholder for when audio feature is not enabled
-#[cfg(not(feature = "audio"))]
-pub fn render_audio_panel(ui: &mut egui::Ui) {
-    ui.label(t!("audio.feature_disabled"));
-    ui.label(t!("audio.enable_feature_hint"));
-}

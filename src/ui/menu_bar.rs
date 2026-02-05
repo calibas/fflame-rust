@@ -251,13 +251,10 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::XaosEditor, ctx);
                 }
 
-                // Audio panel (optional feature)
-                #[cfg(feature = "audio")]
-                {
-                    let audio_open = workspace.panel_exists(super::workspace::PanelType::Audio);
-                    if ui.selectable_label(audio_open, t!("menu.window_audio").as_ref()).clicked() {
-                        workspace.open_floating_panel(super::workspace::PanelType::Audio, ctx);
-                    }
+                // Audio panel
+                let audio_open = workspace.panel_exists(super::workspace::PanelType::Audio);
+                if ui.selectable_label(audio_open, t!("menu.window_audio").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Audio, ctx);
                 }
 
                 ui.separator();

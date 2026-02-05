@@ -352,14 +352,10 @@ pub struct App {
     pub(super) window_fullscreen: bool,  // Window is in fullscreen mode
     pub(super) ui_hidden: bool,          // UI panels are hidden (only in fullscreen)
 
-    // Audio system (optional feature)
-    #[cfg(feature = "audio")]
+    // Audio system
     pub(super) audio_manager: crate::audio::AudioManager,
-    #[cfg(feature = "audio")]
     pub(super) audio_player: crate::audio::AudioPlayer,
-    #[cfg(feature = "audio")]
     pub(super) audio_capture: crate::audio::AudioCapture,
-    #[cfg(feature = "audio")]
     pub(super) signal_manager: crate::signal::SignalManager,
 }
 impl App {
@@ -451,13 +447,9 @@ impl App {
             was_video_exporting: false,
             window_fullscreen: false,
             ui_hidden: false,
-            #[cfg(feature = "audio")]
             audio_manager: crate::audio::AudioManager::new(),
-            #[cfg(feature = "audio")]
             audio_player: crate::audio::AudioPlayer::new(),
-            #[cfg(feature = "audio")]
             audio_capture: crate::audio::AudioCapture::new(),
-            #[cfg(feature = "audio")]
             signal_manager: crate::signal::SignalManager::new(),
         };
 
@@ -583,10 +575,7 @@ impl App {
                     let animation_playing = app.animation_controller.is_playing();
 
                     // Check if audio is playing (needs UI updates for playback progress)
-                    #[cfg(feature = "audio")]
                     let audio_playing = app.audio_player.state() == crate::audio::PlaybackState::Playing;
-                    #[cfg(not(feature = "audio"))]
-                    let audio_playing = false;
 
                     // Check if video/PNG export is in progress (needs UI updates for progress bar)
                     let is_exporting = app.animation_export_progress.lock()
@@ -798,11 +787,8 @@ impl App {
             &export_progress,
             &png_export_progress,
             self.ui_hidden,
-            #[cfg(feature = "audio")]
             &mut self.audio_manager,
-            #[cfg(feature = "audio")]
             &mut self.audio_player,
-            #[cfg(feature = "audio")]
             &mut self.audio_capture,
         );
 

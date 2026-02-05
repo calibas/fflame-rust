@@ -588,8 +588,7 @@ impl App {
             }
         }
 
-        // Handle audio file loading (optional feature)
-        #[cfg(feature = "audio")]
+        // Handle audio file loading
         if ui_response.load_audio_file {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -765,7 +764,6 @@ impl App {
             }
 
             // Check for pending audio file (binary bytes from native file picker)
-            #[cfg(feature = "audio")]
             if let Some(bytes) = self.egui_layer.ctx.data_mut(|data| {
                 data.remove_temp::<Vec<u8>>(egui::Id::new("pending_audio_load_bytes"))
             }) {
@@ -801,11 +799,7 @@ impl App {
     fn handle_animation_seek(&mut self, ui_response: &UiResponse) {
         if ui_response.animation_seek_changed {
             // Evaluate current frame and apply values
-            // Pass SignalManager when audio feature is enabled
-            #[cfg(feature = "audio")]
             let frame_values = self.animation_controller.evaluate_frame(Some(&self.signal_manager));
-            #[cfg(not(feature = "audio"))]
-            let frame_values = self.animation_controller.evaluate_frame(None);
 
             for (path_str, json_value) in frame_values {
                 if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {

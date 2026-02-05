@@ -116,16 +116,11 @@ pub struct PanelContext<'a> {
     // Xaos editor state
     pub xaos_editor_state: &'a mut super::xaos_editor::XaosEditorState,
 
-    // Audio panel state (optional feature)
-    #[cfg(feature = "audio")]
+    // Audio panel state
     pub audio_manager: &'a mut crate::audio::AudioManager,
-    #[cfg(feature = "audio")]
     pub audio_player: &'a mut crate::audio::AudioPlayer,
-    #[cfg(feature = "audio")]
     pub audio_capture: &'a mut crate::audio::AudioCapture,
-    #[cfg(feature = "audio")]
     pub audio_panel_state: &'a mut super::audio_panel::AudioPanelState,
-    #[cfg(feature = "audio")]
     pub load_audio_file: &'a mut bool,
 }
 
@@ -203,7 +198,6 @@ impl<'a> TabViewer for PanelViewer<'a> {
             PanelType::XaosEditor => {
                 self.render_xaos_editor_panel(ui);
             }
-            #[cfg(feature = "audio")]
             PanelType::Audio => {
                 self.render_audio_panel(ui);
             }
@@ -1038,7 +1032,6 @@ impl<'a> PanelViewer<'a> {
     }
 
     /// Render Audio panel (audio-reactive animations)
-    #[cfg(feature = "audio")]
     fn render_audio_panel(&mut self, ui: &mut egui::Ui) {
         super::audio_panel::render_audio_panel(
             ui,
