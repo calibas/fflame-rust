@@ -578,6 +578,12 @@ impl App {
                     // Check if animation is playing (needs continuous redraws)
                     let animation_playing = app.animation_controller.is_playing();
 
+                    // Check if audio is playing (needs UI updates for playback progress)
+                    #[cfg(feature = "audio")]
+                    let audio_playing = app.audio_player.state() == crate::audio::PlaybackState::Playing;
+                    #[cfg(not(feature = "audio"))]
+                    let audio_playing = false;
+
                     // Check if video/PNG export is in progress (needs UI updates for progress bar)
                     let is_exporting = app.animation_export_progress.lock()
                         .map(|p| p.is_exporting)
@@ -597,8 +603,8 @@ impl App {
 
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
-                    // During export, keep redrawing to update progress bar
-                    if is_rendering || animation_playing || ui_active || is_exporting {
+                    // During export or audio playback, keep redrawing to update progress bar
+                    if is_rendering || animation_playing || audio_playing || ui_active || is_exporting {
                         // Actively rendering fractals OR UI is active (for tooltips, hover effects)
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
