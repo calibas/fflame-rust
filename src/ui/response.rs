@@ -71,8 +71,7 @@ pub struct UiResponse {
     // Generated batch of configs from random generator (opens in File Browser)
     pub generated_batch: Option<Vec<crate::config::FractalConfig>>,
 
-    // Audio file load requested (optional feature)
-    #[cfg(feature = "audio")]
+    // Audio file load requested
     pub load_audio_file: bool,
 }
 
@@ -115,7 +114,6 @@ impl Default for UiResponse {
             path_filters_changed: None,
             generated_flame: None,
             generated_batch: None,
-            #[cfg(feature = "audio")]
             load_audio_file: false,
         }
     }

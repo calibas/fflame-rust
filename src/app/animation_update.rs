@@ -91,11 +91,7 @@ impl App {
 
     /// Apply animated values from current frame to ConfigManager.
     fn apply_animated_values(&mut self) {
-        // Pass SignalManager when audio feature is enabled
-        #[cfg(feature = "audio")]
         let frame_values = self.animation_controller.evaluate_frame(Some(&self.signal_manager));
-        #[cfg(not(feature = "audio"))]
-        let frame_values = self.animation_controller.evaluate_frame(None);
 
         for (path_str, json_value) in frame_values {
             // Parse the string key back to ConfigPath
