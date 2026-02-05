@@ -38,6 +38,9 @@ pub struct AudioPlayer {
     /// Whether playback should continue
     playing: Arc<AtomicBool>,
 
+    /// Set to true when playback reaches the end
+    ended: Arc<AtomicBool>,
+
     /// Audio output stream (kept alive while playing)
     _stream: Option<Stream>,
 
@@ -56,6 +59,7 @@ impl AudioPlayer {
             state: PlaybackState::Stopped,
             position: Arc::new(AtomicU64::new(0)),
             playing: Arc::new(AtomicBool::new(false)),
+            ended: Arc::new(AtomicBool::new(false)),
             _stream: None,
             sample_rate: 44100,
             channels: 2,
@@ -77,14 +81,27 @@ impl AudioPlayer {
     }
 
     /// Get the current playback state.
-    pub fn state(&self) -> PlaybackState {
+    pub fn state(&mut self) -> PlaybackState {
+        // Check if playback ended naturally
+        if self.state == PlaybackState::Playing && self.ended.load(Ordering::SeqCst) {
+            self.state = PlaybackState::Stopped;
+            self.playing.store(false, Ordering::SeqCst);
+            self.position.store(0, Ordering::SeqCst);
+            self._stream = None;
+            log::info!("Playback ended");
+        }
         self.state
     }
 
     /// Get the current playback position in seconds.
     pub fn position_seconds(&self) -> f64 {
-        let pos_samples = self.position.load(Ordering::SeqCst);
-        pos_samples as f64 / self.sample_rate as f64 / self.channels as f64
+        // If ended, return 0 (will be at start for next play)
+        if self.ended.load(Ordering::SeqCst) {
+            return 0.0;
+        }
+        // pos is in frames (not interleaved samples)
+        let pos_frames = self.position.load(Ordering::SeqCst);
+        pos_frames as f64 / self.sample_rate as f64
     }
 
     /// Get the duration of loaded audio in seconds.
@@ -101,6 +118,9 @@ impl AudioPlayer {
         if self.state == PlaybackState::Playing {
             return Ok(()); // Already playing
         }
+
+        // Reset ended flag
+        self.ended.store(false, Ordering::SeqCst);
 
         // If we were paused, just resume
         if self.state == PlaybackState::Paused && self._stream.is_some() {
@@ -126,6 +146,7 @@ impl AudioPlayer {
     /// Stop playback and reset position.
     pub fn stop(&mut self) {
         self.playing.store(false, Ordering::SeqCst);
+        self.ended.store(false, Ordering::SeqCst);
         self.position.store(0, Ordering::SeqCst);
         self._stream = None;
         self.state = PlaybackState::Stopped;
@@ -133,13 +154,14 @@ impl AudioPlayer {
 
     /// Seek to a specific time in seconds.
     pub fn seek(&mut self, time: f64) {
-        let sample_pos = (time * self.sample_rate as f64 * self.channels as f64) as u64;
-        let max_pos = self
+        // pos is in frames (not interleaved samples)
+        let frame_pos = (time * self.sample_rate as f64) as u64;
+        let max_frames = self
             .audio_data
             .as_ref()
-            .map(|d| d.samples.len() as u64)
+            .map(|d| (d.samples.len() / d.channels as usize) as u64)
             .unwrap_or(0);
-        self.position.store(sample_pos.min(max_pos), Ordering::SeqCst);
+        self.position.store(frame_pos.min(max_frames), Ordering::SeqCst);
     }
 
     /// Sync playback position to animation time.
@@ -176,6 +198,8 @@ impl AudioPlayer {
         // Mark as playing
         playing.store(true, Ordering::SeqCst);
 
+        let ended = self.ended.clone();
+
         let stream = match supported_config.sample_format() {
             SampleFormat::F32 => self.build_stream::<f32>(
                 &device,
@@ -183,6 +207,7 @@ impl AudioPlayer {
                 audio_data,
                 position,
                 playing,
+                ended,
                 channels,
                 source_rate,
             )?,
@@ -192,6 +217,7 @@ impl AudioPlayer {
                 audio_data,
                 position,
                 playing,
+                ended,
                 channels,
                 source_rate,
             )?,
@@ -201,6 +227,7 @@ impl AudioPlayer {
                 audio_data,
                 position,
                 playing,
+                ended,
                 channels,
                 source_rate,
             )?,
@@ -223,6 +250,7 @@ impl AudioPlayer {
         audio_data: Arc<AudioData>,
         position: Arc<AtomicU64>,
         playing: Arc<AtomicBool>,
+        ended: Arc<AtomicBool>,
         source_channels: usize,
         source_rate: u32,
     ) -> Result<Stream, PlaybackError> {
@@ -244,27 +272,33 @@ impl AudioPlayer {
                         return;
                     }
 
+                    // pos is in output frames
                     let mut pos = position.load(Ordering::SeqCst) as usize;
                     let samples = &audio_data.samples;
-                    let total_samples = samples.len();
+                    let total_source_frames = samples.len() / source_channels;
 
                     for frame in data.chunks_mut(output_channels) {
-                        if pos >= total_samples {
-                            // End of audio - output silence
+                        // Calculate which source frame to read (with resampling)
+                        let source_frame = (pos as f64 * rate_ratio) as usize;
+
+                        if source_frame >= total_source_frames {
+                            // End of audio - output silence and signal ended
                             for sample in frame.iter_mut() {
                                 *sample = T::EQUILIBRIUM;
+                            }
+                            // Only set ended once (when we first reach the end)
+                            if !ended.load(Ordering::SeqCst) {
+                                ended.store(true, Ordering::SeqCst);
                             }
                             continue;
                         }
 
-                        // Simple sample rate conversion (nearest neighbor)
-                        let source_frame = (pos as f64 * rate_ratio) as usize;
                         let source_frame_start = source_frame * source_channels;
 
                         for (ch, sample) in frame.iter_mut().enumerate() {
                             let source_ch = ch % source_channels;
                             let idx = source_frame_start + source_ch;
-                            let value = if idx < total_samples {
+                            let value = if idx < samples.len() {
                                 samples[idx]
                             } else {
                                 0.0
@@ -272,7 +306,7 @@ impl AudioPlayer {
                             *sample = T::from_sample(value);
                         }
 
-                        pos += source_channels;
+                        pos += 1; // Advance one output frame
                     }
 
                     position.store(pos as u64, Ordering::SeqCst);
