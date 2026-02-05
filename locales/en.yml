@@ -909,6 +909,10 @@ animation_panel:
   loop_repeat: "Loop (Repeat)"
   loop_pingpong: "Ping-Pong (Bounce)"
 
+  # Audio sync
+  sync_audio: "Sync Audio"
+  sync_audio_tooltip: "Play loaded audio in sync with animation timeline"
+
   # Quality mode
   quality: "Quality:"
   quality_responsive: "Responsive (Fast)"
