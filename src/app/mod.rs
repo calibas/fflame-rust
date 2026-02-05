@@ -762,6 +762,9 @@ impl App {
             .map(|p| p.clone())
             .unwrap_or_default();
 
+        // Get signal names for track editor dropdown
+        let signal_names: Vec<String> = self.signal_manager.signal_names().iter().map(|s| s.to_string()).collect();
+
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -790,6 +793,7 @@ impl App {
             &mut self.audio_manager,
             &mut self.audio_player,
             &mut self.audio_capture,
+            &signal_names,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
