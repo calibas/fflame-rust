@@ -265,6 +265,14 @@ fn render_live_capture_section(
         ui.label(status_text.as_ref());
     });
 
+    // Show error details when capture failed (WASM only — Error state doesn't exist on desktop)
+    #[cfg(target_arch = "wasm32")]
+    if audio_capture.state() == CaptureState::Error {
+        if let Some(msg) = audio_capture.error_message() {
+            ui.colored_label(egui::Color32::from_rgb(255, 120, 120), t!(msg));
+        }
+    }
+
     // Level meter when capturing
     if audio_capture.is_capturing() {
         let amplitude = audio_capture.amplitude();

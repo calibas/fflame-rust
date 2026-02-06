@@ -44,3 +44,6 @@ Fractal renderers:
 - [CHAOS GAME](https://store.steampowered.com/app/1569980/CHAOS_GAME/)
 - [Fractal Shark](https://github.com/mattsaccount364/FractalShark)
 - [Fraqcel](https://fraqcel.weebly.com/)
+- [ManpWIN](https://github.com/PaulTheLionHeart/manpwin)
+- [Infinity Fractal](https://www.ruinawakens.com/infinityfractal.php)
+- [XaoS](https://github.com/xaos-project/XaoS)
