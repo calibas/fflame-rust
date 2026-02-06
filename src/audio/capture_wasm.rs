@@ -13,6 +13,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{AudioContext, AudioContextOptions, MediaStream, ScriptProcessorNode};
 
+use crate::signal::{Signal, SignalProducer};
+
 /// Live audio capture state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureState {
@@ -572,6 +574,62 @@ impl AudioCapture {
             "live_onset" => Some(self.onset()),
             _ => None,
         }
+    }
+
+    /// Create a signal producer bridge that shares atomic signals with this capture.
+    pub fn create_producer(&self) -> Box<dyn SignalProducer> {
+        Box::new(LiveSignalBridge {
+            signals: self.signals.clone(),
+            active: self.active.clone(),
+        })
+    }
+}
+
+/// Lightweight bridge for sharing live capture signals with SignalManager.
+struct LiveSignalBridge {
+    signals: Arc<AtomicSignals>,
+    active: Arc<AtomicBool>,
+}
+
+// SAFETY: On WASM, everything is single-threaded. The Arc<AtomicSignals> and Arc<AtomicBool>
+// are inherently Send+Sync via their atomic internals.
+unsafe impl Send for LiveSignalBridge {}
+
+impl SignalProducer for LiveSignalBridge {
+    fn signal_names(&self) -> Vec<String> {
+        vec![
+            "live_amplitude".to_string(),
+            "live_energy_low".to_string(),
+            "live_energy_mid".to_string(),
+            "live_energy_high".to_string(),
+            "live_spectral_centroid".to_string(),
+            "live_spectral_flux".to_string(),
+            "live_onset".to_string(),
+        ]
+    }
+
+    fn get_live_value(&self, name: &str) -> Option<f32> {
+        if !self.active.load(Ordering::Relaxed) {
+            return None;
+        }
+        match name {
+            "live_amplitude" => Some(self.signals.get_amplitude()),
+            "live_energy_low" => Some(self.signals.get_energy_low()),
+            "live_energy_mid" => Some(self.signals.get_energy_mid()),
+            "live_energy_high" => Some(self.signals.get_energy_high()),
+            "live_spectral_centroid" => Some(self.signals.get_spectral_centroid()),
+            "live_spectral_flux" => Some(self.signals.get_spectral_flux()),
+            "live_onset" => Some(self.signals.get_onset()),
+            _ => None,
+        }
+    }
+
+    fn get_signal(&self, _name: &str) -> Option<Signal> {
+        None
+    }
+
+    fn is_active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
     }
 }
 

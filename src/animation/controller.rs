@@ -288,7 +288,8 @@ impl AnimationController {
         track_idx: Option<usize>,
     ) -> Option<serde_json::Value> {
         let manager = signal_manager?;
-        let raw_value = manager.get_value_at(signal_name, time)?;
+        // Use get_live_value which checks live producers first, then stored signals
+        let raw_value = manager.get_live_value(signal_name, time)?;
 
         // Apply smoothing if enabled
         let value = if smoothing > 0.0 && track_idx.is_some() {
