@@ -24,6 +24,9 @@ pub struct AnimationController {
     /// Key: (track_index, signal_name), Value: smoothed value
     signal_smoothed: std::collections::HashMap<(usize, String), f32>,
 
+    /// Delta time from the most recent update() call (for frame-rate independent smoothing)
+    last_delta_time: f64,
+
     /// Whether to sync audio playback with animation timeline
     pub sync_audio: bool,
 }
@@ -38,6 +41,7 @@ impl AnimationController {
             speed: 1.0,
             direction: 1.0,
             signal_smoothed: std::collections::HashMap::new(),
+            last_delta_time: 1.0 / 60.0,
             sync_audio: false,
         }
     }
@@ -90,6 +94,7 @@ impl AnimationController {
             return;
         };
 
+        self.last_delta_time = delta_time;
         self.current_time += delta_time * self.speed * self.direction;
 
         // Handle loop modes
@@ -290,9 +295,13 @@ impl AnimationController {
             let key = (track_idx.unwrap(), signal_name.to_string());
             let prev = self.signal_smoothed.get(&key).copied().unwrap_or(raw_value);
 
-            // Exponential smoothing: new = prev + alpha * (raw - prev)
-            // Higher smoothing = lower alpha = more smoothing
-            let alpha = 1.0 - smoothing.clamp(0.0, 0.99) as f32;
+            // Frame-rate independent exponential smoothing:
+            // alpha = 1 - smoothing^(dt / reference_dt)
+            // At 60fps (reference), smoothing=0.9 gives alpha=0.1 (same as before)
+            // At 30fps, alpha increases so the result matches what 60fps would produce
+            let reference_dt: f64 = 1.0 / 60.0;
+            let dt = self.last_delta_time.max(0.001); // clamp to avoid division issues
+            let alpha = (1.0 - smoothing.clamp(0.0, 0.99).powf(dt / reference_dt)) as f32;
             let smoothed = prev + alpha * (raw_value - prev);
             self.signal_smoothed.insert(key, smoothed);
             smoothed

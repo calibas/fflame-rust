@@ -815,12 +815,26 @@ impl App {
             // Note: Overwrite mode is handled by update_overwrite_mode based on recorded actions
             // This ensures tone-mapping-only changes don't incorrectly enable overwrite mode
             self.flame = self.config_manager.active_config().flame.clone();
+
+            // Pause audio during scrubbing to avoid scratching artifacts (desktop)
+            // and AudioBufferSourceNode recreation storm (WASM)
+            if self.animation_controller.sync_audio && self.audio_player.has_audio() {
+                self.audio_player.pause();
+            }
         }
 
         // Only reset accumulation when drag stops or on discrete actions (frame step, click to seek)
         // This provides smooth preview during scrubber drag, then clean rebuild when released
         if ui_response.animation_seek_drag_stopped {
             self.config_manager.request_reset();
+
+            // Seek audio to final position and resume playback after scrub finishes
+            if self.animation_controller.sync_audio && self.audio_player.has_audio() {
+                self.audio_player.seek(self.animation_controller.current_time);
+                if self.animation_controller.is_playing() {
+                    let _ = self.audio_player.play();
+                }
+            }
         }
     }
 
