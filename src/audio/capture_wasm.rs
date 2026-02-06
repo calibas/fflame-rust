@@ -271,6 +271,9 @@ impl RealtimeAnalyzer {
 struct WasmCaptureContext {
     audio_context: AudioContext,
     processor_node: Option<ScriptProcessorNode>,
+    // Keep source_node and stream alive to prevent browser GC from collecting them
+    _source_node: Option<web_sys::MediaStreamAudioSourceNode>,
+    _stream: Option<MediaStream>,
     _closure: Option<Closure<dyn FnMut(web_sys::AudioProcessingEvent)>>,
 }
 
@@ -395,6 +398,12 @@ impl AudioCapture {
                 }
             };
 
+            // Resume AudioContext - browsers create it in "suspended" state due to autoplay policy.
+            // Without this, onaudioprocess callbacks will never fire.
+            if audio_context.state() == web_sys::AudioContextState::Suspended {
+                let _ = audio_context.resume();
+            }
+
             let sample_rate = audio_context.sample_rate();
 
             // Create source node from media stream
@@ -470,10 +479,12 @@ impl AudioCapture {
             // Mark as active
             active.store(true, Ordering::SeqCst);
 
-            // Store context and closure
+            // Store context, nodes, and closures to prevent browser GC
             *context_holder.borrow_mut() = Some(WasmCaptureContext {
                 audio_context,
                 processor_node: Some(processor_node),
+                _source_node: Some(source_node),
+                _stream: Some(stream),
                 _closure: Some(onaudioprocess),
             });
 
