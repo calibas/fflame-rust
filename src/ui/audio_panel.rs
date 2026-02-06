@@ -194,6 +194,11 @@ fn render_live_capture_section(
     audio_capture: &mut AudioCapture,
     panel_state: &mut AudioPanelState,
 ) {
+    // Auto-populate device list on first render
+    if panel_state.device_list.is_empty() {
+        panel_state.refresh_device_list();
+    }
+
     // Refresh device list button
     ui.horizontal(|ui| {
         if ui.button(t!("audio.refresh_devices")).clicked() {

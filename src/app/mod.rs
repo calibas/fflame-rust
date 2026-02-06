@@ -453,6 +453,10 @@ impl App {
             signal_manager: crate::signal::SignalManager::new(),
         };
 
+        // Register live audio capture as a signal producer so live_* signals
+        // appear in the animation track signal dropdown
+        app.signal_manager.add_producer(app.audio_capture.create_producer());
+
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
         app.import_config(initial_config);
 
@@ -763,7 +767,7 @@ impl App {
             .unwrap_or_default();
 
         // Get signal names for track editor dropdown
-        let signal_names: Vec<String> = self.signal_manager.signal_names().iter().map(|s| s.to_string()).collect();
+        let signal_names: Vec<String> = self.signal_manager.signal_names();
 
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,

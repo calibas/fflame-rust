@@ -10,6 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::f32::consts::PI;
 
+use crate::signal::{Signal, SignalProducer};
+
 /// Live audio capture state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureState {
@@ -249,6 +251,9 @@ impl RealtimeAnalyzer {
     }
 }
 
+/// Special device name for system audio loopback capture
+const LOOPBACK_DEVICE_NAME: &str = "System Output (Loopback)";
+
 /// Live audio capture controller
 ///
 /// Captures audio from input device and provides real-time signals.
@@ -301,16 +306,20 @@ impl AudioCapture {
         self.state == CaptureState::Capturing
     }
 
-    /// List available input devices.
+    /// List available capture devices (input devices + system output loopback).
     pub fn list_devices() -> Vec<String> {
         let host = cpal::default_host();
-        host.input_devices()
-            .map(|devices| {
-                devices
-                    .filter_map(|d| d.name().ok())
-                    .collect()
-            })
-            .unwrap_or_default()
+        let mut devices: Vec<String> = host
+            .input_devices()
+            .map(|devices| devices.filter_map(|d| d.name().ok()).collect())
+            .unwrap_or_default();
+
+        // Add system output (loopback) if an output device is available
+        if host.default_output_device().is_some() {
+            devices.push(LOOPBACK_DEVICE_NAME.to_string());
+        }
+
+        devices
     }
 
     /// Start capturing from the default input device.
@@ -319,6 +328,8 @@ impl AudioCapture {
     }
 
     /// Start capturing from a specific device by name.
+    ///
+    /// If device_name is the loopback device name, captures from the default output device.
     pub fn start_device(&mut self, device_name: Option<&str>) -> Result<(), CaptureError> {
         if self.state == CaptureState::Capturing {
             return Ok(()); // Already capturing
@@ -326,7 +337,12 @@ impl AudioCapture {
 
         let host = cpal::default_host();
 
-        let device = if let Some(name) = device_name {
+        let is_loopback = device_name == Some(LOOPBACK_DEVICE_NAME);
+
+        let device = if is_loopback {
+            host.default_output_device()
+                .ok_or(CaptureError::NoInputDevice)?
+        } else if let Some(name) = device_name {
             host.input_devices()
                 .map_err(|e| CaptureError::DeviceError(e.to_string()))?
                 .find(|d| d.name().ok().as_deref() == Some(name))
@@ -336,9 +352,15 @@ impl AudioCapture {
                 .ok_or(CaptureError::NoInputDevice)?
         };
 
-        let supported_config = device
-            .default_input_config()
-            .map_err(|e| CaptureError::ConfigError(e.to_string()))?;
+        let supported_config = if is_loopback {
+            device
+                .default_output_config()
+                .map_err(|e| CaptureError::ConfigError(e.to_string()))?
+        } else {
+            device
+                .default_input_config()
+                .map_err(|e| CaptureError::ConfigError(e.to_string()))?
+        };
 
         self.sample_rate = supported_config.sample_rate().0;
 
@@ -598,6 +620,64 @@ impl AudioCapture {
             "live_onset" => Some(self.onset()),
             _ => None,
         }
+    }
+
+    /// Create a signal producer bridge that shares atomic signals with this capture.
+    ///
+    /// The bridge can be registered with SignalManager so live capture signals
+    /// appear in the animation track signal dropdown.
+    pub fn create_producer(&self) -> Box<dyn SignalProducer> {
+        Box::new(LiveSignalBridge {
+            signals: self.signals.clone(),
+            active: self.active.clone(),
+        })
+    }
+}
+
+/// Lightweight bridge for sharing live capture signals with SignalManager.
+///
+/// Shares the same atomic signals as AudioCapture via Arc, allowing
+/// SignalManager to read live values without owning the capture stream.
+struct LiveSignalBridge {
+    signals: Arc<AtomicSignals>,
+    active: Arc<AtomicBool>,
+}
+
+impl SignalProducer for LiveSignalBridge {
+    fn signal_names(&self) -> Vec<String> {
+        vec![
+            "live_amplitude".to_string(),
+            "live_energy_low".to_string(),
+            "live_energy_mid".to_string(),
+            "live_energy_high".to_string(),
+            "live_spectral_centroid".to_string(),
+            "live_spectral_flux".to_string(),
+            "live_onset".to_string(),
+        ]
+    }
+
+    fn get_live_value(&self, name: &str) -> Option<f32> {
+        if !self.active.load(Ordering::Relaxed) {
+            return None;
+        }
+        match name {
+            "live_amplitude" => Some(self.signals.get_amplitude()),
+            "live_energy_low" => Some(self.signals.get_energy_low()),
+            "live_energy_mid" => Some(self.signals.get_energy_mid()),
+            "live_energy_high" => Some(self.signals.get_energy_high()),
+            "live_spectral_centroid" => Some(self.signals.get_spectral_centroid()),
+            "live_spectral_flux" => Some(self.signals.get_spectral_flux()),
+            "live_onset" => Some(self.signals.get_onset()),
+            _ => None,
+        }
+    }
+
+    fn get_signal(&self, _name: &str) -> Option<Signal> {
+        None // Live-only, no buffered signals
+    }
+
+    fn is_active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
     }
 }
 

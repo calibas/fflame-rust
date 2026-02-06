@@ -355,7 +355,6 @@ pub struct SignalManager {
     signals: HashMap<String, Signal>,
 
     /// Active live signal producers
-    #[allow(dead_code)]
     live_producers: Vec<Box<dyn SignalProducer>>,
 }
 
@@ -388,9 +387,17 @@ impl SignalManager {
         self.signals.remove(name)
     }
 
-    /// Get all signal names
-    pub fn signal_names(&self) -> Vec<&str> {
-        self.signals.keys().map(|s| s.as_str()).collect()
+    /// Get all signal names (stored signals + live producer signals)
+    pub fn signal_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.signals.keys().cloned().collect();
+        for producer in &self.live_producers {
+            for name in producer.signal_names() {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        names
     }
 
     /// Get number of loaded signals
