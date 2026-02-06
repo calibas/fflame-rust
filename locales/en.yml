@@ -1526,6 +1526,7 @@ audio:
   requesting_permission: "Requesting permission..."
   capture_error: "Capture error"
   level: "Level:"
+  not_supported: "Screen/tab audio not supported in this browser. Chrome is recommended."
 
   # Signal monitor
   show_all_signals: "Show all signals"
