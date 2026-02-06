@@ -239,8 +239,9 @@ impl AudioPlayer {
             // Calculate current position before stopping
             self.start_offset = self.position_seconds();
 
-            // Stop the source node
+            // Detach onended callback before stopping to prevent stale async callback
             if let Some(ref source) = self.source_node {
+                source.set_onended(None);
                 let _ = source.stop();
             }
             self.source_node = None;
@@ -253,8 +254,9 @@ impl AudioPlayer {
 
     /// Stop playback and reset position.
     pub fn stop(&mut self) {
-        // Stop the source node if playing
+        // Detach onended callback before stopping to prevent stale async callback
         if let Some(ref source) = self.source_node {
+            source.set_onended(None);
             let _ = source.stop();
         }
         self.source_node = None;
@@ -272,8 +274,10 @@ impl AudioPlayer {
         let was_playing = self.state == PlaybackState::Playing;
 
         if was_playing {
-            // Stop current playback
+            // Detach onended callback before stopping to prevent the old source's
+            // async callback from setting ended=true after the new source starts
             if let Some(ref source) = self.source_node {
+                source.set_onended(None);
                 let _ = source.stop();
             }
             self.source_node = None;

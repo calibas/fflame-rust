@@ -44,8 +44,11 @@ pub struct AudioPlayer {
     /// Audio output stream (kept alive while playing)
     _stream: Option<Stream>,
 
-    /// Sample rate of loaded audio
+    /// Sample rate of loaded audio (source)
     sample_rate: u32,
+
+    /// Sample rate of output device (set when stream is created)
+    output_sample_rate: u32,
 
     /// Number of channels
     channels: u16,
@@ -62,6 +65,7 @@ impl AudioPlayer {
             ended: Arc::new(AtomicBool::new(false)),
             _stream: None,
             sample_rate: 44100,
+            output_sample_rate: 44100,
             channels: 2,
         }
     }
@@ -99,9 +103,9 @@ impl AudioPlayer {
         if self.ended.load(Ordering::SeqCst) {
             return 0.0;
         }
-        // pos is in frames (not interleaved samples)
+        // pos is in output frames (device sample rate), not source frames
         let pos_frames = self.position.load(Ordering::SeqCst);
-        pos_frames as f64 / self.sample_rate as f64
+        pos_frames as f64 / self.output_sample_rate as f64
     }
 
     /// Get the duration of loaded audio in seconds.
@@ -154,14 +158,17 @@ impl AudioPlayer {
 
     /// Seek to a specific time in seconds.
     pub fn seek(&mut self, time: f64) {
-        // pos is in frames (not interleaved samples)
-        let frame_pos = (time * self.sample_rate as f64) as u64;
-        let max_frames = self
+        // pos is in output frames (device sample rate)
+        let frame_pos = (time * self.output_sample_rate as f64) as u64;
+        // max_frames in output frame space
+        let rate_ratio = self.sample_rate as f64 / self.output_sample_rate as f64;
+        let max_source_frames = self
             .audio_data
             .as_ref()
-            .map(|d| (d.samples.len() / d.channels as usize) as u64)
-            .unwrap_or(0);
-        self.position.store(frame_pos.min(max_frames), Ordering::SeqCst);
+            .map(|d| (d.samples.len() / d.channels as usize) as f64)
+            .unwrap_or(0.0);
+        let max_output_frames = (max_source_frames / rate_ratio) as u64;
+        self.position.store(frame_pos.min(max_output_frames), Ordering::SeqCst);
     }
 
     /// Sync playback position to animation time.
@@ -188,6 +195,9 @@ impl AudioPlayer {
         let supported_config = device
             .default_output_config()
             .map_err(|e| PlaybackError::ConfigError(e.to_string()))?;
+
+        // Store the actual output device sample rate for position tracking
+        self.output_sample_rate = supported_config.sample_rate().0;
 
         let audio_data = self.audio_data.clone().unwrap();
         let position = self.position.clone();
@@ -363,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_player_creation() {
-        let player = AudioPlayer::new();
+        let mut player = AudioPlayer::new();
         assert!(!player.has_audio());
         assert_eq!(player.state(), PlaybackState::Stopped);
         assert_eq!(player.position_seconds(), 0.0);
