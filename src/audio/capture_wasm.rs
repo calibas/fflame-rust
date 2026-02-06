@@ -145,7 +145,9 @@ struct RealtimeAnalyzer {
     prev_magnitudes: Vec<f32>,
     onset_threshold: f32,
     max_amplitude: f32,
-    max_energy: f32,
+    max_energy_low: f32,
+    max_energy_mid: f32,
+    max_energy_high: f32,
     max_flux: f32,
 }
 
@@ -165,7 +167,9 @@ impl RealtimeAnalyzer {
             prev_magnitudes: vec![0.0; fft_size / 2 + 1],
             onset_threshold,
             max_amplitude: 0.1,
-            max_energy: 0.1,
+            max_energy_low: 0.1,
+            max_energy_mid: 0.1,
+            max_energy_high: 0.1,
             max_flux: 0.1,
         }
     }
@@ -208,9 +212,11 @@ impl RealtimeAnalyzer {
             .map(|c| c.norm())
             .collect();
 
-        // Compute energy bands
-        let low_end = num_bins / 6;
-        let mid_end = num_bins / 2;
+        // Compute energy bands using perceptual frequency boundaries
+        // Low: 20-250 Hz (kick, bass), Mid: 250-4000 Hz (vocals, snare), High: 4000+ Hz (cymbals, air)
+        let freq_per_bin = self.sample_rate / self.fft_size as f32;
+        let low_end = ((250.0 / freq_per_bin) as usize).clamp(1, num_bins - 2);
+        let mid_end = ((4000.0 / freq_per_bin) as usize).clamp(low_end + 1, num_bins - 1);
 
         let low_energy: f32 = magnitudes[..low_end]
             .iter()
@@ -224,12 +230,14 @@ impl RealtimeAnalyzer {
             .sqrt();
         let high_energy: f32 = magnitudes[mid_end..].iter().map(|m| m * m).sum::<f32>().sqrt();
 
-        let total_energy = low_energy + mid_energy + high_energy + 0.0001;
-        self.max_energy = self.max_energy.max(total_energy) * 0.999 + total_energy * 0.001;
+        // Per-band independent normalization via EMA max tracking
+        self.max_energy_low = self.max_energy_low.max(low_energy) * 0.999 + low_energy * 0.001;
+        self.max_energy_mid = self.max_energy_mid.max(mid_energy) * 0.999 + mid_energy * 0.001;
+        self.max_energy_high = self.max_energy_high.max(high_energy) * 0.999 + high_energy * 0.001;
 
-        signals.set_energy_low((low_energy / self.max_energy * 3.0).clamp(0.0, 1.0));
-        signals.set_energy_mid((mid_energy / self.max_energy * 3.0).clamp(0.0, 1.0));
-        signals.set_energy_high((high_energy / self.max_energy * 3.0).clamp(0.0, 1.0));
+        signals.set_energy_low((low_energy / self.max_energy_low).clamp(0.0, 1.0));
+        signals.set_energy_mid((mid_energy / self.max_energy_mid).clamp(0.0, 1.0));
+        signals.set_energy_high((high_energy / self.max_energy_high).clamp(0.0, 1.0));
 
         // Spectral centroid
         let freq_resolution = self.sample_rate / self.fft_size as f32;
