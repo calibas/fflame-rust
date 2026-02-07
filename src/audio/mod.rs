@@ -38,6 +38,9 @@ mod playback;
 #[cfg(target_arch = "wasm32")]
 mod playback_wasm;
 
+// Shared audio capture types (always compiled)
+mod capture_common;
+
 // Platform-specific audio capture implementations
 #[cfg(not(target_arch = "wasm32"))]
 mod capture_native;
@@ -53,11 +56,14 @@ pub use playback::{AudioPlayer, PlaybackError, PlaybackState};
 #[cfg(target_arch = "wasm32")]
 pub use playback_wasm::{AudioPlayer, PlaybackError, PlaybackState};
 
-// Re-export platform-specific capture types
+// Re-export shared capture types (from capture_common)
+pub use capture_common::{AtomicSignals, CaptureConfig, CaptureError, CaptureState};
+
+// Re-export platform-specific AudioCapture
 #[cfg(not(target_arch = "wasm32"))]
-pub use capture_native::{AtomicSignals, AudioCapture, CaptureConfig, CaptureError, CaptureState};
+pub use capture_native::AudioCapture;
 #[cfg(target_arch = "wasm32")]
-pub use capture_wasm::{AtomicSignals, AudioCapture, CaptureConfig, CaptureError, CaptureState};
+pub use capture_wasm::AudioCapture;
 
 use crate::signal::{Signal, SignalProducer};
 use std::collections::HashMap;

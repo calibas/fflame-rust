@@ -1,262 +1,17 @@
-//! Live audio capture with real-time analysis
+//! Desktop live audio capture using cpal
 //!
-//! Provides real-time audio input capture and analysis for live audio-reactive animations.
-//! Uses cpal for cross-platform audio input and lock-free atomics for thread-safe signal transfer.
+//! Platform-specific capture implementation. All shared types (AtomicSignals,
+//! CaptureConfig, CaptureError, RealtimeAnalyzer, etc.) live in capture_common.
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
-use rustfft::{num_complex::Complex, FftPlanner};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::f32::consts::PI;
 
-use crate::signal::{Signal, SignalProducer};
-
-/// Live audio capture state
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CaptureState {
-    /// Not capturing
-    Stopped,
-    /// Actively capturing audio
-    Capturing,
-}
-
-/// Atomic signal values for lock-free audio thread → main thread transfer
-///
-/// All values are stored as u32 bit patterns of f32 values.
-/// This allows atomic updates without locks.
-#[derive(Default)]
-pub struct AtomicSignals {
-    pub amplitude: AtomicU32,
-    pub energy_low: AtomicU32,
-    pub energy_mid: AtomicU32,
-    pub energy_high: AtomicU32,
-    pub spectral_centroid: AtomicU32,
-    pub spectral_flux: AtomicU32,
-    pub onset: AtomicU32,
-}
-
-impl AtomicSignals {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    fn store_f32(atomic: &AtomicU32, value: f32) {
-        atomic.store(value.to_bits(), Ordering::Release);
-    }
-
-    fn load_f32(atomic: &AtomicU32) -> f32 {
-        f32::from_bits(atomic.load(Ordering::Acquire))
-    }
-
-    pub fn set_amplitude(&self, value: f32) {
-        Self::store_f32(&self.amplitude, value);
-    }
-
-    pub fn get_amplitude(&self) -> f32 {
-        Self::load_f32(&self.amplitude)
-    }
-
-    pub fn set_energy_low(&self, value: f32) {
-        Self::store_f32(&self.energy_low, value);
-    }
-
-    pub fn get_energy_low(&self) -> f32 {
-        Self::load_f32(&self.energy_low)
-    }
-
-    pub fn set_energy_mid(&self, value: f32) {
-        Self::store_f32(&self.energy_mid, value);
-    }
-
-    pub fn get_energy_mid(&self) -> f32 {
-        Self::load_f32(&self.energy_mid)
-    }
-
-    pub fn set_energy_high(&self, value: f32) {
-        Self::store_f32(&self.energy_high, value);
-    }
-
-    pub fn get_energy_high(&self) -> f32 {
-        Self::load_f32(&self.energy_high)
-    }
-
-    pub fn set_spectral_centroid(&self, value: f32) {
-        Self::store_f32(&self.spectral_centroid, value);
-    }
-
-    pub fn get_spectral_centroid(&self) -> f32 {
-        Self::load_f32(&self.spectral_centroid)
-    }
-
-    pub fn set_spectral_flux(&self, value: f32) {
-        Self::store_f32(&self.spectral_flux, value);
-    }
-
-    pub fn get_spectral_flux(&self) -> f32 {
-        Self::load_f32(&self.spectral_flux)
-    }
-
-    pub fn set_onset(&self, value: f32) {
-        Self::store_f32(&self.onset, value);
-    }
-
-    pub fn get_onset(&self) -> f32 {
-        Self::load_f32(&self.onset)
-    }
-}
-
-/// Configuration for live capture
-#[derive(Clone, Debug)]
-pub struct CaptureConfig {
-    /// FFT size for analysis (power of 2)
-    pub fft_size: usize,
-    /// Onset detection threshold (0.0-1.0)
-    pub onset_threshold: f32,
-}
-
-impl Default for CaptureConfig {
-    fn default() -> Self {
-        Self {
-            fft_size: 1024, // Smaller for lower latency (~23ms at 44.1kHz)
-            onset_threshold: 0.3,
-        }
-    }
-}
-
-/// Real-time audio analyzer running on audio thread
-struct RealtimeAnalyzer {
-    fft_size: usize,
-    sample_rate: u32,
-    window: Vec<f32>,
-    buffer: Vec<f32>,
-    buffer_pos: usize,
-    fft_scratch: Vec<Complex<f32>>,
-    prev_magnitudes: Vec<f32>,
-    onset_threshold: f32,
-    // Normalization state (exponential moving average of max values)
-    max_amplitude: f32,
-    max_energy_low: f32,
-    max_energy_mid: f32,
-    max_energy_high: f32,
-    max_flux: f32,
-}
-
-impl RealtimeAnalyzer {
-    fn new(fft_size: usize, sample_rate: u32, onset_threshold: f32) -> Self {
-        let window: Vec<f32> = (0..fft_size)
-            .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / (fft_size - 1) as f32).cos()))
-            .collect();
-
-        Self {
-            fft_size,
-            sample_rate,
-            window,
-            buffer: vec![0.0; fft_size],
-            buffer_pos: 0,
-            fft_scratch: vec![Complex::new(0.0, 0.0); fft_size],
-            prev_magnitudes: vec![0.0; fft_size / 2 + 1],
-            onset_threshold,
-            max_amplitude: 0.1,
-            max_energy_low: 0.1,
-            max_energy_mid: 0.1,
-            max_energy_high: 0.1,
-            max_flux: 0.1,
-        }
-    }
-
-    /// Process incoming samples and update atomic signals when buffer is full
-    fn process_samples(&mut self, samples: &[f32], signals: &Arc<AtomicSignals>) {
-        for &sample in samples {
-            self.buffer[self.buffer_pos] = sample;
-            self.buffer_pos += 1;
-
-            if self.buffer_pos >= self.fft_size {
-                self.analyze_buffer(signals);
-                // Overlap by 50% for smoother updates
-                let half = self.fft_size / 2;
-                self.buffer.copy_within(half.., 0);
-                self.buffer_pos = half;
-            }
-        }
-    }
-
-    fn analyze_buffer(&mut self, signals: &Arc<AtomicSignals>) {
-        // Compute RMS amplitude
-        let rms: f32 = (self.buffer.iter().map(|s| s * s).sum::<f32>() / self.fft_size as f32).sqrt();
-        self.max_amplitude = self.max_amplitude.max(rms) * 0.999 + rms * 0.001;
-        let amplitude = (rms / self.max_amplitude).clamp(0.0, 1.0);
-        signals.set_amplitude(amplitude);
-
-        // Apply window and compute FFT
-        let mut planner = FftPlanner::new();
-        let fft = planner.plan_fft_forward(self.fft_size);
-
-        for i in 0..self.fft_size {
-            self.fft_scratch[i] = Complex::new(self.buffer[i] * self.window[i], 0.0);
-        }
-        fft.process(&mut self.fft_scratch);
-
-        // Compute magnitude spectrum
-        let num_bins = self.fft_size / 2 + 1;
-        let magnitudes: Vec<f32> = self.fft_scratch[..num_bins]
-            .iter()
-            .map(|c| c.norm())
-            .collect();
-
-        // Compute energy bands using perceptual frequency boundaries
-        // Low: 20-250 Hz (kick, bass), Mid: 250-4000 Hz (vocals, snare), High: 4000+ Hz (cymbals, air)
-        let freq_per_bin = self.sample_rate as f32 / self.fft_size as f32;
-        let low_end = ((250.0 / freq_per_bin) as usize).clamp(1, num_bins - 2);
-        let mid_end = ((4000.0 / freq_per_bin) as usize).clamp(low_end + 1, num_bins - 1);
-
-        let low_energy: f32 = magnitudes[..low_end].iter().map(|m| m * m).sum::<f32>().sqrt();
-        let mid_energy: f32 = magnitudes[low_end..mid_end].iter().map(|m| m * m).sum::<f32>().sqrt();
-        let high_energy: f32 = magnitudes[mid_end..].iter().map(|m| m * m).sum::<f32>().sqrt();
-
-        // Per-band independent normalization via EMA max tracking
-        self.max_energy_low = self.max_energy_low.max(low_energy) * 0.999 + low_energy * 0.001;
-        self.max_energy_mid = self.max_energy_mid.max(mid_energy) * 0.999 + mid_energy * 0.001;
-        self.max_energy_high = self.max_energy_high.max(high_energy) * 0.999 + high_energy * 0.001;
-
-        signals.set_energy_low((low_energy / self.max_energy_low).clamp(0.0, 1.0));
-        signals.set_energy_mid((mid_energy / self.max_energy_mid).clamp(0.0, 1.0));
-        signals.set_energy_high((high_energy / self.max_energy_high).clamp(0.0, 1.0));
-
-        // Spectral centroid
-        let freq_resolution = self.sample_rate as f32 / self.fft_size as f32;
-        let total_magnitude: f32 = magnitudes.iter().sum();
-        let centroid = if total_magnitude > 1e-10 {
-            let weighted: f32 = magnitudes
-                .iter()
-                .enumerate()
-                .map(|(i, m)| m * i as f32 * freq_resolution)
-                .sum();
-            weighted / total_magnitude / (self.sample_rate as f32 / 2.0)
-        } else {
-            0.0
-        };
-        signals.set_spectral_centroid(centroid.clamp(0.0, 1.0));
-
-        // Spectral flux (half-wave rectified)
-        let flux: f32 = magnitudes
-            .iter()
-            .zip(self.prev_magnitudes.iter())
-            .map(|(curr, prev)| (curr - prev).max(0.0))
-            .sum();
-
-        self.max_flux = self.max_flux.max(flux) * 0.995 + flux * 0.005;
-        let normalized_flux = (flux / self.max_flux).clamp(0.0, 1.0);
-        signals.set_spectral_flux(normalized_flux);
-
-        // Onset detection
-        let onset = if normalized_flux > self.onset_threshold { 1.0 } else { 0.0 };
-        signals.set_onset(onset);
-
-        // Store magnitudes for next frame
-        self.prev_magnitudes.copy_from_slice(&magnitudes);
-    }
-}
+use super::capture_common::{
+    impl_capture_signal_accessors, AtomicSignals, CaptureConfig, CaptureError, CaptureState,
+    RealtimeAnalyzer,
+};
 
 /// Special device name for system audio loopback capture
 const LOOPBACK_DEVICE_NAME: &str = "System Output (Loopback)";
@@ -264,7 +19,7 @@ const LOOPBACK_DEVICE_NAME: &str = "System Output (Loopback)";
 /// Live audio capture controller
 ///
 /// Captures audio from input device and provides real-time signals.
-/// Implements `SignalProducer` for integration with animation system.
+/// Implements signal accessors via `impl_capture_signal_accessors!()` macro.
 pub struct AudioCapture {
     /// Current capture state
     state: CaptureState,
@@ -426,7 +181,11 @@ impl AudioCapture {
         self.state = CaptureState::Stopped;
     }
 
-    /// Build the input stream for f32 samples.
+    // === Signal accessors (generated by macro) ===
+    impl_capture_signal_accessors!();
+
+    // === Private: cpal stream builders ===
+
     fn build_stream_f32(
         &self,
         device: &Device,
@@ -438,7 +197,8 @@ impl AudioCapture {
         onset_threshold: f32,
     ) -> Result<Stream, CaptureError> {
         let channels = config.channels as usize;
-        let mut analyzer = RealtimeAnalyzer::new(fft_size, sample_rate, onset_threshold);
+        let mut analyzer =
+            RealtimeAnalyzer::new(fft_size, sample_rate as f32, onset_threshold);
         let mut mono_buffer = Vec::with_capacity(1024);
 
         let stream = device
@@ -467,7 +227,6 @@ impl AudioCapture {
         Ok(stream)
     }
 
-    /// Build the input stream for i16 samples.
     fn build_stream_i16(
         &self,
         device: &Device,
@@ -479,7 +238,8 @@ impl AudioCapture {
         onset_threshold: f32,
     ) -> Result<Stream, CaptureError> {
         let channels = config.channels as usize;
-        let mut analyzer = RealtimeAnalyzer::new(fft_size, sample_rate, onset_threshold);
+        let mut analyzer =
+            RealtimeAnalyzer::new(fft_size, sample_rate as f32, onset_threshold);
         let mut mono_buffer = Vec::with_capacity(1024);
 
         let stream = device
@@ -508,7 +268,6 @@ impl AudioCapture {
         Ok(stream)
     }
 
-    /// Build the input stream for u16 samples.
     fn build_stream_u16(
         &self,
         device: &Device,
@@ -520,7 +279,8 @@ impl AudioCapture {
         onset_threshold: f32,
     ) -> Result<Stream, CaptureError> {
         let channels = config.channels as usize;
-        let mut analyzer = RealtimeAnalyzer::new(fft_size, sample_rate, onset_threshold);
+        let mut analyzer =
+            RealtimeAnalyzer::new(fft_size, sample_rate as f32, onset_threshold);
         let mut mono_buffer = Vec::with_capacity(1024);
 
         let stream = device
@@ -533,7 +293,8 @@ impl AudioCapture {
 
                     mono_buffer.clear();
                     for frame in data.chunks(channels) {
-                        let sum: f32 = frame.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).sum();
+                        let sum: f32 =
+                            frame.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).sum();
                         mono_buffer.push(sum / channels as f32);
                     }
 
@@ -548,43 +309,6 @@ impl AudioCapture {
 
         Ok(stream)
     }
-
-    // === Signal accessors for direct reading ===
-
-    /// Get current amplitude (0-1).
-    pub fn amplitude(&self) -> f32 {
-        self.signals.get_amplitude()
-    }
-
-    /// Get current low frequency energy (0-1).
-    pub fn energy_low(&self) -> f32 {
-        self.signals.get_energy_low()
-    }
-
-    /// Get current mid frequency energy (0-1).
-    pub fn energy_mid(&self) -> f32 {
-        self.signals.get_energy_mid()
-    }
-
-    /// Get current high frequency energy (0-1).
-    pub fn energy_high(&self) -> f32 {
-        self.signals.get_energy_high()
-    }
-
-    /// Get current spectral centroid (0-1).
-    pub fn spectral_centroid(&self) -> f32 {
-        self.signals.get_spectral_centroid()
-    }
-
-    /// Get current spectral flux (0-1).
-    pub fn spectral_flux(&self) -> f32 {
-        self.signals.get_spectral_flux()
-    }
-
-    /// Get current onset trigger (0 or 1).
-    pub fn onset(&self) -> f32 {
-        self.signals.get_onset()
-    }
 }
 
 impl Default for AudioCapture {
@@ -593,150 +317,9 @@ impl Default for AudioCapture {
     }
 }
 
-impl AudioCapture {
-    /// Get list of available live signal names.
-    ///
-    /// These signals are prefixed with "live_" to distinguish from offline analysis signals.
-    pub fn signal_names(&self) -> Vec<String> {
-        vec![
-            "live_amplitude".to_string(),
-            "live_energy_low".to_string(),
-            "live_energy_mid".to_string(),
-            "live_energy_high".to_string(),
-            "live_spectral_centroid".to_string(),
-            "live_spectral_flux".to_string(),
-            "live_onset".to_string(),
-        ]
-    }
-
-    /// Get current live value for a signal by name.
-    ///
-    /// Returns None if not capturing or signal name is unknown.
-    pub fn get_live_value(&self, name: &str) -> Option<f32> {
-        if !self.is_capturing() {
-            return None;
-        }
-
-        match name {
-            "live_amplitude" => Some(self.amplitude()),
-            "live_energy_low" => Some(self.energy_low()),
-            "live_energy_mid" => Some(self.energy_mid()),
-            "live_energy_high" => Some(self.energy_high()),
-            "live_spectral_centroid" => Some(self.spectral_centroid()),
-            "live_spectral_flux" => Some(self.spectral_flux()),
-            "live_onset" => Some(self.onset()),
-            _ => None,
-        }
-    }
-
-    /// Create a signal producer bridge that shares atomic signals with this capture.
-    ///
-    /// The bridge can be registered with SignalManager so live capture signals
-    /// appear in the animation track signal dropdown.
-    pub fn create_producer(&self) -> Box<dyn SignalProducer> {
-        Box::new(LiveSignalBridge {
-            signals: self.signals.clone(),
-            active: self.active.clone(),
-        })
-    }
-}
-
-/// Lightweight bridge for sharing live capture signals with SignalManager.
-///
-/// Shares the same atomic signals as AudioCapture via Arc, allowing
-/// SignalManager to read live values without owning the capture stream.
-struct LiveSignalBridge {
-    signals: Arc<AtomicSignals>,
-    active: Arc<AtomicBool>,
-}
-
-impl SignalProducer for LiveSignalBridge {
-    fn signal_names(&self) -> Vec<String> {
-        vec![
-            "live_amplitude".to_string(),
-            "live_energy_low".to_string(),
-            "live_energy_mid".to_string(),
-            "live_energy_high".to_string(),
-            "live_spectral_centroid".to_string(),
-            "live_spectral_flux".to_string(),
-            "live_onset".to_string(),
-        ]
-    }
-
-    fn get_live_value(&self, name: &str) -> Option<f32> {
-        if !self.active.load(Ordering::Relaxed) {
-            return None;
-        }
-        match name {
-            "live_amplitude" => Some(self.signals.get_amplitude()),
-            "live_energy_low" => Some(self.signals.get_energy_low()),
-            "live_energy_mid" => Some(self.signals.get_energy_mid()),
-            "live_energy_high" => Some(self.signals.get_energy_high()),
-            "live_spectral_centroid" => Some(self.signals.get_spectral_centroid()),
-            "live_spectral_flux" => Some(self.signals.get_spectral_flux()),
-            "live_onset" => Some(self.signals.get_onset()),
-            _ => None,
-        }
-    }
-
-    fn get_signal(&self, _name: &str) -> Option<Signal> {
-        None // Live-only, no buffered signals
-    }
-
-    fn is_active(&self) -> bool {
-        self.active.load(Ordering::Relaxed)
-    }
-}
-
-/// Errors that can occur during capture.
-#[derive(Debug)]
-pub enum CaptureError {
-    /// No audio input device available
-    NoInputDevice,
-    /// Device not found by name
-    DeviceNotFound(String),
-    /// Error enumerating devices
-    DeviceError(String),
-    /// Error configuring audio device
-    ConfigError(String),
-    /// Error with audio stream
-    StreamError(String),
-    /// Unsupported sample format
-    UnsupportedFormat,
-}
-
-impl std::fmt::Display for CaptureError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CaptureError::NoInputDevice => write!(f, "No audio input device available"),
-            CaptureError::DeviceNotFound(s) => write!(f, "Audio device not found: {}", s),
-            CaptureError::DeviceError(s) => write!(f, "Device error: {}", s),
-            CaptureError::ConfigError(s) => write!(f, "Config error: {}", s),
-            CaptureError::StreamError(s) => write!(f, "Stream error: {}", s),
-            CaptureError::UnsupportedFormat => write!(f, "Unsupported audio format"),
-        }
-    }
-}
-
-impl std::error::Error for CaptureError {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_atomic_signals() {
-        let signals = AtomicSignals::new();
-
-        signals.set_amplitude(0.75);
-        assert!((signals.get_amplitude() - 0.75).abs() < 0.001);
-
-        signals.set_energy_low(0.5);
-        assert!((signals.get_energy_low() - 0.5).abs() < 0.001);
-
-        signals.set_onset(1.0);
-        assert!((signals.get_onset() - 1.0).abs() < 0.001);
-    }
 
     #[test]
     fn test_capture_creation() {
