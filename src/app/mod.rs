@@ -1373,7 +1373,15 @@ impl App {
                         preset: export_settings.preset,
                         tune: export_settings.tune,
                     },
-                    audio: None, // TODO: Add audio export UI in animation panel
+                    audio: export_settings.audio_file.as_ref().map(|path| {
+                        crate::animation::export::AudioExportConfig {
+                            file: path.clone(),
+                            offset: export_settings.audio_offset,
+                            fade_in: export_settings.audio_fade_in,
+                            fade_out: export_settings.audio_fade_out,
+                            bitrate_kbps: export_settings.audio_bitrate,
+                        }
+                    }),
                 };
 
                 println!("Starting animation export (background thread)...");

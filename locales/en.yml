@@ -958,6 +958,15 @@ animation_panel:
   total_frames: "Total frames: %{frames} (%{duration}s × %{fps} fps)"
   export_video: "🎬 Export Video"
   export_not_available_wasm: "Animation export not available in web version"
+  audio_section: "Audio"
+  audio_file: "File:"
+  audio_browse: "Browse..."
+  audio_clear: "Clear"
+  audio_none: "None"
+  audio_offset: "Offset:"
+  audio_fade_in: "Fade In:"
+  audio_fade_out: "Fade Out:"
+  audio_bitrate: "Bitrate:"
 
 # Track Editor (Animation panel sub-section)
 track_editor:

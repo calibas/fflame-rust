@@ -83,6 +83,16 @@ pub struct AnimationExportSettings {
     pub preset: crate::animation::export::EncodingPreset,
     /// Encoding tune (optimization target, CPU only)
     pub tune: crate::animation::export::EncodingTune,
+    /// Optional audio file for export
+    pub audio_file: Option<std::path::PathBuf>,
+    /// Audio time offset in seconds (negative = skip into audio, positive = delay start)
+    pub audio_offset: f64,
+    /// Audio fade in duration in seconds
+    pub audio_fade_in: f64,
+    /// Audio fade out duration in seconds
+    pub audio_fade_out: f64,
+    /// Audio bitrate in kbps
+    pub audio_bitrate: u32,
 }
 
 impl Default for AnimationExportSettings {
@@ -99,6 +109,11 @@ impl Default for AnimationExportSettings {
             video_quality: 12,
             preset: crate::animation::export::EncodingPreset::default(),
             tune: crate::animation::export::EncodingTune::default(),
+            audio_file: None,
+            audio_offset: 0.0,
+            audio_fade_in: 0.0,
+            audio_fade_out: 0.0,
+            audio_bitrate: 192,
         }
     }
 }
@@ -792,6 +807,71 @@ fn render_export_settings(
             frames = total_frames,
             duration = format!("{:.1}", animation.duration),
             fps = settings.fps));
+    }
+
+    // ── Audio ──
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        ui.separator();
+        ui.collapsing(t!("animation_panel.audio_section"), |ui| {
+            // Audio file picker
+            ui.horizontal(|ui| {
+                ui.label(t!("animation_panel.audio_file"));
+                if let Some(ref path) = settings.audio_file {
+                    let name = path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.to_string_lossy().to_string());
+                    ui.label(&name);
+                } else {
+                    ui.label(t!("animation_panel.audio_none"));
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button(t!("animation_panel.audio_browse")).clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Audio Files", &["mp3", "wav", "flac", "ogg"])
+                        .pick_file()
+                    {
+                        settings.audio_file = Some(path);
+                    }
+                }
+                if settings.audio_file.is_some() {
+                    if ui.button(t!("animation_panel.audio_clear")).clicked() {
+                        settings.audio_file = None;
+                    }
+                }
+            });
+
+            if settings.audio_file.is_some() {
+                ui.horizontal(|ui| {
+                    ui.label(t!("animation_panel.audio_offset"));
+                    ui.add(egui::DragValue::new(&mut settings.audio_offset)
+                        .range(-300.0..=300.0)
+                        .speed(0.1)
+                        .suffix(" s"));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(t!("animation_panel.audio_fade_in"));
+                    ui.add(egui::DragValue::new(&mut settings.audio_fade_in)
+                        .range(0.0..=30.0)
+                        .speed(0.1)
+                        .suffix(" s"));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(t!("animation_panel.audio_fade_out"));
+                    ui.add(egui::DragValue::new(&mut settings.audio_fade_out)
+                        .range(0.0..=30.0)
+                        .speed(0.1)
+                        .suffix(" s"));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(t!("animation_panel.audio_bitrate"));
+                    ui.add(egui::DragValue::new(&mut settings.audio_bitrate)
+                        .range(64..=320)
+                        .suffix(" kbps"));
+                });
+            }
+        });
     }
 
     ui.separator();
