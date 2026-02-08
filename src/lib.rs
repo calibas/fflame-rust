@@ -232,6 +232,7 @@ async fn export_animation_async(
         iterations_per_thread,
         video_settings,
         audio,
+        signals: std::collections::HashMap::new(), // CLI: no signal data (TODO: load from signal files)
     };
 
     // Run export (pipes directly to FFmpeg)

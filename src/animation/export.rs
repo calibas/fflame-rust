@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use crate::animation::{Animation, AnimationController};
 use crate::config::{ConfigPath, FractalConfig, json_to_config_value};
+use crate::signal::{Signal, SignalManager};
 
 /// Video codec options for ffmpeg encoding
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -456,6 +457,8 @@ pub struct AnimationExportConfig {
     pub video_settings: VideoEncodingSettings,
     /// Optional audio to include in export
     pub audio: Option<AudioExportConfig>,
+    /// Signal data for signal tracks (cloned from SignalManager)
+    pub signals: std::collections::HashMap<String, Signal>,
 }
 
 impl AnimationExportConfig {
@@ -1075,6 +1078,13 @@ pub async fn export_animation(
     let mut controller = AnimationController::new();
     controller.load(export_config.animation.clone());
 
+    // Create signal manager from exported signals for signal track evaluation
+    let mut signal_manager = SignalManager::new();
+    for (_name, signal) in &export_config.signals {
+        signal_manager.insert(signal.clone());
+    }
+    let has_signals = !export_config.signals.is_empty();
+
     // Build FFmpeg command for piped raw video input
     let mut ffmpeg = Command::new("ffmpeg");
 
@@ -1274,8 +1284,12 @@ pub async fn export_animation(
 
         progress.on_frame_start(frame, total_frames, time);
 
-        // Evaluate animation at this time
-        let values = controller.evaluate_at_time(time);
+        // Evaluate animation at this time (with signal support)
+        let values = if has_signals {
+            controller.evaluate_at_time_with_signals(time, Some(&signal_manager))
+        } else {
+            controller.evaluate_at_time(time)
+        };
 
         // Create config copy and apply animation values
         let mut frame_config = export_config.config.clone();
@@ -1519,6 +1533,13 @@ pub async fn export_animation_fast(
     let mut controller = AnimationController::new();
     controller.load(export_config.animation.clone());
 
+    // Create signal manager from exported signals for signal track evaluation
+    let mut signal_manager = SignalManager::new();
+    for (_name, signal) in &export_config.signals {
+        signal_manager.insert(signal.clone());
+    }
+    let has_signals = !export_config.signals.is_empty();
+
     // Calculate buffer dimensions
     let bytes_per_pixel = 4u32; // RGBA8
     let unpadded_bytes_per_row = export_config.width * bytes_per_pixel;
@@ -1591,7 +1612,11 @@ pub async fn export_animation_fast(
     // Create renderer
     let surface_format = wgpu::TextureFormat::Rgba8Unorm;
 
-    let values = controller.evaluate_at_time(0.0);
+    let values = if has_signals {
+        controller.evaluate_at_time_with_signals(0.0, Some(&signal_manager))
+    } else {
+        controller.evaluate_at_time(0.0)
+    };
     let mut frame_config = export_config.config.clone();
     apply_animation_values(&mut frame_config, &values);
 
@@ -1613,8 +1638,12 @@ pub async fn export_animation_fast(
         let time = export_config.frame_time(frame);
         progress.on_frame_start(frame, total_frames, time);
 
-        // Evaluate animation
-        let values = controller.evaluate_at_time(time);
+        // Evaluate animation (with signal support)
+        let values = if has_signals {
+            controller.evaluate_at_time_with_signals(time, Some(&signal_manager))
+        } else {
+            controller.evaluate_at_time(time)
+        };
         frame_config = export_config.config.clone();
         apply_animation_values(&mut frame_config, &values);
 

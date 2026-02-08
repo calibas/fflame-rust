@@ -1382,6 +1382,7 @@ impl App {
                             bitrate_kbps: export_settings.audio_bitrate,
                         }
                     }),
+                    signals: self.signal_manager.clone_signals(),
                 };
 
                 println!("Starting animation export (background thread)...");
