@@ -95,7 +95,7 @@ impl AudioAnalyzer {
         let (low, mid, high) = self.compute_energy_bands(&mel_spec);
         signals.insert(
             "energy_low".to_string(),
-            Signal::new("energy_low".to_string(), signal_rate, SignalType::Continuous, low),
+            Signal::new("energy_low".to_string(), signal_rate, SignalType::Continuous, low.clone()),
         );
         signals.insert(
             "energy_mid".to_string(),
@@ -136,8 +136,39 @@ impl AudioAnalyzer {
         let onsets = self.detect_onsets(&flux);
         signals.insert(
             "onset".to_string(),
-            Signal::new("onset".to_string(), signal_rate, SignalType::Trigger, onsets),
+            Signal::new("onset".to_string(), signal_rate, SignalType::Trigger, onsets.clone()),
         );
+
+        // BPM detection (using energy_low for robust autocorrelation) and beat_phase generation
+        if let Some(bpm) = self.detect_bpm(&low, signal_rate) {
+            signals.insert(
+                "bpm".to_string(),
+                Signal::new("bpm".to_string(), signal_rate, SignalType::Scalar, vec![bpm]),
+            );
+
+            let beat_phase = self.generate_beat_phase(&onsets, bpm, signal_rate);
+
+            // Generate beat trigger: 1.0 on each beat, 0.0 otherwise
+            let mut beat = vec![0.0f32; beat_phase.len()];
+            for i in 1..beat_phase.len() {
+                if beat_phase[i] < beat_phase[i - 1] - 0.5 {
+                    beat[i] = 1.0; // Phase wrapped → beat
+                }
+            }
+            // First beat at phase anchor
+            if !beat_phase.is_empty() && beat_phase[0] < 0.01 {
+                beat[0] = 1.0;
+            }
+
+            signals.insert(
+                "beat".to_string(),
+                Signal::new("beat".to_string(), signal_rate, SignalType::Trigger, beat),
+            );
+            signals.insert(
+                "beat_phase".to_string(),
+                Signal::new("beat_phase".to_string(), signal_rate, SignalType::Continuous, beat_phase),
+            );
+        }
 
         signals
     }
@@ -367,6 +398,119 @@ impl AudioAnalyzer {
         onsets
     }
 
+    /// Detect BPM via autocorrelation of a continuous energy signal
+    ///
+    /// Uses energy_low (bass energy) which tracks kick drums and bass hits —
+    /// much more reliable than sparse binary onset signals for autocorrelation.
+    /// Searches for periodicity across 60-200 BPM range.
+    fn detect_bpm(&self, energy: &[f32], signal_rate: f64) -> Option<f32> {
+        if energy.len() < (signal_rate * 4.0) as usize {
+            return None; // Need at least 4 seconds for reliable detection
+        }
+
+        // BPM search range
+        let min_bpm = 60.0f64;
+        let max_bpm = 200.0f64;
+
+        // Convert BPM range to lag range (in samples at signal_rate)
+        let min_lag = (signal_rate * 60.0 / max_bpm).ceil() as usize;
+        let max_lag = (signal_rate * 60.0 / min_bpm).floor() as usize;
+
+        if max_lag >= energy.len() || min_lag >= max_lag {
+            return None;
+        }
+
+        // Compute mean for zero-centered autocorrelation
+        let mean: f32 = energy.iter().sum::<f32>() / energy.len() as f32;
+
+        // Compute autocorrelation at lag=0 (normalization factor)
+        let mut corr_zero = 0.0f32;
+        for v in energy {
+            let d = v - mean;
+            corr_zero += d * d;
+        }
+        if corr_zero < 1e-10 {
+            return None;
+        }
+
+        // Compute normalized autocorrelation for each lag in the BPM range
+        let mut best_lag = min_lag;
+        let mut best_corr = f32::NEG_INFINITY;
+
+        for lag in min_lag..=max_lag {
+            let mut corr = 0.0f32;
+            let n = energy.len() - lag;
+            for i in 0..n {
+                corr += (energy[i] - mean) * (energy[i + lag] - mean);
+            }
+            // Normalize to [-1, 1]
+            corr /= corr_zero;
+
+            if corr > best_corr {
+                best_corr = corr;
+                best_lag = lag;
+            }
+        }
+
+        // Require minimum correlation strength for a real beat
+        if best_corr < 0.05 {
+            return None;
+        }
+
+        let bpm = (signal_rate * 60.0 / best_lag as f64) as f32;
+
+        // Resolve half/double time ambiguity: prefer 80-160 BPM range
+        let preferred_min = 80.0f32;
+        let preferred_max = 160.0f32;
+
+        let autocorr_at = |lag: usize| -> f32 {
+            if lag >= energy.len() { return 0.0; }
+            let n = energy.len() - lag;
+            let mut c = 0.0f32;
+            for i in 0..n {
+                c += (energy[i] - mean) * (energy[i + lag] - mean);
+            }
+            c / corr_zero
+        };
+
+        let mut final_bpm = bpm;
+        if bpm < preferred_min && bpm * 2.0 <= preferred_max {
+            let double_corr = autocorr_at(best_lag / 2);
+            if double_corr > best_corr * 0.7 {
+                final_bpm = bpm * 2.0;
+            }
+        } else if bpm > preferred_max && bpm / 2.0 >= preferred_min {
+            let half_corr = autocorr_at(best_lag * 2);
+            if half_corr > best_corr * 0.7 {
+                final_bpm = bpm / 2.0;
+            }
+        }
+
+        Some((final_bpm * 10.0).round() / 10.0)
+    }
+
+    /// Generate a beat_phase signal: 0-1 sawtooth locked to the detected BPM
+    ///
+    /// Finds the first onset to anchor the phase, then generates a repeating
+    /// 0→1 ramp at the detected tempo.
+    fn generate_beat_phase(&self, onsets: &[f32], bpm: f32, signal_rate: f64) -> Vec<f32> {
+        let beat_period_samples = signal_rate * 60.0 / bpm as f64;
+        let num_samples = onsets.len();
+
+        // Find the first strong onset to anchor the beat grid
+        let first_onset = onsets.iter().position(|&v| v > 0.0).unwrap_or(0);
+
+        let mut phase = Vec::with_capacity(num_samples);
+        for i in 0..num_samples {
+            // Distance from the anchor onset, modulo one beat period
+            let offset = (i as f64 - first_onset as f64).rem_euclid(beat_period_samples);
+            let p = (offset / beat_period_samples) as f32;
+            phase.push(p.clamp(0.0, 1.0));
+        }
+
+        phase
+    }
+
     /// Generate a Hann window of given size
     fn hann_window(size: usize) -> Vec<f32> {
         (0..size)
@@ -502,5 +646,84 @@ mod tests {
         let amp = &signals["amplitude"];
         let max_amp = amp.data.iter().cloned().fold(0.0f32, f32::max);
         assert!(max_amp > 0.5, "Amplitude should be significant for sine wave");
+    }
+
+    #[test]
+    fn test_bpm_detection_120bpm() {
+        let sample_rate = 44100u32;
+        let config = AnalysisConfig::default();
+        let signal_rate = sample_rate as f64 / config.hop_size as f64;
+        let analyzer = AudioAnalyzer::new(sample_rate, config);
+
+        // Generate 5 seconds of audio with kick drum pulses at 120 BPM
+        // 120 BPM = 2 beats/sec = one beat every 0.5s = every 22050 samples
+        let duration_secs = 5.0;
+        let total_samples = (sample_rate as f64 * duration_secs) as usize;
+        let beat_interval = sample_rate as f64 * 60.0 / 120.0; // samples per beat
+
+        let mut samples = vec![0.0f32; total_samples];
+        let mut beat_pos = 0.0;
+        while (beat_pos as usize) < total_samples {
+            // Short burst of low-frequency energy (kick drum simulation)
+            let start = beat_pos as usize;
+            let burst_len = 1000.min(total_samples - start);
+            for i in 0..burst_len {
+                let t = i as f32 / sample_rate as f32;
+                // 80 Hz sine with fast decay
+                samples[start + i] = (2.0 * PI * 80.0 * t).sin() * (-t * 30.0).exp();
+            }
+            beat_pos += beat_interval;
+        }
+
+        let signals = analyzer.analyze(&samples);
+
+        // Should detect BPM
+        assert!(signals.contains_key("bpm"), "BPM signal should be present");
+        let detected_bpm = signals["bpm"].data[0];
+        // Allow ±5 BPM tolerance (autocorrelation resolution depends on signal rate)
+        assert!(
+            (detected_bpm - 120.0).abs() < 5.0,
+            "Expected ~120 BPM, got {:.1} BPM",
+            detected_bpm
+        );
+
+        // Should have beat_phase
+        assert!(signals.contains_key("beat_phase"), "beat_phase signal should be present");
+        let phase = &signals["beat_phase"].data;
+        assert!(!phase.is_empty());
+
+        // Phase should be in 0-1 range
+        for &p in phase {
+            assert!(p >= 0.0 && p <= 1.0, "Phase {} out of range", p);
+        }
+
+        // Phase should have the right number of cycles (~10 beats in 5 seconds at 120 BPM)
+        // Count zero crossings (phase resets from near 1.0 back to near 0.0)
+        let mut beat_count = 0;
+        for i in 1..phase.len() {
+            if phase[i] < 0.1 && phase[i - 1] > 0.9 {
+                beat_count += 1;
+            }
+        }
+        // Expect roughly 10 beats (120 BPM * 5s / 60 = 10), allow ±2
+        assert!(
+            beat_count >= 8 && beat_count <= 12,
+            "Expected ~10 beat cycles, got {}",
+            beat_count
+        );
+    }
+
+    #[test]
+    fn test_bpm_detection_short_audio() {
+        let analyzer = AudioAnalyzer::new(44100, AnalysisConfig::default());
+        // 1 second of silence - too short or no beats
+        let samples = vec![0.0f32; 44100];
+        let signals = analyzer.analyze(&samples);
+        // BPM might not be detected for silence, which is fine
+        if let Some(bpm_signal) = signals.get("bpm") {
+            // If detected, should be in valid range
+            let bpm = bpm_signal.data[0];
+            assert!(bpm >= 60.0 && bpm <= 200.0, "BPM {} out of valid range", bpm);
+        }
     }
 }

@@ -32,6 +32,7 @@ Fractal renderers:
 - [JWildfire](https://jwildfire.overwhale.com/)
 - [Chaotica](https://www.chaoticafractals.com/)
 - [Ultra Fractal](https://www.ultrafractal.com/)
+- [IFSRenderer](https://github.com/bezo97/IFSRenderer)
 - [Mandelbulber](https://github.com/buddhi1980/mandelbulber2)
 - [GPU Mandelbulb Tracer](https://gmt-0-8-152535429025.us-west1.run.app/)
 - [Iterator.it](https://iterator.it/)
@@ -47,3 +48,4 @@ Fractal renderers:
 - [ManpWIN](https://github.com/PaulTheLionHeart/manpwin)
 - [Infinity Fractal](https://www.ruinawakens.com/infinityfractal.php)
 - [XaoS](https://github.com/xaos-project/XaoS)
+- [Flamelet](https://apps.apple.com/us/app/flamelet/id1387331406)

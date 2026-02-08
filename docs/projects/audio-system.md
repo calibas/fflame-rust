@@ -1050,7 +1050,7 @@ Uses `AudioBufferSourceNode` (one-shot nodes, recreated per play/seek):
 
 ### Phase 6: Export Integration (Partial)
 - [x] Signals available during animation export (offline evaluation)
-- [ ] FFmpeg pipeline with audio muxing (future)
+- [x] FFmpeg pipeline with audio muxing (future)
 
 ### Phase 7: UI ✅
 - [x] Audio panel: file info, playback controls, signal monitor, live capture controls
@@ -1059,7 +1059,7 @@ Uses `AudioBufferSourceNode` (one-shot nodes, recreated per play/seek):
 - [ ] Waveform display above tracks (future)
 
 ### Phase 8: Polish
-- [ ] WASM compatibility testing
+- [x] WASM compatibility testing
 - [ ] Error handling improvements
 - [ ] Documentation updates
 

@@ -350,6 +350,25 @@ fn render_signal_monitor(
                 }
             }
 
+            // Show BPM if detected
+            if has_offline {
+                if let Some(bpm_signal) = audio_manager.get_signal("bpm") {
+                    let bpm = bpm_signal.data.first().copied().unwrap_or(0.0);
+                    ui.label("bpm");
+                    ui.label(format!("{:.1}", bpm));
+                    ui.label(""); // No meter for scalar
+                    ui.end_row();
+                }
+                if let Some(beat_signal) = audio_manager.get_signal("beat") {
+                    let value = beat_signal.data.first().copied().unwrap_or(0.0);
+                    render_signal_row(ui, "beat", value, true);
+                }
+                if let Some(phase_signal) = audio_manager.get_signal("beat_phase") {
+                    let value = phase_signal.data.first().copied().unwrap_or(0.0);
+                    render_signal_row(ui, "beat_phase", value, false);
+                }
+            }
+
             // Show additional signals if expanded
             if panel_state.show_all_signals {
                 for signal_name in &offline_signals {
