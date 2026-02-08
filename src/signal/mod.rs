@@ -476,6 +476,11 @@ impl SignalManager {
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Signal)> {
         self.signals.iter()
     }
+
+    /// Clone all stored signals (for passing to export threads)
+    pub fn clone_signals(&self) -> HashMap<String, Signal> {
+        self.signals.clone()
+    }
 }
 
 #[cfg(test)]
