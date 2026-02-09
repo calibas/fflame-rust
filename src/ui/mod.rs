@@ -1,4 +1,5 @@
 pub mod animation_panel;
+pub mod audio_panel;
 mod config_dialog;
 mod effects_panel;
 mod export_panel;
@@ -113,6 +114,9 @@ pub struct EguiLayer {
     // Xaos editor state
     xaos_editor_state: xaos_editor::XaosEditorState,
 
+    // Audio panel state
+    audio_panel_state: audio_panel::AudioPanelState,
+
     // WASM clipboard bridge
     #[cfg(target_arch = "wasm32")]
     web_clipboard: crate::web_clipboard::WebClipboard,
@@ -166,6 +170,7 @@ impl EguiLayer {
             fractal_browser_panel: None,
             density_histogram: crate::renderer::DensityHistogram::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
+            audio_panel_state: audio_panel::AudioPanelState::new(),
             #[cfg(target_arch = "wasm32")]
             web_clipboard: crate::web_clipboard::WebClipboard::install(),
         }
@@ -295,6 +300,10 @@ impl EguiLayer {
         animation_export_progress: &animation_panel::ExportProgress,
         png_export_progress: &export_panel::PngExportProgress,
         fullscreen_mode: bool,
+        audio_manager: &mut crate::audio::AudioManager,
+        audio_player: &mut crate::audio::AudioPlayer,
+        audio_capture: &mut crate::audio::AudioCapture,
+        signal_names: &[String],
     ) -> UiResponse {
         let mut raw_input = self.state.take_egui_input(window);
 
@@ -358,6 +367,9 @@ impl EguiLayer {
 
         // Path filters
         let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
+
+        // Audio file loading
+        let mut load_audio_file = false;
 
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
@@ -538,6 +550,13 @@ impl EguiLayer {
 
                         // Xaos editor state
                         xaos_editor_state: &mut self.xaos_editor_state,
+
+                        // Audio panel state
+                        audio_manager,
+                        audio_player,
+                        audio_capture,
+                        audio_panel_state: &mut self.audio_panel_state,
+                        load_audio_file: &mut load_audio_file,
                     },
                 });
 
@@ -569,6 +588,7 @@ impl EguiLayer {
                 &config_manager.active_config().flame,
                 config_manager.active_config(),
                 animation_controller.current_time,
+                signal_names,
             );
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
@@ -753,6 +773,7 @@ impl EguiLayer {
             path_filters_changed,
             generated_flame,
             generated_batch,
+            load_audio_file,
         }
     }
 

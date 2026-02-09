@@ -35,6 +35,12 @@ rust-i18n = "3.1"
 directories = "6.0"
 rayon = "1.10"
 
+# Audio (for audio-reactive animations)
+cpal = "0.15"
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "wav", "flac", "ogg", "pcm"] }
+rustfft = "6.2"
+ringbuf = "0.4"
+
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 egui-winit = { version = "0.33", default-features = false }
@@ -67,6 +73,26 @@ web-sys = { version = "0.3", features = [
     "RequestMode",
     "Response",
     "Headers",
+    # Web Audio API (for live audio capture)
+    "AudioContext",
+    "AudioContextOptions",
+    "AudioContextState",
+    "AudioNode",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamAudioSourceNode",
+    "MediaStreamConstraints",
+    "Navigator",
+    "ScriptProcessorNode",
+    "AudioProcessingEvent",
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioDestinationNode",
+    "ChannelCountMode",
+    "ChannelInterpretation",
+    # Screen/Tab audio capture via getDisplayMedia
+    "DisplayMediaStreamConstraints",
+    "MediaStreamTrack",
 ] }
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
@@ -82,6 +108,9 @@ env_logger = "0.11"
 pollster = { version = "0.4", features = ["macro"] }
 clap = { version = "4.5", features = ["derive"] }
 egui-wgpu = "0.33"
+
+[features]
+default = []
 
 [build-dependencies]
 chrono = "0.4"

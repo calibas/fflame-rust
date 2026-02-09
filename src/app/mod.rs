@@ -158,6 +158,106 @@ pub fn trigger_browser_file_picker(accept: &str, ctx: egui::Context, result_id: 
     input.click();
 }
 
+/// Trigger a native browser file picker for binary files (WASM only)
+/// Stores raw bytes instead of converting to String (for audio, images, etc.)
+#[cfg(target_arch = "wasm32")]
+pub fn trigger_browser_file_picker_binary(accept: &str, ctx: egui::Context, result_id: &'static str) {
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::JsCast;
+    use web_sys::{HtmlInputElement, FileReader};
+
+    let window = match web_sys::window() {
+        Some(w) => w,
+        None => { log::error!("No window"); return; }
+    };
+    let document = match window.document() {
+        Some(d) => d,
+        None => { log::error!("No document"); return; }
+    };
+
+    // Create hidden file input
+    let input: HtmlInputElement = match document.create_element("input") {
+        Ok(el) => match el.dyn_into::<HtmlInputElement>() {
+            Ok(input) => input,
+            Err(_) => { log::error!("Failed to cast to input"); return; }
+        },
+        Err(_) => { log::error!("Failed to create input"); return; }
+    };
+
+    input.set_type("file");
+    input.set_accept(accept);
+    input.style().set_property("display", "none").ok();
+
+    // Append to body temporarily
+    if let Some(body) = document.body() {
+        let _ = body.append_child(&input);
+    }
+
+    // Set up change handler
+    let input_clone = input.clone();
+    let ctx_clone = ctx.clone();
+    let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+        let files = match input_clone.files() {
+            Some(f) => f,
+            None => return,
+        };
+
+        if files.length() == 0 {
+            return;
+        }
+
+        let file = match files.get(0) {
+            Some(f) => f,
+            None => return,
+        };
+
+        let reader = match FileReader::new() {
+            Ok(r) => r,
+            Err(_) => { log::error!("Failed to create FileReader"); return; }
+        };
+
+        let reader_clone = reader.clone();
+        let ctx_for_load = ctx_clone.clone();
+        let onload = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+            let result = match reader_clone.result() {
+                Ok(r) => r,
+                Err(_) => return,
+            };
+
+            let array_buffer = match result.dyn_into::<js_sys::ArrayBuffer>() {
+                Ok(ab) => ab,
+                Err(_) => return,
+            };
+
+            let uint8_array = js_sys::Uint8Array::new(&array_buffer);
+            let mut contents = vec![0u8; uint8_array.length() as usize];
+            uint8_array.copy_to(&mut contents);
+
+            // Store raw bytes in egui temp storage for pickup
+            ctx_for_load.data_mut(|data| {
+                data.insert_temp(egui::Id::new(result_id), contents);
+            });
+            ctx_for_load.request_repaint();
+        }) as Box<dyn FnMut(_)>);
+
+        reader.set_onload(Some(onload.as_ref().unchecked_ref()));
+        onload.forget(); // Leak closure - it will be cleaned up when reader is done
+
+        let _ = reader.read_as_array_buffer(&file);
+
+        // Clean up input element
+        if let Some(parent) = input_clone.parent_node() {
+            let _ = parent.remove_child(&input_clone);
+        }
+    }) as Box<dyn FnMut(_)>);
+
+    input.set_onchange(Some(closure.as_ref().unchecked_ref()));
+    closure.forget(); // Leak closure - it will be called when file is selected
+
+    // Trigger file picker
+    input.click();
+}
+
 use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, window::Window};
 use egui_wgpu::wgpu::SurfaceError;
 use std::sync::{Arc, Mutex};
@@ -251,6 +351,12 @@ pub struct App {
     // Fullscreen state (two-stage: window fullscreen, then hide UI)
     pub(super) window_fullscreen: bool,  // Window is in fullscreen mode
     pub(super) ui_hidden: bool,          // UI panels are hidden (only in fullscreen)
+
+    // Audio system
+    pub(super) audio_manager: crate::audio::AudioManager,
+    pub(super) audio_player: crate::audio::AudioPlayer,
+    pub(super) audio_capture: crate::audio::AudioCapture,
+    pub(super) signal_manager: crate::signal::SignalManager,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -341,7 +447,15 @@ impl App {
             was_video_exporting: false,
             window_fullscreen: false,
             ui_hidden: false,
+            audio_manager: crate::audio::AudioManager::new(),
+            audio_player: crate::audio::AudioPlayer::new(),
+            audio_capture: crate::audio::AudioCapture::new(),
+            signal_manager: crate::signal::SignalManager::new(),
         };
+
+        // Register live audio capture as a signal producer so live_* signals
+        // appear in the animation track signal dropdown
+        app.signal_manager.add_producer(app.audio_capture.create_producer());
 
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
         app.import_config(initial_config);
@@ -464,6 +578,10 @@ impl App {
                     // Check if animation is playing (needs continuous redraws)
                     let animation_playing = app.animation_controller.is_playing();
 
+                    // Check if audio is playing or capturing (needs UI updates for progress/signals)
+                    let audio_playing = app.audio_player.state() == crate::audio::PlaybackState::Playing;
+                    let audio_capturing = app.audio_capture.is_capturing();
+
                     // Check if video/PNG export is in progress (needs UI updates for progress bar)
                     let is_exporting = app.animation_export_progress.lock()
                         .map(|p| p.is_exporting)
@@ -483,8 +601,8 @@ impl App {
 
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
-                    // During export, keep redrawing to update progress bar
-                    if is_rendering || animation_playing || ui_active || is_exporting {
+                    // During export, audio playback, or live capture, keep redrawing to update UI
+                    if is_rendering || animation_playing || audio_playing || audio_capturing || ui_active || is_exporting {
                         // Actively rendering fractals OR UI is active (for tooltips, hover effects)
                         if app.config_manager.system_settings().vsync_enabled {
                             // VSync enabled: render continuously, let VSync cap frame rate
@@ -649,6 +767,9 @@ impl App {
             .map(|p| p.clone())
             .unwrap_or_default();
 
+        // Get signal names for track editor dropdown
+        let signal_names: Vec<String> = self.signal_manager.signal_names();
+
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -674,6 +795,10 @@ impl App {
             &export_progress,
             &png_export_progress,
             self.ui_hidden,
+            &mut self.audio_manager,
+            &mut self.audio_player,
+            &mut self.audio_capture,
+            &signal_names,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
@@ -1248,6 +1373,16 @@ impl App {
                         preset: export_settings.preset,
                         tune: export_settings.tune,
                     },
+                    audio: export_settings.audio_file.as_ref().map(|path| {
+                        crate::animation::export::AudioExportConfig {
+                            file: path.clone(),
+                            offset: export_settings.audio_offset,
+                            fade_in: export_settings.audio_fade_in,
+                            fade_out: export_settings.audio_fade_out,
+                            bitrate_kbps: export_settings.audio_bitrate,
+                        }
+                    }),
+                    signals: self.signal_manager.clone_signals(),
                 };
 
                 println!("Starting animation export (background thread)...");
