@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use crate::animation::{Animation, AnimationController};
 use crate::config::{ConfigPath, FractalConfig, json_to_config_value};
+use crate::signal::{Signal, SignalManager};
 
 /// Video codec options for ffmpeg encoding
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -368,6 +369,73 @@ impl Default for VideoEncodingSettings {
     }
 }
 
+/// Audio export configuration for including audio in video exports
+#[derive(Debug, Clone)]
+pub struct AudioExportConfig {
+    /// Path to audio file (MP3, WAV, FLAC, OGG, etc.)
+    pub file: PathBuf,
+
+    /// Time offset in seconds
+    /// - Negative: Skip into audio (audio at t=-offset plays at animation t=0)
+    /// - Positive: Delay audio start (silence until animation reaches this time)
+    /// - Zero: Audio and animation start together
+    pub offset: f64,
+
+    /// Fade in duration in seconds (0.0 = no fade)
+    pub fade_in: f64,
+
+    /// Fade out duration in seconds (0.0 = no fade)
+    pub fade_out: f64,
+
+    /// Audio bitrate in kbps (default: 192)
+    pub bitrate_kbps: u32,
+}
+
+impl Default for AudioExportConfig {
+    fn default() -> Self {
+        Self {
+            file: PathBuf::new(),
+            offset: 0.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            bitrate_kbps: 192,
+        }
+    }
+}
+
+impl AudioExportConfig {
+    /// Create a new audio export config with a file path
+    pub fn new(file: PathBuf) -> Self {
+        Self {
+            file,
+            ..Default::default()
+        }
+    }
+
+    /// Set the time offset
+    pub fn with_offset(mut self, offset: f64) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    /// Set fade in duration
+    pub fn with_fade_in(mut self, fade_in: f64) -> Self {
+        self.fade_in = fade_in;
+        self
+    }
+
+    /// Set fade out duration
+    pub fn with_fade_out(mut self, fade_out: f64) -> Self {
+        self.fade_out = fade_out;
+        self
+    }
+
+    /// Check if this config has a valid audio file
+    pub fn has_audio(&self) -> bool {
+        !self.file.as_os_str().is_empty() && self.file.exists()
+    }
+}
+
 /// Animation export configuration
 #[derive(Clone)]
 pub struct AnimationExportConfig {
@@ -387,6 +455,10 @@ pub struct AnimationExportConfig {
     pub iterations_per_thread: u32,
     /// Video encoding settings
     pub video_settings: VideoEncodingSettings,
+    /// Optional audio to include in export
+    pub audio: Option<AudioExportConfig>,
+    /// Signal data for signal tracks (cloned from SignalManager)
+    pub signals: std::collections::HashMap<String, Signal>,
 }
 
 impl AnimationExportConfig {
@@ -1006,6 +1078,13 @@ pub async fn export_animation(
     let mut controller = AnimationController::new();
     controller.load(export_config.animation.clone());
 
+    // Create signal manager from exported signals for signal track evaluation
+    let mut signal_manager = SignalManager::new();
+    for (_name, signal) in &export_config.signals {
+        signal_manager.insert(signal.clone());
+    }
+    let has_signals = !export_config.signals.is_empty();
+
     // Build FFmpeg command for piped raw video input
     let mut ffmpeg = Command::new("ffmpeg");
 
@@ -1205,8 +1284,12 @@ pub async fn export_animation(
 
         progress.on_frame_start(frame, total_frames, time);
 
-        // Evaluate animation at this time
-        let values = controller.evaluate_at_time(time);
+        // Evaluate animation at this time (with signal support)
+        let values = if has_signals {
+            controller.evaluate_at_time_with_signals(time, Some(&signal_manager))
+        } else {
+            controller.evaluate_at_time(time)
+        };
 
         // Create config copy and apply animation values
         let mut frame_config = export_config.config.clone();
@@ -1450,6 +1533,13 @@ pub async fn export_animation_fast(
     let mut controller = AnimationController::new();
     controller.load(export_config.animation.clone());
 
+    // Create signal manager from exported signals for signal track evaluation
+    let mut signal_manager = SignalManager::new();
+    for (_name, signal) in &export_config.signals {
+        signal_manager.insert(signal.clone());
+    }
+    let has_signals = !export_config.signals.is_empty();
+
     // Calculate buffer dimensions
     let bytes_per_pixel = 4u32; // RGBA8
     let unpadded_bytes_per_row = export_config.width * bytes_per_pixel;
@@ -1522,7 +1612,11 @@ pub async fn export_animation_fast(
     // Create renderer
     let surface_format = wgpu::TextureFormat::Rgba8Unorm;
 
-    let values = controller.evaluate_at_time(0.0);
+    let values = if has_signals {
+        controller.evaluate_at_time_with_signals(0.0, Some(&signal_manager))
+    } else {
+        controller.evaluate_at_time(0.0)
+    };
     let mut frame_config = export_config.config.clone();
     apply_animation_values(&mut frame_config, &values);
 
@@ -1544,8 +1638,12 @@ pub async fn export_animation_fast(
         let time = export_config.frame_time(frame);
         progress.on_frame_start(frame, total_frames, time);
 
-        // Evaluate animation
-        let values = controller.evaluate_at_time(time);
+        // Evaluate animation (with signal support)
+        let values = if has_signals {
+            controller.evaluate_at_time_with_signals(time, Some(&signal_manager))
+        } else {
+            controller.evaluate_at_time(time)
+        };
         frame_config = export_config.config.clone();
         apply_animation_values(&mut frame_config, &values);
 
@@ -1756,7 +1854,7 @@ fn build_ffmpeg_args(config: &AnimationExportConfig) -> Vec<String> {
     // Overwrite output
     args.push("-y".to_string());
 
-    // Input format
+    // Video input format (raw RGBA from stdin)
     args.push("-f".to_string());
     args.push("rawvideo".to_string());
     args.push("-pix_fmt".to_string());
@@ -1767,6 +1865,22 @@ fn build_ffmpeg_args(config: &AnimationExportConfig) -> Vec<String> {
     args.push(config.fps.to_string());
     args.push("-i".to_string());
     args.push("-".to_string());
+
+    // Audio input (if present)
+    let has_audio = config.audio.as_ref().map(|a| a.has_audio()).unwrap_or(false);
+    if let Some(ref audio_config) = config.audio {
+        if audio_config.has_audio() {
+            // Handle negative offset (skip into audio) with -ss before -i
+            if audio_config.offset < 0.0 {
+                args.push("-ss".to_string());
+                args.push(format!("{:.3}", -audio_config.offset));
+            }
+
+            // Audio input file
+            args.push("-i".to_string());
+            args.push(audio_config.file.to_string_lossy().to_string());
+        }
+    }
 
     // Codec and hardware acceleration
     let settings = &config.video_settings;
@@ -1959,6 +2073,53 @@ fn build_ffmpeg_args(config: &AnimationExportConfig) -> Vec<String> {
             }
             args.push("-pix_fmt".to_string());
             args.push("yuv420p".to_string());
+        }
+    }
+
+    // Audio encoding (if audio input is present)
+    if has_audio {
+        if let Some(ref audio_config) = config.audio {
+            // Build audio filter chain
+            let mut audio_filters: Vec<String> = Vec::new();
+
+            // Positive offset = delay audio start (adelay filter)
+            if audio_config.offset > 0.0 {
+                let delay_ms = (audio_config.offset * 1000.0) as u64;
+                // Apply delay to both channels
+                audio_filters.push(format!("adelay={}|{}", delay_ms, delay_ms));
+            }
+
+            // Fade in
+            if audio_config.fade_in > 0.0 {
+                audio_filters.push(format!("afade=t=in:st=0:d={:.3}", audio_config.fade_in));
+            }
+
+            // Fade out
+            if audio_config.fade_out > 0.0 {
+                // Calculate fade out start time
+                // This should be: animation_duration - fade_out
+                let animation_duration = config.animation.duration;
+                let fade_out_start = (animation_duration - audio_config.fade_out).max(0.0);
+                audio_filters.push(format!(
+                    "afade=t=out:st={:.3}:d={:.3}",
+                    fade_out_start, audio_config.fade_out
+                ));
+            }
+
+            // Apply audio filter chain if any filters exist
+            if !audio_filters.is_empty() {
+                args.push("-af".to_string());
+                args.push(audio_filters.join(","));
+            }
+
+            // Audio codec and bitrate
+            args.push("-c:a".to_string());
+            args.push("aac".to_string());
+            args.push("-b:a".to_string());
+            args.push(format!("{}k", audio_config.bitrate_kbps));
+
+            // Use shorter of video or audio duration
+            args.push("-shortest".to_string());
         }
     }
 

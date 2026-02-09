@@ -90,6 +90,26 @@ enum Commands {
         /// Video quality (CRF): 0-51, lower = better (default: 18)
         #[arg(long, default_value = "18")]
         video_quality: u8,
+
+        /// Audio file to include in export (MP3, WAV, FLAC, OGG)
+        #[arg(long)]
+        audio: Option<String>,
+
+        /// Audio time offset in seconds (negative = skip into audio, positive = delay start)
+        #[arg(long, default_value = "0.0")]
+        audio_offset: f64,
+
+        /// Audio fade in duration in seconds
+        #[arg(long, default_value = "0.0")]
+        audio_fade_in: f64,
+
+        /// Audio fade out duration in seconds
+        #[arg(long, default_value = "0.0")]
+        audio_fade_out: f64,
+
+        /// Audio bitrate in kbps (default: 192)
+        #[arg(long, default_value = "192")]
+        audio_bitrate: u32,
     },
 }
 
@@ -107,7 +127,7 @@ fn main() {
                 // Run in headless export mode
                 fractal_flame_wgpu::export_mode(&input, &output, width, height, category, iterations_per_thread, dump_shader);
             }
-            Some(Commands::ExportAnimation { config, animation, output, width, height, fps, iterations_per_thread, video_codec, hw_accel, video_quality }) => {
+            Some(Commands::ExportAnimation { config, animation, output, width, height, fps, iterations_per_thread, video_codec, hw_accel, video_quality, audio, audio_offset, audio_fade_in, audio_fade_out, audio_bitrate }) => {
                 // Parse video codec
                 let codec = match video_codec.to_lowercase().as_str() {
                     "h264" => fractal_flame_wgpu::animation::export::VideoCodec::H264,
@@ -151,8 +171,19 @@ fn main() {
                     tune: fractal_flame_wgpu::animation::export::EncodingTune::default(),
                 };
 
+                // Build audio config (if audio file specified)
+                let audio_config = audio.map(|file| {
+                    fractal_flame_wgpu::animation::export::AudioExportConfig {
+                        file: std::path::PathBuf::from(file),
+                        offset: audio_offset,
+                        fade_in: audio_fade_in,
+                        fade_out: audio_fade_out,
+                        bitrate_kbps: audio_bitrate,
+                    }
+                });
+
                 // Run animation export mode
-                fractal_flame_wgpu::export_animation_mode(&config, &animation, &output, width, height, fps, iterations_per_thread, video_settings);
+                fractal_flame_wgpu::export_animation_mode(&config, &animation, &output, width, height, fps, iterations_per_thread, video_settings, audio_config);
             }
             None => {
                 // Run normal GUI mode

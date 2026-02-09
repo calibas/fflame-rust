@@ -19,10 +19,12 @@ pub mod png_metadata;
 pub mod apophysis_xml;
 pub mod i18n;
 pub mod animation;
+pub mod signal;
 pub mod storage;
 pub mod export;
 pub mod resources;
 pub mod effects;
+pub mod audio;
 // mod shader_builder; // Legacy - replaced by shader_builder_v2
 mod shader_builder_v2;
 mod shader_cache;
@@ -87,11 +89,12 @@ pub fn export_animation_mode(
     fps: u32,
     iterations_per_thread: u32,
     video_settings: animation::export::VideoEncodingSettings,
+    audio: Option<animation::export::AudioExportConfig>,
 ) {
     env_logger::init();
     // Enable inlined constants for animation export - maximum shader performance
     shader_builder_v2::enable_inlined_constants();
-    pollster::block_on(export_animation_async(config_path, animation_path, output_path, width, height, fps, iterations_per_thread, video_settings)).expect("Animation export failed");
+    pollster::block_on(export_animation_async(config_path, animation_path, output_path, width, height, fps, iterations_per_thread, video_settings, audio)).expect("Animation export failed");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -170,6 +173,7 @@ async fn export_animation_async(
     fps: u32,
     iterations_per_thread: u32,
     video_settings: animation::export::VideoEncodingSettings,
+    audio: Option<animation::export::AudioExportConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::path::Path;
     use animation::export::{AnimationExportConfig, CliProgressCallback, export_animation, is_ffmpeg_available};
@@ -183,6 +187,18 @@ async fn export_animation_async(
     println!("Resolution: {}x{} @ {} FPS", width, height, fps);
     println!("Iterations per thread: {}", iterations_per_thread);
     println!("Codec: {} (CRF {})", video_settings.codec.display_name(), video_settings.quality);
+    if let Some(ref audio_config) = audio {
+        println!("Audio: {}", audio_config.file.display());
+        if audio_config.offset != 0.0 {
+            println!("  Offset: {:.1}s", audio_config.offset);
+        }
+        if audio_config.fade_in > 0.0 {
+            println!("  Fade in: {:.1}s", audio_config.fade_in);
+        }
+        if audio_config.fade_out > 0.0 {
+            println!("  Fade out: {:.1}s", audio_config.fade_out);
+        }
+    }
     println!();
 
     // Check ffmpeg availability
@@ -215,6 +231,8 @@ async fn export_animation_async(
         fps,
         iterations_per_thread,
         video_settings,
+        audio,
+        signals: std::collections::HashMap::new(), // CLI: no signal data (TODO: load from signal files)
     };
 
     // Run export (pipes directly to FFmpeg)

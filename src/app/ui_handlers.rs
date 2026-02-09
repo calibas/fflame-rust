@@ -587,6 +587,50 @@ impl App {
                 super::trigger_browser_file_picker(".fflame", ctx, "pending_file_browser_json_raw");
             }
         }
+
+        // Handle audio file loading
+        if ui_response.load_audio_file {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                // Desktop: synchronous file dialog
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Audio Files", &["mp3", "wav", "flac", "ogg"])
+                    .pick_file()
+                {
+                    match self.audio_manager.load_file(&path) {
+                        Ok(()) => {
+                            log::info!("Loaded audio file: {}", path.display());
+
+                            // Also load into AudioPlayer for playback
+                            if let Some(audio_data) = self.audio_manager.audio_data() {
+                                self.audio_player.load(audio_data.clone());
+                                log::info!("Audio loaded into player for playback");
+                            }
+
+                            // Auto-analyze after loading
+                            self.audio_manager.analyze();
+                            log::info!("Audio analysis complete: {} signals available",
+                                self.audio_manager.available_signals().len());
+
+                            // Import signals into SignalManager for animation access
+                            self.signal_manager.import_from_producer(&self.audio_manager);
+                            log::info!("Imported {} signals into SignalManager",
+                                self.signal_manager.len());
+                        }
+                        Err(e) => {
+                            log::error!("Failed to load audio file: {}", e);
+                        }
+                    }
+                }
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                // WASM: use native file picker (binary variant for audio)
+                let ctx = self.egui_layer.ctx.clone();
+                super::trigger_browser_file_picker_binary(".mp3,.wav,.flac,.ogg", ctx, "pending_audio_load_bytes");
+            }
+        }
     }
 
     /// Handle undo/redo from UI buttons
@@ -718,6 +762,36 @@ impl App {
                 use crate::ui::workspace::PanelType;
                 let ctx = &self.egui_layer.ctx; self.workspace.open_floating_panel(PanelType::FractalBrowser, ctx);
             }
+
+            // Check for pending audio file (binary bytes from native file picker)
+            if let Some(bytes) = self.egui_layer.ctx.data_mut(|data| {
+                data.remove_temp::<Vec<u8>>(egui::Id::new("pending_audio_load_bytes"))
+            }) {
+                match self.audio_manager.load_bytes(&bytes) {
+                    Ok(()) => {
+                        log::info!("Loaded audio file ({} bytes)", bytes.len());
+
+                        // Also load into AudioPlayer for playback
+                        if let Some(audio_data) = self.audio_manager.audio_data() {
+                            self.audio_player.load(audio_data.clone());
+                            log::info!("Audio loaded into player for playback");
+                        }
+
+                        // Auto-analyze after loading
+                        self.audio_manager.analyze();
+                        log::info!("Audio analysis complete: {} signals available",
+                            self.audio_manager.available_signals().len());
+
+                        // Import signals into SignalManager for animation access
+                        self.signal_manager.import_from_producer(&self.audio_manager);
+                        log::info!("Imported {} signals into SignalManager",
+                            self.signal_manager.len());
+                    }
+                    Err(e) => {
+                        log::error!("Failed to load audio file: {}", e);
+                    }
+                }
+            }
         }
     }
 
@@ -725,7 +799,7 @@ impl App {
     fn handle_animation_seek(&mut self, ui_response: &UiResponse) {
         if ui_response.animation_seek_changed {
             // Evaluate current frame and apply values
-            let frame_values = self.animation_controller.evaluate_frame();
+            let frame_values = self.animation_controller.evaluate_frame(Some(&self.signal_manager));
 
             for (path_str, json_value) in frame_values {
                 if let Some(path) = crate::config::ConfigPath::from_string_key(&path_str) {
@@ -741,12 +815,26 @@ impl App {
             // Note: Overwrite mode is handled by update_overwrite_mode based on recorded actions
             // This ensures tone-mapping-only changes don't incorrectly enable overwrite mode
             self.flame = self.config_manager.active_config().flame.clone();
+
+            // Pause audio during scrubbing to avoid scratching artifacts (desktop)
+            // and AudioBufferSourceNode recreation storm (WASM)
+            if self.animation_controller.sync_audio && self.audio_player.has_audio() {
+                self.audio_player.pause();
+            }
         }
 
         // Only reset accumulation when drag stops or on discrete actions (frame step, click to seek)
         // This provides smooth preview during scrubber drag, then clean rebuild when released
         if ui_response.animation_seek_drag_stopped {
             self.config_manager.request_reset();
+
+            // Seek audio to final position and resume playback after scrub finishes
+            if self.animation_controller.sync_audio && self.audio_player.has_audio() {
+                self.audio_player.seek(self.animation_controller.current_time);
+                if self.animation_controller.is_playing() {
+                    let _ = self.audio_player.play();
+                }
+            }
         }
     }
 

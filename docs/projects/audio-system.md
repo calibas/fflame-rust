@@ -2,13 +2,13 @@
 
 ## Overview
 
-Add optional audio integration to the fractal flame renderer, enabling:
+Audio integration for the fractal flame renderer, enabling:
 1. **Offline audio analysis** - Pre-analyze audio files to extract signals for animation
 2. **Live audio input** - Real-time audio analysis during playback (limited features)
 3. **Audio playback** - Play audio synced to animation timeline
-4. **Audio export** - Include audio in exported MP4 files
+4. **Audio export** - Include audio in exported MP4 files (future)
 
-**Core principle:** Zero impact on normal program performance. Audio is fully optional.
+Audio dependencies are always included (no feature flag). The audio system has zero impact on performance when not in use.
 
 ---
 
@@ -18,44 +18,33 @@ Add optional audio integration to the fractal flame renderer, enabling:
 
 ```
 src/signal/
-  mod.rs              - Signal struct, SignalType, SignalManager
-  file.rs             - .signal binary file format (read/write)
-  producer.rs         - SignalProducer trait
+  mod.rs              - Signal struct, SignalType, SignalManager, SignalProducer trait
 
 src/audio/
   mod.rs              - Public API, AudioManager (implements SignalProducer)
-  analyzer.rs         - STFT, mel spectrogram, onset detection (ported from existing code)
-  playback.rs         - Audio file playback with timeline sync
-  capture.rs          - Live audio input (platform-agnostic interface)
+  analyzer.rs         - STFT, mel spectrogram, onset detection
+  playback.rs         - Desktop audio playback via cpal
+  playback_wasm.rs    - WASM audio playback via Web Audio API
+  capture.rs          - Live audio capture trait
   capture_native.rs   - Desktop capture via cpal
-  capture_wasm.rs     - WASM capture via web-sys + AudioWorklet
+  capture_wasm.rs     - WASM capture via web-sys ScriptProcessorNode
   decode.rs           - Audio file decoding (symphonia)
-  export.rs           - Audio muxing into MP4 (FFmpeg, desktop only)
 ```
 
 ### Dependencies
 
+All audio dependencies are always included (no feature flag):
+
 ```toml
 [dependencies]
-# Audio I/O (desktop only for input, both for output)
-cpal = { version = "0.15", optional = true }
-
-# Audio decoding (MP3, WAV, FLAC, OGG, etc.) - works on WASM too
-symphonia = { version = "0.5", optional = true, features = ["mp3", "wav", "flac", "ogg"] }
-
-# FFT analysis
-rustfft = { version = "6.2", optional = true }
-
-# Thread-safe buffers
-ringbuf = { version = "0.4", optional = true }
-
-# Spectral flux novelty detection
-microdsp = { version = "0.1", optional = true }
-
-[features]
-default = []
-audio = ["cpal", "symphonia", "rustfft", "ringbuf", "microdsp"]
+cpal = "0.15"                        # Audio I/O (desktop)
+symphonia = { version = "0.5",       # Audio decoding (MP3, WAV, FLAC, OGG)
+  features = ["mp3", "wav", "flac", "ogg", "pcm"] }
+rustfft = "6.2"                      # FFT analysis
+ringbuf = "0.4"                      # Thread-safe ring buffers
 ```
+
+WASM uses `web-sys` features for Web Audio API (playback, capture) instead of cpal.
 
 ---
 
@@ -93,8 +82,8 @@ The animation system doesn't care where signals come from - it just consumes the
 ┌─────────────────────────────────────────────────────────────┐
 │                   TrackSource::Signal                        │
 │                                                             │
-│  • signal: String (name or file path)                       │
-│  • output_min/max, smoothing, trigger params                │
+│  • signal_name: String                                      │
+│  • min_output / max_output, smoothing                       │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -104,40 +93,33 @@ The animation system doesn't care where signals come from - it just consumes the
 ```rust
 /// A time-indexed signal that can drive animation parameters.
 /// Source-agnostic - could come from audio, MIDI, sensors, files, etc.
-#[derive(Clone)]
 pub struct Signal {
-    /// Human-readable name (e.g., "energy_low", "kick_trigger")
     pub name: String,
-
-    /// Sample rate in Hz (how many values per second)
     pub sample_rate: f64,
-
-    /// Type of signal (affects how it's interpreted)
     pub signal_type: SignalType,
-
-    /// Time-indexed values, starting at t=0
     pub data: Vec<f32>,
-
-    /// Optional metadata about signal origin
     pub metadata: Option<SignalMetadata>,
 }
 
 pub enum SignalType {
-    /// Continuous value, typically 0.0-1.0
-    Continuous,
-    /// Binary trigger (1.0 = triggered, 0.0 = not)
-    Trigger,
-    /// Scalar with units (e.g., BPM, Hz)
-    Scalar { unit: String },
+    Continuous,              // Value 0.0-1.0 (band energy, amplitude, etc.)
+    Trigger,                 // Binary (1.0 = triggered, 0.0 = not)
+    Scalar { unit: String }, // Value with units (BPM, Hz)
 }
 
 pub struct SignalMetadata {
-    /// What produced this signal ("audio", "midi", "external", etc.)
-    pub source_type: String,
-    /// Source-specific info (audio file hash, analysis params, etc.)
-    pub source_info: serde_json::Value,
+    pub source: Option<String>,              // e.g., "audio_file: track.mp3"
+    pub params: HashMap<String, Value>,      // Analysis parameters
+    pub unit: Option<String>,                // For Scalar type
+    pub created_at: Option<String>,          // ISO 8601 timestamp
+    pub extra: HashMap<String, Value>,       // Extension point
 }
 ```
+
+Key methods on `Signal`:
+- `value_at(time) -> Option<f32>` — Interpolates for Continuous, nearest-sample for Trigger, constant for Scalar
+- `duration() -> f64`
+- `load_from_file(path) / save_to_file(path)` — Binary `.signal` format
 
 ### Signal File Format (`.signal`)
 
@@ -168,55 +150,56 @@ Variable sections:
 ### Signal Manager
 
 ```rust
-/// Manages all signal sources and provides unified access
 pub struct SignalManager {
-    /// Loaded signals (from files or generated)
     signals: HashMap<String, Signal>,
-
-    /// Live signal producers (audio capture, etc.)
     live_producers: Vec<Box<dyn SignalProducer>>,
 }
 
 impl SignalManager {
-    /// Get signal value at specific time
-    pub fn get_value(&self, signal_name: &str, time: f64) -> Option<f32>;
+    // Basic CRUD
+    pub fn insert(&mut self, signal: Signal);
+    pub fn get(&self, name: &str) -> Option<&Signal>;
+    pub fn remove(&mut self, name: &str) -> Option<Signal>;
+    pub fn signal_names(&self) -> Vec<&str>;
+    pub fn len(&self) -> usize;
+    pub fn is_empty(&self) -> bool;
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Signal)>;
+    pub fn clear(&mut self);
 
-    /// Get current live value (for real-time sources)
-    pub fn get_live_value(&self, signal_name: &str) -> Option<f32>;
+    // File I/O
+    pub fn load_from_file(&mut self, path: &Path) -> io::Result<&Signal>;
+    pub fn save_to_file(&self, name: &str, path: &Path) -> io::Result<()>;
 
-    /// Load signal from .signal file
-    pub fn load_signal_file(&mut self, path: &Path) -> Result<()>;
+    // Signal access
+    pub fn get_value_at(&self, name: &str, time: f64) -> Option<f32>;   // Offline/export
+    pub fn get_live_value(&self, name: &str, time: f64) -> Option<f32>; // Live (producers first, then stored)
 
-    /// Save signal to .signal file
-    pub fn save_signal_file(&self, signal_name: &str, path: &Path) -> Result<()>;
-
-    /// Register a live signal producer
-    pub fn register_producer(&mut self, producer: Box<dyn SignalProducer>);
-
-    /// List all available signals
-    pub fn list_signals(&self) -> Vec<&str>;
-}
-
-/// Trait for things that produce signals (audio analyzer, MIDI, etc.)
-pub trait SignalProducer: Send {
-    /// Get the names of signals this producer provides
-    fn signal_names(&self) -> Vec<String>;
-
-    /// Get current live value for a signal
-    fn get_live_value(&self, name: &str) -> Option<f32>;
-
-    /// Get computed signal data (for offline analysis)
-    fn get_signal(&self, name: &str) -> Option<Signal>;
+    // Producer management
+    pub fn add_producer(&mut self, producer: Box<dyn SignalProducer>);
+    pub fn import_from_producer(&mut self, producer: &dyn SignalProducer); // Batch import
 }
 ```
 
-### Future Signal Sources
+### Signal Producer Trait
+
+```rust
+pub trait SignalProducer: Send {
+    fn signal_names(&self) -> Vec<String>;
+    fn get_live_value(&self, name: &str) -> Option<f32>;
+    fn get_signal(&self, name: &str) -> Option<Signal>;
+    fn is_active(&self) -> bool;
+}
+```
+
+`AudioManager` implements `SignalProducer`, making audio analysis signals available to the animation system.
+
+### Signal Sources
 
 | Source | Status | Description |
 |--------|--------|-------------|
-| Audio file analysis | Planned (this doc) | FFT, onset detection, ML |
-| Audio live capture | Planned (this doc) | Real-time mic/loopback |
-| .signal file | Planned (this doc) | Pre-computed, portable |
+| Audio file analysis | **Implemented** | STFT, onset detection, 7 signals |
+| Audio live capture | **Implemented** | Real-time mic/loopback (desktop + WASM) |
+| .signal file | **Implemented** | Binary format, load/save |
 | MIDI file | Future | Note events → triggers |
 | MIDI live | Future | Real-time MIDI input |
 | CSV/JSON import | Future | External data sources |
@@ -231,67 +214,44 @@ Audio analysis is one **signal producer**. It generates signals from audio files
 
 ### Signal Types
 
-Audio analysis produces **signals** - time-varying values that can drive animation parameters.
+Audio analysis produces standard `Signal` structs (same type used by all signal sources).
+Analysis results use the generic signal system - there is no separate `AudioSignal` type.
 
-```rust
-/// A single audio signal that can be attached to animation tracks
-pub struct AudioSignal {
-    pub name: String,
-    pub signal_type: SignalType,
-    /// Sample rate of the signal data (not audio sample rate)
-    /// Typically 100-1000 Hz depending on analysis hop size
-    pub sample_rate: f64,
-    /// Time-indexed values, starting at t=0
-    pub data: Vec<f32>,
-}
+### Implemented Signals
 
-pub enum SignalType {
-    /// Continuous value 0.0-1.0 (band energy, amplitude, etc.)
-    Continuous,
-    /// Binary trigger (onset detected = 1.0, else 0.0)
-    Trigger,
-    /// Value with units (BPM, frequency in Hz, etc.)
-    Scalar { unit: String },
-}
-```
+The `AudioAnalyzer` (STFT with 2048-sample FFT, 512-sample hop, Hann window) produces 7 signals:
 
-### Available Signals
+| Signal Name | Type | Description |
+|-------------|------|-------------|
+| `amplitude` | Continuous | Overall RMS amplitude (0-1, normalized) |
+| `energy_low` | Continuous | Low band energy (20-150 Hz) |
+| `energy_mid` | Continuous | Mid band energy (150-2000 Hz) |
+| `energy_high` | Continuous | High band energy (2000-20000 Hz) |
+| `spectral_centroid` | Continuous | "Brightness" of sound (normalized) |
+| `spectral_flux` | Continuous | Rate of spectral change |
+| `onset` | Trigger | Beat/transient detection via spectral flux + adaptive threshold |
 
-| Signal Name | Type | Latency | Description |
-|-------------|------|---------|-------------|
-| `amplitude` | Continuous | ~3ms | Overall RMS amplitude (0-1) |
-| `amplitude_peak` | Continuous | ~3ms | Peak amplitude with decay |
-| `energy_low` | Continuous | ~6ms | Low band energy (20-150 Hz) |
-| `energy_mid` | Continuous | ~6ms | Mid band energy (150-2000 Hz) |
-| `energy_high` | Continuous | ~6ms | High band energy (2000-20000 Hz) |
-| `onset_low` | Trigger | ~6ms | Bass/kick onset detected |
-| `onset_mid` | Trigger | ~6ms | Snare/vocal onset detected |
-| `onset_high` | Trigger | ~6ms | Hi-hat/cymbal onset detected |
-| `onset_any` | Trigger | ~6ms | Any band onset detected |
-| `spectral_centroid` | Continuous | ~12ms | "Brightness" of sound (Hz, normalized) |
-| `spectral_flux` | Continuous | ~12ms | Rate of spectral change |
-| `bpm` | Scalar | Offline only | Detected tempo |
-| `beat_phase` | Continuous | Offline only | 0-1 sawtooth synced to beat grid |
-| `mel_bin_N` | Continuous | ~50ms | Individual mel spectrogram bin (N=0-63) |
-
-**Latency tiers:**
-- **Tier 1 (~3ms):** Time-domain only, 128-sample window
-- **Tier 2 (~6ms):** Small FFT (256-512 samples), basic frequency analysis
-- **Tier 3 (~12ms):** Medium FFT (1024 samples), spectral features
-- **Tier 4 (~50ms+):** Large FFT (2048-4096), mel spectrogram, offline only
+Signal sample rate = `audio_sample_rate / hop_size` (e.g., 44100 / 512 ≈ 86 Hz).
 
 ### Live vs Offline Availability
 
-| Signal | Live | Offline |
+| Signal | Live (capture) | Offline (file) |
 |--------|------|---------|
-| amplitude, amplitude_peak | Yes | Yes |
+| amplitude | Yes | Yes |
 | energy_low/mid/high | Yes | Yes |
-| onset_low/mid/high/any | Yes | Yes |
 | spectral_centroid | Yes | Yes |
 | spectral_flux | Yes | Yes |
-| bpm | No | Yes |
-| beat_phase | No | Yes |
-| mel_bin_N | No | Yes |
+| onset | Yes | Yes |
+
+### Future Signals (Not Yet Implemented)
+
+| Signal Name | Type | Description |
+|-------------|------|-------------|
+| `amplitude_peak` | Continuous | Peak amplitude with decay |
+| `onset_low/mid/high` | Trigger | Per-band onset detection |
+| `bpm` | Scalar | Detected tempo |
+| `beat_phase` | Continuous | 0-1 sawtooth synced to beat grid |
+| `mel_bin_N` | Continuous | Individual mel spectrogram bins |
 
 ### Extended Signals (Future)
 
@@ -348,22 +308,15 @@ Additional DSP features that could be added later (see [audio-analysis-dsp-ml.md
 ## ML-Assisted Analysis (Optional)
 
 Machine learning can provide higher-level semantic signals that pure DSP cannot reliably extract.
-This is **fully optional** via a separate feature flag.
+This would be an optional addition (not yet implemented).
 
-### Feature Flag
+### Potential Dependencies
 
 ```toml
 [dependencies]
 # ONNX inference - choose one:
-# tract: Pure Rust, no native deps, slower but portable (works on WASM)
-tract-onnx = { version = "0.21", optional = true }
-# ort: ONNX Runtime bindings, faster but requires native libs (no WASM)
-ort = { version = "2.0", optional = true }
-
-[features]
-audio = ["cpal", "symphonia", "rustfft", "ringbuf", "microdsp"]
-audio-ml = ["audio", "tract-onnx"]  # ML with tract (portable, WASM-compatible)
-audio-ml-fast = ["audio", "ort"]    # ML with ort (faster, desktop only)
+tract-onnx = { version = "0.21", optional = true }  # Pure Rust, WASM-compatible
+ort = { version = "2.0", optional = true }           # ONNX Runtime, faster, desktop only
 ```
 
 **Runtime comparison:**
@@ -470,16 +423,16 @@ Heavier models (section detection, key) only run offline.
 
 ### Integration Example
 
-```rust
-// In animation file
+```json
 {
   "target": "Saturation",
   "source": {
-    "type": "Signal",
-    "signal": "vocal_presence",  // ML-derived signal
-    "output_min": 0.5,
-    "output_max": 1.0,
-    "smoothing": 0.7  // High smoothing for ML signals (they update slowly)
+    "Signal": {
+      "signal_name": "vocal_presence",
+      "min_output": 0.5,
+      "max_output": 1.0,
+      "smoothing": 0.7
+    }
   }
 }
 ```
@@ -498,88 +451,67 @@ Heavier models (section detection, key) only run offline.
 
 ### Signal to Parameter Mapping Guide
 
-Suggested mappings from audio signals to fractal parameters:
+Suggested mappings from implemented audio signals to fractal parameters:
 
 | Audio Signal | Good For Driving | Why |
 |--------------|------------------|-----|
 | `amplitude` | Zoom, Scale, Brightness | Overall energy, smooth |
-| `amplitude_peak` | Flash effects, Exposure | Fast transients |
 | `energy_low` | Zoom, Transform scale | Bass = "weight", slow movement |
 | `energy_mid` | Rotation speed, Pan | Melodic content, medium energy |
 | `energy_high` | Saturation, Fine detail params | Hi-hats, sparkle |
-| `onset_low` | Trigger zoom pulse, Transform snap | Kick drum hits |
-| `onset_mid` | Trigger rotation, Color shift | Snare hits |
-| `onset_high` | Trigger sparkle, Small param bumps | Hi-hat ticks |
+| `onset` | Trigger zoom pulse, Color shift | Beat/transient hits |
 | `spectral_centroid` | Color warmth, Hue shift | "Brightness" of sound |
 | `spectral_flux` | Variation weights, Chaos params | Rate of change |
+
+**Future signals (when implemented):**
+
+| Audio Signal | Good For Driving | Why |
+|--------------|------------------|-----|
 | `beat_phase` | Cyclic parameters (rotation, pan) | Syncs to tempo |
 | `pitch` | Hue (map pitch to color wheel) | Musical pitch |
-| `chroma_N` | Individual color channels | Harmonic content |
 | `vocal_presence` | Saturation, Foreground emphasis | Voice = focus |
-| `harmonic_energy` | Smooth/flowing parameters | Sustained tones |
-| `percussive_energy` | Sharp/transient parameters | Drums, attacks |
 
-### Smoothing Patterns
+### Smoothing
 
-Different signal types benefit from different attack/decay characteristics:
+Each signal track has a `smoothing` parameter (0.0 = no smoothing, up to ~0.99 = very heavy).
+Smoothing is frame-rate independent exponential smoothing applied in `AnimationController`:
 
-```rust
-/// Attack/decay smoothing for reactive visuals
-pub struct SignalSmoother {
-    /// How fast to respond to increases (0.0-1.0, higher = faster)
-    pub attack: f32,
-    /// How fast to respond to decreases (0.0-1.0, higher = faster)
-    pub decay: f32,
-    current_value: f32,
-}
-
-impl SignalSmoother {
-    pub fn process(&mut self, input: f32) -> f32 {
-        let rate = if input > self.current_value { self.attack } else { self.decay };
-        self.current_value += (input - self.current_value) * rate;
-        self.current_value
-    }
-}
+```
+alpha = 1 - smoothing^(dt / reference_dt)   // reference_dt = 1/60s
+smoothed = prev + alpha * (raw - prev)
 ```
 
-**Recommended presets:**
+**Recommended smoothing values:**
 
-| Use Case | Attack | Decay | Effect |
-|----------|--------|-------|--------|
-| Kick drum response | 0.9 | 0.1 | Fast hit, slow fade |
-| Hi-hat shimmer | 0.8 | 0.6 | Quick response both ways |
-| Bass swell | 0.3 | 0.2 | Smooth, weighty |
-| Vocal presence | 0.4 | 0.3 | Medium, natural |
-| ML signals | 0.2 | 0.2 | Very smooth (compensate for update rate) |
+| Use Case | Smoothing | Effect |
+|----------|-----------|--------|
+| Kick drum response | 0.0-0.3 | Fast, punchy |
+| Melodic/vocal | 0.5-0.7 | Medium, natural |
+| Bass swell | 0.8-0.9 | Smooth, weighty |
+| Background ambient | 0.95+ | Very slow, atmospheric |
 
-### New TrackSource Variant
+**Future:** Separate attack/decay rates for asymmetric smoothing (fast attack, slow decay for percussion).
+
+### TrackSource::Signal Variant
 
 ```rust
 // In src/animation/mod.rs
 
 pub enum TrackSource {
     Keyframes { keyframes: Vec<Keyframe> },
-    Oscillator { /* existing */ },
+    Oscillator { /* ... */ },
 
     /// Signal-driven track - value comes from any signal source
-    /// (audio analysis, .signal file, MIDI, external data, etc.)
     Signal {
-        /// Name of the signal (e.g., "energy_low", "onset_any")
-        /// Can also be a path to a .signal file
-        signal: String,
-        /// Output range mapping
-        output_min: f64,
-        output_max: f64,
-        /// Smoothing factor (0 = no smoothing, 1 = max smoothing)
-        smoothing: f64,
-        /// For trigger signals: hold time in seconds before returning to min
-        trigger_hold: Option<f64>,
-        /// For trigger signals: attack/decay envelope
-        trigger_attack: Option<f64>,
-        trigger_decay: Option<f64>,
+        signal_name: String,  // Name of signal in SignalManager (e.g., "energy_low", "onset")
+        min_output: f64,      // Value when signal is at 0.0
+        max_output: f64,      // Value when signal is at 1.0
+        smoothing: f64,       // 0.0 = none, up to ~0.99 = heavy (frame-rate independent)
     },
 }
 ```
+
+Helper constructors: `Track::signal(target, signal_name, min, max)` and `Track::signal_with_smoothing(..., smoothing)`.
 
 ### Example Animation with Signal Track
 
@@ -587,34 +519,28 @@ pub enum TrackSource {
 {
   "name": "Audio Reactive Zoom",
   "duration": 30.0,
-  "audio": {
-    "file": "music.mp3",
-    "offset": -2.5,       // Start 2.5 seconds into the audio at animation t=0
-    "fade_in": 0.0,       // Fade in duration (for export)
-    "fade_out": 2.0       // Fade out duration (for export)
-  },
   "tracks": [
     {
       "target": "Zoom",
       "source": {
-        "type": "Signal",
-        "signal": "energy_low",
-        "output_min": 1.0,
-        "output_max": 2.0,
-        "smoothing": 0.3
+        "Signal": {
+          "signal_name": "energy_low",
+          "min_output": 1.0,
+          "max_output": 2.0,
+          "smoothing": 0.3
+        }
       },
       "interpolation": "Linear"
     },
     {
       "target": "Exposure",
       "source": {
-        "type": "Signal",
-        "signal": "onset_any",
-        "output_min": 1.0,
-        "output_max": 1.5,
-        "trigger_hold": 0.1,
-        "trigger_attack": 0.01,
-        "trigger_decay": 0.2
+        "Signal": {
+          "signal_name": "onset",
+          "min_output": 1.0,
+          "max_output": 1.5,
+          "smoothing": 0.0
+        }
       },
       "interpolation": "Linear"
     }
@@ -624,107 +550,113 @@ pub enum TrackSource {
 
 ### Signal Track Evaluation
 
+Signal evaluation is handled by `AnimationController::evaluate_signal()`:
+
 ```rust
-impl Track {
-    pub fn evaluate_at(&self, time: f64, signal_manager: Option<&SignalManager>) -> Option<f64> {
-        match &self.source {
-            TrackSource::Signal { signal, output_min, output_max, smoothing, .. } => {
-                let manager = signal_manager?;
-                let raw_value = manager.get_value(signal, time)?;
+fn evaluate_signal(&mut self, signal_name, min_output, max_output, smoothing, time,
+                   signal_manager, track_idx) -> Option<Value> {
+    let manager = signal_manager?;
+    let raw_value = manager.get_value_at(signal_name, time)?;
 
-                // Apply smoothing (exponential moving average against previous frame)
-                let smoothed = self.apply_smoothing(raw_value, *smoothing);
+    // Frame-rate independent smoothing (if enabled)
+    let value = if smoothing > 0.0 {
+        let alpha = (1.0 - smoothing.powf(dt / reference_dt)) as f32;
+        prev + alpha * (raw_value - prev)
+    } else {
+        raw_value
+    };
 
-                // Map to output range
-                Some(output_min + smoothed * (output_max - output_min))
-            }
-            // ... existing variants
-        }
-    }
+    // Map signal value (0-1) to output range
+    Some(min_output + value as f64 * (max_output - min_output))
 }
 ```
+
+The `SignalManager` is passed through the call chain:
+`App::advance_animation()` → `AnimationController::evaluate_frame(Some(&signal_manager))`
 
 ---
 
-## AudioManager
+## AudioManager & AudioPlayer
 
-Central coordinator for all audio functionality.
+Audio functionality is split into two main components:
+- **AudioManager** — File loading, decoding, analysis, signal production (implements `SignalProducer`)
+- **AudioPlayer** — Playback with timeline sync (separate struct, platform-specific implementations)
 
-### Animation Audio Config
-
-Stored in the animation file:
-
-```rust
-/// Audio configuration for an animation
-#[derive(Serialize, Deserialize, Clone)]
-pub struct AnimationAudioConfig {
-    /// Path to audio file (relative to animation file, or absolute)
-    pub file: PathBuf,
-
-    /// Time offset in seconds
-    /// - Negative: skip into audio (audio at t=-offset plays at animation t=0)
-    /// - Positive: delay audio start (silence until animation reaches this time)
-    /// - Zero: audio and animation start together
-    pub offset: f64,
-
-    /// Fade in duration in seconds (for export only)
-    pub fade_in: f64,
-
-    /// Fade out duration in seconds (for export only)
-    pub fade_out: f64,
-}
-```
-
-### AudioManager Struct
+### AudioManager
 
 ```rust
 pub struct AudioManager {
-    /// Decoded audio data (if file loaded)
     audio_data: Option<AudioData>,
-
-    /// Pre-computed signals from offline analysis
-    offline_signals: HashMap<String, AudioSignal>,
-
-    /// Live capture state
-    live_capture: Option<LiveCaptureState>,
-
-    /// Current playback state
-    playback: Option<PlaybackState>,
-
-    /// Analysis configuration
-    config: AudioAnalysisConfig,
+    analyzer: AudioAnalyzer,
+    signals: HashMap<String, Signal>,
+    // ...
 }
 
 impl AudioManager {
-    /// Load and analyze an audio file (offline analysis)
-    pub fn load_file(&mut self, path: &Path) -> Result<AudioFileInfo>;
-
-    /// Get signal value at specific time (for offline playback)
-    pub fn get_signal_at(&self, signal_name: &str, time: f64) -> Option<f32>;
-
-    /// Get current signal value (for live input)
-    pub fn get_signal_live(&self, signal_name: &str) -> Option<f32>;
-
-    /// Start audio playback synced to animation
-    pub fn start_playback(&mut self, start_time: f64);
-
-    /// Seek playback to specific time
-    pub fn seek(&mut self, time: f64);
-
-    /// Stop playback
-    pub fn stop_playback(&mut self);
-
-    /// Start live audio capture
-    pub fn start_live_capture(&mut self, device: Option<&str>) -> Result<()>;
-
-    /// Stop live capture
-    pub fn stop_live_capture(&mut self);
-
-    /// Check if audio is available
+    pub fn load_file(&mut self, path: &Path) -> Result<()>;    // Desktop
+    pub fn load_bytes(&mut self, bytes: &[u8]) -> Result<()>;  // WASM
+    pub fn analyze(&mut self);                                   // Run offline analysis
+    pub fn analyze_with_config(&mut self, config: AnalysisConfig);
     pub fn has_audio(&self) -> bool;
+    pub fn duration(&self) -> Option<f64>;
+    pub fn sample_rate(&self) -> Option<u32>;
+    pub fn channels(&self) -> Option<u16>;
+    pub fn available_signals(&self) -> Vec<String>;
+    pub fn clear(&mut self);
+}
 
-    /// Get audio file info for export
-    pub fn get_audio_for_export(&self) -> Option<&AudioData>;
+// AudioManager implements SignalProducer, so signals can be imported into SignalManager:
+// signal_manager.import_from_producer(&audio_manager);
+```
+
+### AudioPlayer
+
+Separate platform-specific implementations for audio playback:
+
+```rust
+// Desktop (src/audio/playback.rs) - uses cpal
+// WASM (src/audio/playback_wasm.rs) - uses Web Audio API AudioBufferSourceNode
+pub struct AudioPlayer {
+    // Platform-specific internals
+}
+
+impl AudioPlayer {
+    pub fn new() -> Self;
+    pub fn load(&mut self, audio_data: AudioData);
+    pub fn has_audio(&self) -> bool;
+    pub fn state(&mut self) -> PlaybackState;  // Stopped | Playing | Paused
+    pub fn position_seconds(&self) -> f64;
+    pub fn duration(&self) -> Option<f64>;
+    pub fn play(&mut self) -> Result<(), PlaybackError>;
+    pub fn pause(&mut self);
+    pub fn stop(&mut self);
+    pub fn seek(&mut self, time: f64);
+    pub fn sync_to_time(&mut self, animation_time: f64);  // Drift correction (100ms threshold)
+}
+```
+
+**Desktop implementation details:**
+- Uses cpal output stream with configurable sample format (F32/I16/U16)
+- Tracks position in output frames via `Arc<AtomicU64>`
+- Divides by `output_sample_rate` (not source rate) for accurate position
+- Simple nearest-neighbor resampling when source rate != output rate
+
+**WASM implementation details:**
+- Uses `AudioContext` + `AudioBufferSourceNode` (one-shot, recreated per play)
+- Tracks position via `context.current_time()` offset arithmetic
+- Detaches `onended` callback before stopping to prevent stale async callbacks
+- Deinterleaves samples into per-channel `AudioBuffer` data
+
+### Animation Audio Config (Future)
+
+Stored in the animation file (not yet implemented):
+
+```rust
+pub struct AnimationAudioConfig {
+    pub file: PathBuf,     // Path to audio file
+    pub offset: f64,       // Time offset (negative = skip into audio)
+    pub fade_in: f64,      // Fade in duration (for export)
+    pub fade_out: f64,     // Fade out duration (for export)
 }
 ```
 
@@ -735,52 +667,41 @@ impl AudioManager {
 ### Flow
 
 ```
-Audio File (MP3/WAV/FLAC)
+Audio File (MP3/WAV/FLAC/OGG)
     │
     ▼
 ┌─────────────────────┐
-│  symphonia decode   │  → PCM samples (f32, mono, resampled to 44.1kHz)
+│  symphonia decode   │  → PCM samples (f32, interleaved)
 └─────────────────────┘
     │
     ▼
 ┌─────────────────────┐
-│  Tier 1 Analysis    │  → amplitude, amplitude_peak
-│  (128 sample hops)  │     ~344 signals/sec
+│  to_mono()          │  → Mono f32 samples
 └─────────────────────┘
     │
     ▼
-┌─────────────────────┐
-│  Tier 2 Analysis    │  → energy_low/mid/high, onsets
-│  (256-512 FFT)      │     ~172 signals/sec
-└─────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  AudioAnalyzer::analyze()                                │
+│  STFT (2048 FFT, 512 hop, Hann window, 128 mel bands)   │
+│                                                          │
+│  Per frame:                                              │
+│    → amplitude (RMS)                                     │
+│    → energy_low/mid/high (band energy from magnitudes)   │
+│    → spectral_centroid (normalized)                       │
+│    → spectral_flux (frame-to-frame difference)           │
+│  After all frames:                                       │
+│    → onset (adaptive threshold on spectral flux)         │
+└─────────────────────────────────────────────────────────┘
     │
     ▼
-┌─────────────────────┐
-│  Tier 3 Analysis    │  → spectral_centroid, spectral_flux
-│  (1024 FFT)         │     ~86 signals/sec
-└─────────────────────┘
-    │
-    ▼
-┌─────────────────────┐
-│  Tier 4 Analysis    │  → mel_bins, beat detection, BPM
-│  (4096 FFT)         │     ~22 signals/sec
-└─────────────────────┘
-    │
-    ▼
-┌─────────────────────┐
-│  Beat Grid Sync     │  → beat_phase (aligned to detected BPM)
-└─────────────────────┘
-    │
-    ▼
-HashMap<String, AudioSignal>  (all signals at their native sample rates)
+HashMap<String, Signal>  (7 signals at ~86 Hz sample rate)
 ```
 
-### Analysis is done on a background thread
+### Current Limitations
 
-- File load returns immediately with basic info (duration, format)
-- Analysis runs on background thread with progress callback
-- Signals become available as each tier completes
-- Full analysis of a 3-minute track: ~1-2 seconds
+- Analysis runs **synchronously** (blocks UI during analysis)
+- Future: Background thread with progress callback
+- Full analysis of a 3-minute track completes quickly but freezes the UI
 
 ---
 
@@ -815,99 +736,74 @@ HashMap<String, AudioSignal>  (all signals at their native sample rates)
 └─────────────────────────────────────────────────────────┘
 ```
 
-### DSP Thread Internals
-
-Detailed view of what happens inside the DSP analysis:
-
-```
-Audio Input (cpal/web-sys)
-    │
-    ├── Ring buffer → DSP Thread
-    │                     │
-    │                     ├── FFT (rustfft, 256-512 samples)
-    │                     │     │
-    │                     │     ├── Spectral features (centroid, flux, rolloff)
-    │                     │     ├── Band energy (low/mid/high)
-    │                     │     ├── Onset detection (per-band)
-    │                     │     └── Mel spectrogram → [Ring buffer for ML]
-    │                     │
-    │                     ├── [Optional] HPSS
-    │                     │     ├── Harmonic mask → cleaner pitch/chromagram
-    │                     │     └── Percussive mask → sharper onset detection
-    │                     │
-    │                     ├── [Optional] Pitch detection (YIN/MPM, separate buffer)
-    │                     │
-    │                     └── [Optional] Chromagram (larger FFT, lower rate)
-    │
-    └── [Optional] ML Thread (separate, async)
-                          │
-                          ├── tract/ort inference on mel frames
-                          └── Classification results → AtomicSignals
-```
-
-All DSP runs in one thread at 3-6ms hop rate. Optional features (HPSS, pitch, chromagram)
-can be enabled/disabled. ML inference runs asynchronously on accumulated windows.
-
 ### Lock-Free Signal Transfer
 
+Live capture uses `AtomicSignals` for lock-free audio thread → main thread transfer:
+
 ```rust
-/// Atomic signal values for lock-free audio thread → main thread transfer
 struct AtomicSignals {
-    amplitude: AtomicU32,      // f32 bits
-    amplitude_peak: AtomicU32,
+    amplitude: AtomicU32,      // f32 bits stored as u32
     energy_low: AtomicU32,
     energy_mid: AtomicU32,
     energy_high: AtomicU32,
-    onset_flags: AtomicU8,     // bit flags: low=0x01, mid=0x02, high=0x04
     spectral_centroid: AtomicU32,
     spectral_flux: AtomicU32,
+    onset: AtomicU32,
 }
 ```
 
-### Buffer Sizing for Low Latency
-
-| Setting | Value | Latency |
-|---------|-------|---------|
-| cpal buffer | 128 samples | 2.9ms |
-| Ring buffer | 256 samples | 5.8ms |
-| Tier 1 analysis | 128 samples | 0ms (runs every callback) |
-| Tier 2 FFT | 512 samples | ~6ms (overlapping) |
-| Total | | **~6ms** for Tier 1+2 signals |
+Real-time analysis runs in the cpal input callback (desktop) or ScriptProcessorNode callback (WASM).
+Results are read atomically from the main thread for display in the Signal Monitor.
 
 ---
 
-## Audio Playback
+## Audio Playback & Animation Sync
 
-### Sync Strategy
+### Sync Architecture
 
-Animation drives timing, audio follows:
+Animation drives timing, audio follows. Sync is controlled by `AnimationController.sync_audio` (toggled via UI checkbox in Animation Panel).
 
-1. `AnimationController` maintains master timeline
-2. On `play()`, `AudioManager::start_playback(current_time)` begins audio
-3. On `seek()`, `AudioManager::seek(time)` repositions audio
-4. On `pause()`, `AudioManager::pause_playback()` pauses audio
-5. No drift correction needed - both use system clock
+**State transitions** (in `src/app/animation_update.rs`):
 
-### Playback Implementation
+1. **Animation starts** → `audio_player.seek(current_time)` + `audio_player.play()`
+2. **Each frame** → `audio_player.sync_to_time(animation_time)` (seeks if >100ms drift)
+3. **Animation pauses** → `audio_player.pause()`
+4. **Animation stops** → `audio_player.stop()`
+5. **Animation auto-stops** (LoopMode::Once end) → `audio_player.stop()`
+
+### Timeline Scrubbing
+
+During timeline scrubbing (drag), audio is paused to avoid scratch artifacts.
+On drag release, audio seeks to the final position and resumes if animation is playing.
+
+```
+// In src/app/ui_handlers.rs:
+// During drag: audio_player.pause()
+// On drag release: audio_player.seek(time) + audio_player.play()
+```
+
+### Drift Correction
+
+`sync_to_time()` compares `position_seconds()` with the animation time. If the difference exceeds 100ms, it performs a seek to resync. This handles minor drift without constant seeking.
+
+### Signal Smoothing
+
+Signal tracks support exponential smoothing that is **frame-rate independent**:
 
 ```rust
-struct PlaybackState {
-    /// Audio samples ready for playback
-    samples: Arc<Vec<f32>>,
-    /// Current playback position (sample index)
-    position: Arc<AtomicUsize>,
-    /// Whether playback is active
-    playing: Arc<AtomicBool>,
-    /// cpal output stream
-    stream: cpal::Stream,
-}
+// alpha = 1 - smoothing^(dt / reference_dt)
+// At 60fps (reference), smoothing=0.9 gives alpha=0.1
+// At 30fps, alpha increases proportionally so results match
+let reference_dt = 1.0 / 60.0;
+let alpha = (1.0 - smoothing.powf(dt / reference_dt)) as f32;
+let smoothed = prev + alpha * (raw_value - prev);
 ```
 
-The cpal output callback reads from `samples` at `position`, incrementing atomically. Main thread controls `playing` and can set `position` for seeking.
+Smoothed values are cached per-track in `AnimationController.signal_smoothed`.
 
 ---
 
-## Export with Audio
+## Export with Audio (Future)
 
 ### MP4 Muxing
 
@@ -994,10 +890,9 @@ ffmpeg -y \
 
 ## UI Integration
 
-### Audio Panel (new panel in egui_dock)
+### Audio Panel
 
-Controls for audio file loading, preview, timing, live capture, and signal monitoring.
-(Waveform timeline display is in Animation panel, not here.)
+Controls for audio file loading, playback, live capture, and signal monitoring.
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -1006,64 +901,44 @@ Controls for audio file loading, preview, timing, live capture, and signal monit
 │ ── Audio File ────────────────────────────────  │
 │ File: music.mp3                       [Load]    │
 │ Duration: 3:24  |  44.1kHz  |  Stereo           │
-│ Analysis: Complete ████████████████ 100%        │
+│ Analysis: Complete                              │
 │                                                 │
-│ ── Preview & Timing ──────────────────────────  │
+│ ── Playback ─────────────────────────────────── │
 │ [▶]  [■]  0:45 / 3:24                           │
-│ [▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▂▃▄▅▆▇█▇▆▅▄▃▂▁▂▃▄]  ← scrubber │
-│                                                 │
-│ Animation offset: [ -2.5 ] sec                  │
-│   (negative = skip into audio at anim start)   │
-│   (positive = silence before audio starts)     │
-│ [Set to current position]                       │
-│                                                 │
-│ ── Export Audio Settings ─────────────────────  │
-│ Fade in:  [ 0.0 ] sec                           │
-│ Fade out: [ 2.0 ] sec                           │
+│ [────────────●──────] position slider            │
 │                                                 │
 │ ── Live Input ────────────────────────────────  │
 │ Device: [System Default        ▼]  [● Capture]  │
-│ Level: ████████░░░░░░░░ -12dB                   │
+│ Level: ████████░░░░░░░░                         │
 │                                                 │
 │ ── Signal Monitor ────────────────────────────  │
-│ ┌─────────────────────────────────────────────┐ │
-│ │ amplitude      ████████░░ 0.78              │ │
-│ │ energy_low     ███░░░░░░░ 0.32    [graph]   │ │
-│ │ energy_mid     █████░░░░░ 0.51    [graph]   │ │
-│ │ energy_high    ██░░░░░░░░ 0.18    [graph]   │ │
-│ │ spectral_cent. █████████░ 0.89              │ │
-│ │ onset_low      [●]                          │ │
-│ │ onset_mid      [ ]                          │ │
-│ │ onset_high     [●]                          │ │
-│ │ bpm            128.4                        │ │
-│ └─────────────────────────────────────────────┘ │
-│                                                 │
-│ [Show All Signals...]  [Signal History Graph]   │
+│ amplitude      ████████░░ 0.78                  │
+│ energy_low     ███░░░░░░░ 0.32                  │
+│ energy_mid     █████░░░░░ 0.51                  │
+│ energy_high    ██░░░░░░░░ 0.18                  │
+│ spectral_cent. █████████░ 0.89                  │
+│ spectral_flux  ██████░░░░ 0.62                  │
+│ onset          [●]                              │
 └─────────────────────────────────────────────────┘
 ```
 
-**Signal visualization options:**
-- Real-time meter bars (current value)
-- Mini sparkline graphs (last ~2 seconds of history)
-- Expandable full signal history graph (scrollable, shows full track analysis)
-- Onset triggers shown as blinking indicators
-- Click signal to see detailed view / copy to clipboard for animation track
+### Animation Panel Audio Integration
 
-### Animation Panel Integration
+- **Sync Audio** checkbox — toggles `AnimationController.sync_audio`
+- When enabled, loaded audio plays/pauses/stops with the animation timeline
+- Timeline scrubbing pauses audio during drag, seeks on release
 
-**Waveform display:**
-- Simple waveform overview rendered above tracks connected to audio
-- Shows full duration of audio file
-- Playhead indicator synced to animation timeline
-- No zoom/scroll for now (simple overview only)
+### Track Editor Signal Integration
 
-**When adding an Audio track:**
-1. Show dropdown of available signals (grouped by category: DSP, ML)
-2. Show output range sliders (min/max)
-3. Show smoothing preset dropdown (Kick, Hi-hat, Bass, Vocal, ML) + custom
-4. For triggers: show hold/attack/decay controls
-5. Live preview of mapped value (small meter showing current output)
-6. Waveform appears above track when audio is loaded
+- Signal name is selected via **dropdown** (populated from `SignalManager.signal_names()`)
+- No manual text entry required
+- Shows "No signals available" if no audio has been analyzed
+
+### Future UI Improvements
+
+- Waveform display above timeline
+- Signal history sparklines in monitor
+- Smoothing preset dropdown (Kick, Bass, Vocal, etc.)
 
 ---
 
@@ -1071,19 +946,17 @@ Controls for audio file loading, preview, timing, live capture, and signal monit
 
 ### Platform-Specific Backends
 
-cpal does NOT support audio input on WASM (only output). However, we can implement
-live capture using the Web Audio API directly via web-sys.
-
 | Feature | Desktop | WASM |
 |---------|---------|------|
-| Audio input | cpal | web-sys + AudioWorklet |
-| Audio output | cpal | Web Audio API |
+| Audio input | cpal | web-sys ScriptProcessorNode |
+| Audio output | cpal | Web Audio API (AudioBufferSourceNode) |
 | File decoding | symphonia | symphonia (works in WASM) |
 | File loading | filesystem | drag-drop / file picker |
-| Export with audio | FFmpeg | Not supported (video only) |
-| ML inference | tract (full speed) | tract (~2-3x slower, Tier 1 only for live) |
+| Export with audio | Not yet implemented | Not supported |
 
 ### WASM Live Capture Architecture
+
+Uses `ScriptProcessorNode` (not AudioWorklet) for simpler implementation:
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -1092,139 +965,108 @@ live capture using the Web Audio API directly via web-sys.
 │  getUserMedia() ──▶ MediaStream ──▶ MediaStreamAudioSourceNode │
 │                                              │                  │
 │                                              ▼                  │
-│                                      AudioWorkletNode           │
-│                                      (runs on audio thread)     │
-│                                              │                  │
-│                                              ▼ postMessage()    │
-│                                      MessagePort                │
+│                                    ScriptProcessorNode          │
+│                                    (onaudioprocess callback)    │
 │                                              │                  │
 └──────────────────────────────────────────────│──────────────────┘
-                                               │
-                                               ▼ (web-sys callback)
+                                               │ (direct callback)
+                                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                        WASM Module                                │
 │                                                                  │
-│  Ring Buffer ◀── audio samples (Vec<f32>)                        │
-│       │                                                          │
-│       ▼                                                          │
-│  Tier 1+2 Analysis ──▶ AtomicSignals ──▶ AudioManager API       │
+│  Audio samples ──▶ Analysis ──▶ AtomicSignals                    │
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### Implementation Details
+### WASM Audio Playback
 
-1. **Permission request:** Call `navigator.mediaDevices.getUserMedia({ audio: true })`
-2. **AudioWorklet processor:** JavaScript worklet that buffers samples and posts to main thread
-3. **web-sys bindings:** Receive audio data in Rust via message event handler
-4. **Same analysis code:** Once samples are in the ring buffer, same analysis pipeline as desktop
-
-### Required web-sys Features
-
-```toml
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = [
-    # Existing features...
-    # Audio capture
-    "AudioContext",
-    "AudioWorklet",
-    "AudioWorkletNode",
-    "AudioWorkletNodeOptions",
-    "MediaDevices",
-    "MediaStream",
-    "MediaStreamAudioSourceNode",
-    "MediaStreamConstraints",
-    "Navigator",
-    # Audio playback
-    "AudioBuffer",
-    "AudioBufferSourceNode",
-    "AudioDestinationNode",
-    "GainNode",
-] }
-```
+Uses `AudioBufferSourceNode` (one-shot nodes, recreated per play/seek):
+- Samples deinterleaved and copied to per-channel `AudioBuffer`
+- Position tracked via `AudioContext.currentTime()` offset math
+- `onended` callbacks detached before `stop()` to prevent stale async race conditions
 
 ### Limitations
 
-- **Export:** No FFmpeg in browser, so export is video-only on WASM
-  - Users can combine audio externally, or we could offer WebM muxing via browser APIs (future)
-- **File access:** Must use drag-drop or file picker (no filesystem access)
-- **Latency:** May be slightly higher than desktop (~10-15ms vs ~6ms) due to message passing overhead
+- **Export:** No FFmpeg in browser, video-only export on WASM
+- **File access:** Drag-drop or file picker only (no filesystem)
+- **ScriptProcessorNode:** Deprecated API, but AudioWorklet requires separate JS file and more complexity
 
 ---
 
 ## Implementation Phases
 
-### Phase 0: Signal System Foundation
-- [ ] Create `src/signal/mod.rs` with `Signal` struct
-- [ ] Implement `SignalType` enum (Continuous, Trigger, Scalar)
-- [ ] Implement `.signal` binary file format (read/write)
-- [ ] Create `SignalManager` with basic load/save/get operations
-- [ ] Add `TrackSource::Signal` variant to animation system
-- [ ] Signal evaluation in `Track::evaluate_at()`
+### Phase 0: Signal System Foundation ✅
+- [x] `Signal` struct with `SignalType` (Continuous, Trigger, Scalar)
+- [x] `.signal` binary file format (read/write)
+- [x] `SignalManager` with CRUD, file I/O, producer management
+- [x] `SignalProducer` trait
+- [x] `TrackSource::Signal` variant in animation system
+- [x] Signal evaluation with `SignalManager` context
+- [x] Wire `SignalManager` to App and pass through animation chain
 
-### Phase 1: Audio Infrastructure
-- [ ] Add `audio` feature flag and dependencies
-- [ ] Create `src/audio/mod.rs` with `AudioManager` (implements `SignalProducer`)
-- [ ] Implement `decode.rs` with symphonia (MP3/WAV decode)
-- [ ] Wire AudioManager to SignalManager
+### Phase 1: Audio Infrastructure ✅
+- [x] Audio dependencies (cpal, symphonia, rustfft, ringbuf) — always included, no feature flag
+- [x] `AudioManager` implementing `SignalProducer`
+- [x] Audio decoding via symphonia (MP3, WAV, FLAC, OGG)
+- [x] `AudioData` struct with interleaving, mono conversion, channel extraction
+- [x] Wire `AudioManager` to `SignalManager` via `import_from_producer()`
 
-### Phase 2: Offline Analysis
-- [ ] Port mel spectrogram processor (remove Godot dependencies)
-- [ ] Implement tiered analysis pipeline
-- [ ] Add `amplitude`, `energy_*`, `onset_*` signals
-- [ ] Add `spectral_centroid`, `spectral_flux` signals
-- [ ] Implement BPM detection and `beat_phase`
-- [ ] Background thread analysis with progress
+### Phase 2: Offline Analysis ✅
+- [x] STFT-based analysis (2048 FFT, 512 hop, Hann window, 128 mel bands)
+- [x] 7 signals: `amplitude`, `energy_low/mid/high`, `spectral_centroid`, `spectral_flux`, `onset`
+- [ ] BPM detection and `beat_phase` (future)
+- [ ] Background thread analysis with progress (currently synchronous)
 
-### Phase 3: Animation Integration
-- [ ] Add `TrackSource::Signal` variant
-- [ ] Implement audio track evaluation in `Track::evaluate_at()`
-- [ ] Signal smoothing and trigger envelope
-- [ ] Update animation serialization (load/save audio tracks)
+### Phase 3: Animation Integration ✅
+- [x] `TrackSource::Signal` with `signal_name`, `min_output`, `max_output`, `smoothing`
+- [x] Frame-rate independent exponential smoothing
+- [x] Animation serialization (load/save signal tracks)
+- [ ] Trigger envelope (attack/decay) for onset signals (future)
 
-### Phase 4: Audio Playback
-- [ ] Implement cpal output stream
-- [ ] Sync with animation timeline
-- [ ] Seek support
+### Phase 4: Audio Playback ✅
+- [x] Desktop playback via cpal (`playback.rs`) with sample-rate resampling
+- [x] WASM playback via Web Audio API (`playback_wasm.rs`) with AudioBufferSourceNode
+- [x] `sync_audio` checkbox in Animation Panel
+- [x] Audio-animation sync: start/stop/pause with animation state machine
+- [x] Drift correction via `sync_to_time()` (100ms threshold)
+- [x] Timeline scrubbing: pause during drag, seek+resume on drop
+- [x] Seek, play/pause/stop on both platforms
+- [x] End detection (desktop: atomic flag in stream callback, WASM: onended event)
+- [x] WASM: detach `onended` before stopping to prevent stale async callbacks
 
-### Phase 5: Live Capture (Desktop)
-- [ ] Implement cpal input stream (capture_native.rs)
-- [ ] Lock-free signal transfer (atomics)
-- [ ] Device selection UI
-- [ ] Low-latency Tier 1+2 analysis
+### Phase 5: Live Capture (Desktop) ✅
+- [x] cpal input stream (`capture_native.rs`)
+- [x] Lock-free `AtomicSignals` for audio thread → main thread transfer
+- [x] Device selection UI
+- [x] Real-time analysis (7 signals)
 
-### Phase 5b: Live Capture (WASM)
-- [ ] AudioWorklet processor JavaScript code
-- [ ] web-sys bindings for getUserMedia + AudioWorklet
-- [ ] Message port → ring buffer bridging
-- [ ] Permission request UI flow
-- [ ] Same analysis pipeline as desktop
+### Phase 5b: Live Capture (WASM) ✅
+- [x] ScriptProcessorNode-based capture (`capture_wasm.rs`)
+- [x] web-sys getUserMedia bindings
+- [x] Ring buffer bridging
+- [x] Permission request UI
+- [x] Same analysis pipeline as desktop
 
-### Phase 6: Export Integration
-- [ ] Modify FFmpeg pipeline to include audio input
-- [ ] Handle duration mismatches
-- [ ] Progress indication for audio muxing
+### Phase 6: Export Integration (Partial)
+- [x] Signals available during animation export (offline evaluation)
+- [x] FFmpeg pipeline with audio muxing (future)
 
-### Phase 7: UI
-- [ ] Audio panel (file info, waveform, signal meters)
-- [ ] Animation panel integration (audio track editor)
-- [ ] Live capture controls
+### Phase 7: UI ✅
+- [x] Audio panel: file info, playback controls, signal monitor, live capture controls
+- [x] Signal dropdown in track editor (populated from SignalManager)
+- [x] "Sync Audio" checkbox in Animation Panel
+- [ ] Waveform display above tracks (future)
 
 ### Phase 8: Polish
-- [ ] WASM compatibility testing (both live capture and offline)
-- [ ] Error handling and user feedback
-- [ ] Documentation
+- [x] WASM compatibility testing
+- [ ] Error handling improvements
+- [ ] Documentation updates
 
-### Phase 9: ML Analysis (Optional)
-- [ ] Add `audio-ml` feature flag with `tract-onnx` dependency
-- [ ] ML thread infrastructure (separate from DSP thread)
-- [ ] Mel spectrogram ring buffer for ML input
-- [ ] `tract` ONNX model loading and inference
-- [ ] Tier 1 model: vocal presence detection (Silero VAD or similar)
-- [ ] Tier 2 model: instrument/genre classification
-- [ ] ML signal integration with AudioManager
-- [ ] Model download/caching system (for larger models)
-- [ ] WASM testing with lightweight models
+### Phase 9: ML Analysis (Optional, Future)
+- [ ] `tract-onnx` integration for ML-derived signals
+- [ ] Vocal presence, genre, mood, instrument detection
+- [ ] See ML section below for full plan
 
 ---
 
@@ -1236,23 +1078,23 @@ web-sys = { version = "0.3", features = [
 
 ### Signal Architecture
 - **Generalized signals:** Signals are source-agnostic - audio is just one producer
-- **TrackSource::Signal:** Replaces `TrackSource::Audio` - works with any signal source
+- **TrackSource::Signal:** Works with any signal source (no separate `TrackSource::Audio`)
 - **Binary file format:** `.signal` files for storing/exchanging signals (compact, not human-readable)
 - **SignalManager:** Central coordinator for all signal sources
 - **SignalProducer trait:** Audio, MIDI, external sources all implement this
-- **Live recording:** Optional, low-priority feature (capture live signals for later replay)
+- **No feature flag:** Audio dependencies always included (zero cost when unused)
 
 ### Audio System
-- **microdsp:** Confirmed available on crates.io - will use for spectral flux detection
-- **Multiple audio files:** Single file per animation (may revisit for layering in future)
-- **WASM live capture:** Will implement via web-sys + AudioWorklet (cpal doesn't support WASM input)
-- **Waveform visualization:** Simple overview, displayed in Animation panel above connected tracks
-- **MIDI support:** Not in initial scope (potential future optional feature)
-- **Audio effects:** No - purely analysis, no audio modification
-- **Audio offset:** Support via `offset` field - negative skips into audio, positive delays start
-- **Audio preview:** Audio Panel includes play/pause/scrub controls for finding start point
-- **Export fades:** FFmpeg `afade` filter for fade in/out (configured per-animation)
-- **Signal visualization:** Audio Panel shows real-time meters + mini sparklines + expandable history
+- **Spectral flux:** Implemented directly in `AudioAnalyzer` (no external `microdsp` dependency)
+- **Separate playback:** `AudioPlayer` is independent from `AudioManager` (analysis vs playback)
+- **Platform playback:** Desktop uses cpal, WASM uses Web Audio API AudioBufferSourceNode
+- **Animation sync:** `sync_audio` flag on AnimationController, toggled via UI checkbox
+- **Scrub behavior:** Pause audio during drag, seek+resume on release (avoids scratch artifacts)
+- **Smoothing:** Frame-rate independent exponential smoothing (alpha scales with dt)
+- **Multiple audio files:** Single file per animation
+- **WASM live capture:** ScriptProcessorNode via web-sys (not AudioWorklet due to complexity)
+- **MIDI support:** Not in scope (potential future feature)
+- **Audio effects:** No - purely analysis and playback, no audio modification
 
 ---
 

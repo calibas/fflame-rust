@@ -14,6 +14,7 @@ pub mod export;
 
 pub use controller::AnimationController;
 pub use interpolation::{EasingFunction, Interpolation};
+pub use export::AudioExportConfig;
 
 /// Complete animation definition with parameter tracks
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +137,19 @@ pub enum TrackSource {
         /// Starting phase (0.0-1.0, where 1.0 = full cycle)
         #[serde(default)]
         phase: f64,
+    },
+
+    /// Signal-driven track (audio analysis, MIDI, sensors, etc.)
+    Signal {
+        /// Name of the signal to read from SignalManager
+        signal_name: String,
+        /// Value when signal is at minimum (0.0)
+        min_output: f64,
+        /// Value when signal is at maximum (1.0)
+        max_output: f64,
+        /// Optional smoothing factor (0.0 = none, 1.0 = heavy)
+        #[serde(default)]
+        smoothing: f64,
     },
 }
 
@@ -527,6 +541,42 @@ impl Track {
                 amplitude,
                 frequency,
                 phase,
+            },
+            interpolation: Interpolation::Linear,
+        }
+    }
+
+    /// Create signal-driven track
+    ///
+    /// Maps signal values (normalized 0-1) to output range [min_output, max_output]
+    pub fn signal(target: String, signal_name: String, min_output: f64, max_output: f64) -> Self {
+        Self {
+            target,
+            source: TrackSource::Signal {
+                signal_name,
+                min_output,
+                max_output,
+                smoothing: 0.0,
+            },
+            interpolation: Interpolation::Linear, // Not used for signals
+        }
+    }
+
+    /// Create signal-driven track with smoothing
+    pub fn signal_with_smoothing(
+        target: String,
+        signal_name: String,
+        min_output: f64,
+        max_output: f64,
+        smoothing: f64,
+    ) -> Self {
+        Self {
+            target,
+            source: TrackSource::Signal {
+                signal_name,
+                min_output,
+                max_output,
+                smoothing,
             },
             interpolation: Interpolation::Linear,
         }
