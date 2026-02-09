@@ -548,19 +548,19 @@ impl<'a> PanelViewer<'a> {
     fn handle_fractal_drag(&mut self, drag_delta: egui::Vec2, panel_size: egui::Vec2) {
         let config = self.context.config_manager.active_config();
 
-        // Convert screen space delta to fractal space
-        // Invert both X and Y (drag right = pan left, drag down = pan up)
-        let screen_dx = -drag_delta.x / panel_size.x;
-        let screen_dy = -drag_delta.y / panel_size.y;
+        // Convert screen pixel delta to fractal space
+        // Use width for both axes so drag speed is uniform regardless of aspect ratio
+        // (dividing Y by panel_size.y made vertical panning slow on tall viewports)
+        let scale = 4.0 / (config.zoom * panel_size.x);
+        let dx = -drag_delta.x * scale;
+        let dy = -drag_delta.y * scale;
 
         // Apply rotation (negate to convert screen to fractal space)
         let cos_r = (-config.rotation).cos();
         let sin_r = (-config.rotation).sin();
 
-        // Scale by zoom (4.0 is the full visible range: -2 to +2)
-        let scale = 4.0 / config.zoom;
-        let fractal_dx = (screen_dx * cos_r - screen_dy * sin_r) * scale;
-        let fractal_dy = (screen_dx * sin_r + screen_dy * cos_r) * scale;
+        let fractal_dx = dx * cos_r - dy * sin_r;
+        let fractal_dy = dx * sin_r + dy * cos_r;
 
         let new_pan_x = config.pan_x + fractal_dx;
         let new_pan_y = config.pan_y + fractal_dy;
