@@ -526,8 +526,8 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 name: "scale".to_string(),
                 param_type: ParamType::Float,
                 default_value: 3.0,
-                min_value: Some(0.5),
-                max_value: Some(10.0),
+                min_value: Some(0.1),
+                max_value: Some(100.0),
             },
             EffectParameter {
                 name: "speed".to_string(),

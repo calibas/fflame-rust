@@ -572,7 +572,7 @@ fn render_track_editor_panel_content(
         // Edit mode: Show target as read-only label
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            ui.strong(&state.new_track_target);
+            ui.strong(path_to_display(&state.new_track_target));
         });
     } else {
         // Add mode: Show editable target selector
@@ -580,7 +580,7 @@ fn render_track_editor_panel_content(
         if !state.new_track_target.is_empty() {
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                ui.strong(&state.new_track_target);
+                ui.strong(path_to_display(&state.new_track_target));
                 if ui.small_button("🗑").clicked() {
                     state.new_track_target.clear();
                 }
@@ -633,14 +633,14 @@ fn render_track_editor_panel_content(
             // Edit mode: Show target Y as read-only label
             ui.horizontal(|ui| {
                 ui.label("→");
-                ui.strong(&state.new_track_target_y);
+                ui.strong(path_to_display(&state.new_track_target_y));
             });
         } else {
             // Add mode: Show editable target Y selector
             if !state.new_track_target_y.is_empty() {
                 ui.horizontal(|ui| {
                     ui.label("→");
-                    ui.strong(&state.new_track_target_y);
+                    ui.strong(path_to_display(&state.new_track_target_y));
                     if ui.small_button("🗑").clicked() {
                         state.new_track_target_y.clear();
                     }
