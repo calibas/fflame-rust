@@ -222,6 +222,11 @@ impl AudioManager {
     pub fn available_signals(&self) -> Vec<&str> {
         self.signals.keys().map(|s| s.as_str()).collect()
     }
+
+    /// Insert or replace a signal by name.
+    pub fn insert_signal(&mut self, name: String, signal: Signal) {
+        self.signals.insert(name, signal);
+    }
 }
 
 impl Default for AudioManager {

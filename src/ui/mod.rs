@@ -1,5 +1,5 @@
 pub mod animation_panel;
-pub mod audio_panel;
+pub mod signal_panel;
 mod config_dialog;
 mod effects_panel;
 mod export_panel;
@@ -114,8 +114,8 @@ pub struct EguiLayer {
     // Xaos editor state
     xaos_editor_state: xaos_editor::XaosEditorState,
 
-    // Audio panel state
-    audio_panel_state: audio_panel::AudioPanelState,
+    // Signal panel state
+    pub(crate) signal_panel_state: signal_panel::SignalPanelState,
 
     // WASM clipboard bridge
     #[cfg(target_arch = "wasm32")]
@@ -170,7 +170,7 @@ impl EguiLayer {
             fractal_browser_panel: None,
             density_histogram: crate::renderer::DensityHistogram::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
-            audio_panel_state: audio_panel::AudioPanelState::new(),
+            signal_panel_state: signal_panel::SignalPanelState::new(),
             #[cfg(target_arch = "wasm32")]
             web_clipboard: crate::web_clipboard::WebClipboard::install(),
         }
@@ -303,6 +303,7 @@ impl EguiLayer {
         audio_manager: &mut crate::audio::AudioManager,
         audio_player: &mut crate::audio::AudioPlayer,
         audio_capture: &mut crate::audio::AudioCapture,
+        signal_manager: &mut crate::signal::SignalManager,
         signal_names: &[String],
     ) -> UiResponse {
         let mut raw_input = self.state.take_egui_input(window);
@@ -371,6 +372,10 @@ impl EguiLayer {
         // Audio file loading
         let mut load_audio_file = false;
 
+        // Signal file load/save
+        let mut load_signal_file = false;
+        let mut save_signal_file: Option<String> = None;
+
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
         let menu_state = MenuState {
@@ -386,6 +391,8 @@ impl EguiLayer {
 
         // Get fractal texture ID before the closure (avoid borrow conflict)
         let fractal_texture_id = self.fractal_texture_id();
+        // Capture animation time before closure to avoid borrow conflict with animation_controller
+        let anim_current_time = animation_controller.current_time;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Debug: Print font info once after fonts are available
@@ -551,12 +558,16 @@ impl EguiLayer {
                         // Xaos editor state
                         xaos_editor_state: &mut self.xaos_editor_state,
 
-                        // Audio panel state
+                        // Signal panel state
                         audio_manager,
                         audio_player,
                         audio_capture,
-                        audio_panel_state: &mut self.audio_panel_state,
+                        signal_panel_state: &mut self.signal_panel_state,
+                        signal_manager,
+                        current_time: anim_current_time,
                         load_audio_file: &mut load_audio_file,
+                        load_signal_file: &mut load_signal_file,
+                        save_signal_file: &mut save_signal_file,
                     },
                 });
 
@@ -774,6 +785,8 @@ impl EguiLayer {
             generated_flame,
             generated_batch,
             load_audio_file,
+            load_signal_file,
+            save_signal_file,
         }
     }
 

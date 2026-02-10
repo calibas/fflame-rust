@@ -40,6 +40,11 @@ pub struct Animation {
     #[serde(default)]
     pub circular_tracks: Vec<CircularTrack>,
 
+    /// Signal generator configs (procedural waveforms)
+    /// Regenerated into SignalManager on load; no binary data in .anim files.
+    #[serde(default)]
+    pub generators: Vec<crate::signal::generator::GeneratorConfig>,
+
     /// Looping behavior
     pub loop_mode: LoopMode,
 }
@@ -231,6 +236,7 @@ impl Animation {
             duration,
             tracks: Vec::new(),
             circular_tracks: Vec::new(),
+            generators: Vec::new(),
             loop_mode: LoopMode::Once,
         }
     }
@@ -243,6 +249,7 @@ impl Animation {
             duration,
             tracks: Vec::new(),
             circular_tracks: Vec::new(),
+            generators: Vec::new(),
             loop_mode: LoopMode::Once,
         }
     }
