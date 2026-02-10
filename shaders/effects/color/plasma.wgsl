@@ -44,17 +44,18 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return output;
 }
 
-fn plasma(uv: vec2<f32>, scale: f32, time: f32) -> f32 {
+fn plasma(uv: vec2<f32>, scale: f32, time: f32, dir_phase: f32) -> f32 {
     let p = uv * scale;
+    let t = time + dir_phase;
 
-    var v = sin(p.x + time);
-    v += sin((p.y + time) * 0.5);
-    v += sin((p.x + p.y + time) * 0.5);
+    var v = sin(p.x + t);
+    v += sin((p.y + t) * 0.5);
+    v += sin((p.x + p.y + t) * 0.5);
 
-    // Circular pattern
-    let cx = p.x + 0.5 * sin(time * 0.2);
-    let cy = p.y + 0.5 * cos(time * 0.3);
-    v += sin(sqrt(cx * cx + cy * cy + 1.0) + time);
+    // Circular pattern (center orbits via sin/cos)
+    let cx = p.x + 0.5 * sin(t * 0.25);
+    let cy = p.y + 0.5 * cos(t * 0.5);
+    v += sin(sqrt(cx * cx + cy * cy + 1.0) + t);
 
     return v * 0.25;  // Normalize to roughly -1 to 1
 }
@@ -79,12 +80,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let blend_mode = i32(get_param(4u));
     let direction = get_param(5u) * PI / 180.0;
 
-    // Compute directional time offset and apply to UV
-    let time_offset = vec2<f32>(cos(direction), sin(direction)) * time * 0.1;
-    let animated_uv = input.uv + time_offset;
+    // Per-pixel phase offset along direction axis creates apparent motion
+    // Each pixel sees the same animation but offset in time, so the pattern
+    // appears to travel in the chosen direction while keeping a fixed loop period of 8*PI
+    let dir_vec = vec2<f32>(cos(direction), sin(direction));
+    let dir_phase = dot(input.uv * scale, dir_vec);
 
     // Generate plasma with directional movement
-    let v = plasma(animated_uv, scale, time);
+    let v = plasma(input.uv, scale, time, dir_phase);
     let plasma_rgb = plasma_color(v);
 
     // Apply blend mode using shared library
