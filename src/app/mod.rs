@@ -798,6 +798,7 @@ impl App {
             &mut self.audio_manager,
             &mut self.audio_player,
             &mut self.audio_capture,
+            &mut self.signal_manager,
             &signal_names,
         );
 

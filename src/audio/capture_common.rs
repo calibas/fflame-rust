@@ -48,6 +48,8 @@ pub struct AtomicSignals {
     pub spectral_centroid: AtomicU32,
     pub spectral_flux: AtomicU32,
     pub onset: AtomicU32,
+    pub live_bpm: AtomicU32,
+    pub live_beat_phase: AtomicU32,
 }
 
 impl AtomicSignals {
@@ -117,6 +119,22 @@ impl AtomicSignals {
 
     pub fn get_onset(&self) -> f32 {
         Self::load_f32(&self.onset)
+    }
+
+    pub fn set_live_bpm(&self, value: f32) {
+        Self::store_f32(&self.live_bpm, value);
+    }
+
+    pub fn get_live_bpm(&self) -> f32 {
+        Self::load_f32(&self.live_bpm)
+    }
+
+    pub fn set_live_beat_phase(&self, value: f32) {
+        Self::store_f32(&self.live_beat_phase, value);
+    }
+
+    pub fn get_live_beat_phase(&self) -> f32 {
+        Self::load_f32(&self.live_beat_phase)
     }
 }
 
@@ -199,6 +217,22 @@ pub(crate) struct RealtimeAnalyzer {
     max_energy_mid: f32,
     max_energy_high: f32,
     max_flux: f32,
+    // Live BPM detection state
+    /// Ring buffer of raw bass energy values for autocorrelation
+    bass_energy_ring: Vec<f32>,
+    /// Write position in ring buffer
+    bass_ring_pos: usize,
+    /// Number of valid samples in ring buffer
+    bass_ring_count: usize,
+    /// Frames since last BPM analysis
+    frames_since_bpm_analysis: usize,
+    /// Current smoothed BPM estimate
+    smoothed_bpm: f32,
+    /// Running beat phase (0-1, wraps each beat)
+    beat_phase: f32,
+    /// Analysis rate: how many FFT frames per second
+    /// (used to compute beat phase increment)
+    fft_frames_per_sec: f32,
 }
 
 impl RealtimeAnalyzer {
@@ -206,6 +240,12 @@ impl RealtimeAnalyzer {
         let window: Vec<f32> = (0..fft_size)
             .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / (fft_size - 1) as f32).cos()))
             .collect();
+
+        // With 50% overlap, FFT frames happen every fft_size/2 samples
+        let fft_frames_per_sec = sample_rate / (fft_size as f32 / 2.0);
+
+        // Ring buffer for ~8 seconds of bass energy at FFT frame rate
+        let ring_size = (fft_frames_per_sec * 8.0) as usize;
 
         Self {
             fft_size,
@@ -221,6 +261,13 @@ impl RealtimeAnalyzer {
             max_energy_mid: 0.1,
             max_energy_high: 0.1,
             max_flux: 0.1,
+            bass_energy_ring: vec![0.0; ring_size],
+            bass_ring_pos: 0,
+            bass_ring_count: 0,
+            frames_since_bpm_analysis: 0,
+            smoothed_bpm: 0.0,
+            beat_phase: 0.0,
+            fft_frames_per_sec,
         }
     }
 
@@ -328,6 +375,142 @@ impl RealtimeAnalyzer {
 
         // Store magnitudes for next frame
         self.prev_magnitudes.copy_from_slice(&magnitudes);
+
+        // ── Live BPM detection ──────────────────────────────────────────────
+        // Store raw (un-normalized) bass energy in ring buffer
+        self.bass_energy_ring[self.bass_ring_pos] = low_energy;
+        self.bass_ring_pos = (self.bass_ring_pos + 1) % self.bass_energy_ring.len();
+        if self.bass_ring_count < self.bass_energy_ring.len() {
+            self.bass_ring_count += 1;
+        }
+        self.frames_since_bpm_analysis += 1;
+
+        // Run BPM analysis every ~2 seconds of frames, need ≥4 seconds of data
+        let analysis_interval = (self.fft_frames_per_sec * 2.0) as usize;
+        let min_samples_for_bpm = (self.fft_frames_per_sec * 4.0) as usize;
+
+        if self.frames_since_bpm_analysis >= analysis_interval
+            && self.bass_ring_count >= min_samples_for_bpm
+        {
+            self.frames_since_bpm_analysis = 0;
+
+            // Flatten ring buffer into contiguous slice for autocorrelation
+            let count = self.bass_ring_count;
+            let ring_len = self.bass_energy_ring.len();
+            let start = if count < ring_len {
+                0
+            } else {
+                self.bass_ring_pos
+            };
+
+            let mut energy_flat = Vec::with_capacity(count);
+            for i in 0..count {
+                energy_flat.push(self.bass_energy_ring[(start + i) % ring_len]);
+            }
+
+            if let Some(new_bpm) = Self::detect_bpm_live(&energy_flat, self.fft_frames_per_sec as f64) {
+                if self.smoothed_bpm <= 0.0 {
+                    // First detection: use directly
+                    self.smoothed_bpm = new_bpm;
+                } else {
+                    // Exponential smoothing
+                    self.smoothed_bpm = self.smoothed_bpm * 0.7 + new_bpm * 0.3;
+                }
+                signals.set_live_bpm(self.smoothed_bpm);
+            }
+        }
+
+        // Update beat phase based on current BPM estimate
+        if self.smoothed_bpm > 0.0 {
+            // beats per second = bpm / 60
+            // phase increment per FFT frame = (bpm / 60) / fft_frames_per_sec
+            let phase_inc = self.smoothed_bpm / 60.0 / self.fft_frames_per_sec;
+            self.beat_phase += phase_inc;
+            if self.beat_phase >= 1.0 {
+                self.beat_phase -= 1.0;
+            }
+            signals.set_live_beat_phase(self.beat_phase);
+        }
+    }
+
+    /// Detect BPM from bass energy data using autocorrelation.
+    /// `signal_rate` is the number of energy samples per second (FFT frame rate).
+    fn detect_bpm_live(energy: &[f32], signal_rate: f64) -> Option<f32> {
+        if energy.len() < (signal_rate * 4.0) as usize {
+            return None;
+        }
+
+        let min_bpm = 60.0f64;
+        let max_bpm = 200.0f64;
+        let min_lag = (signal_rate * 60.0 / max_bpm).ceil() as usize;
+        let max_lag = (signal_rate * 60.0 / min_bpm).floor() as usize;
+
+        if max_lag >= energy.len() || min_lag >= max_lag {
+            return None;
+        }
+
+        let mean: f32 = energy.iter().sum::<f32>() / energy.len() as f32;
+
+        let mut corr_zero = 0.0f32;
+        for v in energy {
+            let d = v - mean;
+            corr_zero += d * d;
+        }
+        if corr_zero < 1e-10 {
+            return None;
+        }
+
+        let mut best_lag = min_lag;
+        let mut best_corr = f32::NEG_INFINITY;
+
+        for lag in min_lag..=max_lag {
+            let mut corr = 0.0f32;
+            let n = energy.len() - lag;
+            for i in 0..n {
+                corr += (energy[i] - mean) * (energy[i + lag] - mean);
+            }
+            corr /= corr_zero;
+
+            if corr > best_corr {
+                best_corr = corr;
+                best_lag = lag;
+            }
+        }
+
+        if best_corr < 0.05 {
+            return None;
+        }
+
+        let bpm = (signal_rate * 60.0 / best_lag as f64) as f32;
+
+        // Resolve half/double time ambiguity: prefer 80-160 BPM range
+        let preferred_min = 80.0f32;
+        let preferred_max = 160.0f32;
+
+        let autocorr_at = |lag: usize| -> f32 {
+            if lag >= energy.len() { return 0.0; }
+            let n = energy.len() - lag;
+            let mut c = 0.0f32;
+            for i in 0..n {
+                c += (energy[i] - mean) * (energy[i + lag] - mean);
+            }
+            c / corr_zero
+        };
+
+        let mut final_bpm = bpm;
+        if bpm < preferred_min && bpm * 2.0 <= preferred_max {
+            let double_corr = autocorr_at(best_lag / 2);
+            if double_corr > best_corr * 0.7 {
+                final_bpm = bpm * 2.0;
+            }
+        } else if bpm > preferred_max && bpm / 2.0 >= preferred_min {
+            let half_corr = autocorr_at(best_lag * 2);
+            if half_corr > best_corr * 0.7 {
+                final_bpm = bpm / 2.0;
+            }
+        }
+
+        Some((final_bpm * 10.0).round() / 10.0)
     }
 }
 
@@ -381,6 +564,8 @@ pub(crate) fn live_signal_names() -> Vec<String> {
         "live_spectral_centroid".to_string(),
         "live_spectral_flux".to_string(),
         "live_onset".to_string(),
+        "live_bpm".to_string(),
+        "live_beat_phase".to_string(),
     ]
 }
 
@@ -394,6 +579,8 @@ pub(crate) fn get_live_signal_value(signals: &AtomicSignals, name: &str) -> Opti
         "live_spectral_centroid" => Some(signals.get_spectral_centroid()),
         "live_spectral_flux" => Some(signals.get_spectral_flux()),
         "live_onset" => Some(signals.get_onset()),
+        "live_bpm" => Some(signals.get_live_bpm()),
+        "live_beat_phase" => Some(signals.get_live_beat_phase()),
         _ => None,
     }
 }
@@ -501,7 +688,7 @@ mod tests {
     #[test]
     fn test_live_signal_names() {
         let names = live_signal_names();
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 9);
         assert!(names.contains(&"live_amplitude".to_string()));
         assert!(names.contains(&"live_energy_low".to_string()));
         assert!(names.contains(&"live_onset".to_string()));
