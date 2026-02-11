@@ -371,7 +371,12 @@ impl<'a> PanelViewer<'a> {
                 log::info!("Animation '{}' has embedded config, loading it", animation.name);
                 *self.context.selected_preset_config = Some(config);
             }
+            let generators = animation.generators.clone();
+            let duration = animation.duration;
             self.context.animation_controller.load(animation);
+            self.context.signal_panel_state.restore_generators(
+                generators, self.context.signal_manager, duration,
+            );
         }
 
         // Handle animation load trigger (WASM only - uses native file picker)

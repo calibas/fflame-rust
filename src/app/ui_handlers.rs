@@ -787,23 +787,12 @@ impl App {
                                 log::error!("Failed to load animation's embedded config: {}", e);
                             }
                         }
-                        // Restore generators from animation to panel state + SignalManager
                         let generators = animation.generators.clone();
+                        let duration = animation.duration;
                         self.animation_controller.load(animation);
-
-                        // Regenerate generator signals from config
-                        self.egui_layer.signal_panel_state.generators = generators.clone();
-                        let duration = self.animation_controller.animation
-                            .as_ref().map(|a| a.duration).unwrap_or(10.0);
-                        for gen in &generators {
-                            let signal = gen.generate_signal(duration, 100.0);
-                            self.signal_manager.insert(signal);
-                        }
-                        if !generators.is_empty() {
-                            // Set generator counter to avoid name collisions
-                            self.egui_layer.signal_panel_state.generator_counter = generators.len();
-                        }
-                        log::info!("Animation loaded successfully ({} generators)", generators.len());
+                        self.egui_layer.signal_panel_state.restore_generators(
+                            generators, &mut self.signal_manager, duration,
+                        );
                     }
                     Err(e) => {
                         log::error!("Failed to parse animation JSON: {}", e);
