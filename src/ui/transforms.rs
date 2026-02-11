@@ -489,7 +489,6 @@ fn render_enabled_variation(
             egui::Slider::new(&mut value, -5.0..=5.0)
                 .text(display_name)
                 .drag_value_speed(0.1)
-                .step_by(0.1)
                 .clamping(egui::SliderClamping::Never)
         );
 
@@ -1050,7 +1049,6 @@ fn render_final_transform(
                                         egui::Slider::new(&mut value, -5.0..=5.0)
                                             .text(display_name)
                                             .drag_value_speed(0.1)
-                                            .step_by(0.1)
                                             .clamping(egui::SliderClamping::Never)
                                     );
 

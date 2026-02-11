@@ -53,6 +53,25 @@ impl SignalPanelState {
         Self::default()
     }
 
+    /// Restore generators from a loaded animation into panel state and SignalManager.
+    /// Called from both desktop (panel_viewer) and WASM (ui_handlers) animation load paths.
+    pub fn restore_generators(
+        &mut self,
+        generators: Vec<GeneratorConfig>,
+        signal_manager: &mut crate::signal::SignalManager,
+        animation_duration: f64,
+    ) {
+        self.generators = generators;
+        if !self.generators.is_empty() {
+            self.generator_counter = self.generators.len();
+            for gen in &self.generators {
+                let signal = gen.generate_signal(animation_duration, 100.0);
+                signal_manager.insert(signal);
+            }
+            log::info!("Restored {} generators from animation", self.generators.len());
+        }
+    }
+
     /// Refresh the list of available audio devices
     pub fn refresh_device_list(&mut self) {
         self.device_list = AudioCapture::list_devices();
@@ -76,36 +95,31 @@ pub fn render_signal_panel(
     load_signal_file: &mut bool,
     save_signal_file: &mut Option<String>,
 ) {
-    // Top-level section: Audio (collapsible, contains file/playback/capture)
-    egui::CollapsingHeader::new(t!("signal.audio_section"))
+    // Top-level section: Audio File
+    egui::CollapsingHeader::new(t!("audio.file_section"))
         .default_open(true)
         .show(ui, |ui| {
-            // Sub-section: Audio File
-            egui::CollapsingHeader::new(t!("audio.file_section"))
-                .default_open(true)
-                .show(ui, |ui| {
-                    render_file_section(ui, audio_manager, audio_player, panel_state, load_audio_file);
-                });
+            render_file_section(ui, audio_manager, audio_player, panel_state, load_audio_file);
+        });
 
-            ui.add_space(4.0);
+    ui.add_space(4.0);
 
-            // Sub-section: Playback Controls (if audio loaded)
-            if audio_manager.has_audio() {
-                egui::CollapsingHeader::new(t!("audio.playback_section"))
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        render_playback_section(ui, audio_player, audio_manager);
-                    });
+    // Sub-section: Playback Controls (if audio loaded)
+    if audio_manager.has_audio() {
+        egui::CollapsingHeader::new(t!("audio.playback_section"))
+            .default_open(true)
+            .show(ui, |ui| {
+                render_playback_section(ui, audio_player, audio_manager);
+            });
 
-                ui.add_space(4.0);
-            }
+        ui.add_space(4.0);
+    }
 
-            // Sub-section: Live Capture
-            egui::CollapsingHeader::new(t!("audio.live_section"))
-                .default_open(false)
-                .show(ui, |ui| {
-                    render_live_capture_section(ui, audio_capture, panel_state);
-                });
+    // Top-level sectionn: Live Capture
+    egui::CollapsingHeader::new(t!("audio.live_section"))
+        .default_open(false)
+        .show(ui, |ui| {
+            render_live_capture_section(ui, audio_capture, panel_state);
         });
 
     ui.add_space(8.0);
