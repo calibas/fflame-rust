@@ -116,12 +116,16 @@ pub struct PanelContext<'a> {
     // Xaos editor state
     pub xaos_editor_state: &'a mut super::xaos_editor::XaosEditorState,
 
-    // Audio panel state
+    // Signal panel state
     pub audio_manager: &'a mut crate::audio::AudioManager,
     pub audio_player: &'a mut crate::audio::AudioPlayer,
     pub audio_capture: &'a mut crate::audio::AudioCapture,
-    pub audio_panel_state: &'a mut super::audio_panel::AudioPanelState,
+    pub signal_panel_state: &'a mut super::signal_panel::SignalPanelState,
+    pub signal_manager: &'a mut crate::signal::SignalManager,
+    pub current_time: f64,
     pub load_audio_file: &'a mut bool,
+    pub load_signal_file: &'a mut bool,
+    pub save_signal_file: &'a mut Option<String>,
 }
 
 /// Viewer for rendering each panel type
@@ -198,8 +202,8 @@ impl<'a> TabViewer for PanelViewer<'a> {
             PanelType::XaosEditor => {
                 self.render_xaos_editor_panel(ui);
             }
-            PanelType::Audio => {
-                self.render_audio_panel(ui);
+            PanelType::Signal => {
+                self.render_signal_panel(ui);
             }
         }
     }
@@ -367,7 +371,12 @@ impl<'a> PanelViewer<'a> {
                 log::info!("Animation '{}' has embedded config, loading it", animation.name);
                 *self.context.selected_preset_config = Some(config);
             }
+            let generators = animation.generators.clone();
+            let duration = animation.duration;
             self.context.animation_controller.load(animation);
+            self.context.signal_panel_state.restore_generators(
+                generators, self.context.signal_manager, duration,
+            );
         }
 
         // Handle animation load trigger (WASM only - uses native file picker)
@@ -379,6 +388,11 @@ impl<'a> PanelViewer<'a> {
 
         // Handle animation save response
         if response.save_animation {
+            // Sync generators from panel state → animation before saving
+            if let Some(ref mut animation) = self.context.animation_controller.animation {
+                animation.generators = self.context.signal_panel_state.generators.clone();
+            }
+
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(ref animation) = self.context.animation_controller.animation {
                 // Clone animation and embed current config
@@ -1031,15 +1045,24 @@ impl<'a> PanelViewer<'a> {
         );
     }
 
-    /// Render Audio panel (audio-reactive animations)
-    fn render_audio_panel(&mut self, ui: &mut egui::Ui) {
-        super::audio_panel::render_audio_panel(
+    /// Render Signal panel (signals, audio, generators)
+    fn render_signal_panel(&mut self, ui: &mut egui::Ui) {
+        let animation_duration = self.context.animation_controller.animation
+            .as_ref()
+            .map(|a| a.duration)
+            .unwrap_or(10.0);
+        super::signal_panel::render_signal_panel(
             ui,
             self.context.audio_manager,
             self.context.audio_player,
             self.context.audio_capture,
-            self.context.audio_panel_state,
+            self.context.signal_panel_state,
+            self.context.signal_manager,
+            self.context.current_time,
+            animation_duration,
             self.context.load_audio_file,
+            self.context.load_signal_file,
+            self.context.save_signal_file,
         );
     }
 }

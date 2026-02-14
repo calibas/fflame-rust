@@ -631,6 +631,50 @@ impl App {
                 super::trigger_browser_file_picker_binary(".mp3,.wav,.flac,.ogg", ctx, "pending_audio_load_bytes");
             }
         }
+
+        // Handle signal file loading (.signal binary format)
+        if ui_response.load_signal_file {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Signal Files", &["signal"])
+                    .pick_file()
+                {
+                    match self.signal_manager.load_from_file(&path) {
+                        Ok(signal) => {
+                            let name = signal.name.clone();
+                            log::info!("Loaded signal file: {} ({})", name, path.display());
+                            self.egui_layer.signal_panel_state.loaded_signal_files.push(name);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to load signal file: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle signal file saving
+        if let Some(ref signal_name) = ui_response.save_signal_file {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let default_name = format!("{}.signal", signal_name);
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Signal Files", &["signal"])
+                    .set_file_name(&default_name)
+                    .save_file()
+                {
+                    match self.signal_manager.save_to_file(signal_name, &path) {
+                        Ok(()) => {
+                            log::info!("Saved signal '{}' to {}", signal_name, path.display());
+                        }
+                        Err(e) => {
+                            log::error!("Failed to save signal file: {}", e);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Handle undo/redo from UI buttons
@@ -743,8 +787,12 @@ impl App {
                                 log::error!("Failed to load animation's embedded config: {}", e);
                             }
                         }
+                        let generators = animation.generators.clone();
+                        let duration = animation.duration;
                         self.animation_controller.load(animation);
-                        log::info!("Animation loaded successfully");
+                        self.egui_layer.signal_panel_state.restore_generators(
+                            generators, &mut self.signal_manager, duration,
+                        );
                     }
                     Err(e) => {
                         log::error!("Failed to parse animation JSON: {}", e);

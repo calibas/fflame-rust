@@ -64,7 +64,7 @@ menu:
   window_random_generator: "🎲 Random Generator"
   window_effects: "✨ Effects"
   window_xaos_editor: "🔀 Xaos Editor"
-  window_audio: "🎵 Audio"
+  window_signal: "📊 Signals"
 
   # Window Menu - Workspace layouts
   reset_workspace: "🔄 Reset Workspace"
@@ -132,7 +132,7 @@ panels:
   settings: "Settings"
   tone_mapping: "Tone Mapping"
   xaos_editor: "Xaos Editor"
-  audio: "Audio"
+  signal: "Signals"
 
 # Random Generator Panel
 random_generator:
@@ -1504,7 +1504,22 @@ effects:
       intensity: "Intensity"
       blend_mode: "Blend Mode"
 
-# Audio Panel (optional feature)
+# Signal Panel
+signal:
+  generators_section: "Signal Generators"
+  files_section: "Signal Files"
+  no_generators: "No generators. Click '+' to add a waveform generator."
+  add_generator: "+"
+  generator_name: "Name"
+  generator_waveform: "Waveform"
+  generator_frequency: "Freq (Hz)"
+  generator_phase: "Phase"
+  generator_delete: "🗑"
+  no_signal_files: "No signal files loaded."
+  load_signal_file: "Load Signal..."
+  save_signal: "Save"
+
+# Audio (sub-section of Signal Panel)
 audio:
   # Section headers
   file_section: "Audio File"

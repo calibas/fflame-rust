@@ -1,15 +1,26 @@
 use std::sync::Arc;
+use std::mem::ManuallyDrop;
 use winit::window::Window;
 use egui_wgpu::wgpu::*;
 
 pub struct GpuContext {
     #[allow(dead_code)]
     pub instance: Instance,
-    pub surface: Surface<'static>,
+    /// Wrapped in ManuallyDrop so reinit() can drop the old surface
+    /// before creating a new one (OS only allows one swap chain per window).
+    /// Deref makes this transparent — all existing code works unchanged.
+    pub surface: ManuallyDrop<Surface<'static>>,
     pub device: Arc<Device>,
     pub queue: Arc<Queue>,
     pub config: SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
+}
+
+impl Drop for GpuContext {
+    fn drop(&mut self) {
+        // SAFETY: surface is always valid except briefly during reinit()
+        unsafe { ManuallyDrop::drop(&mut self.surface); }
+    }
 }
 
 impl GpuContext {
@@ -227,7 +238,7 @@ impl GpuContext {
 
         Ok(Self {
             instance,
-            surface,
+            surface: ManuallyDrop::new(surface),
             device: Arc::new(device),
             queue: Arc::new(queue),
             config,
@@ -262,6 +273,52 @@ impl GpuContext {
             self.surface.configure(&self.device, &self.config);
             log::info!("Updated present mode: {:?}", present_mode);
         }
+    }
+
+    /// Full GPU reinitialization: new instance, adapter, device, queue, and surface.
+    /// Called after device loss (e.g. Windows sleep/wake). Uses pollster::block_on
+    /// for the async adapter/device calls, which complete synchronously on desktop.
+    /// Preserves current size and present mode from the old config.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn reinit(&mut self, window: Arc<Window>) -> anyhow::Result<()> {
+        log::info!("Full GPU reinitialization starting...");
+        let old_size = self.size;
+        let old_present_mode = self.config.present_mode;
+
+        // Flush any in-flight GPU work before releasing resources.
+        // The device may be lost, so ignore poll errors.
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
+
+        // SAFETY: Drop old surface to release the window's swap chain.
+        // The OS only allows one swap chain per window, so we must release
+        // the old one before GpuContext::new() creates a new one.
+        // If new() fails after this, we panic — there's no way to restore a valid surface.
+        unsafe { ManuallyDrop::drop(&mut self.surface); }
+
+        let mut new_ctx = ManuallyDrop::new(
+            pollster::block_on(Self::new(window))
+                .expect("GPU reinitialization failed — cannot recover from device loss")
+        );
+
+        // SAFETY: We're moving all fields out of new_ctx and preventing its Drop
+        // from running (via ManuallyDrop). The old surface was already dropped above.
+        unsafe {
+            self.instance = std::ptr::read(&new_ctx.instance);
+            self.surface = std::ptr::read(&new_ctx.surface);
+            self.device = std::ptr::read(&new_ctx.device);
+            self.queue = std::ptr::read(&new_ctx.queue);
+            self.config = std::ptr::read(&new_ctx.config);
+        }
+        self.size = old_size;
+
+        // Restore size and present mode
+        self.config.width = old_size.width;
+        self.config.height = old_size.height;
+        self.config.present_mode = old_present_mode;
+        self.surface.configure(&self.device, &self.config);
+
+        log::info!("✓ Full GPU reinitialization complete");
+        Ok(())
     }
 
     pub fn begin_frame(&self) {

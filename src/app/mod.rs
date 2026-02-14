@@ -352,6 +352,9 @@ pub struct App {
     pub(super) window_fullscreen: bool,  // Window is in fullscreen mode
     pub(super) ui_hidden: bool,          // UI panels are hidden (only in fullscreen)
 
+    // Surface recovery: set on surface error, handled at top of next RedrawRequested
+    pub(super) needs_surface_recreate: bool,
+
     // Audio system
     pub(super) audio_manager: crate::audio::AudioManager,
     pub(super) audio_player: crate::audio::AudioPlayer,
@@ -445,6 +448,7 @@ impl App {
             histogram_frame_counter: 0,
             effect_chain,
             was_video_exporting: false,
+            needs_surface_recreate: false,
             window_fullscreen: false,
             ui_hidden: false,
             audio_manager: crate::audio::AudioManager::new(),
@@ -526,23 +530,71 @@ impl App {
                             app.modifiers = new_modifiers.state();
                         }
                         WindowEvent::RedrawRequested => {
+                            // Handle deferred GPU reinitialization (from previous frame's error)
+                            // Desktop only — WASM WebGPU doesn't have device loss from sleep/wake
+                            #[cfg(not(target_arch = "wasm32"))]
+                            if app.needs_surface_recreate {
+                                log::info!("Attempting full GPU reinitialization...");
+
+                                // Drop GPU-dependent resources BEFORE reinit
+                                // (they hold Arc refs to the dead device)
+                                app.flame_renderer = None;
+
+                                match app.gpu.reinit(window.clone()) {
+                                    Ok(()) => {
+                                        // Recreate all GPU-dependent resources with new device
+                                        app.egui_layer.reinit_gpu_resources(
+                                            &window, &app.gpu.device, &app.gpu.queue, app.gpu.config.format,
+                                        );
+                                        let config = app.config_manager.active_config();
+                                        app.flame_renderer = Some(FlameRenderer::with_palette_size(
+                                            &app.gpu.device,
+                                            &app.gpu.queue,
+                                            app.gpu.config.format,
+                                            app.gpu.size.width,
+                                            app.gpu.size.height,
+                                            &config.flame,
+                                            config.palette_size,
+                                        ));
+                                        app.effect_chain = crate::renderer::effect_chain::EffectChainRunner::new(
+                                            &app.gpu.device,
+                                            app.gpu.size.width,
+                                            app.gpu.size.height,
+                                        );
+                                        // Force full GPU state re-sync: the new FlameRenderer
+                                        // has default buffers, so we must re-upload everything.
+                                        app.config_manager.request_full_resync();
+                                        // Force viewport resize on next frame to fix aspect ratio
+                                        app.fractal_viewport_size = (0, 0);
+                                        app.needs_surface_recreate = false;
+                                        log::info!("GPU reinitialized successfully");
+                                    }
+                                    Err(e) => {
+                                        log::error!("GPU reinitialization failed: {:?}", e);
+                                        // Stay in needs_surface_recreate state; AboutToWait
+                                        // won't spin — it just waits for user events
+                                        return;
+                                    }
+                                }
+                            }
+
                             app.update();
                             match app.render(&window) {
                                 Ok(_) => {},
                                 Err(SurfaceError::Lost | SurfaceError::Outdated) => {
-                                    log::warn!("Surface lost/outdated, reconfiguring...");
-                                    app.gpu.resize(app.gpu.size);
+                                    log::warn!("Surface lost/outdated, scheduling recovery...");
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    { app.needs_surface_recreate = true; }
+                                    #[cfg(target_arch = "wasm32")]
+                                    { app.gpu.resize(app.gpu.size); }
                                 }
                                 Err(SurfaceError::OutOfMemory) => elwt.exit(),
-                                Err(SurfaceError::Timeout) => {
-                                    // Timeout during surface acquisition - try to recover
-                                    log::warn!("Surface timeout, reconfiguring...");
-                                    app.gpu.resize(app.gpu.size);
-                                }
                                 Err(e) => {
-                                    // For "Other" errors, also try to recover by reconfiguring
-                                    log::error!("Surface error: {:?}, attempting recovery...", e);
-                                    app.gpu.resize(app.gpu.size);
+                                    log::error!("Surface error: {:?}, scheduling recovery...", e);
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    { app.needs_surface_recreate = true; }
+                                    #[cfg(target_arch = "wasm32")]
+                                    { app.gpu.resize(app.gpu.size); }
                                 }
                             }
 
@@ -556,11 +608,14 @@ impl App {
                 }
                 Event::Resumed => {
                     // Refresh window state when app resumes (wake from sleep, etc.)
-                    // This fixes UI offset issues on Windows after sleep/wake cycles
                     let size = window.inner_size();
                     if size.width > 0 && size.height > 0 {
-                        log::info!("Resumed event - resizing to {}x{}", size.width, size.height);
-                        app.gpu.resize(size);
+                        if app.needs_surface_recreate {
+                            log::info!("Resumed event with pending surface recreate");
+                        } else {
+                            log::info!("Resumed event - resizing to {}x{}", size.width, size.height);
+                            app.gpu.resize(size);
+                        }
                         window.request_redraw();
                     }
                 }
@@ -598,6 +653,14 @@ impl App {
                     let ui_active = app.last_input_time
                         .map(|t| t.elapsed() < UI_IDLE_TIMEOUT)
                         .unwrap_or(false);
+
+                    // If surface needs recreation, request one redraw to trigger it
+                    // but don't continuously spin — wait for events after that
+                    if app.needs_surface_recreate {
+                        window.request_redraw();
+                        elwt.set_control_flow(ControlFlow::Wait);
+                        return;
+                    }
 
                     // EVENT-DRIVEN RENDERING:
                     // Only render when something actually changes
@@ -714,10 +777,7 @@ impl App {
         // Normal rendering: acquire surface texture
         let frame = match self.gpu.surface.get_current_texture() {
             Ok(f) => f,
-            Err(e) => {
-                log::error!("Surface error: {:?}", e);
-                return Err(e);
-            }
+            Err(e) => return Err(e),
         };
         let surface_view = frame.texture.create_view(&egui_wgpu::wgpu::TextureViewDescriptor::default());
         let mut encoder = self.gpu.device.create_command_encoder(&egui_wgpu::wgpu::CommandEncoderDescriptor {
@@ -798,6 +858,7 @@ impl App {
             &mut self.audio_manager,
             &mut self.audio_player,
             &mut self.audio_capture,
+            &mut self.signal_manager,
             &signal_names,
         );
 

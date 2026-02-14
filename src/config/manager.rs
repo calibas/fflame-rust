@@ -2225,6 +2225,16 @@ impl ConfigManager {
         self.pending_actions.reset_accumulation = true;
     }
 
+    /// Request a full GPU re-sync (all buffers: flame, palette, view, tone curve).
+    /// Used after GPU reinitialization when all renderer state has been lost.
+    pub fn request_full_resync(&mut self) {
+        self.pending_actions.reset_accumulation = true;
+        self.pending_actions.update_flame = true;
+        self.pending_actions.update_palette = true;
+        self.pending_actions.update_view = true;
+        self.pending_actions.update_tone_curve = true;
+    }
+
     /// Record an action for later retrieval
     ///
     /// Called internally when config changes occur

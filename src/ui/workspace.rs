@@ -50,8 +50,8 @@ pub enum PanelType {
     Effects,
     /// Xaos editor panel (chaos-weighted transform transitions)
     XaosEditor,
-    /// Audio panel (audio-reactive animations)
-    Audio,
+    /// Signal panel (signals, audio, generators)
+    Signal,
 }
 
 impl std::fmt::Display for PanelType {
@@ -77,7 +77,7 @@ impl std::fmt::Display for PanelType {
             PanelType::RandomGenerator => t!("panels.random_generator"),
             PanelType::Effects => t!("panels.effects"),
             PanelType::XaosEditor => t!("panels.xaos_editor"),
-            PanelType::Audio => t!("panels.audio"),
+            PanelType::Signal => t!("panels.signal"),
         };
         write!(f, "{}", title)
     }
@@ -132,7 +132,7 @@ impl Workspace {
             PanelType::RandomGenerator => egui::vec2(400.0, 450.0),
             PanelType::Effects => egui::vec2(350.0, 400.0),
             PanelType::XaosEditor => egui::vec2(500.0, 450.0),
-            PanelType::Audio => egui::vec2(350.0, 450.0),
+            PanelType::Signal => egui::vec2(350.0, 450.0),
         }
     }
 

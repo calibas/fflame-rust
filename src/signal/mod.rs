@@ -17,6 +17,8 @@
 //! - Header: magic, version, type, flags, sample_rate, lengths
 //! - Body: name (UTF-8), data (f32 array), optional metadata (JSON)
 
+pub mod generator;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
