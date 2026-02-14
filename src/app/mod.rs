@@ -531,6 +531,8 @@ impl App {
                         }
                         WindowEvent::RedrawRequested => {
                             // Handle deferred GPU reinitialization (from previous frame's error)
+                            // Desktop only — WASM WebGPU doesn't have device loss from sleep/wake
+                            #[cfg(not(target_arch = "wasm32"))]
                             if app.needs_surface_recreate {
                                 log::info!("Attempting full GPU reinitialization...");
 
@@ -580,13 +582,19 @@ impl App {
                             match app.render(&window) {
                                 Ok(_) => {},
                                 Err(SurfaceError::Lost | SurfaceError::Outdated) => {
-                                    log::warn!("Surface lost/outdated, scheduling GPU reinit...");
-                                    app.needs_surface_recreate = true;
+                                    log::warn!("Surface lost/outdated, scheduling recovery...");
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    { app.needs_surface_recreate = true; }
+                                    #[cfg(target_arch = "wasm32")]
+                                    { app.gpu.resize(app.gpu.size); }
                                 }
                                 Err(SurfaceError::OutOfMemory) => elwt.exit(),
                                 Err(e) => {
-                                    log::error!("Surface error: {:?}, scheduling GPU reinit...", e);
-                                    app.needs_surface_recreate = true;
+                                    log::error!("Surface error: {:?}, scheduling recovery...", e);
+                                    #[cfg(not(target_arch = "wasm32"))]
+                                    { app.needs_surface_recreate = true; }
+                                    #[cfg(target_arch = "wasm32")]
+                                    { app.gpu.resize(app.gpu.size); }
                                 }
                             }
 
