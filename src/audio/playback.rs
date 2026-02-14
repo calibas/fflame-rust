@@ -168,14 +168,34 @@ impl AudioPlayer {
             .map(|d| (d.samples.len() / d.channels as usize) as f64)
             .unwrap_or(0.0);
         let max_output_frames = (max_source_frames / rate_ratio) as u64;
-        self.position.store(frame_pos.min(max_output_frames), Ordering::SeqCst);
+        let clamped = frame_pos.min(max_output_frames);
+        self.position.store(clamped, Ordering::SeqCst);
+
+        // Clear ended flag when seeking before the end so the stream resumes output
+        if clamped < max_output_frames {
+            self.ended.store(false, Ordering::SeqCst);
+        }
     }
 
     /// Sync playback position to animation time.
     ///
     /// Call this from the animation loop to keep audio in sync.
     /// If the difference is too large, it will seek to the correct position.
+    /// If audio ended (e.g., animation looped), restarts playback automatically.
     pub fn sync_to_time(&mut self, animation_time: f64) {
+        // Handle audio that has ended (animation looped past audio end)
+        if self.state != PlaybackState::Playing || self.ended.load(Ordering::SeqCst) {
+            self.seek(animation_time);
+            // seek() clears `ended` when position is before the audio end
+            if !self.ended.load(Ordering::SeqCst) && self.state != PlaybackState::Playing {
+                // Stream was dropped by state() — restart it
+                if let Err(e) = self.play() {
+                    log::warn!("Failed to restart audio for loop: {:?}", e);
+                }
+            }
+            return;
+        }
+
         let current_pos = self.position_seconds();
         let diff = (animation_time - current_pos).abs();
 

@@ -73,6 +73,12 @@ pub struct UiResponse {
 
     // Audio file load requested
     pub load_audio_file: bool,
+
+    // Signal file load requested
+    pub load_signal_file: bool,
+
+    // Signal file save requested (signal name to save)
+    pub save_signal_file: Option<String>,
 }
 
 impl Default for UiResponse {
@@ -115,6 +121,8 @@ impl Default for UiResponse {
             generated_flame: None,
             generated_batch: None,
             load_audio_file: false,
+            load_signal_file: false,
+            save_signal_file: None,
         }
     }
 }

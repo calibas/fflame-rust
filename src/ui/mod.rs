@@ -1,5 +1,5 @@
 pub mod animation_panel;
-pub mod audio_panel;
+pub mod signal_panel;
 mod config_dialog;
 mod effects_panel;
 mod export_panel;
@@ -114,8 +114,8 @@ pub struct EguiLayer {
     // Xaos editor state
     xaos_editor_state: xaos_editor::XaosEditorState,
 
-    // Audio panel state
-    audio_panel_state: audio_panel::AudioPanelState,
+    // Signal panel state
+    pub(crate) signal_panel_state: signal_panel::SignalPanelState,
 
     // WASM clipboard bridge
     #[cfg(target_arch = "wasm32")]
@@ -123,6 +123,43 @@ pub struct EguiLayer {
 }
 
 impl EguiLayer {
+    /// Reinitialize GPU-dependent resources after surface recreation.
+    /// Preserves all UI state (panels, editors, settings, etc).
+    pub fn reinit_gpu_resources(&mut self, window: &Window, device: &Device, queue: &Queue, format: TextureFormat) {
+        let viewport_id = self.ctx.viewport_id();
+        self.state = EguiWinitState::new(self.ctx.clone(), viewport_id, window, None, None, None);
+        self.renderer = EguiRenderer::new(
+            device,
+            format,
+            RendererOptions {
+                msaa_samples: 1,
+                depth_stencil_format: None,
+                dithering: false,
+                predictable_texture_filtering: false,
+            },
+        );
+        // Clear stale texture registrations from old surface
+        self.fractal_texture_id = None;
+        self.fractal_texture_width = 0;
+        self.fractal_texture_height = 0;
+
+        // Pre-seed the font atlas in the new renderer. After reinit, egui's
+        // Context still thinks the font atlas exists and may send partial
+        // updates (pos: Some). The new Renderer has no textures, so a partial
+        // update would panic. Pre-seeding the full atlas here prevents that.
+        let font_image = self.ctx.fonts(|f| f.image());
+        self.renderer.update_texture(
+            device,
+            queue,
+            egui::TextureId::Managed(0),
+            &egui::epaint::ImageDelta {
+                image: egui::ImageData::Color(std::sync::Arc::new(font_image)),
+                pos: None,
+                options: egui::TextureOptions::LINEAR,
+            },
+        );
+    }
+
     pub fn new(window: &Window, device: &Device, format: TextureFormat) -> Self {
         let ctx = egui_dock::egui::Context::default();
 
@@ -170,7 +207,7 @@ impl EguiLayer {
             fractal_browser_panel: None,
             density_histogram: crate::renderer::DensityHistogram::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
-            audio_panel_state: audio_panel::AudioPanelState::new(),
+            signal_panel_state: signal_panel::SignalPanelState::new(),
             #[cfg(target_arch = "wasm32")]
             web_clipboard: crate::web_clipboard::WebClipboard::install(),
         }
@@ -303,6 +340,7 @@ impl EguiLayer {
         audio_manager: &mut crate::audio::AudioManager,
         audio_player: &mut crate::audio::AudioPlayer,
         audio_capture: &mut crate::audio::AudioCapture,
+        signal_manager: &mut crate::signal::SignalManager,
         signal_names: &[String],
     ) -> UiResponse {
         let mut raw_input = self.state.take_egui_input(window);
@@ -371,6 +409,10 @@ impl EguiLayer {
         // Audio file loading
         let mut load_audio_file = false;
 
+        // Signal file load/save
+        let mut load_signal_file = false;
+        let mut save_signal_file: Option<String> = None;
+
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
         let menu_state = MenuState {
@@ -386,6 +428,8 @@ impl EguiLayer {
 
         // Get fractal texture ID before the closure (avoid borrow conflict)
         let fractal_texture_id = self.fractal_texture_id();
+        // Capture animation time before closure to avoid borrow conflict with animation_controller
+        let anim_current_time = animation_controller.current_time;
 
         let full_output = self.ctx.run(raw_input, |ctx| {
             // Debug: Print font info once after fonts are available
@@ -551,12 +595,16 @@ impl EguiLayer {
                         // Xaos editor state
                         xaos_editor_state: &mut self.xaos_editor_state,
 
-                        // Audio panel state
+                        // Signal panel state
                         audio_manager,
                         audio_player,
                         audio_capture,
-                        audio_panel_state: &mut self.audio_panel_state,
+                        signal_panel_state: &mut self.signal_panel_state,
+                        signal_manager,
+                        current_time: anim_current_time,
                         load_audio_file: &mut load_audio_file,
+                        load_signal_file: &mut load_signal_file,
+                        save_signal_file: &mut save_signal_file,
                     },
                 });
 
@@ -774,6 +822,8 @@ impl EguiLayer {
             generated_flame,
             generated_batch,
             load_audio_file,
+            load_signal_file,
+            save_signal_file,
         }
     }
 
