@@ -1,7 +1,6 @@
 //! Animation system for automated parameter changes over time
 //!
 //! This module provides keyframe-based animation with track interpolation,
-//! as well as procedural track types (oscillators, circular motion).
 //! During playback, the animation controller updates ConfigManager silently
 //! (without creating undo points).
 
@@ -35,10 +34,6 @@ pub struct Animation {
     /// Supports loading from both old HashMap format and new Vec format for backwards compatibility
     #[serde(deserialize_with = "deserialize_tracks")]
     pub tracks: Vec<Track>,
-
-    /// Circular motion tracks (output X and Y to two parameters)
-    #[serde(default)]
-    pub circular_tracks: Vec<CircularTrack>,
 
     /// Signal generator configs (procedural waveforms)
     /// Regenerated into SignalManager on load; no binary data in .anim files.
@@ -130,21 +125,7 @@ pub enum TrackSource {
         keyframes: Vec<Keyframe>,
     },
 
-    /// Sinusoidal oscillation (no keyframes needed)
-    Oscillator {
-        oscillator_type: OscillatorType,
-        /// Center value (oscillates around this)
-        center: f64,
-        /// Peak deviation from center
-        amplitude: f64,
-        /// Cycles per second
-        frequency: f64,
-        /// Starting phase (0.0-1.0, where 1.0 = full cycle)
-        #[serde(default)]
-        phase: f64,
-    },
-
-    /// Signal-driven track (audio analysis, MIDI, sensors, etc.)
+    /// Signal-driven track (audio analysis, generators, MIDI, sensors, etc.)
     Signal {
         /// Name of the signal to read from SignalManager
         signal_name: String,
@@ -155,40 +136,25 @@ pub enum TrackSource {
         /// Optional smoothing factor (0.0 = none, 1.0 = heavy)
         #[serde(default)]
         smoothing: f64,
+        /// Start time in seconds (0.0 = start of animation)
+        #[serde(default)]
+        start_time: f64,
+        /// End time in seconds (0.0 = use animation duration)
+        #[serde(default)]
+        end_time: f64,
+        /// Fade in duration in seconds
+        #[serde(default)]
+        fade_in: f64,
+        /// Fade in easing curve
+        #[serde(default)]
+        fade_in_easing: EasingFunction,
+        /// Fade out duration in seconds
+        #[serde(default)]
+        fade_out: f64,
+        /// Fade out easing curve
+        #[serde(default)]
+        fade_out_easing: EasingFunction,
     },
-}
-
-/// Type of oscillator waveform
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OscillatorType {
-    /// Smooth sine wave
-    Sine,
-    /// Linear up/down (triangle wave)
-    Triangle,
-    /// Linear ramp up, instant reset
-    Sawtooth,
-    /// Instant flip between min and max
-    Square,
-}
-
-/// Circular motion track (outputs to TWO parameters)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CircularTrack {
-    /// ConfigPath string for X output (e.g., "PanX" or "TransformAffine.0.E")
-    pub target_x: String,
-    /// ConfigPath string for Y output
-    pub target_y: String,
-    /// Center X coordinate
-    pub center_x: f64,
-    /// Center Y coordinate
-    pub center_y: f64,
-    /// Radius of circular motion
-    pub radius: f64,
-    /// Revolutions per second (negative = clockwise)
-    pub speed: f64,
-    /// Starting angle in radians
-    #[serde(default)]
-    pub phase: f64,
 }
 
 /// Single keyframe defining parameter value at specific time
@@ -235,7 +201,6 @@ impl Animation {
             base_config: None,
             duration,
             tracks: Vec::new(),
-            circular_tracks: Vec::new(),
             generators: Vec::new(),
             loop_mode: LoopMode::Once,
         }
@@ -248,7 +213,6 @@ impl Animation {
             base_config: Some(config),
             duration,
             tracks: Vec::new(),
-            circular_tracks: Vec::new(),
             generators: Vec::new(),
             loop_mode: LoopMode::Once,
         }
@@ -271,26 +235,10 @@ impl Animation {
         index
     }
 
-    /// Add circular motion track (returns index of the new track)
-    pub fn add_circular_track(&mut self, track: CircularTrack) -> usize {
-        let index = self.circular_tracks.len();
-        self.circular_tracks.push(track);
-        index
-    }
-
     /// Remove a track by index
     pub fn remove_track(&mut self, index: usize) -> Option<Track> {
         if index < self.tracks.len() {
             Some(self.tracks.remove(index))
-        } else {
-            None
-        }
-    }
-
-    /// Remove a circular track by index
-    pub fn remove_circular_track(&mut self, index: usize) -> Option<CircularTrack> {
-        if index < self.circular_tracks.len() {
-            Some(self.circular_tracks.remove(index))
         } else {
             None
         }
@@ -313,19 +261,6 @@ impl Animation {
         for track in &mut self.tracks {
             if let Some(new_target) = decrement_transform_index(&track.target, removed_index) {
                 track.target = new_target;
-            }
-        }
-
-        // Same for circular tracks
-        self.circular_tracks.retain(|track| {
-            !track.target_x.starts_with(&prefix) && !track.target_y.starts_with(&prefix)
-        });
-        for track in &mut self.circular_tracks {
-            if let Some(new_target) = decrement_transform_index(&track.target_x, removed_index) {
-                track.target_x = new_target;
-            }
-            if let Some(new_target) = decrement_transform_index(&track.target_y, removed_index) {
-                track.target_y = new_target;
             }
         }
 
@@ -352,19 +287,6 @@ impl Animation {
             }
         }
 
-        // Circular tracks typically don't target effects, but handle them for completeness
-        self.circular_tracks.retain(|track| {
-            !track.target_x.starts_with(&prefix) && !track.target_y.starts_with(&prefix)
-        });
-        for track in &mut self.circular_tracks {
-            if let Some(new_target) = decrement_effect_index(&track.target_x, "ColorEffect", removed_index) {
-                track.target_x = new_target;
-            }
-            if let Some(new_target) = decrement_effect_index(&track.target_y, "ColorEffect", removed_index) {
-                track.target_y = new_target;
-            }
-        }
-
         initial_count - self.tracks.len()
     }
 
@@ -388,19 +310,6 @@ impl Animation {
             }
         }
 
-        // Circular tracks typically don't target effects, but handle them for completeness
-        self.circular_tracks.retain(|track| {
-            !track.target_x.starts_with(&prefix) && !track.target_y.starts_with(&prefix)
-        });
-        for track in &mut self.circular_tracks {
-            if let Some(new_target) = decrement_effect_index(&track.target_x, "DensityEffect", removed_index) {
-                track.target_x = new_target;
-            }
-            if let Some(new_target) = decrement_effect_index(&track.target_y, "DensityEffect", removed_index) {
-                track.target_y = new_target;
-            }
-        }
-
         initial_count - self.tracks.len()
     }
 
@@ -413,14 +322,6 @@ impl Animation {
                 track.target = new_target;
             }
         }
-        for track in &mut self.circular_tracks {
-            if let Some(new_target) = remap_effect_index(&track.target_x, "ColorEffect", old_index, new_index) {
-                track.target_x = new_target;
-            }
-            if let Some(new_target) = remap_effect_index(&track.target_y, "ColorEffect", old_index, new_index) {
-                track.target_y = new_target;
-            }
-        }
     }
 
     /// Update animation tracks when density effects are reordered.
@@ -430,14 +331,6 @@ impl Animation {
         for track in &mut self.tracks {
             if let Some(new_target) = remap_effect_index(&track.target, "DensityEffect", old_index, new_index) {
                 track.target = new_target;
-            }
-        }
-        for track in &mut self.circular_tracks {
-            if let Some(new_target) = remap_effect_index(&track.target_x, "DensityEffect", old_index, new_index) {
-                track.target_x = new_target;
-            }
-            if let Some(new_target) = remap_effect_index(&track.target_y, "DensityEffect", old_index, new_index) {
-                track.target_y = new_target;
             }
         }
     }
@@ -510,49 +403,6 @@ impl Track {
         }
     }
 
-    /// Create oscillator track
-    pub fn oscillator(
-        target: String,
-        oscillator_type: OscillatorType,
-        center: f64,
-        amplitude: f64,
-        frequency: f64,
-    ) -> Self {
-        Self {
-            target,
-            source: TrackSource::Oscillator {
-                oscillator_type,
-                center,
-                amplitude,
-                frequency,
-                phase: 0.0,
-            },
-            interpolation: Interpolation::Linear, // Not used for oscillators
-        }
-    }
-
-    /// Create oscillator track with phase offset
-    pub fn oscillator_with_phase(
-        target: String,
-        oscillator_type: OscillatorType,
-        center: f64,
-        amplitude: f64,
-        frequency: f64,
-        phase: f64,
-    ) -> Self {
-        Self {
-            target,
-            source: TrackSource::Oscillator {
-                oscillator_type,
-                center,
-                amplitude,
-                frequency,
-                phase,
-            },
-            interpolation: Interpolation::Linear,
-        }
-    }
-
     /// Create signal-driven track
     ///
     /// Maps signal values (normalized 0-1) to output range [min_output, max_output]
@@ -564,6 +414,12 @@ impl Track {
                 min_output,
                 max_output,
                 smoothing: 0.0,
+                start_time: 0.0,
+                end_time: 0.0,
+                fade_in: 0.0,
+                fade_in_easing: EasingFunction::Linear,
+                fade_out: 0.0,
+                fade_out_easing: EasingFunction::Linear,
             },
             interpolation: Interpolation::Linear, // Not used for signals
         }
@@ -584,6 +440,12 @@ impl Track {
                 min_output,
                 max_output,
                 smoothing,
+                start_time: 0.0,
+                end_time: 0.0,
+                fade_in: 0.0,
+                fade_in_easing: EasingFunction::Linear,
+                fade_out: 0.0,
+                fade_out_easing: EasingFunction::Linear,
             },
             interpolation: Interpolation::Linear,
         }
@@ -603,42 +465,6 @@ impl Track {
             TrackSource::Keyframes { keyframes } => Some(keyframes),
             _ => None,
         }
-    }
-}
-
-impl CircularTrack {
-    /// Create a new circular motion track
-    pub fn new(
-        target_x: String,
-        target_y: String,
-        center_x: f64,
-        center_y: f64,
-        radius: f64,
-        speed: f64,
-    ) -> Self {
-        Self {
-            target_x,
-            target_y,
-            center_x,
-            center_y,
-            radius,
-            speed,
-            phase: 0.0,
-        }
-    }
-
-    /// Create circular track with starting phase
-    pub fn with_phase(mut self, phase: f64) -> Self {
-        self.phase = phase;
-        self
-    }
-
-    /// Evaluate position at given time
-    pub fn evaluate(&self, time: f64) -> (f64, f64) {
-        let angle = time * self.speed * 2.0 * std::f64::consts::PI + self.phase;
-        let x = self.center_x + self.radius * angle.cos();
-        let y = self.center_y + self.radius * angle.sin();
-        (x, y)
     }
 }
 
@@ -738,57 +564,8 @@ mod tests {
     }
 
     #[test]
-    fn test_oscillator_track_json() {
-        let mut anim = Animation::new("Oscillate".into(), 5.0);
-
-        let track = Track::oscillator("Exposure".into(), OscillatorType::Sine, 1.0, 0.5, 2.0);
-        anim.add_track(track);
-
-        let json = anim.to_json().unwrap();
-        let loaded = Animation::from_json(&json).unwrap();
-
-        assert_eq!(loaded.tracks.len(), 1);
-        let track = &loaded.tracks[0];
-        assert_eq!(track.target, "Exposure");
-        match &track.source {
-            TrackSource::Oscillator { oscillator_type, center, amplitude, frequency, .. } => {
-                assert_eq!(*oscillator_type, OscillatorType::Sine);
-                assert_eq!(*center, 1.0);
-                assert_eq!(*amplitude, 0.5);
-                assert_eq!(*frequency, 2.0);
-            }
-            _ => panic!("Expected Oscillator track"),
-        }
-    }
-
-    #[test]
-    fn test_circular_track_json() {
-        let mut anim = Animation::new("Circle".into(), 10.0);
-
-        anim.add_circular_track(CircularTrack::new(
-            "PanX".into(),
-            "PanY".into(),
-            0.5, -0.5,
-            0.2,
-            0.1,
-        ));
-
-        let json = anim.to_json().unwrap();
-        let loaded = Animation::from_json(&json).unwrap();
-
-        assert_eq!(loaded.circular_tracks.len(), 1);
-        let ct = &loaded.circular_tracks[0];
-        assert_eq!(ct.target_x, "PanX");
-        assert_eq!(ct.target_y, "PanY");
-        assert_eq!(ct.center_x, 0.5);
-        assert_eq!(ct.center_y, -0.5);
-        assert_eq!(ct.radius, 0.2);
-        assert_eq!(ct.speed, 0.1);
-    }
-
-    #[test]
     fn test_full_animation_json() {
-        // Test a complete animation with all track types
+        // Test a complete animation with multiple track types
         let mut anim = Animation::new("Full Test".into(), 10.0);
         anim.loop_mode = LoopMode::PingPong;
 
@@ -800,22 +577,12 @@ mod tests {
             10.0,
         ));
 
-        // Oscillator track
-        anim.add_track(Track::oscillator(
+        // Signal track
+        anim.add_track(Track::signal(
             "Brightness".into(),
-            OscillatorType::Triangle,
-            1.0,
-            0.3,
+            "energy".into(),
             0.5,
-        ));
-
-        // Circular track
-        anim.add_circular_track(CircularTrack::new(
-            "PanX".into(),
-            "PanY".into(),
-            0.0, 0.0,
-            0.5,
-            0.25,
+            2.0,
         ));
 
         let json = anim.to_json().unwrap();
@@ -826,6 +593,5 @@ mod tests {
         assert_eq!(loaded.duration, 10.0);
         assert_eq!(loaded.loop_mode, LoopMode::PingPong);
         assert_eq!(loaded.tracks.len(), 2);
-        assert_eq!(loaded.circular_tracks.len(), 1);
     }
 }

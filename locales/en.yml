@@ -982,17 +982,13 @@ track_editor:
   add_new_track: "Add New Track"
   type: "Type:"
   type_keyframe: "Keyframe"
-  type_oscillator: "Oscillator"
-  type_circular: "Circular"
   target: "Target:"
-  target_y: "Target Y:"
   select: "Select..."
   add: "Add"
   cancel: "Cancel"
 
   # Track types display
   keyframes_count: "Keyframes (%{count})"
-  circular_label: "(Circular)"
   delete_track: "Delete track"
   edit: "Edit"
 
@@ -1003,21 +999,6 @@ track_editor:
   interpolation_smooth: "Smooth"
   interpolation_sinusoidal: "Sinusoidal"
   edit_keyframes: "Edit Keyframes"
-
-  # Oscillator controls
-  osc_type: "Type:"
-  osc_sine: "Sine"
-  osc_triangle: "Triangle"
-  osc_sawtooth: "Sawtooth"
-  osc_square: "Square"
-  center: "Center:"
-  amplitude: "Amplitude:"
-  frequency: "Frequency:"
-  phase: "Phase:"
-
-  # Circular track controls
-  radius: "Radius:"
-  speed: "Speed:"
 
   # Keyframe editor
   keyframe_window_title: "Keyframes: %{path}"
@@ -1108,36 +1089,11 @@ track_editor:
   no_animation: "No animation loaded"
   select_target: "Select target..."
   change_target: "Change target"
-  select_target_y: "Select Y target..."
-  change_target_y: "Change Y target"
-
   # Type-specific subpanels
   keyframes_section: "Keyframes"
-  oscillator_section: "Oscillator Parameters"
-  circular_section: "Circular Motion"
   keyframe_count: "Keyframes"
   keyframes_will_be_created: "Keyframes will be created when track is added"
   select_target_first: "Select a target parameter to edit keyframes"
-
-  # Waveform options
-  waveform: "Waveform:"
-  waveform_sine: "Sine"
-  waveform_triangle: "Triangle"
-  waveform_sawtooth: "Sawtooth"
-  waveform_square: "Square"
-
-  # Oscillator parameters (abbreviated)
-  osc_center: "Center:"
-  osc_amplitude: "Amplitude:"
-  osc_frequency: "Frequency:"
-  osc_phase: "Phase:"
-
-  # Circular parameters
-  circ_center_x: "Center X:"
-  circ_center_y: "Center Y:"
-  circ_radius: "Radius:"
-  circ_speed: "Speed:"
-  circ_phase: "Phase:"
 
   # Signal track type and parameters
   type_signal: "Signal"
@@ -1148,6 +1104,10 @@ track_editor:
   signal_min_output: "Min Output:"
   signal_max_output: "Max Output:"
   signal_smoothing: "Smoothing:"
+  signal_start_time: "Start Time:"
+  signal_end_time: "End Time:"
+  signal_fade_in: "Fade In:"
+  signal_fade_out: "Fade Out:"
 
   # Action buttons
   update_track: "Update Track"
