@@ -342,6 +342,8 @@ impl EguiLayer {
         audio_capture: &mut crate::audio::AudioCapture,
         signal_manager: &mut crate::signal::SignalManager,
         signal_names: &[String],
+        is_software_renderer: bool,
+        adapter_name: &str,
     ) -> UiResponse {
         let mut raw_input = self.state.take_egui_input(window);
 
@@ -476,6 +478,8 @@ impl EguiLayer {
                 workspace,
                 &mut menu_actions,
                 &menu_state,
+                is_software_renderer,
+                adapter_name,
             );
 
             // All windows are now dockable panels (see Windows menu)
