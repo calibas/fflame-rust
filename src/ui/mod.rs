@@ -123,6 +123,43 @@ pub struct EguiLayer {
 }
 
 impl EguiLayer {
+    /// Reinitialize GPU-dependent resources after surface recreation.
+    /// Preserves all UI state (panels, editors, settings, etc).
+    pub fn reinit_gpu_resources(&mut self, window: &Window, device: &Device, queue: &Queue, format: TextureFormat) {
+        let viewport_id = self.ctx.viewport_id();
+        self.state = EguiWinitState::new(self.ctx.clone(), viewport_id, window, None, None, None);
+        self.renderer = EguiRenderer::new(
+            device,
+            format,
+            RendererOptions {
+                msaa_samples: 1,
+                depth_stencil_format: None,
+                dithering: false,
+                predictable_texture_filtering: false,
+            },
+        );
+        // Clear stale texture registrations from old surface
+        self.fractal_texture_id = None;
+        self.fractal_texture_width = 0;
+        self.fractal_texture_height = 0;
+
+        // Pre-seed the font atlas in the new renderer. After reinit, egui's
+        // Context still thinks the font atlas exists and may send partial
+        // updates (pos: Some). The new Renderer has no textures, so a partial
+        // update would panic. Pre-seeding the full atlas here prevents that.
+        let font_image = self.ctx.fonts(|f| f.image());
+        self.renderer.update_texture(
+            device,
+            queue,
+            egui::TextureId::Managed(0),
+            &egui::epaint::ImageDelta {
+                image: egui::ImageData::Color(std::sync::Arc::new(font_image)),
+                pos: None,
+                options: egui::TextureOptions::LINEAR,
+            },
+        );
+    }
+
     pub fn new(window: &Window, device: &Device, format: TextureFormat) -> Self {
         let ctx = egui_dock::egui::Context::default();
 
