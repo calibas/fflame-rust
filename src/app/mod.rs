@@ -860,6 +860,8 @@ impl App {
             &mut self.audio_capture,
             &mut self.signal_manager,
             &signal_names,
+            self.gpu.is_software_renderer,
+            &self.gpu.adapter_name,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);

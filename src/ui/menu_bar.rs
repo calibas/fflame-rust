@@ -7,6 +7,8 @@ pub fn render_menu_bar(
     workspace: &mut super::workspace::Workspace,
     menu_actions: &mut MenuActions,
     menu_state: &MenuState,
+    is_software_renderer: bool,
+    adapter_name: &str,
 ) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
@@ -305,6 +307,17 @@ pub fn render_menu_bar(
 
             // Push language selector to the right side
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Software renderer warning (right-aligned, before language selector)
+                if is_software_renderer {
+                    let warning = egui::RichText::new(format!("CPU: {}", adapter_name))
+                        .color(egui::Color32::from_rgb(255, 180, 50))
+                        .small();
+                    ui.label(warning).on_hover_text(
+                        "Running on a software renderer (CPU).\nPerformance will be significantly reduced.\nInstall GPU drivers for full performance."
+                    );
+                    ui.separator();
+                }
+
                 // Language selector menu (globe icon)
                 ui.menu_button("🌐", |ui| {
                     let locales = crate::i18n::supported_locales();

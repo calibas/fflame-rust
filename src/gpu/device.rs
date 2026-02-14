@@ -14,6 +14,10 @@ pub struct GpuContext {
     pub queue: Arc<Queue>,
     pub config: SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
+    /// True when running on a software renderer (SwiftShader, Lavapipe, etc.)
+    pub is_software_renderer: bool,
+    /// GPU adapter name (e.g. "NVIDIA GeForce RTX 3080" or "llvmpipe")
+    pub adapter_name: String,
 }
 
 impl Drop for GpuContext {
@@ -43,14 +47,26 @@ impl GpuContext {
         // Create instance with appropriate backend for platform
         #[cfg(target_arch = "wasm32")]
         log::info!("Creating GPU instance with BROWSER_WEBGPU backend (WebGL not supported - requires compute shaders)");
+        // Support WGPU_BACKEND env var to force a specific backend
+        // (e.g. WGPU_BACKEND=vulkan to test SwiftShader on Windows where DX12 is preferred)
         #[cfg(not(target_arch = "wasm32"))]
-        log::info!("Creating GPU instance with all backends");
+        let desktop_backends = std::env::var("WGPU_BACKEND").ok().and_then(|val| {
+            match val.to_lowercase().as_str() {
+                "vulkan" | "vk" => Some(Backends::VULKAN),
+                "dx12" | "d3d12" => Some(Backends::DX12),
+                "metal" | "mtl" => Some(Backends::METAL),
+                "gl" | "opengl" => Some(Backends::GL),
+                _ => None,
+            }
+        }).unwrap_or(Backends::all());
+        #[cfg(not(target_arch = "wasm32"))]
+        log::info!("Creating GPU instance with backends: {:?}", desktop_backends);
 
         let instance = Instance::new(&InstanceDescriptor {
             #[cfg(target_arch = "wasm32")]
-            backends: Backends::BROWSER_WEBGPU,  // WebGL doesn't support compute shaders
+            backends: Backends::BROWSER_WEBGPU,
             #[cfg(not(target_arch = "wasm32"))]
-            backends: Backends::all(),
+            backends: desktop_backends,
             ..Default::default()
         });
 
@@ -119,13 +135,18 @@ impl GpuContext {
             }
         };
 
-        // Log adapter info
+        // Log adapter info and detect software rendering
         let adapter_info = adapter.get_info();
+        let is_software_renderer = adapter_info.device_type == DeviceType::Cpu;
+        let adapter_name = adapter_info.name.clone();
         log::info!("GPU Adapter: {}", adapter_info.name);
         log::info!("  Backend: {:?}", adapter_info.backend);
         log::info!("  Device Type: {:?}", adapter_info.device_type);
         log::info!("  Driver: {}", adapter_info.driver);
         log::info!("  Driver Info: {}", adapter_info.driver_info);
+        if is_software_renderer {
+            log::warn!("Software renderer detected — performance will be reduced");
+        }
 
         // Get adapter limits to request higher storage buffer size for large resolutions
         let adapter_limits = adapter.limits();
@@ -243,6 +264,8 @@ impl GpuContext {
             queue: Arc::new(queue),
             config,
             size,
+            is_software_renderer,
+            adapter_name,
         })
     }
 
