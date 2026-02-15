@@ -1,7 +1,7 @@
 # CPU Rendering Research
 
 **Date:** 2026-02-14
-**Status:** Research / Feasibility Analysis
+**Status:** Phase 1 POC implemented (`experimental/swiftshader-cpu-fallback` branch)
 
 ## Motivation
 
@@ -272,10 +272,49 @@ It is **incompatible** with:
 
 ---
 
+## Phase 1 POC Implementation
+
+Branch: `experimental/swiftshader-cpu-fallback`
+
+### What was implemented
+
+- **CLI flag**: `--cpu-rendering` forces SwiftShader Vulkan ICD
+- **Auto-detection**: `GpuContext` reports `is_software_renderer` and `adapter_name` from adapter info (`DeviceType::Cpu`)
+- **UI indicator**: Orange "CPU: SwiftShader Device (Subzero)" label in menu bar when on software renderer
+- **ICD auto-path**: `enable_cpu_rendering()` sets `VK_ICD_FILENAMES` to `<exe_dir>/swiftshader/vk_swiftshader_icd.json`
+- **Backend forcing**: CPU mode forces `Backends::VULKAN` (Windows defaults to DX12 which won't see SwiftShader)
+- **Build script**: `build.rs` copies `swiftshader/` contents to target directory alongside the exe
+- **Bundled DLL**: Chrome-extracted SwiftShader (Subzero backend, ~5MB) with Apache 2.0 license
+
+### Key files
+
+| File | Changes |
+|---|---|
+| `src/gpu/device.rs` | `CPU_RENDERING_ENABLED` flag, `enable_cpu_rendering()`, ICD path setup, adapter detection |
+| `src/main.rs` | `--cpu-rendering` CLI arg, calls `enable_cpu_rendering()` before app start |
+| `src/ui/menu_bar.rs` | Orange warning label when `is_software_renderer` is true |
+| `build.rs` | `copy_swiftshader_to_target()` copies DLL + ICD JSON to target dir |
+| `swiftshader/` | `vk_swiftshader.dll`, `vk_swiftshader_icd.json`, `LICENSE.txt` (Apache 2.0) |
+
+### Cross-platform status
+
+Currently Windows-only. For Linux/macOS support, need to:
+- Add `libvk_swiftshader.so` (Linux) / `libvk_swiftshader.dylib` (macOS) to `swiftshader/`
+- Update `build.rs` copy list and `vk_swiftshader_icd.json` library_path
+- The Rust code is already platform-agnostic (only the DLL filename in the warning message is Windows-specific)
+
+### Results
+
+- Full 3-pass GPU pipeline runs unchanged on SwiftShader (~10x slower than discrete GPU)
+- Interactive editing is usable at reduced performance
+- All dynamic shader compilation works (ShaderBuilder + variations)
+
+---
+
 ## Open Questions
 
-1. **SwiftShader licensing**: Apache 2.0 — compatible with bundling
-2. **SwiftShader binary size**: ~10-20 MB per platform (acceptable?)
-3. **Interactive performance on CPU**: Is 10-100x slower usable for interactive editing, or only for batch export?
+1. ~~**SwiftShader licensing**: Apache 2.0 — compatible with bundling~~ ✅ Resolved: Apache 2.0, LICENSE.txt bundled
+2. **SwiftShader binary size**: ~5 MB (Chrome Subzero build) per platform — acceptable
+3. **Interactive performance on CPU**: ~10x slower than discrete GPU, usable for interactive editing
 4. **WASM CPU priority**: How important is supporting browsers without WebGPU? WebGPU adoption is growing rapidly (Chrome 113+, Firefox 121+, Safari experimental)
 5. **Renderer trait design**: Should we abstract at the `FlameRenderer` level or create a separate `CpuFlameRenderer`?

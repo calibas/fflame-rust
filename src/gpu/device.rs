@@ -1,7 +1,20 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::mem::ManuallyDrop;
 use winit::window::Window;
 use egui_wgpu::wgpu::*;
+
+/// Global flag to force CPU rendering via SwiftShader.
+/// When enabled, forces Vulkan backend and sets VK_ICD_FILENAMES to bundled SwiftShader ICD.
+static CPU_RENDERING_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Enable CPU rendering mode via bundled SwiftShader ICD.
+/// Must be called before GpuContext::new().
+#[cfg(not(target_arch = "wasm32"))]
+pub fn enable_cpu_rendering() {
+    CPU_RENDERING_ENABLED.store(true, Ordering::Relaxed);
+    log::info!("CPU rendering mode enabled — will use SwiftShader");
+}
 
 pub struct GpuContext {
     #[allow(dead_code)]
@@ -47,20 +60,33 @@ impl GpuContext {
         // Create instance with appropriate backend for platform
         #[cfg(target_arch = "wasm32")]
         log::info!("Creating GPU instance with BROWSER_WEBGPU backend (WebGL not supported - requires compute shaders)");
-        // Support WGPU_BACKEND env var to force a specific backend
-        // (e.g. WGPU_BACKEND=vulkan to test SwiftShader on Windows where DX12 is preferred)
         #[cfg(not(target_arch = "wasm32"))]
-        let desktop_backends = std::env::var("WGPU_BACKEND").ok().and_then(|val| {
-            match val.to_lowercase().as_str() {
-                "vulkan" | "vk" => Some(Backends::VULKAN),
-                "dx12" | "d3d12" => Some(Backends::DX12),
-                "metal" | "mtl" => Some(Backends::METAL),
-                "gl" | "opengl" => Some(Backends::GL),
-                _ => None,
+        let desktop_backends = if CPU_RENDERING_ENABLED.load(Ordering::Relaxed) {
+            // SwiftShader is a Vulkan ICD — must force Vulkan backend
+            // (Windows defaults to DX12 which won't see SwiftShader)
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+            if let Some(dir) = exe_dir {
+                let icd_path = dir.join("swiftshader").join("vk_swiftshader_icd.json");
+                if icd_path.exists() {
+                    log::info!("Setting VK_ICD_FILENAMES to: {}", icd_path.display());
+                    std::env::set_var("VK_ICD_FILENAMES", &icd_path);
+                } else {
+                    log::warn!("SwiftShader ICD not found at: {}", icd_path.display());
+                    // Currently Windows-only (.dll). For cross-platform support:
+                    //   Linux:  "libvk_swiftshader.so"
+                    //   macOS:  "libvk_swiftshader.dylib"
+                    // The ICD JSON and build.rs copy step also need updating.
+                    log::warn!("Place vk_swiftshader.dll and vk_swiftshader_icd.json in swiftshader/ next to the executable");
+                }
             }
-        }).unwrap_or(Backends::all());
-        #[cfg(not(target_arch = "wasm32"))]
-        log::info!("Creating GPU instance with backends: {:?}", desktop_backends);
+            log::info!("Creating GPU instance with Vulkan backend (CPU rendering mode)");
+            Backends::VULKAN
+        } else {
+            log::info!("Creating GPU instance with all backends");
+            Backends::all()
+        };
 
         let instance = Instance::new(&InstanceDescriptor {
             #[cfg(target_arch = "wasm32")]
