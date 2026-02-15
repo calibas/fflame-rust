@@ -857,17 +857,21 @@ pub enum SnapshotData {
     },
 
     /// Transform added
-    /// Undo: remove at index, Redo: insert at index
+    /// Undo: remove at index + restore xaos, Redo: insert at index
     AddTransform {
         index: usize,
         transform: crate::scene::transforms::Transform,
+        /// Xaos matrix state before the add (restored on undo)
+        xaos_before: Option<Vec<Vec<f32>>>,
     },
 
     /// Transform deleted
-    /// Undo: re-insert at index, Redo: remove at index
+    /// Undo: re-insert at index + restore xaos, Redo: remove at index
     DeleteTransform {
         index: usize,
         transform: crate::scene::transforms::Transform,
+        /// Xaos matrix state before the delete (restored on undo)
+        xaos_before: Option<Vec<Vec<f32>>>,
     },
 
     /// Transform modified (affine edit, triangle editor, etc.)
@@ -984,10 +988,11 @@ impl ConfigChange {
     }
 
     /// Create add transform snapshot
-    /// Stores the added transform for efficient undo/redo
+    /// Stores the added transform and xaos state for efficient undo/redo
     pub fn add_transform_snapshot(
         index: usize,
         transform: crate::scene::transforms::Transform,
+        xaos_before: Option<Vec<Vec<f32>>>,
         description: String,
     ) -> Self {
         let now = Instant::now();
@@ -995,16 +1000,17 @@ impl ConfigChange {
             deltas: vec![],
             timestamp: now,
             description,
-            snapshot: Some(SnapshotData::AddTransform { index, transform }),
+            snapshot: Some(SnapshotData::AddTransform { index, transform, xaos_before }),
             last_update_time: now,
         }
     }
 
     /// Create delete transform snapshot
-    /// Stores the deleted transform for efficient undo/redo
+    /// Stores the deleted transform and xaos state for efficient undo/redo
     pub fn delete_transform_snapshot(
         index: usize,
         transform: crate::scene::transforms::Transform,
+        xaos_before: Option<Vec<Vec<f32>>>,
         description: String,
     ) -> Self {
         let now = Instant::now();
@@ -1012,7 +1018,7 @@ impl ConfigChange {
             deltas: vec![],
             timestamp: now,
             description,
-            snapshot: Some(SnapshotData::DeleteTransform { index, transform }),
+            snapshot: Some(SnapshotData::DeleteTransform { index, transform, xaos_before }),
             last_update_time: now,
         }
     }

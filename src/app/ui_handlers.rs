@@ -94,7 +94,9 @@ impl App {
     fn handle_transform_operations(&mut self, ui_response: &UiResponse) {
         // Handle add transform
         if ui_response.add_transform {
-            let insert_index = self.config_manager.active_config().flame.transforms.len();
+            let config = self.config_manager.active_config();
+            let insert_index = config.flame.transforms.len();
+            let xaos_before = config.flame.xaos.clone();
 
             // Create a new default transform with identity affine and linear variation
             let mut new_transform = Transform::default();
@@ -107,6 +109,7 @@ impl App {
             let change = crate::config::ConfigChange::add_transform_snapshot(
                 insert_index,
                 new_transform,
+                xaos_before,
                 "Add Transform".to_string(),
             );
 
@@ -127,9 +130,11 @@ impl App {
                 let deleted_transform = config.flame.transforms[idx].clone();
 
                 // Create specialized snapshot for efficient undo/redo
+                let xaos_before = config.flame.xaos.clone();
                 let change = crate::config::ConfigChange::delete_transform_snapshot(
                     idx,
                     deleted_transform,
+                    xaos_before,
                     format!("Delete Transform {}", idx + 1),
                 );
 
@@ -161,9 +166,11 @@ impl App {
                 let insert_idx = idx + 1;
 
                 // Create specialized snapshot for efficient undo/redo
+                let xaos_before = config.flame.xaos.clone();
                 let change = crate::config::ConfigChange::add_transform_snapshot(
                     insert_idx,
                     cloned_transform,
+                    xaos_before,
                     format!("Clone Transform {}", idx + 1),
                 );
 

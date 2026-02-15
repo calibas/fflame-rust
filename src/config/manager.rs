@@ -505,20 +505,22 @@ impl ConfigManager {
                     return Ok(UpdateType::IterationReset);
                 }
 
-                crate::config::SnapshotData::AddTransform { index, .. } => {
+                crate::config::SnapshotData::AddTransform { index, xaos_before, .. } => {
                     log::debug!("  Undoing add transform at index {}", index);
                     if *index < self.current.flame.transforms.len() {
                         self.current.flame.transforms.remove(*index);
-                        self.current.flame.on_transform_deleted(*index);
+                        // Restore xaos matrix to pre-add state (not incremental delete)
+                        self.current.flame.xaos = xaos_before.clone();
                     }
                     return Ok(UpdateType::IterationReset);
                 }
 
-                crate::config::SnapshotData::DeleteTransform { index, transform } => {
+                crate::config::SnapshotData::DeleteTransform { index, transform, xaos_before } => {
                     log::debug!("  Undoing delete transform (re-insert at index {})", index);
                     if *index <= self.current.flame.transforms.len() {
-                        self.current.flame.on_transform_added(*index);
                         self.current.flame.transforms.insert(*index, transform.clone());
+                        // Restore xaos matrix to pre-delete state (not incremental add)
+                        self.current.flame.xaos = xaos_before.clone();
                     }
                     return Ok(UpdateType::IterationReset);
                 }
@@ -634,7 +636,7 @@ impl ConfigManager {
                     return Ok(UpdateType::IterationReset);
                 }
 
-                crate::config::SnapshotData::AddTransform { index, transform } => {
+                crate::config::SnapshotData::AddTransform { index, transform, .. } => {
                     log::debug!("  Redoing add transform at index {}", index);
                     if *index <= self.current.flame.transforms.len() {
                         self.current.flame.on_transform_added(*index);
@@ -1972,7 +1974,7 @@ impl ConfigManager {
         // Apply the change based on snapshot type
         if let Some(snapshot) = &change.snapshot {
             match snapshot {
-                crate::config::SnapshotData::AddTransform { index, transform } => {
+                crate::config::SnapshotData::AddTransform { index, transform, .. } => {
                     if *index <= self.current.flame.transforms.len() {
                         // Update xaos matrix before inserting (needs old transform list for detection)
                         self.current.flame.on_transform_added(*index);
