@@ -79,6 +79,9 @@ fn main() {
 
     // Copy shaders folder to target directory
     copy_shaders_to_target();
+
+    // Copy SwiftShader ICD to target directory (for --cpu-rendering flag)
+    copy_swiftshader_to_target();
 }
 
 fn copy_assets_to_target() {
@@ -164,4 +167,35 @@ fn copy_shaders_to_target() {
 
     // Tell cargo to rerun if shaders change
     println!("cargo:rerun-if-changed=shaders");
+}
+
+fn copy_swiftshader_to_target() {
+    use std::path::PathBuf;
+
+    let out_dir = env::var("OUT_DIR").unwrap();
+    let target_dir = PathBuf::from(out_dir)
+        .ancestors()
+        .nth(3)
+        .unwrap()
+        .to_path_buf();
+
+    let sw_src = Path::new("swiftshader");
+    let sw_dst = target_dir.join("swiftshader");
+
+    // Only copy if swiftshader folder exists (optional — not all devs will have it)
+    if sw_src.exists() {
+        let _ = fs::create_dir_all(&sw_dst);
+        // Currently Windows-only (.dll). For cross-platform support, add:
+        //   Linux:  "libvk_swiftshader.so"
+        //   macOS:  "libvk_swiftshader.dylib"
+        for name in &["vk_swiftshader.dll", "vk_swiftshader_icd.json"] {
+            let src = sw_src.join(name);
+            if src.exists() {
+                let _ = fs::copy(&src, sw_dst.join(name));
+            }
+        }
+        println!("cargo:warning=Copied SwiftShader to {:?}", sw_dst);
+    }
+
+    println!("cargo:rerun-if-changed=swiftshader");
 }

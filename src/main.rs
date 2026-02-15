@@ -10,6 +10,10 @@ use clap::{Parser, Subcommand};
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// Force CPU rendering via bundled SwiftShader (Vulkan software rasterizer)
+    #[arg(long)]
+    cpu_rendering: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -117,6 +121,10 @@ fn main() {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let cli = Cli::parse();
+
+        if cli.cpu_rendering {
+            fractal_flame_wgpu::gpu::device::enable_cpu_rendering();
+        }
 
         match cli.command {
             Some(Commands::ListEncoders) => {
