@@ -504,13 +504,15 @@ impl App {
                             app.shutdown(elwt);
                         },
                         WindowEvent::Resized(size) => {
-                            // Skip resize if dimensions are zero (happens when minimizing on Windows)
                             if size.width > 0 && size.height > 0 {
                                 log::debug!("Window resized to {}x{}", size.width, size.height);
                                 app.gpu.resize(size);
                                 // NOTE: Don't resize renderer here - it will be resized by fractal viewport resize
                                 // The fractal panel is smaller than the window (due to UI panels)
                                 // Resizing renderer to window size causes aspect ratio mismatch
+                            } else {
+                                // Window minimized — mark size as zero so render() skips
+                                app.gpu.size = size;
                             }
                         },
                         WindowEvent::ScaleFactorChanged { .. } => {
@@ -522,6 +524,15 @@ impl App {
                                 window.request_redraw();
                             }
                         },
+                        WindowEvent::Focused(true) => {
+                            // Reconfigure surface on focus regain to fix UI offset
+                            // (Windows DWM composition changes can desync surface position)
+                            let size = window.inner_size();
+                            if size.width > 0 && size.height > 0 {
+                                app.gpu.resize(size);
+                            }
+                            window.request_redraw();
+                        }
                         WindowEvent::KeyboardInput { event: key_event, .. } if !consumed => {
                             // Handle keyboard input only if egui didn't consume it
                             app.handle_keyboard(&key_event);
