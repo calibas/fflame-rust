@@ -363,6 +363,12 @@ impl Flame {
             ConfigValue::Float(0.0),
         ));
 
+        // 5. Pre-transform becomes invisible (its only role is to feed the post-transform)
+        changes.push((
+            ConfigPath::TransformOpacity { index: pre },
+            ConfigValue::Float(0.0),
+        ));
+
         changes
     }
 
