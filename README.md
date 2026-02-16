@@ -51,3 +51,4 @@ Fractal renderers:
 - [Flamelet](https://apps.apple.com/us/app/flamelet/id1387331406)
 - [Iterated Dynamics](https://github.com/LegalizeAdulthood/iterated-dynamics)
 - [Incendia](https://www.incendia.net/)
+- [StrataVoxel](https://maierfelix.github.io/strata-voxel/)
