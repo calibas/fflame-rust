@@ -270,7 +270,9 @@ impl GpuContext {
 
         if self.config.present_mode != present_mode {
             self.config.present_mode = present_mode;
-            self.surface.configure(&self.device, &self.config);
+            if self.config.width > 0 && self.config.height > 0 {
+                self.surface.configure(&self.device, &self.config);
+            }
             log::info!("Updated present mode: {:?}", present_mode);
         }
     }
@@ -315,7 +317,9 @@ impl GpuContext {
         self.config.width = old_size.width;
         self.config.height = old_size.height;
         self.config.present_mode = old_present_mode;
-        self.surface.configure(&self.device, &self.config);
+        if old_size.width > 0 && old_size.height > 0 {
+            self.surface.configure(&self.device, &self.config);
+        }
 
         log::info!("✓ Full GPU reinitialization complete");
         Ok(())
