@@ -1459,6 +1459,15 @@ impl FlameRenderer {
                 return true;
             }
         } else if needs_xaos && has_xaos {
+            // Recreate buffer if transform count changed (e.g., clone/add/delete)
+            let required_size = (flame.transforms.len() * flame.transforms.len() * std::mem::size_of::<f32>()) as u64;
+            let current_size = self.buffers.xaos_buffer.as_ref().map(|b| b.size()).unwrap_or(0);
+            if required_size != current_size {
+                self.buffers.drop_xaos_buffer();
+                self.buffers.create_xaos_buffer(device, flame.transforms.len() as u32);
+                self.buffers.update_xaos(queue, flame);
+                return true;
+            }
             // Just update the data
             self.buffers.update_xaos(queue, flame);
         }

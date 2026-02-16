@@ -636,10 +636,14 @@ impl ConfigManager {
                     return Ok(UpdateType::IterationReset);
                 }
 
-                crate::config::SnapshotData::AddTransform { index, transform, .. } => {
+                crate::config::SnapshotData::AddTransform { index, transform, clone_from, .. } => {
                     log::debug!("  Redoing add transform at index {}", index);
                     if *index <= self.current.flame.transforms.len() {
-                        self.current.flame.on_transform_added(*index);
+                        if let Some(source_idx) = clone_from {
+                            self.current.flame.on_transform_cloned(*index, *source_idx);
+                        } else {
+                            self.current.flame.on_transform_added(*index);
+                        }
                         self.current.flame.transforms.insert(*index, transform.clone());
                     }
                     self.position += 1;
@@ -1974,10 +1978,14 @@ impl ConfigManager {
         // Apply the change based on snapshot type
         if let Some(snapshot) = &change.snapshot {
             match snapshot {
-                crate::config::SnapshotData::AddTransform { index, transform, .. } => {
+                crate::config::SnapshotData::AddTransform { index, transform, clone_from, .. } => {
                     if *index <= self.current.flame.transforms.len() {
-                        // Update xaos matrix before inserting (needs old transform list for detection)
-                        self.current.flame.on_transform_added(*index);
+                        // Update xaos matrix before inserting
+                        if let Some(source_idx) = clone_from {
+                            self.current.flame.on_transform_cloned(*index, *source_idx);
+                        } else {
+                            self.current.flame.on_transform_added(*index);
+                        }
                         self.current.flame.transforms.insert(*index, transform.clone());
                     } else {
                         return Err(ConfigError::InvalidIndex);

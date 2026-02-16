@@ -143,6 +143,30 @@ impl Flame {
         }
     }
 
+    /// Update xaos matrix after a transform is cloned.
+    ///
+    /// Inserts a new row and column at `clone_idx` that duplicate the source
+    /// transform's xaos relationships. The clone gets the same incoming weights
+    /// (reachable from the same transforms) and outgoing weights (routes to the
+    /// same transforms) as the source, including the source's self-weight for
+    /// clone↔source and clone↔clone weights.
+    pub fn on_transform_cloned(&mut self, clone_idx: usize, source_idx: usize) {
+        if let Some(ref mut xaos) = self.xaos {
+            // Step 1: Insert column at clone_idx.
+            // Each row gets the same weight-to-clone as its weight-to-source.
+            for row in xaos.iter_mut() {
+                let source_col_value = row[source_idx];
+                row.insert(clone_idx, source_col_value);
+            }
+
+            // Step 2: Insert row at clone_idx, copying the source's row.
+            // Source index may have shifted if clone was inserted before it.
+            let adjusted_source = if clone_idx <= source_idx { source_idx + 1 } else { source_idx };
+            let new_row = xaos[adjusted_source].clone();
+            xaos.insert(clone_idx, new_row);
+        }
+    }
+
     /// Update xaos matrix after a transform is deleted at the given index.
     ///
     /// Removes the row and column at the given index. If the resulting matrix

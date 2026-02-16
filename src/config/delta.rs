@@ -863,6 +863,8 @@ pub enum SnapshotData {
         transform: crate::scene::transforms::Transform,
         /// Xaos matrix state before the add (restored on undo)
         xaos_before: Option<Vec<Vec<f32>>>,
+        /// If Some, this was a clone — duplicates source's xaos relationships on apply/redo
+        clone_from: Option<usize>,
     },
 
     /// Transform deleted
@@ -1000,7 +1002,26 @@ impl ConfigChange {
             deltas: vec![],
             timestamp: now,
             description,
-            snapshot: Some(SnapshotData::AddTransform { index, transform, xaos_before }),
+            snapshot: Some(SnapshotData::AddTransform { index, transform, xaos_before, clone_from: None }),
+            last_update_time: now,
+        }
+    }
+
+    /// Create clone transform snapshot
+    /// Like add, but duplicates the source transform's xaos relationships
+    pub fn clone_transform_snapshot(
+        index: usize,
+        transform: crate::scene::transforms::Transform,
+        xaos_before: Option<Vec<Vec<f32>>>,
+        clone_from: usize,
+        description: String,
+    ) -> Self {
+        let now = Instant::now();
+        Self {
+            deltas: vec![],
+            timestamp: now,
+            description,
+            snapshot: Some(SnapshotData::AddTransform { index, transform, xaos_before, clone_from: Some(clone_from) }),
             last_update_time: now,
         }
     }
