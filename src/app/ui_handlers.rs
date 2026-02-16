@@ -165,12 +165,13 @@ impl App {
                 // Insert after the original transform
                 let insert_idx = idx + 1;
 
-                // Create specialized snapshot for efficient undo/redo
+                // Create specialized snapshot — clone duplicates the source's xaos relationships
                 let xaos_before = config.flame.xaos.clone();
-                let change = crate::config::ConfigChange::add_transform_snapshot(
+                let change = crate::config::ConfigChange::clone_transform_snapshot(
                     insert_idx,
                     cloned_transform,
                     xaos_before,
+                    idx,
                     format!("Clone Transform {}", idx + 1),
                 );
 
