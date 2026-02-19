@@ -43,8 +43,19 @@ pub fn render_menu_bar(
                 {
                     ui.separator();
 
-                    if ui.button(t!("menu.save_online")).clicked() {
-                        menu_actions.file.save_online = true;
+                    if menu_state.has_api_flame_id {
+                        // Currently editing a cloud flame — show Update + Save as New Copy
+                        if ui.button(t!("menu.update_online")).clicked() {
+                            menu_actions.file.update_online = true;
+                        }
+                        if ui.button(t!("menu.save_online_new_copy")).clicked() {
+                            menu_actions.file.save_online_new_copy = true;
+                        }
+                    } else {
+                        // No cloud flame loaded — show Save Online
+                        if ui.button(t!("menu.save_online")).clicked() {
+                            menu_actions.file.save_online = true;
+                        }
                     }
                 }
 

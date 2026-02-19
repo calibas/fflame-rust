@@ -73,9 +73,15 @@ pub struct FractalBrowserPanel {
     /// Whether we're loading a specific flame's full config
     #[cfg(feature = "api")]
     online_loading_flame: bool,
-    /// Shared slot for receiving async flame config result
+    /// Shared slot for receiving async flame config result (config + flame_id)
     #[cfg(feature = "api")]
-    online_flame_result: Arc<Mutex<Option<Result<FractalConfig, String>>>>,
+    online_flame_result: Arc<Mutex<Option<Result<(FractalConfig, String), String>>>>,
+    /// Whether a delete is in progress
+    #[cfg(feature = "api")]
+    online_deleting: bool,
+    /// Shared slot for receiving async delete result (flame_name on success)
+    #[cfg(feature = "api")]
+    online_delete_result: Arc<Mutex<Option<Result<String, String>>>>,
 }
 
 impl Default for FractalBrowserPanel {
@@ -119,6 +125,10 @@ impl FractalBrowserPanel {
             online_loading_flame: false,
             #[cfg(feature = "api")]
             online_flame_result: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "api")]
+            online_deleting: false,
+            #[cfg(feature = "api")]
+            online_delete_result: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -446,11 +456,37 @@ impl FractalBrowserPanel {
                 if let Some(result) = slot.take() {
                     self.online_loading_flame = false;
                     match result {
-                        Ok(config) => {
+                        Ok((config, flame_id)) => {
                             response.selected = Some(config);
+                            response.api_flame_id = Some(flame_id);
                         }
                         Err(e) => {
                             self.online_error = Some(e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Poll for completed async delete
+        if self.online_deleting {
+            if let Ok(mut slot) = self.online_delete_result.lock() {
+                if let Some(result) = slot.take() {
+                    self.online_deleting = false;
+                    match result {
+                        Ok(name) => {
+                            response.api_notification = Some((
+                                rust_i18n::t!("api.delete_success", name = name).to_string(),
+                                false,
+                            ));
+                            // Refresh the list
+                            self.online_fetched = false;
+                        }
+                        Err(e) => {
+                            response.api_notification = Some((
+                                rust_i18n::t!("api.delete_error", error = e).to_string(),
+                                true,
+                            ));
                         }
                     }
                 }
@@ -464,7 +500,7 @@ impl FractalBrowserPanel {
 
         // Toolbar
         ui.horizontal(|ui| {
-            let refresh_enabled = !self.online_loading && !self.online_loading_flame;
+            let refresh_enabled = !self.online_loading && !self.online_loading_flame && !self.online_deleting;
             if ui
                 .add_enabled(refresh_enabled, egui::Button::new(t!("browser.online_refresh")))
                 .clicked()
@@ -478,12 +514,15 @@ impl FractalBrowserPanel {
             } else if self.online_loading_flame {
                 ui.spinner();
                 ui.label(t!("browser.online_loading_flame"));
+            } else if self.online_deleting {
+                ui.spinner();
+                ui.label(t!("browser.online_deleting"));
             }
         });
 
         // Error message
         if let Some(ref error) = self.online_error {
-            ui.colored_label(egui::Color32::RED, format!("⚠ {}", error));
+            ui.colored_label(egui::Color32::RED, format!("{}", error));
         }
 
         ui.separator();
@@ -501,7 +540,8 @@ impl FractalBrowserPanel {
         } else if !self.online_flames.is_empty() {
             // Clone the list to avoid borrow issues during iteration
             let flames: Vec<_> = self.online_flames.clone();
-            let is_loading_flame = self.online_loading_flame;
+            let is_busy = self.online_loading_flame || self.online_deleting;
+            let mut delete_flame: Option<(String, String)> = None;
 
             egui::ScrollArea::vertical().show(ui, |ui| {
                 for flame in &flames {
@@ -525,16 +565,37 @@ impl FractalBrowserPanel {
                         flame.name, render_mode, flame.transform_count, variations_summary
                     );
 
-                    let button = ui.add_enabled(
-                        !is_loading_flame,
-                        egui::Button::new(&label).wrap_mode(egui::TextWrapMode::Truncate),
-                    );
+                    ui.horizontal(|ui| {
+                        // Load button (main flame row)
+                        let button = ui.add_enabled(
+                            !is_busy,
+                            egui::Button::new(&label).wrap_mode(egui::TextWrapMode::Truncate),
+                        );
+                        if button.clicked() {
+                            self.trigger_load_flame(&flame.id);
+                        }
 
-                    if button.clicked() {
-                        self.trigger_load_flame(&flame.id);
-                    }
+                        // Delete button (small, red)
+                        let del_btn = ui.add_enabled(
+                            !is_busy,
+                            egui::Button::new(
+                                egui::RichText::new("X")
+                                    .color(egui::Color32::from_rgb(220, 80, 80))
+                                    .small(),
+                            ),
+                        );
+                        if del_btn.clicked() {
+                            delete_flame = Some((flame.id.clone(), flame.name.clone()));
+                        }
+                        del_btn.on_hover_text(t!("browser.online_delete"));
+                    });
                 }
             });
+
+            // Trigger delete outside the borrow
+            if let Some((id, name)) = delete_flame {
+                self.trigger_delete_flame(&id, &name);
+            }
         }
 
         response
@@ -586,6 +647,38 @@ impl FractalBrowserPanel {
         {
             self.online_loading_flame = false;
             self.online_error = Some("Online browsing not yet available on desktop".to_string());
+        }
+    }
+
+    /// Request a refresh of the online flame list (e.g., after save/delete)
+    #[cfg(feature = "api")]
+    pub fn request_online_refresh(&mut self) {
+        self.online_fetched = false;
+    }
+
+    /// Trigger async delete of a flame
+    #[cfg(feature = "api")]
+    fn trigger_delete_flame(&mut self, flame_id: &str, flame_name: &str) {
+        self.online_deleting = true;
+        self.online_error = None;
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let result_slot = self.online_delete_result.clone();
+            let id = flame_id.to_string();
+            let name = flame_name.to_string();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = delete_online_flame(&id).await.map(|_| name);
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(result);
+                }
+            });
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.online_deleting = false;
+            self.online_error = Some("Delete not yet available on desktop".to_string());
         }
     }
 
@@ -666,8 +759,9 @@ async fn fetch_online_flames() -> Result<Vec<crate::api::types::FlameListItem>, 
 }
 
 /// Fetch a single flame's full config from the API (WASM async helper)
+/// Returns (FractalConfig, flame_id) on success.
 #[cfg(all(feature = "api", target_arch = "wasm32"))]
-async fn fetch_online_flame(flame_id: &str) -> Result<crate::config::FractalConfig, String> {
+async fn fetch_online_flame(flame_id: &str) -> Result<(crate::config::FractalConfig, String), String> {
     use crate::api::ApiState;
 
     let window = web_sys::window().ok_or("No window")?;
@@ -689,7 +783,37 @@ async fn fetch_online_flame(flame_id: &str) -> Result<crate::config::FractalConf
 
     let mut api = ApiState::new(&base_url);
     api.set_token(&token);
-    api.load_flame(flame_id)
+    let config = api.load_flame(flame_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok((config, flame_id.to_string()))
+}
+
+/// Delete a flame from the API (WASM async helper)
+#[cfg(all(feature = "api", target_arch = "wasm32"))]
+async fn delete_online_flame(flame_id: &str) -> Result<(), String> {
+    use crate::api::ApiState;
+
+    let window = web_sys::window().ok_or("No window")?;
+    let storage = window
+        .local_storage()
+        .map_err(|_| "Failed to access localStorage")?
+        .ok_or("No localStorage")?;
+
+    let token = storage
+        .get_item("fflame_auth_token")
+        .map_err(|_| "Failed to read token")?
+        .ok_or("Not signed in — click Sign In first")?;
+
+    let base_url = storage
+        .get_item("fflame_api_base_url")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "http://localhost:3000".to_string());
+
+    let mut api = ApiState::new(&base_url);
+    api.set_token(&token);
+    api.delete_flame(flame_id)
         .await
         .map_err(|e| e.to_string())
 }

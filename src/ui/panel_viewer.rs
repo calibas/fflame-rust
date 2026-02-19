@@ -70,6 +70,14 @@ pub struct PanelContext<'a> {
     // Selected preset config (from any browser)
     pub selected_preset_config: &'a mut Option<crate::config::FractalConfig>,
 
+    // API flame ID loaded from Online tab
+    #[cfg(feature = "api")]
+    pub loaded_api_flame_id: &'a mut Option<String>,
+
+    // API notification from browser panel (e.g., delete result)
+    #[cfg(feature = "api")]
+    pub api_notification: &'a mut Option<(String, bool)>,
+
     // File browser open request (shared by FractalBrowser)
     pub file_browser_open_requested: &'a mut bool,
 
@@ -1022,6 +1030,18 @@ impl<'a> PanelViewer<'a> {
             // Handle selection (load the config)
             if let Some(config) = response.selected {
                 *self.context.selected_preset_config = Some(config);
+
+                // Pass API flame ID through (for Online tab loads)
+                #[cfg(feature = "api")]
+                {
+                    *self.context.loaded_api_flame_id = response.api_flame_id;
+                }
+            }
+
+            // Pass API notifications through (e.g., delete result)
+            #[cfg(feature = "api")]
+            if let Some(notification) = response.api_notification {
+                *self.context.api_notification = Some(notification);
             }
         }
     }

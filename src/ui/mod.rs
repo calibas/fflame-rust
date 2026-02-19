@@ -38,6 +38,8 @@ pub use font_loader::{ensure_font_for_locale, initialize_default_fonts};
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
+#[cfg(feature = "api")]
+pub use response::ApiSaveAction;
 pub use workspace::Workspace;
 pub use xaos_editor::XaosEditorState;
 
@@ -60,6 +62,20 @@ pub struct PathClickInfo {
     pub color_preview: Vec<[u8; 4]>,
     /// Dimensions of the color preview (width, height) - usually 5x5
     pub preview_size: (u32, u32),
+}
+
+/// API notification for toast-style feedback overlay
+#[cfg(feature = "api")]
+pub struct ApiNotification {
+    pub message: String,
+    pub is_error: bool,
+    pub created_at: web_time::Instant,
+}
+
+#[cfg(feature = "api")]
+impl ApiNotification {
+    const DURATION_SECS: f32 = 4.0;
+    const FADE_START_SECS: f32 = 3.0;
 }
 
 use egui_wgpu::wgpu::*;
@@ -107,6 +123,27 @@ pub struct EguiLayer {
 
     // Fractal browser panel state
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
+
+    // API: flame ID loaded from Online tab (passed through to UiResponse)
+    #[cfg(feature = "api")]
+    loaded_api_flame_id: Option<String>,
+
+    // API: notification toast
+    #[cfg(feature = "api")]
+    api_notification: Option<ApiNotification>,
+
+    // API: save dialog state
+    #[cfg(feature = "api")]
+    api_save_dialog_open: bool,
+    #[cfg(feature = "api")]
+    api_save_dialog_name: String,
+    /// Whether the save dialog is for a "new copy" (true) or first save (false)
+    #[cfg(feature = "api")]
+    api_save_dialog_is_copy: bool,
+
+    /// API notification from browser panel (e.g. delete result)
+    #[cfg(feature = "api")]
+    api_browser_notification: Option<(String, bool)>,
 
     // Histogram for density visualization (levels now in ConfigManager)
     density_histogram: crate::renderer::DensityHistogram,
@@ -205,6 +242,18 @@ impl EguiLayer {
             generated_flame: None,
             generated_batch: None,
             fractal_browser_panel: None,
+            #[cfg(feature = "api")]
+            loaded_api_flame_id: None,
+            #[cfg(feature = "api")]
+            api_notification: None,
+            #[cfg(feature = "api")]
+            api_save_dialog_open: false,
+            #[cfg(feature = "api")]
+            api_save_dialog_name: String::new(),
+            #[cfg(feature = "api")]
+            api_save_dialog_is_copy: false,
+            #[cfg(feature = "api")]
+            api_browser_notification: None,
             density_histogram: crate::renderer::DensityHistogram::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
@@ -266,6 +315,144 @@ impl EguiLayer {
         let close = self.close_path_overlay;
         self.close_path_overlay = false;
         close
+    }
+
+    /// Show an API notification toast
+    #[cfg(feature = "api")]
+    pub fn show_api_notification(&mut self, message: &str, is_error: bool) {
+        self.api_notification = Some(ApiNotification {
+            message: message.to_string(),
+            is_error,
+            created_at: web_time::Instant::now(),
+        });
+    }
+
+    /// Request the Online tab to refresh its flame list
+    #[cfg(feature = "api")]
+    pub fn request_online_refresh(&mut self) {
+        if let Some(ref mut panel) = self.fractal_browser_panel {
+            panel.request_online_refresh();
+        }
+    }
+
+    /// Render API notification toast overlay (bottom-center)
+    #[cfg(feature = "api")]
+    fn render_api_notification(&mut self, ctx: &egui::Context) {
+        let notification = match &self.api_notification {
+            Some(n) => n,
+            None => return,
+        };
+
+        let elapsed = notification.created_at.elapsed().as_secs_f32();
+        if elapsed >= ApiNotification::DURATION_SECS {
+            self.api_notification = None;
+            return;
+        }
+
+        // Calculate opacity (fade out in last second)
+        let alpha = if elapsed >= ApiNotification::FADE_START_SECS {
+            let fade_progress = (elapsed - ApiNotification::FADE_START_SECS)
+                / (ApiNotification::DURATION_SECS - ApiNotification::FADE_START_SECS);
+            1.0 - fade_progress
+        } else {
+            1.0
+        };
+
+        let bg_color = if notification.is_error {
+            egui::Color32::from_rgba_unmultiplied(180, 40, 40, (alpha * 230.0) as u8)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(40, 140, 40, (alpha * 230.0) as u8)
+        };
+
+        let text_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, (alpha * 255.0) as u8);
+
+        let screen_rect = ctx.screen_rect();
+        let anchor_pos = egui::pos2(screen_rect.center().x, screen_rect.bottom() - 60.0);
+
+        egui::Area::new(egui::Id::new("api_notification"))
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -60.0))
+            .order(egui::Order::Foreground)
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(bg_color)
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(16, 10))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(&notification.message).color(text_color).size(14.0));
+                    });
+            });
+
+        // Request repaint for animation
+        ctx.request_repaint();
+    }
+
+    /// Render the API save dialog window
+    #[cfg(feature = "api")]
+    fn render_api_save_dialog(&mut self, ctx: &egui::Context) -> Option<response::ApiSaveAction> {
+        if !self.api_save_dialog_open {
+            return None;
+        }
+
+        let mut action = None;
+        let mut open = self.api_save_dialog_open;
+
+        egui::Window::new(rust_i18n::t!("api.save_dialog_title"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(rust_i18n::t!("api.save_dialog_name_label"));
+                    let response = ui.text_edit_singleline(&mut self.api_save_dialog_name);
+
+                    // Auto-focus the text field on first frame
+                    if response.gained_focus() || !response.has_focus() {
+                        response.request_focus();
+                    }
+
+                    // Enter key submits
+                    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        let name = self.api_save_dialog_name.trim().to_string();
+                        if !name.is_empty() {
+                            action = Some(response::ApiSaveAction::SaveNew { name });
+                        }
+                    }
+                });
+
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button(rust_i18n::t!("api.save_dialog_save")).clicked() {
+                        let name = self.api_save_dialog_name.trim().to_string();
+                        if !name.is_empty() {
+                            action = Some(response::ApiSaveAction::SaveNew { name });
+                        }
+                    }
+                    if ui.button(rust_i18n::t!("api.save_dialog_cancel")).clicked() {
+                        self.api_save_dialog_open = false;
+                    }
+                });
+            });
+
+        if !open {
+            self.api_save_dialog_open = false;
+        }
+
+        if action.is_some() {
+            self.api_save_dialog_open = false;
+        }
+
+        action
+    }
+
+    /// Open the API save dialog with a pre-filled name
+    #[cfg(feature = "api")]
+    pub fn open_save_dialog(&mut self, name: &str, is_copy: bool) {
+        self.api_save_dialog_name = name.to_string();
+        self.api_save_dialog_open = true;
+        self.api_save_dialog_is_copy = is_copy;
     }
 
     /// Register the renderer's fractal texture with egui for display
@@ -342,6 +529,7 @@ impl EguiLayer {
         audio_capture: &mut crate::audio::AudioCapture,
         signal_manager: &mut crate::signal::SignalManager,
         signal_names: &[String],
+        #[cfg(feature = "api")] api_flame_id: &Option<String>,
     ) -> UiResponse {
         let mut raw_input = self.state.take_egui_input(window);
 
@@ -420,6 +608,10 @@ impl EguiLayer {
             can_redo,
             is_paused: *paused,
             render_mode_2d: config_manager.active_config().flame.render_mode == crate::scene::transforms::RenderMode::TwoD,
+            #[cfg(feature = "api")]
+            has_api_flame_id: api_flame_id.is_some(),
+            #[cfg(feature = "api")]
+            flame_name: config_manager.config().flame.name.clone(),
         };
 
         // Log ConfigManager state at start of UI render
@@ -549,6 +741,14 @@ impl EguiLayer {
                         // Selected preset config (from FractalBrowser or other sources)
                         selected_preset_config: &mut self.selected_preset_config,
 
+                        // API flame ID loaded from Online tab
+                        #[cfg(feature = "api")]
+                        loaded_api_flame_id: &mut self.loaded_api_flame_id,
+
+                        // API notification from browser panel
+                        #[cfg(feature = "api")]
+                        api_notification: &mut self.api_browser_notification,
+
                         // File browser open request (shared by FractalBrowser)
                         file_browser_open_requested: &mut file_browser_open_requested,
 
@@ -641,6 +841,24 @@ impl EguiLayer {
 
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
         });
+
+        // API notification toast and save dialog (rendered outside ctx.run to avoid borrow conflicts with self)
+        #[cfg(feature = "api")]
+        {
+            let ctx = self.ctx.clone();
+            self.render_api_notification(&ctx);
+        }
+        #[cfg(feature = "api")]
+        let api_save_dialog_action = {
+            let ctx = self.ctx.clone();
+            self.render_api_save_dialog(&ctx)
+        };
+
+        // Process browser notifications (e.g. delete results) through the toast system
+        #[cfg(feature = "api")]
+        if let Some((message, is_error)) = self.api_browser_notification.take() {
+            self.show_api_notification(&message, is_error);
+        }
 
         // Log egui repaint requests for performance investigation
         let needs_repaint = self.ctx.has_requested_repaint();
@@ -753,7 +971,24 @@ impl EguiLayer {
         *quit_requested |= menu_actions.file.quit;
 
         #[cfg(feature = "api")]
-        let save_online_requested = menu_actions.file.save_online;
+        let api_save_action = if menu_actions.file.update_online {
+            // "Update Online" — update existing flame in place
+            response::ApiSaveAction::Update
+        } else if menu_actions.file.save_online {
+            // "Save Online..." — open name dialog for new save
+            self.open_save_dialog(&config_manager.config().flame.name, false);
+            response::ApiSaveAction::None
+        } else if menu_actions.file.save_online_new_copy {
+            // "Save Online (New Copy)..." — open name dialog for a copy
+            let name = format!("{} (copy)", config_manager.config().flame.name);
+            self.open_save_dialog(&name, true);
+            response::ApiSaveAction::None
+        } else if let Some(action) = api_save_dialog_action {
+            // From save dialog submission
+            action
+        } else {
+            response::ApiSaveAction::None
+        };
 
         // Combine undo/redo from both menu and panels (OR to not override panel buttons)
         undo_requested |= menu_actions.edit.undo;
@@ -782,6 +1017,10 @@ impl EguiLayer {
 
         // Take selected preset config (reset to None after returning)
         let selected_preset_config = self.selected_preset_config.take();
+
+        // Take API flame ID (reset to None after returning)
+        #[cfg(feature = "api")]
+        let loaded_api_flame_id = self.loaded_api_flame_id.take();
 
         // Take generated flame from random generator panel
         let generated_flame = self.generated_flame.take();
@@ -828,7 +1067,9 @@ impl EguiLayer {
             load_signal_file,
             save_signal_file,
             #[cfg(feature = "api")]
-            save_online_requested,
+            api_save_action,
+            #[cfg(feature = "api")]
+            loaded_api_flame_id,
         }
     }
 

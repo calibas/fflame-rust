@@ -363,6 +363,8 @@ pub struct App {
 
     // API integration (feature-gated)
     #[cfg(feature = "api")]
+    pub(super) api_flame_id: Option<String>,
+    #[cfg(feature = "api")]
     pub(super) api_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
     #[cfg(feature = "api")]
     pub(super) api_save_in_progress: bool,
@@ -461,6 +463,8 @@ impl App {
             audio_player: crate::audio::AudioPlayer::new(),
             audio_capture: crate::audio::AudioCapture::new(),
             signal_manager: crate::signal::SignalManager::new(),
+            #[cfg(feature = "api")]
+            api_flame_id: None,
             #[cfg(feature = "api")]
             api_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             #[cfg(feature = "api")]
@@ -881,6 +885,8 @@ impl App {
             &mut self.audio_capture,
             &mut self.signal_manager,
             &signal_names,
+            #[cfg(feature = "api")]
+            &self.api_flame_id,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
