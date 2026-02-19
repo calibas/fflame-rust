@@ -832,6 +832,12 @@ browser:
   tab_files: "Files"
   batch_empty_title: "No random batch results"
   batch_empty_hint: "Use the Random Generator to create a batch of flames"
+  tab_online: "Online"
+  online_refresh: "⟳ Refresh"
+  online_loading_list: "Loading flames..."
+  online_loading_flame: "Loading flame..."
+  online_empty: "No flames saved online"
+  online_empty_hint: "Use File → Save Online to upload a flame"
 
 # Config Import/Export Dialog
 config_dialog:
