@@ -18,6 +18,8 @@ menu:
   open: "📂 Open..."
   save_as: "💾 Save As..."
   save_online: "☁ Save Online..."
+  update_online: "☁ Update Online"
+  save_online_new_copy: "☁ Save Online (New Copy)..."
   from_preset_library: "📚 From Preset Library..."
   random_flame: "🎲 Random Flame"
   random_batch: "🎲 Random Batch..."
@@ -838,6 +840,20 @@ browser:
   online_loading_flame: "Loading flame..."
   online_empty: "No flames saved online"
   online_empty_hint: "Use File → Save Online to upload a flame"
+  online_delete: "Delete"
+  online_deleting: "Deleting..."
+
+# API (cloud save/update)
+api:
+  save_dialog_title: "Save Online"
+  save_dialog_name_label: "Flame Name:"
+  save_dialog_save: "Save"
+  save_dialog_cancel: "Cancel"
+  save_success: "Saved online: %{name}"
+  update_success: "Updated online: %{name}"
+  save_error: "Failed to save: %{error}"
+  delete_success: "Deleted: %{name}"
+  delete_error: "Failed to delete: %{error}"
 
 # Config Import/Export Dialog
 config_dialog:

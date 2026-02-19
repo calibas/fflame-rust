@@ -197,6 +197,12 @@ impl App {
             if let Err(e) = self.load_config_with_undo(new_config, "history.action.new_flame".to_string()) {
                 eprintln!("Failed to create new flame: {}", e);
             }
+
+            // Clear API flame ID — this is a new local flame
+            #[cfg(feature = "api")]
+            {
+                self.api_flame_id = None;
+            }
         }
     }
 
@@ -734,6 +740,12 @@ impl App {
                 log::error!("Failed to load preset: {}", e);
             } else {
                 log::info!("Preset loaded successfully");
+
+                // Track API flame ID if loaded from Online tab, clear otherwise
+                #[cfg(feature = "api")]
+                {
+                    self.api_flame_id = ui_response.loaded_api_flame_id.clone();
+                }
             }
         }
     }
@@ -908,9 +920,11 @@ impl App {
         }
     }
 
-    /// Handle "Save Online" — save current flame to the API
+    /// Handle API save/update — process async results and new requests
     #[cfg(feature = "api")]
     fn handle_save_online(&mut self, ui_response: &UiResponse) {
+        use crate::ui::ApiSaveAction;
+
         // Check for completed async save
         if self.api_save_in_progress {
             if let Ok(mut result) = self.api_save_result.lock() {
@@ -918,57 +932,128 @@ impl App {
                     self.api_save_in_progress = false;
                     match save_result {
                         Ok(flame_id) => {
-                            log::info!("Flame saved online: {}", flame_id);
+                            log::info!("Flame saved/updated online: {}", flame_id);
+                            self.api_flame_id = Some(flame_id.clone());
+                            let name = self.config_manager.active_config().flame.name.clone();
+                            self.egui_layer.show_api_notification(
+                                &rust_i18n::t!("api.save_success", name = name),
+                                false,
+                            );
+                            // Auto-refresh the Online tab
+                            self.egui_layer.request_online_refresh();
                         }
                         Err(e) => {
                             log::error!("Failed to save flame online: {}", e);
+                            self.egui_layer.show_api_notification(
+                                &rust_i18n::t!("api.save_error", error = e),
+                                true,
+                            );
                         }
                     }
                 }
             }
         }
 
-        // Handle new save request
-        if ui_response.save_online_requested && !self.api_save_in_progress {
+        // Handle new save/update request
+        let action = &ui_response.api_save_action;
+        let should_act = !matches!(action, ApiSaveAction::None) && !self.api_save_in_progress;
+        if should_act {
             let config = self.export_config();
-            let name = config.flame.name.clone();
             let result_slot = self.api_save_result.clone();
             self.api_save_in_progress = true;
 
-            #[cfg(target_arch = "wasm32")]
-            {
-                wasm_bindgen_futures::spawn_local(async move {
-                    let save_result = save_flame_online(config, &name).await;
-                    if let Ok(mut slot) = result_slot.lock() {
-                        *slot = Some(save_result);
+            match action {
+                ApiSaveAction::SaveNew { name } => {
+                    let name = name.clone();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        wasm_bindgen_futures::spawn_local(async move {
+                            let save_result = save_flame_online(config, &name).await;
+                            if let Ok(mut slot) = result_slot.lock() {
+                                *slot = Some(save_result);
+                            }
+                        });
                     }
-                });
-            }
-
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                log::warn!("Save Online not yet implemented for desktop");
-                self.api_save_in_progress = false;
-                if let Ok(mut slot) = self.api_save_result.lock() {
-                    *slot = Some(Err("Save Online not yet implemented for desktop".to_string()));
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        log::warn!("Save Online not yet implemented for desktop");
+                        self.api_save_in_progress = false;
+                        if let Ok(mut slot) = self.api_save_result.lock() {
+                            *slot = Some(Err("Save Online not yet implemented for desktop".to_string()));
+                        }
+                    }
                 }
+                ApiSaveAction::Update => {
+                    if let Some(flame_id) = self.api_flame_id.clone() {
+                        let name = config.flame.name.clone();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            wasm_bindgen_futures::spawn_local(async move {
+                                let save_result = update_flame_online(config, &flame_id, &name).await;
+                                if let Ok(mut slot) = result_slot.lock() {
+                                    *slot = Some(save_result);
+                                }
+                            });
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            log::warn!("Update Online not yet implemented for desktop");
+                            self.api_save_in_progress = false;
+                            if let Ok(mut slot) = self.api_save_result.lock() {
+                                *slot = Some(Err("Update Online not yet implemented for desktop".to_string()));
+                            }
+                        }
+                    } else {
+                        log::error!("Update requested but no api_flame_id");
+                        self.api_save_in_progress = false;
+                    }
+                }
+                ApiSaveAction::None => unreachable!(),
             }
         }
     }
 }
 
-/// Save a flame to the API (async helper for WASM).
-///
-/// Reads the auth token from localStorage and the API base URL,
-/// then calls the API to save the flame.
+/// Save a flame to the API as new (async helper for WASM).
 #[cfg(all(feature = "api", target_arch = "wasm32"))]
 async fn save_flame_online(
     config: crate::config::FractalConfig,
     name: &str,
 ) -> Result<String, String> {
+    let (api, token) = create_api_state().await?;
+    api.save_flame(&config, Some(name))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Update an existing flame on the API (async helper for WASM).
+#[cfg(all(feature = "api", target_arch = "wasm32"))]
+async fn update_flame_online(
+    config: crate::config::FractalConfig,
+    flame_id: &str,
+    name: &str,
+) -> Result<String, String> {
+    let (api, token) = create_api_state().await?;
+    api.update_flame(flame_id, &config, Some(name))
+        .await
+        .map(|resp| resp.id)
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a flame from the API (async helper for WASM).
+#[cfg(all(feature = "api", target_arch = "wasm32"))]
+async fn delete_flame_online(flame_id: &str) -> Result<(), String> {
+    let (api, token) = create_api_state().await?;
+    api.delete_flame(flame_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Create an ApiState from localStorage credentials (shared helper).
+#[cfg(all(feature = "api", target_arch = "wasm32"))]
+async fn create_api_state() -> Result<(crate::api::ApiState, String), String> {
     use crate::api::ApiState;
 
-    // Read token from localStorage (set by JS auth wrapper)
     let window = web_sys::window().ok_or("No window")?;
     let storage = window
         .local_storage()
@@ -980,17 +1065,13 @@ async fn save_flame_online(
         .map_err(|_| "Failed to read token")?
         .ok_or("Not signed in — click Sign In first")?;
 
-    // Read API base URL (default to same origin, fall back to localhost)
     let base_url = storage
         .get_item("fflame_api_base_url")
         .ok()
         .flatten()
         .unwrap_or_else(|| "http://localhost:3000".to_string());
 
-    // Create a temporary ApiState and save
     let mut api = ApiState::new(&base_url);
     api.set_token(&token);
-    api.save_flame(&config, Some(name))
-        .await
-        .map_err(|e| e.to_string())
+    Ok((api, token))
 }
