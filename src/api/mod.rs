@@ -189,6 +189,70 @@ impl ApiState {
         client::api_delete(&url, &token).await
     }
 
+    /// Search flames with filters.
+    pub async fn search_flames(
+        &self,
+        params: &SearchFlamesParams,
+    ) -> FetchResult<Vec<FlameListItem>> {
+        let token = self.require_token()?;
+        let url = build_url(
+            &self.base_url,
+            &format!("/api/search/flames{}", params.to_query_string()),
+        );
+        client::api_get(&url, &token).await
+    }
+
+    // --- Palette operations ---
+
+    /// List palettes, optionally filtered by scope.
+    pub async fn list_palettes(
+        &self,
+        scope: Option<ApiPaletteScope>,
+        page: u32,
+        per_page: u32,
+    ) -> FetchResult<Vec<PaletteResponse>> {
+        let token = self.require_token()?;
+        let scope_param = scope
+            .map(|s| {
+                let s = serde_json::to_value(s)
+                    .ok()
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                format!("&scope={}", s)
+            })
+            .unwrap_or_default();
+        let url = build_url(
+            &self.base_url,
+            &format!("/api/palettes?page={}&per_page={}{}", page, per_page, scope_param),
+        );
+        client::api_get(&url, &token).await
+    }
+
+    /// Get a single palette by ID.
+    pub async fn get_palette(&self, palette_id: &str) -> FetchResult<PaletteResponse> {
+        let token = self.require_token()?;
+        let url = build_url(&self.base_url, &format!("/api/palettes/{}", palette_id));
+        client::api_get(&url, &token).await
+    }
+
+    /// Update an existing palette.
+    pub async fn update_palette(
+        &self,
+        palette_id: &str,
+        req: &UpdatePaletteRequest,
+    ) -> FetchResult<PaletteResponse> {
+        let token = self.require_token()?;
+        let url = build_url(&self.base_url, &format!("/api/palettes/{}", palette_id));
+        client::api_put(&url, req, &token).await
+    }
+
+    /// Delete a palette.
+    pub async fn delete_palette(&self, palette_id: &str) -> FetchResult<()> {
+        let token = self.require_token()?;
+        let url = build_url(&self.base_url, &format!("/api/palettes/{}", palette_id));
+        client::api_delete(&url, &token).await
+    }
+
     // --- Helpers ---
 
     fn require_token(&self) -> FetchResult<String> {
