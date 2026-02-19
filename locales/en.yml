@@ -17,6 +17,7 @@ menu:
   new: "📄 New"
   open: "📂 Open..."
   save_as: "💾 Save As..."
+  save_online: "☁ Save Online..."
   from_preset_library: "📚 From Preset Library..."
   random_flame: "🎲 Random Flame"
   random_batch: "🎲 Random Batch..."

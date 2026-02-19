@@ -360,6 +360,12 @@ pub struct App {
     pub(super) audio_player: crate::audio::AudioPlayer,
     pub(super) audio_capture: crate::audio::AudioCapture,
     pub(super) signal_manager: crate::signal::SignalManager,
+
+    // API integration (feature-gated)
+    #[cfg(feature = "api")]
+    pub(super) api_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
+    #[cfg(feature = "api")]
+    pub(super) api_save_in_progress: bool,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -455,6 +461,10 @@ impl App {
             audio_player: crate::audio::AudioPlayer::new(),
             audio_capture: crate::audio::AudioCapture::new(),
             signal_manager: crate::signal::SignalManager::new(),
+            #[cfg(feature = "api")]
+            api_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(feature = "api")]
+            api_save_in_progress: false,
         };
 
         // Register live audio capture as a signal producer so live_* signals

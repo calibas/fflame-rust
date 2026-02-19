@@ -79,6 +79,10 @@ pub struct UiResponse {
 
     // Signal file save requested (signal name to save)
     pub save_signal_file: Option<String>,
+
+    // API: Save current flame online
+    #[cfg(feature = "api")]
+    pub save_online_requested: bool,
 }
 
 impl Default for UiResponse {
@@ -123,6 +127,8 @@ impl Default for UiResponse {
             load_audio_file: false,
             load_signal_file: false,
             save_signal_file: None,
+            #[cfg(feature = "api")]
+            save_online_requested: false,
         }
     }
 }
