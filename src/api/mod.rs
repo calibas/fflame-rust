@@ -114,6 +114,9 @@ impl ApiState {
 
     /// Save a FractalConfig to the API as a new flame.
     /// Returns the server-assigned flame ID.
+    ///
+    /// Order: create flame first, then palette with flame_id (API requires it
+    /// for custom palettes), then update the flame to link the palette.
     pub async fn save_flame(
         &self,
         config: &FractalConfig,
@@ -121,19 +124,27 @@ impl ApiState {
     ) -> FetchResult<String> {
         let token = self.require_token()?;
 
-        // First, save the palette
-        let palette_req = sync::palette_to_create_request(&config.palette);
+        // 1. Create the flame (without palette)
+        let flame_req = sync::config_to_create_request(config, name);
+        let flame_url = build_url(&self.base_url, "/api/flames");
+        let flame_resp: FlameResponse =
+            client::api_post(&flame_url, &flame_req, &token).await?;
+        let flame_id = flame_resp.id;
+
+        // 2. Create the palette with the flame_id (required for custom palettes)
+        let mut palette_req = sync::palette_to_create_request(&config.palette);
+        palette_req.flame_id = Some(flame_id.clone());
         let palette_url = build_url(&self.base_url, "/api/palettes");
         let palette_resp: PaletteResponse =
             client::api_post(&palette_url, &palette_req, &token).await?;
 
-        // Then save the flame with the palette ID
-        let mut flame_req = sync::config_to_create_request(config, name);
-        flame_req.palette_id = Some(palette_resp.id);
+        // 3. Update the flame to link the palette
+        let update_url = build_url(&self.base_url, &format!("/api/flames/{}", flame_id));
+        let mut update_req = sync::config_to_create_request(config, name);
+        update_req.palette_id = Some(palette_resp.id);
+        let _: FlameResponse = client::api_put(&update_url, &update_req, &token).await?;
 
-        let url = build_url(&self.base_url, "/api/flames");
-        let resp: FlameResponse = client::api_post(&url, &flame_req, &token).await?;
-        Ok(resp.id)
+        Ok(flame_id)
     }
 
     /// Update an existing flame on the API.
