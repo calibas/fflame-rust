@@ -1,9 +1,10 @@
-//! Fractal Browser panel - unified browser for presets, batch results, and files
+//! Fractal Browser panel - unified browser for presets, batch results, files, and online flames
 //!
-//! A tabbed panel that provides three views:
+//! A tabbed panel that provides views:
 //! - Presets: Built-in presets from assets/presets.fflame
 //! - Batch: Random batch generation results (persists until next batch)
 //! - Files: Loaded .fflame files
+//! - Online: Flames fetched from the API (feature-gated behind `api`)
 
 use egui;
 use rust_i18n::t;
@@ -12,6 +13,9 @@ use super::fractal_gallery::{FractalConfigGallery, GalleryResponse};
 use crate::config::FractalConfig;
 use crate::scene::presets::global_preset_library;
 
+#[cfg(feature = "api")]
+use std::sync::{Arc, Mutex};
+
 /// Which tab is currently active in the browser
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BrowserTab {
@@ -19,6 +23,8 @@ pub enum BrowserTab {
     Presets,
     Batch,
     Files,
+    #[cfg(feature = "api")]
+    Online,
 }
 
 /// State for the Fractal Browser panel
@@ -47,6 +53,29 @@ pub struct FractalBrowserPanel {
     files_error_message: Option<String>,
     /// Whether file open dialog was requested
     files_open_requested: bool,
+
+    // --- Online tab (feature-gated) ---
+    /// Cached flame list items from the API
+    #[cfg(feature = "api")]
+    online_flames: Vec<crate::api::types::FlameListItem>,
+    /// Whether the flame list has been fetched
+    #[cfg(feature = "api")]
+    online_fetched: bool,
+    /// Whether a flame list fetch is in progress
+    #[cfg(feature = "api")]
+    online_loading: bool,
+    /// Error from last fetch
+    #[cfg(feature = "api")]
+    online_error: Option<String>,
+    /// Shared slot for receiving async flame list results
+    #[cfg(feature = "api")]
+    online_list_result: Arc<Mutex<Option<Result<Vec<crate::api::types::FlameListItem>, String>>>>,
+    /// Whether we're loading a specific flame's full config
+    #[cfg(feature = "api")]
+    online_loading_flame: bool,
+    /// Shared slot for receiving async flame config result
+    #[cfg(feature = "api")]
+    online_flame_result: Arc<Mutex<Option<Result<FractalConfig, String>>>>,
 }
 
 impl Default for FractalBrowserPanel {
@@ -75,6 +104,21 @@ impl FractalBrowserPanel {
             files_current_path: None,
             files_error_message: None,
             files_open_requested: false,
+
+            #[cfg(feature = "api")]
+            online_flames: Vec::new(),
+            #[cfg(feature = "api")]
+            online_fetched: false,
+            #[cfg(feature = "api")]
+            online_loading: false,
+            #[cfg(feature = "api")]
+            online_error: None,
+            #[cfg(feature = "api")]
+            online_list_result: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "api")]
+            online_loading_flame: false,
+            #[cfg(feature = "api")]
+            online_flame_result: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -210,6 +254,10 @@ impl FractalBrowserPanel {
                     return Some((BrowserTab::Files, config));
                 }
             }
+            #[cfg(feature = "api")]
+            BrowserTab::Online => {
+                // Online tab doesn't use FractalConfigGallery for thumbnails
+            }
         }
 
         // Then check others
@@ -241,6 +289,8 @@ impl FractalBrowserPanel {
             BrowserTab::Presets => self.presets_gallery.generate_one_thumbnail(ctx, render_fn),
             BrowserTab::Batch => self.batch_gallery.generate_one_thumbnail(ctx, render_fn),
             BrowserTab::Files => self.files_gallery.generate_one_thumbnail(ctx, render_fn),
+            #[cfg(feature = "api")]
+            BrowserTab::Online => true, // Online tab doesn't generate thumbnails locally
         }
     }
 
@@ -272,6 +322,8 @@ impl FractalBrowserPanel {
             BrowserTab::Presets => self.presets_gallery.generation_progress(),
             BrowserTab::Batch => self.batch_gallery.generation_progress(),
             BrowserTab::Files => self.files_gallery.generation_progress(),
+            #[cfg(feature = "api")]
+            BrowserTab::Online => (0, 0),
         }
     }
 
@@ -313,6 +365,22 @@ impl FractalBrowserPanel {
             {
                 self.current_tab = BrowserTab::Files;
             }
+
+            // Online tab (api feature)
+            #[cfg(feature = "api")]
+            {
+                let online_label = if self.online_flames.is_empty() {
+                    t!("browser.tab_online").to_string()
+                } else {
+                    format!("{} ({})", t!("browser.tab_online"), self.online_flames.len())
+                };
+                if ui
+                    .selectable_label(self.current_tab == BrowserTab::Online, online_label)
+                    .clicked()
+                {
+                    self.current_tab = BrowserTab::Online;
+                }
+            }
         });
 
         ui.separator();
@@ -322,6 +390,8 @@ impl FractalBrowserPanel {
             BrowserTab::Presets => self.render_presets_tab(ui),
             BrowserTab::Batch => self.render_batch_tab(ui),
             BrowserTab::Files => self.render_files_tab(ui),
+            #[cfg(feature = "api")]
+            BrowserTab::Online => self.render_online_tab(ui),
         }
     }
 
@@ -343,6 +413,179 @@ impl FractalBrowserPanel {
                 });
             });
             GalleryResponse::default()
+        }
+    }
+
+    /// Render the Online tab — fetches flame list from API, loads full config on click
+    #[cfg(feature = "api")]
+    fn render_online_tab(&mut self, ui: &mut egui::Ui) -> GalleryResponse {
+        let mut response = GalleryResponse::default();
+
+        // Poll for completed async flame list fetch
+        if self.online_loading {
+            if let Ok(mut slot) = self.online_list_result.lock() {
+                if let Some(result) = slot.take() {
+                    self.online_loading = false;
+                    match result {
+                        Ok(flames) => {
+                            self.online_flames = flames;
+                            self.online_fetched = true;
+                            self.online_error = None;
+                        }
+                        Err(e) => {
+                            self.online_error = Some(e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Poll for completed async single-flame load
+        if self.online_loading_flame {
+            if let Ok(mut slot) = self.online_flame_result.lock() {
+                if let Some(result) = slot.take() {
+                    self.online_loading_flame = false;
+                    match result {
+                        Ok(config) => {
+                            response.selected = Some(config);
+                        }
+                        Err(e) => {
+                            self.online_error = Some(e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Auto-fetch on first visit
+        if !self.online_fetched && !self.online_loading {
+            self.trigger_fetch_flames();
+        }
+
+        // Toolbar
+        ui.horizontal(|ui| {
+            let refresh_enabled = !self.online_loading && !self.online_loading_flame;
+            if ui
+                .add_enabled(refresh_enabled, egui::Button::new(t!("browser.online_refresh")))
+                .clicked()
+            {
+                self.trigger_fetch_flames();
+            }
+
+            if self.online_loading {
+                ui.spinner();
+                ui.label(t!("browser.online_loading_list"));
+            } else if self.online_loading_flame {
+                ui.spinner();
+                ui.label(t!("browser.online_loading_flame"));
+            }
+        });
+
+        // Error message
+        if let Some(ref error) = self.online_error {
+            ui.colored_label(egui::Color32::RED, format!("⚠ {}", error));
+        }
+
+        ui.separator();
+
+        // Flame list
+        if self.online_flames.is_empty() && self.online_fetched {
+            ui.centered_and_justified(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(50.0);
+                    ui.label(t!("browser.online_empty"));
+                    ui.add_space(10.0);
+                    ui.label(t!("browser.online_empty_hint"));
+                });
+            });
+        } else if !self.online_flames.is_empty() {
+            // Clone the list to avoid borrow issues during iteration
+            let flames: Vec<_> = self.online_flames.clone();
+            let is_loading_flame = self.online_loading_flame;
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for flame in &flames {
+                    let render_mode = match flame.render_mode {
+                        crate::api::types::ApiRenderMode::TwoD => "2D",
+                        crate::api::types::ApiRenderMode::ThreeD => "3D",
+                    };
+
+                    let variations_summary = if flame.variation_names.len() <= 3 {
+                        flame.variation_names.join(", ")
+                    } else {
+                        format!(
+                            "{}, +{}",
+                            flame.variation_names[..2].join(", "),
+                            flame.variation_names.len() - 2
+                        )
+                    };
+
+                    let label = format!(
+                        "{} — {} | {}T | {}",
+                        flame.name, render_mode, flame.transform_count, variations_summary
+                    );
+
+                    let button = ui.add_enabled(
+                        !is_loading_flame,
+                        egui::Button::new(&label).wrap_mode(egui::TextWrapMode::Truncate),
+                    );
+
+                    if button.clicked() {
+                        self.trigger_load_flame(&flame.id);
+                    }
+                }
+            });
+        }
+
+        response
+    }
+
+    /// Trigger async fetch of the flame list from the API
+    #[cfg(feature = "api")]
+    fn trigger_fetch_flames(&mut self) {
+        self.online_loading = true;
+        self.online_error = None;
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let result_slot = self.online_list_result.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = fetch_online_flames().await;
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(result);
+                }
+            });
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.online_loading = false;
+            self.online_error = Some("Online browsing not yet available on desktop".to_string());
+        }
+    }
+
+    /// Trigger async load of a single flame's full config
+    #[cfg(feature = "api")]
+    fn trigger_load_flame(&mut self, flame_id: &str) {
+        self.online_loading_flame = true;
+        self.online_error = None;
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let result_slot = self.online_flame_result.clone();
+            let id = flame_id.to_string();
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = fetch_online_flame(&id).await;
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(result);
+                }
+            });
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.online_loading_flame = false;
+            self.online_error = Some("Online browsing not yet available on desktop".to_string());
         }
     }
 
@@ -391,4 +634,62 @@ impl FractalBrowserPanel {
             GalleryResponse::default()
         }
     }
+}
+
+/// Fetch the list of flames from the API (WASM async helper)
+#[cfg(all(feature = "api", target_arch = "wasm32"))]
+async fn fetch_online_flames() -> Result<Vec<crate::api::types::FlameListItem>, String> {
+    use crate::api::ApiState;
+
+    let window = web_sys::window().ok_or("No window")?;
+    let storage = window
+        .local_storage()
+        .map_err(|_| "Failed to access localStorage")?
+        .ok_or("No localStorage")?;
+
+    let token = storage
+        .get_item("fflame_auth_token")
+        .map_err(|_| "Failed to read token")?
+        .ok_or("Not signed in — click Sign In first")?;
+
+    let base_url = storage
+        .get_item("fflame_api_base_url")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "http://localhost:3000".to_string());
+
+    let mut api = ApiState::new(&base_url);
+    api.set_token(&token);
+    api.list_my_flames(1, 100)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Fetch a single flame's full config from the API (WASM async helper)
+#[cfg(all(feature = "api", target_arch = "wasm32"))]
+async fn fetch_online_flame(flame_id: &str) -> Result<crate::config::FractalConfig, String> {
+    use crate::api::ApiState;
+
+    let window = web_sys::window().ok_or("No window")?;
+    let storage = window
+        .local_storage()
+        .map_err(|_| "Failed to access localStorage")?
+        .ok_or("No localStorage")?;
+
+    let token = storage
+        .get_item("fflame_auth_token")
+        .map_err(|_| "Failed to read token")?
+        .ok_or("Not signed in — click Sign In first")?;
+
+    let base_url = storage
+        .get_item("fflame_api_base_url")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "http://localhost:3000".to_string());
+
+    let mut api = ApiState::new(&base_url);
+    api.set_token(&token);
+    api.load_flame(flame_id)
+        .await
+        .map_err(|e| e.to_string())
 }
