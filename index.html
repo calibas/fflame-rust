@@ -68,6 +68,159 @@
             display: none;
         }
 
+        /* Auth UI */
+        #auth-bar {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        #auth-bar button {
+            background: rgba(102, 126, 234, 0.8);
+            color: #fff;
+            border: none;
+            padding: 5px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        #auth-bar button:hover {
+            background: rgba(102, 126, 234, 1);
+        }
+
+        #auth-bar button.secondary {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        #auth-bar button.secondary:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+
+        #auth-bar .user-email {
+            color: #ccc;
+        }
+
+        /* Auth modal */
+        #auth-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.6);
+            align-items: center;
+            justify-content: center;
+        }
+
+        #auth-modal.visible {
+            display: flex;
+        }
+
+        #auth-modal .modal-box {
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 24px;
+            width: 340px;
+            max-width: 90vw;
+        }
+
+        #auth-modal h2 {
+            margin: 0 0 16px;
+            font-size: 1.2rem;
+            color: #667eea;
+        }
+
+        #auth-modal label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 13px;
+            color: #aaa;
+        }
+
+        #auth-modal input {
+            width: 100%;
+            padding: 8px 10px;
+            margin-bottom: 12px;
+            background: #1a1a1a;
+            border: 1px solid #555;
+            border-radius: 4px;
+            color: #fff;
+            font-size: 14px;
+        }
+
+        #auth-modal input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        #auth-modal .modal-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        #auth-modal .modal-actions button {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        #auth-modal .btn-primary {
+            background: #667eea;
+            color: #fff;
+        }
+
+        #auth-modal .btn-primary:hover {
+            background: #7b91f0;
+        }
+
+        #auth-modal .btn-primary:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+
+        #auth-modal .btn-cancel {
+            background: #444;
+            color: #ccc;
+        }
+
+        #auth-modal .btn-cancel:hover {
+            background: #555;
+        }
+
+        #auth-modal .modal-toggle {
+            margin-top: 12px;
+            text-align: center;
+            font-size: 12px;
+            color: #888;
+        }
+
+        #auth-modal .modal-toggle a {
+            color: #667eea;
+            cursor: pointer;
+            text-decoration: none;
+        }
+
+        #auth-modal .modal-toggle a:hover {
+            text-decoration: underline;
+        }
+
+        #auth-modal .auth-error {
+            color: #f55;
+            font-size: 12px;
+            margin-bottom: 8px;
+            min-height: 16px;
+        }
+
         .spinner {
             width: 50px;
             height: 50px;
@@ -116,6 +269,32 @@
     </style>
 </head>
 <body>
+    <!-- Auth bar (top-right corner) -->
+    <div id="auth-bar">
+        <span id="auth-status"></span>
+    </div>
+
+    <!-- Auth modal (login / register) -->
+    <div id="auth-modal">
+        <div class="modal-box">
+            <h2 id="auth-modal-title">Sign In</h2>
+            <div class="auth-error" id="auth-error"></div>
+            <form id="auth-form" autocomplete="on">
+                <label for="auth-email">Email</label>
+                <input id="auth-email" type="email" name="email" autocomplete="email" required>
+                <label for="auth-password">Password</label>
+                <input id="auth-password" type="password" name="password" autocomplete="current-password" required>
+                <div class="modal-actions">
+                    <button type="submit" class="btn-primary" id="auth-submit">Sign In</button>
+                    <button type="button" class="btn-cancel" id="auth-cancel">Cancel</button>
+                </div>
+            </form>
+            <div class="modal-toggle" id="auth-toggle">
+                Don't have an account? <a id="auth-toggle-link">Register</a>
+            </div>
+        </div>
+    </div>
+
     <div id="canvas-container">
         <canvas id="canvas"></canvas>
 
@@ -123,70 +302,256 @@
             <div class="spinner"></div>
             <p>Loading Fractal Flame Renderer...</p>
         </div>
-
-        <!-- <div class="info">
-            <h3>Controls</h3>
-            <ul>
-                <li>🖱️ <strong>Drag</strong>: Pan view</li>
-                <li>🔍 <strong>Scroll</strong>: Zoom in/out</li>
-                <li>⌨️ <strong>Arrow keys</strong>: Pan</li>
-                <li>⌨️ <strong>+/-</strong>: Zoom</li>
-                <li>📊 Check the UI panels for settings</li>
-            </ul>
-        </div> -->
     </div>
 
     <script type="module">
-        import init from './pkg/fractal_flame_wgpu.js';
+        import init, { WasmApi } from './pkg/fractal_flame_wgpu.js';
+
+        // ====================================================================
+        // Configuration
+        // ====================================================================
+
+        const API_BASE_URL = 'http://localhost:3000';
+        const TOKEN_KEY = 'fflame_auth_token';
+
+        // ====================================================================
+        // Auth wrapper — handles login/register via direct fetch,
+        // then passes tokens to the WASM app.
+        // ====================================================================
+
+        const fflameAuth = {
+            _wasmApi: null,
+            _mode: 'login', // 'login' or 'register'
+
+            init(wasmApi) {
+                this._wasmApi = wasmApi;
+                this._wasmApi.api_set_base_url(API_BASE_URL);
+
+                // Wire up UI
+                document.getElementById('auth-form').addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    this._submit();
+                });
+                document.getElementById('auth-cancel').addEventListener('click', () => this._hideModal());
+                document.getElementById('auth-toggle-link').addEventListener('click', () => this._toggleMode());
+
+                // Restore saved session
+                this._restoreSession();
+                this._renderBar();
+            },
+
+            // -- Public actions --
+
+            showLogin() {
+                this._mode = 'login';
+                this._showModal();
+            },
+
+            showRegister() {
+                this._mode = 'register';
+                this._showModal();
+            },
+
+            async signOut() {
+                localStorage.removeItem(TOKEN_KEY);
+                this._wasmApi.api_clear_token();
+                this._renderBar();
+                console.log('Signed out');
+            },
+
+            // -- Internal --
+
+            async _restoreSession() {
+                const token = localStorage.getItem(TOKEN_KEY);
+                if (!token) return;
+
+                try {
+                    this._wasmApi.api_set_token(token);
+                    await this._wasmApi.api_validate_token();
+                    console.log('Session restored');
+                } catch (e) {
+                    console.warn('Saved token invalid, clearing:', e);
+                    localStorage.removeItem(TOKEN_KEY);
+                    this._wasmApi.api_clear_token();
+                }
+                this._renderBar();
+            },
+
+            async _submit() {
+                const email = document.getElementById('auth-email').value.trim();
+                const password = document.getElementById('auth-password').value;
+                const errorEl = document.getElementById('auth-error');
+                const submitBtn = document.getElementById('auth-submit');
+
+                if (!email || !password) {
+                    errorEl.textContent = 'Email and password are required.';
+                    return;
+                }
+
+                errorEl.textContent = '';
+                submitBtn.disabled = true;
+                submitBtn.textContent = this._mode === 'login' ? 'Signing in...' : 'Registering...';
+
+                try {
+                    const endpoint = this._mode === 'login'
+                        ? '/api/auth/login'
+                        : '/api/auth/register';
+
+                    const resp = await fetch(API_BASE_URL + endpoint, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ email, password }),
+                    });
+
+                    if (!resp.ok) {
+                        const body = await resp.text();
+                        let msg;
+                        try {
+                            const json = JSON.parse(body);
+                            msg = json.error || json.message || body;
+                        } catch {
+                            msg = body || `HTTP ${resp.status}`;
+                        }
+                        throw new Error(msg);
+                    }
+
+                    const data = await resp.json();
+                    const token = data.token;
+
+                    // Persist token
+                    localStorage.setItem(TOKEN_KEY, token);
+
+                    // Pass to WASM
+                    this._wasmApi.api_set_token(token);
+                    await this._wasmApi.api_validate_token();
+
+                    this._hideModal();
+                    this._renderBar();
+                    console.log('Authenticated successfully');
+                } catch (e) {
+                    errorEl.textContent = e.message;
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = this._mode === 'login' ? 'Sign In' : 'Register';
+                }
+            },
+
+            _showModal() {
+                const modal = document.getElementById('auth-modal');
+                const title = document.getElementById('auth-modal-title');
+                const submit = document.getElementById('auth-submit');
+                const toggle = document.getElementById('auth-toggle');
+                const toggleLink = document.getElementById('auth-toggle-link');
+                const passwordInput = document.getElementById('auth-password');
+
+                if (this._mode === 'login') {
+                    title.textContent = 'Sign In';
+                    submit.textContent = 'Sign In';
+                    toggle.innerHTML = 'Don\'t have an account? <a id="auth-toggle-link">Register</a>';
+                    passwordInput.autocomplete = 'current-password';
+                } else {
+                    title.textContent = 'Register';
+                    submit.textContent = 'Register';
+                    toggle.innerHTML = 'Already have an account? <a id="auth-toggle-link">Sign In</a>';
+                    passwordInput.autocomplete = 'new-password';
+                }
+
+                // Re-bind toggle link after innerHTML replacement
+                document.getElementById('auth-toggle-link').addEventListener('click', () => this._toggleMode());
+
+                document.getElementById('auth-error').textContent = '';
+                document.getElementById('auth-email').value = '';
+                document.getElementById('auth-password').value = '';
+                modal.classList.add('visible');
+                document.getElementById('auth-email').focus();
+            },
+
+            _hideModal() {
+                document.getElementById('auth-modal').classList.remove('visible');
+            },
+
+            _toggleMode() {
+                this._mode = this._mode === 'login' ? 'register' : 'login';
+                this._showModal();
+            },
+
+            _renderBar() {
+                const bar = document.getElementById('auth-status');
+                let statusJson;
+                try {
+                    statusJson = JSON.parse(this._wasmApi.api_get_auth_status());
+                } catch {
+                    statusJson = { status: 'signed_out' };
+                }
+
+                if (statusJson.status === 'signed_in') {
+                    const email = statusJson.email || 'User';
+                    bar.innerHTML = `
+                        <span class="user-email">${email}</span>
+                        <button class="secondary" id="btn-signout">Sign Out</button>
+                    `;
+                    document.getElementById('btn-signout').addEventListener('click', () => this.signOut());
+                } else {
+                    bar.innerHTML = `
+                        <button id="btn-signin">Sign In</button>
+                        <button class="secondary" id="btn-register">Register</button>
+                    `;
+                    document.getElementById('btn-signin').addEventListener('click', () => this.showLogin());
+                    document.getElementById('btn-register').addEventListener('click', () => this.showRegister());
+                }
+            },
+        };
+
+        // Expose globally for console debugging
+        window.fflameAuth = fflameAuth;
+
+        // ====================================================================
+        // App initialization
+        // ====================================================================
 
         async function run() {
             try {
-                // Log WebGPU availability (informational only)
-                // NOTE: navigator.gpu can be undefined on some browsers/platforms even when WebGPU works
-                // Let wgpu's initialization handle actual capability detection
                 console.log('navigator.gpu available:', !!navigator.gpu);
-                if (navigator.gpu) {
-                    console.log('navigator.gpu detected, WebGPU likely supported');
-                } else {
-                    console.warn('navigator.gpu not detected - will attempt initialization anyway (may work on some platforms)');
+                if (!navigator.gpu) {
+                    console.warn('navigator.gpu not detected - will attempt initialization anyway');
                 }
 
                 // Initialize the WASM module
-                // NOTE: Do NOT call canvas.getContext() here - let wgpu claim it
                 await init();
 
                 // Hide loading screen
                 document.getElementById('loading').classList.add('hidden');
 
-                // Add window resize listener to trigger canvas resize
-                // winit only responds to canvas element resize, not window resize
-                // So we set canvas CSS to 100% width/height and nudge dimensions
+                // Initialize auth wrapper (WasmApi is constructed inside WASM,
+                // but we can also create a standalone instance for API ops)
+                try {
+                    const wasmApi = new WasmApi();
+                    fflameAuth.init(wasmApi);
+                    window.wasmApi = wasmApi;
+                    console.log('Auth wrapper initialized. Use fflameAuth.showLogin() or window.wasmApi from console.');
+                } catch (e) {
+                    // WasmApi may not be available if built without --features api
+                    console.log('WasmApi not available (built without api feature?):', e.message);
+                }
+
+                // Window resize handler
                 let resizeTimeout;
                 window.addEventListener('resize', () => {
                     clearTimeout(resizeTimeout);
                     resizeTimeout = setTimeout(() => {
                         const canvas = document.getElementById('canvas');
                         if (canvas) {
-                            // Set canvas CSS to fill window
                             canvas.style.width = '100%';
                             canvas.style.height = '100%';
-
-                            // Temporarily add 1px to width to trigger winit's ResizeObserver
                             const currentWidth = canvas.width;
                             canvas.width = currentWidth + 1;
-
-                            // Let winit detect the change and handle proper resize
-                            requestAnimationFrame(() => {
-                                // winit will have seen the change and scheduled resize
-                                // The actual size will be corrected by winit's resize logic
-                            });
+                            requestAnimationFrame(() => {});
                             console.log('Window resized - triggered canvas resize');
                         }
-                    }, 100); // Debounce to avoid excessive calls
+                    }, 100);
                 });
 
                 console.log('Fractal Flame Renderer initialized successfully!');
-                console.log('Window resize listener installed - canvas will auto-resize');
             } catch (error) {
                 console.error('Failed to initialize:', error);
                 document.getElementById('loading').innerHTML =

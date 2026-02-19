@@ -418,7 +418,7 @@ pub struct FlameResponse {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlameListItem {
     pub id: String,
     pub name: String,
