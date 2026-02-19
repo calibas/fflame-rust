@@ -178,6 +178,12 @@ mod wasm {
             .map_err(|_| FetchError::Network("Response is not a Response object".to_string()))?;
 
         let status = resp.status();
+        if status == 401 {
+            return Err(FetchError::Unauthorized);
+        }
+        if status == 403 {
+            return Err(FetchError::Forbidden);
+        }
         if status == 404 {
             return Err(FetchError::NotFound(url.to_string()));
         }

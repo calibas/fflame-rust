@@ -111,6 +111,7 @@ egui-wgpu = "0.33"
 
 [features]
 default = []
+api = []
 
 [build-dependencies]
 chrono = "0.4"
