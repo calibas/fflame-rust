@@ -39,6 +39,15 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator, ctx);
                 }
 
+                #[cfg(feature = "api")]
+                {
+                    ui.separator();
+
+                    if ui.button(t!("menu.save_online")).clicked() {
+                        menu_actions.file.save_online = true;
+                    }
+                }
+
                 ui.separator();
 
                 if ui.button(t!("menu.export")).clicked() {

@@ -752,6 +752,9 @@ impl EguiLayer {
         }
         *quit_requested |= menu_actions.file.quit;
 
+        #[cfg(feature = "api")]
+        let save_online_requested = menu_actions.file.save_online;
+
         // Combine undo/redo from both menu and panels (OR to not override panel buttons)
         undo_requested |= menu_actions.edit.undo;
         redo_requested |= menu_actions.edit.redo;
@@ -824,6 +827,8 @@ impl EguiLayer {
             load_audio_file,
             load_signal_file,
             save_signal_file,
+            #[cfg(feature = "api")]
+            save_online_requested,
         }
     }
 
