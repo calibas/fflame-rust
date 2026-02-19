@@ -431,6 +431,71 @@ pub struct FlameListItem {
 }
 
 // ============================================================================
+// Search
+// ============================================================================
+
+/// Parameters for searching flames via GET /api/search/flames
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SearchFlamesParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub render_mode: Option<ApiRenderMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_3d: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_transforms: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_transforms: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_page: Option<u32>,
+}
+
+impl SearchFlamesParams {
+    /// Build query string from non-None fields.
+    pub fn to_query_string(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(ref mode) = self.render_mode {
+            let s = serde_json::to_value(mode)
+                .ok()
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+            parts.push(format!("render_mode={}", s));
+        }
+        if let Some(has_3d) = self.has_3d {
+            parts.push(format!("has_3d={}", has_3d));
+        }
+        if let Some(ref variation) = self.variation {
+            parts.push(format!("variation={}", variation));
+        }
+        if let Some(min) = self.min_transforms {
+            parts.push(format!("min_transforms={}", min));
+        }
+        if let Some(max) = self.max_transforms {
+            parts.push(format!("max_transforms={}", max));
+        }
+        if let Some(ref name) = self.name {
+            parts.push(format!("name={}", name));
+        }
+        if let Some(page) = self.page {
+            parts.push(format!("page={}", page));
+        }
+        if let Some(per_page) = self.per_page {
+            parts.push(format!("per_page={}", per_page));
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", parts.join("&"))
+        }
+    }
+}
+
+// ============================================================================
 // Palettes
 // ============================================================================
 
