@@ -12,10 +12,9 @@ pub struct FileMenuActions {
     pub export_png: bool,
     pub export_png_transparent: bool,
     pub save_online: bool,
-    #[cfg(feature = "api")]
     pub update_online: bool,
-    #[cfg(feature = "api")]
     pub save_online_new_copy: bool,
+    pub sign_out: bool,
     pub quit: bool,
 }
 
@@ -65,8 +64,8 @@ pub struct MenuState {
     pub can_redo: bool,
     pub is_paused: bool,
     pub render_mode_2d: bool, // true = 2D, false = 3D
-    #[cfg(feature = "api")]
+    pub online_mode: bool,
     pub has_api_flame_id: bool,
-    #[cfg(feature = "api")]
     pub flame_name: String,
+    pub auth_email: Option<String>,
 }

@@ -39,8 +39,7 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator, ctx);
                 }
 
-                #[cfg(feature = "api")]
-                {
+                if menu_state.online_mode {
                     ui.separator();
 
                     if menu_state.has_api_flame_id {
@@ -323,9 +322,9 @@ pub fn render_menu_bar(
                 }
             });
 
-            // Push language selector to the right side
+            // Push right-side controls (right-to-left: language, then auth status)
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Language selector menu (globe icon)
+                // Language selector menu (globe icon) — rightmost
                 ui.menu_button("🌐", |ui| {
                     let locales = crate::i18n::supported_locales();
                     let current_locale = crate::i18n::current_locale();
@@ -373,6 +372,21 @@ pub fn render_menu_bar(
                         }
                     }
                 });
+
+                // Auth status display (left of language selector)
+                if menu_state.online_mode {
+                    ui.separator();
+                    if let Some(ref email) = menu_state.auth_email {
+                        ui.weak(email);
+                        if ui.small_button(t!("auth.sign_out")).clicked() {
+                            menu_actions.file.sign_out = true;
+                        }
+                    } else {
+                        if ui.small_button(t!("auth.not_signed_in")).clicked() {
+                            workspace.open_floating_panel(super::workspace::PanelType::LoginDialog, ctx);
+                        }
+                    }
+                }
             });
         });
     });

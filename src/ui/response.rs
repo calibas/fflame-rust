@@ -81,16 +81,13 @@ pub struct UiResponse {
     pub save_signal_file: Option<String>,
 
     // API: Save action (save new, update existing)
-    #[cfg(feature = "api")]
     pub api_save_action: ApiSaveAction,
 
     // API: Flame ID loaded from Online tab
-    #[cfg(feature = "api")]
     pub loaded_api_flame_id: Option<String>,
 }
 
 /// API save action type
-#[cfg(feature = "api")]
 #[derive(Debug, Clone, Default)]
 pub enum ApiSaveAction {
     #[default]
@@ -141,9 +138,7 @@ impl Default for UiResponse {
             load_audio_file: false,
             load_signal_file: false,
             save_signal_file: None,
-            #[cfg(feature = "api")]
             api_save_action: ApiSaveAction::None,
-            #[cfg(feature = "api")]
             loaded_api_flame_id: None,
         }
     }

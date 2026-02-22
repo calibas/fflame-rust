@@ -6,7 +6,7 @@ echo "Building for WASM..."
 # Build the WASM module
 echo "Building WASM module..."
 export RUSTFLAGS=--cfg=web_sys_unstable_apis
-cargo build --lib --target wasm32-unknown-unknown --release --features api
+cargo build --lib --target wasm32-unknown-unknown --release
 
 if [ $? -ne 0 ]; then
     echo "❌ Cargo build failed"

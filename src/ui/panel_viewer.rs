@@ -71,12 +71,16 @@ pub struct PanelContext<'a> {
     pub selected_preset_config: &'a mut Option<crate::config::FractalConfig>,
 
     // API flame ID loaded from Online tab
-    #[cfg(feature = "api")]
     pub loaded_api_flame_id: &'a mut Option<String>,
 
     // API notification from browser panel (e.g., delete result)
-    #[cfg(feature = "api")]
     pub api_notification: &'a mut Option<(String, bool)>,
+
+    // Login dialog state
+    pub login_dialog_state: &'a mut super::login_dialog::LoginDialogState,
+
+    // Cloud palette state (for Palette Library cloud section)
+    pub cloud_palette_state: &'a mut super::CloudPaletteState,
 
     // File browser open request (shared by FractalBrowser)
     pub file_browser_open_requested: &'a mut bool,
@@ -213,6 +217,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             PanelType::Signal => {
                 self.render_signal_panel(ui);
             }
+            PanelType::LoginDialog => {
+                self.render_login_dialog(ui);
+            }
         }
     }
 }
@@ -273,12 +280,22 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Palette Library panel (browse and manage palette packs)
     fn render_palette_library_panel(&mut self, ui: &mut egui::Ui) {
-        super::palette_library::render_palette_library(
-            ui,
-            self.context.palette_library,
-            self.context.config_manager,
-            self.context.open_palette_editor,
-        );
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            super::palette_library::render_palette_library(
+                ui,
+                self.context.palette_library,
+                self.context.config_manager,
+                self.context.open_palette_editor,
+            );
+
+            if self.context.config_manager.system_settings().online_mode {
+                super::palette_library::render_cloud_palettes_section(
+                    ui,
+                    self.context.cloud_palette_state,
+                    self.context.config_manager,
+                );
+            }
+        });
     }
 
     /// Render the View panel (zoom, pan, rotation)
@@ -1020,7 +1037,8 @@ impl<'a> PanelViewer<'a> {
         }
 
         if let Some(panel) = self.context.fractal_browser_panel.as_mut() {
-            let response = panel.render(ui);
+            let online_mode = self.context.config_manager.system_settings().online_mode;
+            let response = panel.render(ui, online_mode);
 
             // Handle file open request from Files tab
             if panel.take_open_file_request() {
@@ -1032,14 +1050,10 @@ impl<'a> PanelViewer<'a> {
                 *self.context.selected_preset_config = Some(config);
 
                 // Pass API flame ID through (for Online tab loads)
-                #[cfg(feature = "api")]
-                {
-                    *self.context.loaded_api_flame_id = response.api_flame_id;
-                }
+                *self.context.loaded_api_flame_id = response.api_flame_id;
             }
 
             // Pass API notifications through (e.g., delete result)
-            #[cfg(feature = "api")]
             if let Some(notification) = response.api_notification {
                 *self.context.api_notification = Some(notification);
             }
@@ -1063,6 +1077,21 @@ impl<'a> PanelViewer<'a> {
             self.context.flame,
             self.context.xaos_editor_state,
         );
+    }
+
+    /// Render Login Dialog panel (email/password form)
+    fn render_login_dialog(&mut self, ui: &mut egui::Ui) {
+        if let Some(success) = super::login_dialog::render_login_dialog(
+            ui,
+            self.context.login_dialog_state,
+            self.context.config_manager,
+        ) {
+            // Login succeeded — show notification
+            *self.context.api_notification = Some((
+                format!("Signed in as {}", success.email),
+                false,
+            ));
+        }
     }
 
     /// Render Signal panel (signals, audio, generators)

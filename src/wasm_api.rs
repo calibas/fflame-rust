@@ -27,7 +27,6 @@ pub struct WasmApi {
     config: Option<FractalConfig>,
     current_iterations: u64,
     target_iterations: u64,
-    #[cfg(feature = "api")]
     api_state: crate::api::ApiState,
 }
 
@@ -41,7 +40,6 @@ impl WasmApi {
             config: None,
             current_iterations: 0,
             target_iterations: 0,
-            #[cfg(feature = "api")]
             api_state: crate::api::ApiState::default(),
         }
     }
@@ -250,7 +248,7 @@ impl WasmApi {
 // API integration methods (feature-gated)
 // ============================================================================
 
-#[cfg(all(target_arch = "wasm32", feature = "api"))]
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl WasmApi {
     /// Set the API base URL (e.g., "https://api.fflame.app").

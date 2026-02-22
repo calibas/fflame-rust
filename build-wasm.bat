@@ -3,7 +3,7 @@ echo Building for WASM...
 
 REM Build the WASM module
 set RUSTFLAGS=--cfg=web_sys_unstable_apis
-cargo build --lib --target wasm32-unknown-unknown --release --features api
+cargo build --lib --target wasm32-unknown-unknown --release
 if %errorlevel% neq 0 exit /b %errorlevel%
 
 REM Generate bindings with wasm-bindgen

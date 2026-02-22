@@ -52,6 +52,8 @@ pub enum PanelType {
     XaosEditor,
     /// Signal panel (signals, audio, generators)
     Signal,
+    /// Login dialog (email/password form)
+    LoginDialog,
 }
 
 impl std::fmt::Display for PanelType {
@@ -78,6 +80,7 @@ impl std::fmt::Display for PanelType {
             PanelType::Effects => t!("panels.effects"),
             PanelType::XaosEditor => t!("panels.xaos_editor"),
             PanelType::Signal => t!("panels.signal"),
+            PanelType::LoginDialog => t!("login.title"),
         };
         write!(f, "{}", title)
     }
@@ -133,6 +136,7 @@ impl Workspace {
             PanelType::Effects => egui::vec2(350.0, 400.0),
             PanelType::XaosEditor => egui::vec2(500.0, 450.0),
             PanelType::Signal => egui::vec2(350.0, 450.0),
+            PanelType::LoginDialog => egui::vec2(350.0, 280.0),
         }
     }
 
