@@ -147,6 +147,15 @@ pub use wasm::{api_request, api_request_raw};
 mod native {
     use super::*;
 
+    /// Shared ureq Agent for connection pooling (HTTP keep-alive).
+    /// Without this, every request creates a fresh TCP+TLS connection (~300-700ms overhead).
+    static AGENT: once_cell::sync::Lazy<ureq::Agent> = once_cell::sync::Lazy::new(|| {
+        ureq::AgentBuilder::new()
+            .timeout_connect(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+    });
+
     /// Make an authenticated API request (desktop via ureq).
     ///
     /// Keeps `async fn` signature for interface compatibility with WASM.
@@ -158,7 +167,7 @@ mod native {
         body: Option<String>,
         token: Option<&str>,
     ) -> FetchResult<String> {
-        let mut req = ureq::request(method, url);
+        let mut req = AGENT.request(method, url);
 
         if let Some(token) = token {
             req = req.set("Authorization", &format!("Bearer {}", token));
