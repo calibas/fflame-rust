@@ -954,13 +954,27 @@ impl App {
             let result_slot = self.api_save_result.clone();
             self.api_save_in_progress = true;
 
+            // Read credentials from SystemSettings
+            let settings = self.config_manager.system_settings();
+            let base_url = settings.api_base_url.clone();
+            let token = match settings.auth_token.clone() {
+                Some(t) => t,
+                None => {
+                    self.api_save_in_progress = false;
+                    if let Ok(mut slot) = self.api_save_result.lock() {
+                        *slot = Some(Err("Not signed in — click Sign In first".to_string()));
+                    }
+                    return;
+                }
+            };
+
             match action {
                 ApiSaveAction::SaveNew { name } => {
                     let name = name.clone();
                     #[cfg(target_arch = "wasm32")]
                     {
                         wasm_bindgen_futures::spawn_local(async move {
-                            let save_result = save_flame_online(config, &name).await;
+                            let save_result = save_flame_online(&base_url, &token, config, &name).await;
                             if let Ok(mut slot) = result_slot.lock() {
                                 *slot = Some(save_result);
                             }
@@ -968,11 +982,12 @@ impl App {
                     }
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        log::warn!("Save Online not yet implemented for desktop");
-                        self.api_save_in_progress = false;
-                        if let Ok(mut slot) = self.api_save_result.lock() {
-                            *slot = Some(Err("Save Online not yet implemented for desktop".to_string()));
-                        }
+                        std::thread::spawn(move || {
+                            let result = pollster::block_on(save_flame_online(&base_url, &token, config, &name));
+                            if let Ok(mut slot) = result_slot.lock() {
+                                *slot = Some(result);
+                            }
+                        });
                     }
                 }
                 ApiSaveAction::Update => {
@@ -981,7 +996,7 @@ impl App {
                         #[cfg(target_arch = "wasm32")]
                         {
                             wasm_bindgen_futures::spawn_local(async move {
-                                let save_result = update_flame_online(config, &flame_id, &name).await;
+                                let save_result = update_flame_online(&base_url, &token, config, &flame_id, &name).await;
                                 if let Ok(mut slot) = result_slot.lock() {
                                     *slot = Some(save_result);
                                 }
@@ -989,11 +1004,12 @@ impl App {
                         }
                         #[cfg(not(target_arch = "wasm32"))]
                         {
-                            log::warn!("Update Online not yet implemented for desktop");
-                            self.api_save_in_progress = false;
-                            if let Ok(mut slot) = self.api_save_result.lock() {
-                                *slot = Some(Err("Update Online not yet implemented for desktop".to_string()));
-                            }
+                            std::thread::spawn(move || {
+                                let result = pollster::block_on(update_flame_online(&base_url, &token, config, &flame_id, &name));
+                                if let Ok(mut slot) = result_slot.lock() {
+                                    *slot = Some(result);
+                                }
+                            });
                         }
                     } else {
                         log::error!("Update requested but no api_flame_id");
@@ -1006,64 +1022,45 @@ impl App {
     }
 }
 
-/// Save a flame to the API as new (async helper for WASM).
-#[cfg(target_arch = "wasm32")]
+/// Save a flame to the API as new (async helper).
 async fn save_flame_online(
+    base_url: &str,
+    token: &str,
     config: crate::config::FractalConfig,
     name: &str,
 ) -> Result<String, String> {
-    let (api, token) = create_api_state().await?;
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
     api.save_flame(&config, Some(name))
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Update an existing flame on the API (async helper for WASM).
-#[cfg(target_arch = "wasm32")]
+/// Update an existing flame on the API (async helper).
 async fn update_flame_online(
+    base_url: &str,
+    token: &str,
     config: crate::config::FractalConfig,
     flame_id: &str,
     name: &str,
 ) -> Result<String, String> {
-    let (api, token) = create_api_state().await?;
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
     api.update_flame(flame_id, &config, Some(name))
         .await
         .map(|resp| resp.id)
         .map_err(|e| e.to_string())
 }
 
-/// Delete a flame from the API (async helper for WASM).
-#[cfg(target_arch = "wasm32")]
-async fn delete_flame_online(flame_id: &str) -> Result<(), String> {
-    let (api, token) = create_api_state().await?;
+/// Delete a flame from the API (async helper).
+async fn delete_flame_online(
+    base_url: &str,
+    token: &str,
+    flame_id: &str,
+) -> Result<(), String> {
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
     api.delete_flame(flame_id)
         .await
         .map_err(|e| e.to_string())
-}
-
-/// Create an ApiState from localStorage credentials (shared helper).
-#[cfg(target_arch = "wasm32")]
-async fn create_api_state() -> Result<(crate::api::ApiState, String), String> {
-    use crate::api::ApiState;
-
-    let window = web_sys::window().ok_or("No window")?;
-    let storage = window
-        .local_storage()
-        .map_err(|_| "Failed to access localStorage")?
-        .ok_or("No localStorage")?;
-
-    let token = storage
-        .get_item("fflame_auth_token")
-        .map_err(|_| "Failed to read token")?
-        .ok_or("Not signed in — click Sign In first")?;
-
-    let base_url = storage
-        .get_item("fflame_api_base_url")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "http://localhost:3000".to_string());
-
-    let mut api = ApiState::new(&base_url);
-    api.set_token(&token);
-    Ok((api, token))
 }

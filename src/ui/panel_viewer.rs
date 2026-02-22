@@ -294,11 +294,21 @@ impl<'a> PanelViewer<'a> {
                 self.context.open_palette_editor,
             );
 
-            if self.context.config_manager.system_settings().online_mode {
+            let (online_mode, auth_pair) = {
+                let settings = self.context.config_manager.system_settings();
+                let online = settings.online_mode;
+                let auth = settings.auth_token.as_ref().map(|token| {
+                    (settings.api_base_url.clone(), token.clone())
+                });
+                (online, auth)
+            };
+            if online_mode {
+                let auth = auth_pair.as_ref().map(|(b, t)| (b.as_str(), t.as_str()));
                 super::palette_library::render_cloud_palettes_section(
                     ui,
                     self.context.cloud_palette_state,
                     self.context.config_manager,
+                    auth,
                 );
             }
         });
@@ -1043,8 +1053,12 @@ impl<'a> PanelViewer<'a> {
         }
 
         if let Some(panel) = self.context.fractal_browser_panel.as_mut() {
-            let online_mode = self.context.config_manager.system_settings().online_mode;
-            let response = panel.render(ui, online_mode);
+            let settings = self.context.config_manager.system_settings();
+            let online_mode = settings.online_mode;
+            let auth: Option<(&str, &str)> = settings.auth_token.as_ref().map(|token| {
+                (settings.api_base_url.as_str(), token.as_str())
+            });
+            let response = panel.render(ui, online_mode, auth);
 
             // Handle file open request from Files tab
             if panel.take_open_file_request() {
