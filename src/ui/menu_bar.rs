@@ -7,6 +7,7 @@ pub fn render_menu_bar(
     workspace: &mut super::workspace::Workspace,
     menu_actions: &mut MenuActions,
     menu_state: &MenuState,
+    save_online_dialog_state: &mut super::save_online_dialog::SaveOnlineDialogState,
 ) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
@@ -48,12 +49,15 @@ pub fn render_menu_bar(
                             menu_actions.file.update_online = true;
                         }
                         if ui.button(t!("menu.save_online_new_copy")).clicked() {
-                            menu_actions.file.save_online_new_copy = true;
+                            let name = format!("{} (copy)", menu_state.flame_name);
+                            save_online_dialog_state.open(&name, true);
+                            workspace.open_floating_panel(super::workspace::PanelType::SaveOnlineDialog, ctx);
                         }
                     } else {
                         // No cloud flame loaded — show Save Online
                         if ui.button(t!("menu.save_online")).clicked() {
-                            menu_actions.file.save_online = true;
+                            save_online_dialog_state.open(&menu_state.flame_name, false);
+                            workspace.open_floating_panel(super::workspace::PanelType::SaveOnlineDialog, ctx);
                         }
                     }
                 }
