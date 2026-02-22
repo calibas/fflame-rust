@@ -11,9 +11,7 @@ pub struct FileMenuActions {
     pub import_apophysis: bool,
     pub export_png: bool,
     pub export_png_transparent: bool,
-    pub save_online: bool,
     pub update_online: bool,
-    pub save_online_new_copy: bool,
     pub sign_out: bool,
     pub quit: bool,
 }

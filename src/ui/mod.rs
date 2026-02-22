@@ -9,6 +9,7 @@ pub mod fractal_browser;
 pub mod fractal_gallery;
 mod help;
 pub mod login_dialog;
+pub mod save_online_dialog;
 pub mod histogram;
 mod menu_bar;
 mod menu_context;
@@ -156,11 +157,8 @@ pub struct EguiLayer {
     // API: notification toast
     api_notification: Option<ApiNotification>,
 
-    // API: save dialog state
-    api_save_dialog_open: bool,
-    api_save_dialog_name: String,
-    /// Whether the save dialog is for a "new copy" (true) or first save (false)
-    api_save_dialog_is_copy: bool,
+    // API: save dialog state (docked panel)
+    save_online_dialog_state: save_online_dialog::SaveOnlineDialogState,
 
     /// API notification from browser panel (e.g. delete result)
     api_browser_notification: Option<(String, bool)>,
@@ -270,9 +268,7 @@ impl EguiLayer {
             fractal_browser_panel: None,
             loaded_api_flame_id: None,
             api_notification: None,
-            api_save_dialog_open: false,
-            api_save_dialog_name: String::new(),
-            api_save_dialog_is_copy: false,
+            save_online_dialog_state: save_online_dialog::SaveOnlineDialogState::default(),
             api_browser_notification: None,
             login_dialog_state: login_dialog::LoginDialogState::default(),
             cloud_palette_state: CloudPaletteState::default(),
@@ -404,72 +400,6 @@ impl EguiLayer {
 
         // Request repaint for animation
         ctx.request_repaint();
-    }
-
-    /// Render the API save dialog window
-    fn render_api_save_dialog(&mut self, ctx: &egui::Context) -> Option<response::ApiSaveAction> {
-        if !self.api_save_dialog_open {
-            return None;
-        }
-
-        let mut action = None;
-        let mut open = self.api_save_dialog_open;
-
-        egui::Window::new(rust_i18n::t!("api.save_dialog_title"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(rust_i18n::t!("api.save_dialog_name_label"));
-                    let response = ui.text_edit_singleline(&mut self.api_save_dialog_name);
-
-                    // Auto-focus the text field on first frame
-                    if response.gained_focus() || !response.has_focus() {
-                        response.request_focus();
-                    }
-
-                    // Enter key submits
-                    if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        let name = self.api_save_dialog_name.trim().to_string();
-                        if !name.is_empty() {
-                            action = Some(response::ApiSaveAction::SaveNew { name });
-                        }
-                    }
-                });
-
-                ui.add_space(8.0);
-
-                ui.horizontal(|ui| {
-                    if ui.button(rust_i18n::t!("api.save_dialog_save")).clicked() {
-                        let name = self.api_save_dialog_name.trim().to_string();
-                        if !name.is_empty() {
-                            action = Some(response::ApiSaveAction::SaveNew { name });
-                        }
-                    }
-                    if ui.button(rust_i18n::t!("api.save_dialog_cancel")).clicked() {
-                        self.api_save_dialog_open = false;
-                    }
-                });
-            });
-
-        if !open {
-            self.api_save_dialog_open = false;
-        }
-
-        if action.is_some() {
-            self.api_save_dialog_open = false;
-        }
-
-        action
-    }
-
-    /// Open the API save dialog with a pre-filled name
-    pub fn open_save_dialog(&mut self, name: &str, is_copy: bool) {
-        self.api_save_dialog_name = name.to_string();
-        self.api_save_dialog_open = true;
-        self.api_save_dialog_is_copy = is_copy;
     }
 
     /// Register the renderer's fractal texture with egui for display
@@ -685,6 +615,7 @@ impl EguiLayer {
                 workspace,
                 &mut menu_actions,
                 &menu_state,
+                &mut self.save_online_dialog_state,
             );
 
             // All windows are now dockable panels (see Windows menu)
@@ -766,6 +697,9 @@ impl EguiLayer {
 
                         // Login dialog state
                         login_dialog_state: &mut self.login_dialog_state,
+
+                        // Save Online dialog state
+                        save_online_dialog_state: &mut self.save_online_dialog_state,
 
                         // Cloud palette state
                         cloud_palette_state: &mut self.cloud_palette_state,
@@ -863,15 +797,14 @@ impl EguiLayer {
             // Note: quit_requested is now handled in app.rs event loop for graceful shutdown
         });
 
-        // API notification toast and save dialog (rendered outside ctx.run to avoid borrow conflicts with self)
+        // API notification toast (rendered outside ctx.run to avoid borrow conflicts with self)
         {
             let ctx = self.ctx.clone();
             self.render_api_notification(&ctx);
         }
-        let api_save_dialog_action = {
-            let ctx = self.ctx.clone();
-            self.render_api_save_dialog(&ctx)
-        };
+
+        // Poll save dialog action from the docked panel
+        let api_save_dialog_action = self.save_online_dialog_state.take_action();
 
         // Process browser notifications (e.g. delete results) through the toast system
         if let Some((message, is_error)) = self.api_browser_notification.take() {
@@ -991,17 +924,8 @@ impl EguiLayer {
         let api_save_action = if menu_actions.file.update_online {
             // "Update Online" — update existing flame in place
             response::ApiSaveAction::Update
-        } else if menu_actions.file.save_online {
-            // "Save Online..." — open name dialog for new save
-            self.open_save_dialog(&config_manager.config().flame.name, false);
-            response::ApiSaveAction::None
-        } else if menu_actions.file.save_online_new_copy {
-            // "Save Online (New Copy)..." — open name dialog for a copy
-            let name = format!("{} (copy)", config_manager.config().flame.name);
-            self.open_save_dialog(&name, true);
-            response::ApiSaveAction::None
         } else if let Some(action) = api_save_dialog_action {
-            // From save dialog submission
+            // From save dialog panel submission
             action
         } else {
             response::ApiSaveAction::None

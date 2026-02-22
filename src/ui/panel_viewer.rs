@@ -79,6 +79,9 @@ pub struct PanelContext<'a> {
     // Login dialog state
     pub login_dialog_state: &'a mut super::login_dialog::LoginDialogState,
 
+    // Save Online dialog state
+    pub save_online_dialog_state: &'a mut super::save_online_dialog::SaveOnlineDialogState,
+
     // Cloud palette state (for Palette Library cloud section)
     pub cloud_palette_state: &'a mut super::CloudPaletteState,
 
@@ -219,6 +222,9 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
             PanelType::LoginDialog => {
                 self.render_login_dialog(ui);
+            }
+            PanelType::SaveOnlineDialog => {
+                self.render_save_online_dialog(ui);
             }
         }
     }
@@ -1077,6 +1083,15 @@ impl<'a> PanelViewer<'a> {
             self.context.flame,
             self.context.xaos_editor_state,
         );
+    }
+
+    /// Render Save Online Dialog panel (name input)
+    fn render_save_online_dialog(&mut self, ui: &mut egui::Ui) {
+        let _should_close = super::save_online_dialog::render_save_online_dialog(
+            ui,
+            self.context.save_online_dialog_state,
+        );
+        // Panel closes via the dock's X button; action is polled in render_ui
     }
 
     /// Render Login Dialog panel (email/password form)
