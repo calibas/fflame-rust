@@ -297,59 +297,19 @@ pub fn render_palette_library(
 
 // --- Cloud Palettes Section (API feature) ---
 
-/// Fetch cloud palettes from the API (WASM async helper)
-#[cfg(target_arch = "wasm32")]
-async fn fetch_cloud_palettes() -> Result<Vec<crate::api::types::PaletteResponse>, String> {
-    use crate::api::ApiState;
-
-    let window = web_sys::window().ok_or("No window")?;
-    let storage = window
-        .local_storage()
-        .map_err(|_| "Failed to access localStorage")?
-        .ok_or("No localStorage")?;
-
-    let token = storage
-        .get_item("fflame_auth_token")
-        .map_err(|_| "Failed to read token")?
-        .ok_or("Not signed in")?;
-
-    let base_url = storage
-        .get_item("fflame_api_base_url")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "http://localhost:3000".to_string());
-
-    let mut api = ApiState::new(&base_url);
-    api.set_token(&token);
+/// Fetch cloud palettes from the API
+async fn fetch_cloud_palettes(base_url: &str, token: &str) -> Result<Vec<crate::api::types::PaletteResponse>, String> {
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
     api.list_palettes(None, 1, 100)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Delete a cloud palette from the API (WASM async helper)
-#[cfg(target_arch = "wasm32")]
-async fn delete_cloud_palette(palette_id: &str) -> Result<String, String> {
-    use crate::api::ApiState;
-
-    let window = web_sys::window().ok_or("No window")?;
-    let storage = window
-        .local_storage()
-        .map_err(|_| "Failed to access localStorage")?
-        .ok_or("No localStorage")?;
-
-    let token = storage
-        .get_item("fflame_auth_token")
-        .map_err(|_| "Failed to read token")?
-        .ok_or("Not signed in")?;
-
-    let base_url = storage
-        .get_item("fflame_api_base_url")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "http://localhost:3000".to_string());
-
-    let mut api = ApiState::new(&base_url);
-    api.set_token(&token);
+/// Delete a cloud palette from the API
+async fn delete_cloud_palette(base_url: &str, token: &str, palette_id: &str) -> Result<String, String> {
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
     let id = palette_id.to_string();
     api.delete_palette(&id)
         .await
@@ -357,11 +317,33 @@ async fn delete_cloud_palette(palette_id: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Render the Cloud Palettes section in the Palette Library panel
+/// Read credentials from localStorage (WASM only)
+#[cfg(target_arch = "wasm32")]
+fn get_wasm_palette_credentials() -> Result<(String, String), String> {
+    let window = web_sys::window().ok_or("No window")?;
+    let storage = window
+        .local_storage()
+        .map_err(|_| "Failed to access localStorage")?
+        .ok_or("No localStorage")?;
+    let token = storage
+        .get_item("fflame_auth_token")
+        .map_err(|_| "Failed to read token")?
+        .ok_or("Not signed in")?;
+    let base_url = storage
+        .get_item("fflame_api_base_url")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "http://localhost:3000".to_string());
+    Ok((base_url, token))
+}
+
+/// Render the Cloud Palettes section in the Palette Library panel.
+/// `auth` is `Some((base_url, token))` when signed in, `None` otherwise.
 pub fn render_cloud_palettes_section(
     ui: &mut egui::Ui,
     cloud_state: &mut super::CloudPaletteState,
     config_manager: &mut ConfigManager,
+    auth: Option<(&str, &str)>,
 ) {
     // Poll async results
     poll_cloud_palette_results(ui, cloud_state);
@@ -386,7 +368,7 @@ pub fn render_cloud_palettes_section(
         .body(|ui| {
             // Auto-fetch on first expand
             if !cloud_state.fetched && !cloud_state.loading {
-                trigger_cloud_palette_fetch(cloud_state);
+                trigger_cloud_palette_fetch(cloud_state, auth);
             }
 
             // Toolbar: Refresh button
@@ -395,7 +377,7 @@ pub fn render_cloud_palettes_section(
                 if ui.add_enabled(refresh_enabled, egui::Button::new(t!("palette_library.cloud_refresh")))
                     .clicked()
                 {
-                    trigger_cloud_palette_fetch(cloud_state);
+                    trigger_cloud_palette_fetch(cloud_state, auth);
                 }
             });
 
@@ -528,7 +510,7 @@ pub fn render_cloud_palettes_section(
 
                         // Handle delete
                         if delete_clicked {
-                            trigger_cloud_palette_delete(cloud_state, id);
+                            trigger_cloud_palette_delete(cloud_state, id, auth);
                         }
 
                         ui.end_row();
@@ -543,54 +525,95 @@ pub fn render_cloud_palettes_section(
         });
 }
 
-/// Trigger async fetch of cloud palettes
-fn trigger_cloud_palette_fetch(cloud_state: &mut super::CloudPaletteState) {
+/// Trigger async fetch of cloud palettes.
+/// `auth` is `Some((base_url, token))` from SystemSettings; on WASM falls back to localStorage.
+fn trigger_cloud_palette_fetch(cloud_state: &mut super::CloudPaletteState, auth: Option<(&str, &str)>) {
     cloud_state.loading = true;
     cloud_state.error = None;
     cloud_state.notification = None;
 
+    // Get credentials: prefer passed-in auth, fall back to WASM localStorage
+    let credentials: Result<(String, String), String> = if let Some((base_url, token)) = auth {
+        Ok((base_url.to_string(), token.to_string()))
+    } else {
+        #[cfg(target_arch = "wasm32")]
+        { get_wasm_palette_credentials() }
+        #[cfg(not(target_arch = "wasm32"))]
+        { Err("Not signed in — click Sign In first".to_string()) }
+    };
+
+    let (base_url, token) = match credentials {
+        Ok(creds) => creds,
+        Err(e) => {
+            cloud_state.loading = false;
+            cloud_state.error = Some(e);
+            cloud_state.fetched = true;
+            return;
+        }
+    };
+
+    let result_slot = cloud_state.list_result.clone();
+
     #[cfg(target_arch = "wasm32")]
-    {
-        let result_slot = cloud_state.list_result.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = fetch_cloud_palettes().await;
-            if let Ok(mut slot) = result_slot.lock() {
-                *slot = Some(result);
-            }
-        });
-    }
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = fetch_cloud_palettes(&base_url, &token).await;
+        if let Ok(mut slot) = result_slot.lock() {
+            *slot = Some(result);
+        }
+    });
 
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        cloud_state.loading = false;
-        cloud_state.error = Some("Cloud palettes not available on desktop".to_string());
-        cloud_state.fetched = true;
-    }
+    std::thread::spawn(move || {
+        let result = pollster::block_on(fetch_cloud_palettes(&base_url, &token));
+        if let Ok(mut slot) = result_slot.lock() {
+            *slot = Some(result);
+        }
+    });
 }
 
-/// Trigger async delete of a cloud palette
-fn trigger_cloud_palette_delete(cloud_state: &mut super::CloudPaletteState, palette_id: &str) {
+/// Trigger async delete of a cloud palette.
+/// `auth` is `Some((base_url, token))` from SystemSettings; on WASM falls back to localStorage.
+fn trigger_cloud_palette_delete(cloud_state: &mut super::CloudPaletteState, palette_id: &str, auth: Option<(&str, &str)>) {
     cloud_state.deleting = true;
     cloud_state.notification = None;
 
+    // Get credentials
+    let credentials: Result<(String, String), String> = if let Some((base_url, token)) = auth {
+        Ok((base_url.to_string(), token.to_string()))
+    } else {
+        #[cfg(target_arch = "wasm32")]
+        { get_wasm_palette_credentials() }
+        #[cfg(not(target_arch = "wasm32"))]
+        { Err("Not signed in — click Sign In first".to_string()) }
+    };
+
+    let (base_url, token) = match credentials {
+        Ok(creds) => creds,
+        Err(e) => {
+            cloud_state.deleting = false;
+            cloud_state.error = Some(e);
+            return;
+        }
+    };
+
+    let result_slot = cloud_state.delete_result.clone();
+    let id = palette_id.to_string();
+
     #[cfg(target_arch = "wasm32")]
-    {
-        let result_slot = cloud_state.delete_result.clone();
-        let id = palette_id.to_string();
-        wasm_bindgen_futures::spawn_local(async move {
-            let result = delete_cloud_palette(&id).await;
-            if let Ok(mut slot) = result_slot.lock() {
-                *slot = Some(result);
-            }
-        });
-    }
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = delete_cloud_palette(&base_url, &token, &id).await;
+        if let Ok(mut slot) = result_slot.lock() {
+            *slot = Some(result);
+        }
+    });
 
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        let _ = palette_id;
-        cloud_state.deleting = false;
-        cloud_state.error = Some("Cloud palettes not available on desktop".to_string());
-    }
+    std::thread::spawn(move || {
+        let result = pollster::block_on(delete_cloud_palette(&base_url, &token, &id));
+        if let Ok(mut slot) = result_slot.lock() {
+            *slot = Some(result);
+        }
+    });
 }
 
 /// Poll async results for cloud palette operations

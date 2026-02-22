@@ -75,6 +75,9 @@ pub struct FractalBrowserPanel {
     online_search_name: String,
     /// Search filter: render mode (0=All, 1=2D, 2=3D)
     online_search_render_mode: u8,
+
+    /// Cached auth credentials for trigger methods (base_url, token) — set each frame from render()
+    auth_credentials: Option<(String, String)>,
 }
 
 impl Default for FractalBrowserPanel {
@@ -115,6 +118,8 @@ impl FractalBrowserPanel {
             online_delete_result: Arc::new(Mutex::new(None)),
             online_search_name: String::new(),
             online_search_render_mode: 0,
+
+            auth_credentials: None,
         }
     }
 
@@ -333,7 +338,11 @@ impl FractalBrowserPanel {
     // ========== Rendering ==========
 
     /// Render the panel
-    pub fn render(&mut self, ui: &mut egui::Ui, online_mode: bool) -> GalleryResponse {
+    /// `auth` is `Some((base_url, token))` when signed in, `None` otherwise.
+    pub fn render(&mut self, ui: &mut egui::Ui, online_mode: bool, auth: Option<(&str, &str)>) -> GalleryResponse {
+        // Cache auth credentials for use by trigger methods
+        self.auth_credentials = auth.map(|(b, t)| (b.to_string(), t.to_string()));
+
         // Tab bar
         ui.horizontal(|ui| {
             if ui
@@ -644,41 +653,55 @@ impl FractalBrowserPanel {
 
         let has_filters = !self.online_search_name.is_empty() || self.online_search_render_mode != 0;
 
+        // Get credentials (WASM: from localStorage, Desktop: from cached auth)
         #[cfg(target_arch = "wasm32")]
-        {
-            let result_slot = self.online_list_result.clone();
-            if has_filters {
-                let name = if self.online_search_name.is_empty() {
-                    None
-                } else {
-                    Some(self.online_search_name.clone())
-                };
-                let render_mode = match self.online_search_render_mode {
-                    1 => Some(crate::api::types::ApiRenderMode::TwoD),
-                    2 => Some(crate::api::types::ApiRenderMode::ThreeD),
-                    _ => None,
-                };
-                wasm_bindgen_futures::spawn_local(async move {
-                    let result = search_online_flames(name, render_mode).await;
-                    if let Ok(mut slot) = result_slot.lock() {
-                        *slot = Some(result);
-                    }
-                });
-            } else {
-                wasm_bindgen_futures::spawn_local(async move {
-                    let result = fetch_online_flames().await;
-                    if let Ok(mut slot) = result_slot.lock() {
-                        *slot = Some(result);
-                    }
-                });
-            }
-        }
-
+        let credentials = get_wasm_credentials();
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let _ = has_filters;
-            self.online_loading = false;
-            self.online_error = Some("Online browsing not yet available on desktop".to_string());
+        let credentials = self.auth_credentials.clone().map(|(b, t)| Ok((b, t))).unwrap_or(Err("Not signed in".to_string()));
+
+        let (base_url, token) = match credentials {
+            Ok(creds) => creds,
+            Err(e) => {
+                self.online_loading = false;
+                self.online_error = Some(e);
+                return;
+            }
+        };
+
+        let result_slot = self.online_list_result.clone();
+
+        if has_filters {
+            let name = if self.online_search_name.is_empty() {
+                None
+            } else {
+                Some(self.online_search_name.clone())
+            };
+            let render_mode = match self.online_search_render_mode {
+                1 => Some(crate::api::types::ApiRenderMode::TwoD),
+                2 => Some(crate::api::types::ApiRenderMode::ThreeD),
+                _ => None,
+            };
+            #[cfg(target_arch = "wasm32")]
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = search_online_flames(&base_url, &token, name, render_mode).await;
+                if let Ok(mut slot) = result_slot.lock() { *slot = Some(result); }
+            });
+            #[cfg(not(target_arch = "wasm32"))]
+            std::thread::spawn(move || {
+                let result = pollster::block_on(search_online_flames(&base_url, &token, name, render_mode));
+                if let Ok(mut slot) = result_slot.lock() { *slot = Some(result); }
+            });
+        } else {
+            #[cfg(target_arch = "wasm32")]
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = fetch_online_flames(&base_url, &token).await;
+                if let Ok(mut slot) = result_slot.lock() { *slot = Some(result); }
+            });
+            #[cfg(not(target_arch = "wasm32"))]
+            std::thread::spawn(move || {
+                let result = pollster::block_on(fetch_online_flames(&base_url, &token));
+                if let Ok(mut slot) = result_slot.lock() { *slot = Some(result); }
+            });
         }
     }
 
@@ -687,23 +710,34 @@ impl FractalBrowserPanel {
         self.online_loading_flame = true;
         self.online_error = None;
 
+        // Get credentials (WASM: from localStorage, Desktop: from cached auth)
         #[cfg(target_arch = "wasm32")]
-        {
-            let result_slot = self.online_flame_result.clone();
-            let id = flame_id.to_string();
-            wasm_bindgen_futures::spawn_local(async move {
-                let result = fetch_online_flame(&id).await;
-                if let Ok(mut slot) = result_slot.lock() {
-                    *slot = Some(result);
-                }
-            });
-        }
-
+        let credentials = get_wasm_credentials();
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.online_loading_flame = false;
-            self.online_error = Some("Online browsing not yet available on desktop".to_string());
-        }
+        let credentials = self.auth_credentials.clone().map(|(b, t)| Ok((b, t))).unwrap_or(Err("Not signed in".to_string()));
+
+        let (base_url, token) = match credentials {
+            Ok(creds) => creds,
+            Err(e) => {
+                self.online_loading_flame = false;
+                self.online_error = Some(e);
+                return;
+            }
+        };
+
+        let result_slot = self.online_flame_result.clone();
+        let id = flame_id.to_string();
+
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = fetch_online_flame(&base_url, &token, &id).await;
+            if let Ok(mut slot) = result_slot.lock() { *slot = Some(result); }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || {
+            let result = pollster::block_on(fetch_online_flame(&base_url, &token, &id));
+            if let Ok(mut slot) = result_slot.lock() { *slot = Some(result); }
+        });
     }
 
     /// Request a refresh of the online flame list (e.g., after save/delete)
@@ -716,24 +750,35 @@ impl FractalBrowserPanel {
         self.online_deleting = true;
         self.online_error = None;
 
+        // Get credentials (WASM: from localStorage, Desktop: from cached auth)
         #[cfg(target_arch = "wasm32")]
-        {
-            let result_slot = self.online_delete_result.clone();
-            let id = flame_id.to_string();
-            let name = flame_name.to_string();
-            wasm_bindgen_futures::spawn_local(async move {
-                let result = delete_online_flame(&id).await.map(|_| name);
-                if let Ok(mut slot) = result_slot.lock() {
-                    *slot = Some(result);
-                }
-            });
-        }
-
+        let credentials = get_wasm_credentials();
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.online_deleting = false;
-            self.online_error = Some("Delete not yet available on desktop".to_string());
-        }
+        let credentials = self.auth_credentials.clone().map(|(b, t)| Ok((b, t))).unwrap_or(Err("Not signed in".to_string()));
+
+        let (base_url, token) = match credentials {
+            Ok(creds) => creds,
+            Err(e) => {
+                self.online_deleting = false;
+                self.online_error = Some(e);
+                return;
+            }
+        };
+
+        let result_slot = self.online_delete_result.clone();
+        let id = flame_id.to_string();
+        let name = flame_name.to_string();
+
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = delete_online_flame(&base_url, &token, &id).await.map(|_| name);
+            if let Ok(mut slot) = result_slot.lock() { *slot = Some(result); }
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || {
+            let result = pollster::block_on(delete_online_flame(&base_url, &token, &id)).map(|_| name);
+            if let Ok(mut slot) = result_slot.lock() { *slot = Some(result); }
+        });
     }
 
     fn render_files_tab(&mut self, ui: &mut egui::Ui) -> GalleryResponse {
@@ -783,65 +828,46 @@ impl FractalBrowserPanel {
     }
 }
 
-/// Fetch the list of flames from the API (WASM async helper)
+/// Read auth credentials from WASM localStorage (DRY helper for WASM trigger methods)
 #[cfg(target_arch = "wasm32")]
-async fn fetch_online_flames() -> Result<Vec<crate::api::types::FlameListItem>, String> {
-    use crate::api::ApiState;
-
+fn get_wasm_credentials() -> Result<(String, String), String> {
     let window = web_sys::window().ok_or("No window")?;
     let storage = window
         .local_storage()
         .map_err(|_| "Failed to access localStorage")?
         .ok_or("No localStorage")?;
-
     let token = storage
         .get_item("fflame_auth_token")
         .map_err(|_| "Failed to read token")?
         .ok_or("Not signed in — click Sign In first")?;
-
     let base_url = storage
         .get_item("fflame_api_base_url")
         .ok()
         .flatten()
         .unwrap_or_else(|| "http://localhost:3000".to_string());
+    Ok((base_url, token))
+}
 
-    let mut api = ApiState::new(&base_url);
-    api.set_token(&token);
+/// Fetch the list of flames from the API (cross-platform async helper)
+async fn fetch_online_flames(base_url: &str, token: &str) -> Result<Vec<crate::api::types::FlameListItem>, String> {
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
     api.list_my_flames(1, 100)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Search flames from the API with filters (WASM async helper)
-#[cfg(target_arch = "wasm32")]
+/// Search flames from the API with filters (cross-platform async helper)
 async fn search_online_flames(
+    base_url: &str,
+    token: &str,
     name: Option<String>,
     render_mode: Option<crate::api::types::ApiRenderMode>,
 ) -> Result<Vec<crate::api::types::FlameListItem>, String> {
-    use crate::api::ApiState;
-    use crate::api::types::SearchFlamesParams;
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
 
-    let window = web_sys::window().ok_or("No window")?;
-    let storage = window
-        .local_storage()
-        .map_err(|_| "Failed to access localStorage")?
-        .ok_or("No localStorage")?;
-
-    let token = storage
-        .get_item("fflame_auth_token")
-        .map_err(|_| "Failed to read token")?
-        .ok_or("Not signed in — click Sign In first")?;
-
-    let base_url = storage
-        .get_item("fflame_api_base_url")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "http://localhost:3000".to_string());
-
-    let mut api = ApiState::new(&base_url);
-    api.set_token(&token);
-
-    let params = SearchFlamesParams {
+    let params = crate::api::types::SearchFlamesParams {
         name,
         render_mode,
         per_page: Some(100),
@@ -852,61 +878,21 @@ async fn search_online_flames(
         .map_err(|e| e.to_string())
 }
 
-/// Fetch a single flame's full config from the API (WASM async helper)
+/// Fetch a single flame's full config from the API (cross-platform async helper)
 /// Returns (FractalConfig, flame_id) on success.
-#[cfg(target_arch = "wasm32")]
-async fn fetch_online_flame(flame_id: &str) -> Result<(crate::config::FractalConfig, String), String> {
-    use crate::api::ApiState;
-
-    let window = web_sys::window().ok_or("No window")?;
-    let storage = window
-        .local_storage()
-        .map_err(|_| "Failed to access localStorage")?
-        .ok_or("No localStorage")?;
-
-    let token = storage
-        .get_item("fflame_auth_token")
-        .map_err(|_| "Failed to read token")?
-        .ok_or("Not signed in — click Sign In first")?;
-
-    let base_url = storage
-        .get_item("fflame_api_base_url")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "http://localhost:3000".to_string());
-
-    let mut api = ApiState::new(&base_url);
-    api.set_token(&token);
+async fn fetch_online_flame(base_url: &str, token: &str, flame_id: &str) -> Result<(crate::config::FractalConfig, String), String> {
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
     let config = api.load_flame(flame_id)
         .await
         .map_err(|e| e.to_string())?;
     Ok((config, flame_id.to_string()))
 }
 
-/// Delete a flame from the API (WASM async helper)
-#[cfg(target_arch = "wasm32")]
-async fn delete_online_flame(flame_id: &str) -> Result<(), String> {
-    use crate::api::ApiState;
-
-    let window = web_sys::window().ok_or("No window")?;
-    let storage = window
-        .local_storage()
-        .map_err(|_| "Failed to access localStorage")?
-        .ok_or("No localStorage")?;
-
-    let token = storage
-        .get_item("fflame_auth_token")
-        .map_err(|_| "Failed to read token")?
-        .ok_or("Not signed in — click Sign In first")?;
-
-    let base_url = storage
-        .get_item("fflame_api_base_url")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "http://localhost:3000".to_string());
-
-    let mut api = ApiState::new(&base_url);
-    api.set_token(&token);
+/// Delete a flame from the API (cross-platform async helper)
+async fn delete_online_flame(base_url: &str, token: &str, flame_id: &str) -> Result<(), String> {
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
     api.delete_flame(flame_id)
         .await
         .map_err(|e| e.to_string())
