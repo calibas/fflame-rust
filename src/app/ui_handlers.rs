@@ -33,7 +33,6 @@ impl App {
         self.handle_animation_requests(ui_response);
         self.handle_animation_seek(ui_response);
         self.handle_path_filters(ui_response);
-        #[cfg(feature = "api")]
         self.handle_save_online(ui_response);
     }
 
@@ -199,10 +198,7 @@ impl App {
             }
 
             // Clear API flame ID — this is a new local flame
-            #[cfg(feature = "api")]
-            {
-                self.api_flame_id = None;
-            }
+            self.api_flame_id = None;
         }
     }
 
@@ -742,10 +738,7 @@ impl App {
                 log::info!("Preset loaded successfully");
 
                 // Track API flame ID if loaded from Online tab, clear otherwise
-                #[cfg(feature = "api")]
-                {
-                    self.api_flame_id = ui_response.loaded_api_flame_id.clone();
-                }
+                self.api_flame_id = ui_response.loaded_api_flame_id.clone();
             }
         }
     }
@@ -921,7 +914,6 @@ impl App {
     }
 
     /// Handle API save/update — process async results and new requests
-    #[cfg(feature = "api")]
     fn handle_save_online(&mut self, ui_response: &UiResponse) {
         use crate::ui::ApiSaveAction;
 
@@ -1015,7 +1007,7 @@ impl App {
 }
 
 /// Save a flame to the API as new (async helper for WASM).
-#[cfg(all(feature = "api", target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 async fn save_flame_online(
     config: crate::config::FractalConfig,
     name: &str,
@@ -1027,7 +1019,7 @@ async fn save_flame_online(
 }
 
 /// Update an existing flame on the API (async helper for WASM).
-#[cfg(all(feature = "api", target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 async fn update_flame_online(
     config: crate::config::FractalConfig,
     flame_id: &str,
@@ -1041,7 +1033,7 @@ async fn update_flame_online(
 }
 
 /// Delete a flame from the API (async helper for WASM).
-#[cfg(all(feature = "api", target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 async fn delete_flame_online(flame_id: &str) -> Result<(), String> {
     let (api, token) = create_api_state().await?;
     api.delete_flame(flame_id)
@@ -1050,7 +1042,7 @@ async fn delete_flame_online(flame_id: &str) -> Result<(), String> {
 }
 
 /// Create an ApiState from localStorage credentials (shared helper).
-#[cfg(all(feature = "api", target_arch = "wasm32"))]
+#[cfg(target_arch = "wasm32")]
 async fn create_api_state() -> Result<(crate::api::ApiState, String), String> {
     use crate::api::ApiState;
 

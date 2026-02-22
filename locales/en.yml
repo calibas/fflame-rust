@@ -806,6 +806,16 @@ palette_library:
   tooltip_select_palette: "Click to use this palette (creates an editable copy)"
   tooltip_retry: "Click to retry loading this pack"
 
+  # Cloud Palettes
+  cloud_section: "Cloud Palettes"
+  cloud_loading: "Loading palettes..."
+  cloud_empty: "No palettes saved online"
+  cloud_empty_hint: "Palettes are saved automatically with your flames"
+  cloud_refresh: "Refresh"
+  cloud_load_success: "Loaded palette: %{name}"
+  cloud_delete_success: "Deleted palette: %{name}"
+  cloud_delete_error: "Failed to delete: %{error}"
+
 # Preset Library Panel
 preset_library:
   title: "Preset Library"
@@ -842,6 +852,12 @@ browser:
   online_empty_hint: "Use File → Save Online to upload a flame"
   online_delete: "Delete"
   online_deleting: "Deleting..."
+  search_placeholder: "Search by name..."
+  search_all: "All"
+  search_2d: "2D"
+  search_3d: "3D"
+  search_button: "Search"
+  search_clear: "Clear"
 
 # API (cloud save/update)
 api:
@@ -1554,3 +1570,19 @@ errors:
   export_failed: "Export failed"
   gpu_error: "GPU error"
   shader_compilation_failed: "Shader compilation failed"
+
+# Auth status (menu bar)
+auth:
+  signed_in: "Signed in"
+  not_signed_in: "Not signed in"
+  sign_out: "Sign Out"
+  signed_out_success: "Signed out"
+
+login:
+  title: "Sign In"
+  email: "Email:"
+  password: "Password:"
+  sign_in: "Sign In"
+  signing_in: "Signing in..."
+  register: "Create Account"
+  no_account: "Don't have an account?"

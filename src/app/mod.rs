@@ -361,12 +361,9 @@ pub struct App {
     pub(super) audio_capture: crate::audio::AudioCapture,
     pub(super) signal_manager: crate::signal::SignalManager,
 
-    // API integration (feature-gated)
-    #[cfg(feature = "api")]
+    // API integration
     pub(super) api_flame_id: Option<String>,
-    #[cfg(feature = "api")]
     pub(super) api_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
-    #[cfg(feature = "api")]
     pub(super) api_save_in_progress: bool,
 }
 impl App {
@@ -463,11 +460,8 @@ impl App {
             audio_player: crate::audio::AudioPlayer::new(),
             audio_capture: crate::audio::AudioCapture::new(),
             signal_manager: crate::signal::SignalManager::new(),
-            #[cfg(feature = "api")]
             api_flame_id: None,
-            #[cfg(feature = "api")]
             api_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
-            #[cfg(feature = "api")]
             api_save_in_progress: false,
         };
 
@@ -484,6 +478,28 @@ impl App {
             let screen_size = egui::vec2(app.gpu.size.width as f32, app.gpu.size.height as f32);
             let help_size = egui::vec2(400.0, 450.0); // Fixed size for Help panel
             app.workspace.open_floating_panel_centered(PanelType::Help, help_size, screen_size);
+        }
+
+        // WASM: Adopt auth token from localStorage if SystemSettings has none.
+        // This supports external login pages on the same domain setting the token.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let has_saved_token = app.config_manager.system_settings().auth_token.is_some();
+            if !has_saved_token {
+                if let Some(token) = web_sys::window()
+                    .and_then(|w| w.local_storage().ok().flatten())
+                    .and_then(|s| s.get_item("fflame_auth_token").ok().flatten())
+                {
+                    let email = web_sys::window()
+                        .and_then(|w| w.local_storage().ok().flatten())
+                        .and_then(|s| s.get_item("fflame_auth_email").ok().flatten());
+                    let settings = app.config_manager.system_settings_mut();
+                    settings.auth_token = Some(token);
+                    settings.auth_email = email;
+                    let _ = settings.save();
+                    log::info!("Adopted auth token from localStorage");
+                }
+            }
         }
 
         #[allow(deprecated)]
@@ -885,7 +901,6 @@ impl App {
             &mut self.audio_capture,
             &mut self.signal_manager,
             &signal_names,
-            #[cfg(feature = "api")]
             &self.api_flame_id,
         );
 

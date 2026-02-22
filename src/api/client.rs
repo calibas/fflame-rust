@@ -147,28 +147,70 @@ pub use wasm::{api_request, api_request_raw};
 mod native {
     use super::*;
 
+    /// Make an authenticated API request (desktop via ureq).
+    ///
+    /// Keeps `async fn` signature for interface compatibility with WASM.
+    /// ureq is blocking, so the async is a no-op — callers run this on a
+    /// background thread via `std::thread::spawn` + `pollster::block_on`.
     pub async fn api_request_raw(
-        _method: &str,
+        method: &str,
         url: &str,
-        _body: Option<String>,
-        _token: Option<&str>,
+        body: Option<String>,
+        token: Option<&str>,
     ) -> FetchResult<String> {
-        Err(FetchError::Network(format!(
-            "HTTP API requests not yet implemented for desktop. URL: {}",
-            url
-        )))
+        let mut req = ureq::request(method, url);
+
+        if let Some(token) = token {
+            req = req.set("Authorization", &format!("Bearer {}", token));
+        }
+        if body.is_some() {
+            req = req.set("Content-Type", "application/json");
+        }
+
+        let result = match body {
+            Some(ref json_body) => req.send_string(json_body),
+            None => req.call(),
+        };
+
+        match result {
+            Ok(resp) => {
+                let status = resp.status();
+                if status == 204 {
+                    return Ok(String::new());
+                }
+                resp.into_string()
+                    .map_err(|e| FetchError::Network(format!("Failed to read response: {}", e)))
+            }
+            Err(ureq::Error::Status(status, resp)) => {
+                if status == 401 {
+                    return Err(FetchError::Unauthorized);
+                }
+                if status == 403 {
+                    return Err(FetchError::Forbidden);
+                }
+                if status == 404 {
+                    return Err(FetchError::NotFound(url.to_string()));
+                }
+                let message = resp
+                    .into_string()
+                    .unwrap_or_else(|_| format!("HTTP error {}", status));
+                Err(FetchError::Http { status, message })
+            }
+            Err(ureq::Error::Transport(e)) => {
+                Err(FetchError::Network(format!("Network error: {}", e)))
+            }
+        }
     }
 
+    /// Make a typed API request that deserializes the JSON response.
     pub async fn api_request<T: DeserializeOwned>(
-        _method: &str,
+        method: &str,
         url: &str,
-        _body: Option<String>,
-        _token: Option<&str>,
+        body: Option<String>,
+        token: Option<&str>,
     ) -> FetchResult<T> {
-        Err(FetchError::Network(format!(
-            "HTTP API requests not yet implemented for desktop. URL: {}",
-            url
-        )))
+        let text = api_request_raw(method, url, body, token).await?;
+        serde_json::from_str(&text).map_err(FetchError::from)
     }
 }
 

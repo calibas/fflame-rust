@@ -64,8 +64,9 @@ pub fn render_palette_library(
     }
     ui.separator();
 
-    // Scrollable area for pack list
-    egui::ScrollArea::vertical().show(ui, |ui| {
+    // Note: ScrollArea is managed by the panel viewer (render_palette_library_panel)
+    // so cloud palettes section can share the same scroll area.
+    {
         // Iterate through all packs
         for pack_idx in 0..library.pack_count() {
             // Get pack info (includes load state)
@@ -291,5 +292,366 @@ pub fn render_palette_library(
             ui.label(t!("palette_library.no_packs"));
             ui.label(t!("palette_library.no_packs_hint"));
         }
-    });
+    }
+}
+
+// --- Cloud Palettes Section (API feature) ---
+
+/// Fetch cloud palettes from the API (WASM async helper)
+#[cfg(target_arch = "wasm32")]
+async fn fetch_cloud_palettes() -> Result<Vec<crate::api::types::PaletteResponse>, String> {
+    use crate::api::ApiState;
+
+    let window = web_sys::window().ok_or("No window")?;
+    let storage = window
+        .local_storage()
+        .map_err(|_| "Failed to access localStorage")?
+        .ok_or("No localStorage")?;
+
+    let token = storage
+        .get_item("fflame_auth_token")
+        .map_err(|_| "Failed to read token")?
+        .ok_or("Not signed in")?;
+
+    let base_url = storage
+        .get_item("fflame_api_base_url")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "http://localhost:3000".to_string());
+
+    let mut api = ApiState::new(&base_url);
+    api.set_token(&token);
+    api.list_palettes(None, 1, 100)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a cloud palette from the API (WASM async helper)
+#[cfg(target_arch = "wasm32")]
+async fn delete_cloud_palette(palette_id: &str) -> Result<String, String> {
+    use crate::api::ApiState;
+
+    let window = web_sys::window().ok_or("No window")?;
+    let storage = window
+        .local_storage()
+        .map_err(|_| "Failed to access localStorage")?
+        .ok_or("No localStorage")?;
+
+    let token = storage
+        .get_item("fflame_auth_token")
+        .map_err(|_| "Failed to read token")?
+        .ok_or("Not signed in")?;
+
+    let base_url = storage
+        .get_item("fflame_api_base_url")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "http://localhost:3000".to_string());
+
+    let mut api = ApiState::new(&base_url);
+    api.set_token(&token);
+    let id = palette_id.to_string();
+    api.delete_palette(&id)
+        .await
+        .map(|_| id)
+        .map_err(|e| e.to_string())
+}
+
+/// Render the Cloud Palettes section in the Palette Library panel
+pub fn render_cloud_palettes_section(
+    ui: &mut egui::Ui,
+    cloud_state: &mut super::CloudPaletteState,
+    config_manager: &mut ConfigManager,
+) {
+    // Poll async results
+    poll_cloud_palette_results(ui, cloud_state);
+
+    ui.separator();
+
+    let header_id = ui.make_persistent_id("cloud_palettes_header");
+    let mut collapsing = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        header_id,
+        false, // Default collapsed
+    );
+
+    collapsing
+        .show_header(ui, |ui| {
+            ui.strong(t!("palette_library.cloud_section"));
+
+            if cloud_state.loading {
+                ui.spinner();
+            }
+        })
+        .body(|ui| {
+            // Auto-fetch on first expand
+            if !cloud_state.fetched && !cloud_state.loading {
+                trigger_cloud_palette_fetch(cloud_state);
+            }
+
+            // Toolbar: Refresh button
+            ui.horizontal(|ui| {
+                let refresh_enabled = !cloud_state.loading;
+                if ui.add_enabled(refresh_enabled, egui::Button::new(t!("palette_library.cloud_refresh")))
+                    .clicked()
+                {
+                    trigger_cloud_palette_fetch(cloud_state);
+                }
+            });
+
+            // Error display
+            if let Some(ref error) = cloud_state.error {
+                ui.colored_label(egui::Color32::RED, error);
+            }
+
+            // Loading state
+            if cloud_state.loading && cloud_state.palettes.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(t!("palette_library.cloud_loading"));
+                });
+                return;
+            }
+
+            // Empty state
+            if cloud_state.fetched && cloud_state.palettes.is_empty() {
+                ui.weak(t!("palette_library.cloud_empty"));
+                ui.weak(t!("palette_library.cloud_empty_hint"));
+                return;
+            }
+
+            // Palette list with gradient previews
+            let preview_height = 20.0;
+            let preview_width = 200.0;
+            let max_name_width = cloud_state.palettes.iter()
+                .map(|p| {
+                    let name = p.name.as_deref().unwrap_or("Unnamed");
+                    name.len() as f32 * 8.0
+                })
+                .fold(0.0f32, f32::max)
+                .max(100.0)
+                .min(200.0);
+
+            egui::Grid::new("cloud_palette_grid")
+                .num_columns(3) // name, preview, delete button
+                .spacing([10.0, 4.0])
+                .striped(false)
+                .show(ui, |ui| {
+                    // Collect palette data first to avoid borrow conflicts
+                    let palette_data: Vec<_> = cloud_state.palettes.iter().map(|p| {
+                        let name = p.name.clone().unwrap_or_else(|| "Unnamed".to_string());
+                        let id = p.id.clone();
+                        let palette = crate::api::sync::palette_from_api(p);
+                        (id, name, palette)
+                    }).collect();
+
+                    for (id, name, palette) in &palette_data {
+                        // Generate cached texture for gradient preview
+                        let texture_id = egui::Id::new(("cloud_palette_preview", id));
+                        let texture = ui.ctx().data_mut(|data| {
+                            data.get_temp::<egui::TextureHandle>(texture_id)
+                        }).unwrap_or_else(|| {
+                            let preview_image = PaletteLibrary::generate_preview(
+                                palette,
+                                preview_width as usize,
+                                preview_height as usize,
+                            );
+                            let tex = ui.ctx().load_texture(
+                                format!("cloud_palette_{}", id),
+                                preview_image,
+                                egui::TextureOptions::LINEAR,
+                            );
+                            ui.ctx().data_mut(|data| {
+                                data.insert_temp(texture_id, tex.clone());
+                            });
+                            tex
+                        });
+
+                        // Name column (clickable)
+                        let (name_rect, name_response) = ui.allocate_exact_size(
+                            egui::vec2(max_name_width, preview_height),
+                            egui::Sense::click(),
+                        );
+
+                        // Preview column (clickable)
+                        let (img_rect, img_response) = ui.allocate_exact_size(
+                            egui::vec2(preview_width, preview_height),
+                            egui::Sense::click(),
+                        );
+
+                        // Delete button column
+                        let delete_clicked = ui.add_enabled(
+                            !cloud_state.deleting,
+                            egui::Button::new("X")
+                                .small()
+                                .fill(egui::Color32::from_rgb(120, 30, 30)),
+                        ).clicked();
+
+                        // Hover highlight
+                        if name_response.hovered() || img_response.hovered() {
+                            let row_rect = name_rect.union(img_rect);
+                            ui.painter().rect_filled(
+                                row_rect.expand(2.0),
+                                2.0,
+                                ui.visuals().widgets.hovered.bg_fill,
+                            );
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+
+                        // Draw name
+                        ui.painter().text(
+                            name_rect.left_center() + egui::vec2(5.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            name,
+                            egui::FontId::default(),
+                            ui.visuals().text_color(),
+                        );
+
+                        // Draw gradient preview
+                        let image = egui::Image::new(&texture)
+                            .fit_to_exact_size(egui::vec2(preview_width, preview_height));
+                        ui.put(img_rect, image);
+
+                        // Handle click to load palette
+                        if name_response.clicked() || img_response.clicked() {
+                            let mut palette_copy = palette.clone();
+                            palette_copy.built_in = false;
+                            let _ = config_manager.update_param(
+                                ConfigPath::Palette,
+                                palette_copy.into(),
+                            );
+                            cloud_state.notification = Some((
+                                t!("palette_library.cloud_load_success", name = name).to_string(),
+                                false,
+                            ));
+                        }
+
+                        // Handle delete
+                        if delete_clicked {
+                            trigger_cloud_palette_delete(cloud_state, id);
+                        }
+
+                        ui.end_row();
+                    }
+                });
+
+            // Show notification
+            if let Some((ref msg, is_error)) = cloud_state.notification {
+                let color = if is_error { egui::Color32::RED } else { egui::Color32::GREEN };
+                ui.colored_label(color, msg);
+            }
+        });
+}
+
+/// Trigger async fetch of cloud palettes
+fn trigger_cloud_palette_fetch(cloud_state: &mut super::CloudPaletteState) {
+    cloud_state.loading = true;
+    cloud_state.error = None;
+    cloud_state.notification = None;
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let result_slot = cloud_state.list_result.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = fetch_cloud_palettes().await;
+            if let Ok(mut slot) = result_slot.lock() {
+                *slot = Some(result);
+            }
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cloud_state.loading = false;
+        cloud_state.error = Some("Cloud palettes not available on desktop".to_string());
+        cloud_state.fetched = true;
+    }
+}
+
+/// Trigger async delete of a cloud palette
+fn trigger_cloud_palette_delete(cloud_state: &mut super::CloudPaletteState, palette_id: &str) {
+    cloud_state.deleting = true;
+    cloud_state.notification = None;
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let result_slot = cloud_state.delete_result.clone();
+        let id = palette_id.to_string();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = delete_cloud_palette(&id).await;
+            if let Ok(mut slot) = result_slot.lock() {
+                *slot = Some(result);
+            }
+        });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = palette_id;
+        cloud_state.deleting = false;
+        cloud_state.error = Some("Cloud palettes not available on desktop".to_string());
+    }
+}
+
+/// Poll async results for cloud palette operations
+fn poll_cloud_palette_results(
+    ui: &mut egui::Ui,
+    cloud_state: &mut super::CloudPaletteState,
+) {
+    // Poll list result
+    if let Ok(mut slot) = cloud_state.list_result.try_lock() {
+        if let Some(result) = slot.take() {
+            cloud_state.loading = false;
+            cloud_state.fetched = true;
+            match result {
+                Ok(palettes) => {
+                    // Clear texture cache when palette list changes
+                    for p in &cloud_state.palettes {
+                        let texture_id = egui::Id::new(("cloud_palette_preview", &p.id));
+                        ui.ctx().data_mut(|data| {
+                            data.remove::<egui::TextureHandle>(texture_id);
+                        });
+                    }
+                    cloud_state.palettes = palettes;
+                    cloud_state.error = None;
+                }
+                Err(e) => {
+                    cloud_state.error = Some(e);
+                }
+            }
+            ui.ctx().request_repaint();
+        }
+    }
+
+    // Poll delete result
+    if let Ok(mut slot) = cloud_state.delete_result.try_lock() {
+        if let Some(result) = slot.take() {
+            cloud_state.deleting = false;
+            match result {
+                Ok(deleted_id) => {
+                    // Remove from local list and clear texture cache
+                    let texture_id = egui::Id::new(("cloud_palette_preview", &deleted_id));
+                    ui.ctx().data_mut(|data| {
+                        data.remove::<egui::TextureHandle>(texture_id);
+                    });
+                    let name = cloud_state.palettes.iter()
+                        .find(|p| p.id == deleted_id)
+                        .and_then(|p| p.name.clone())
+                        .unwrap_or_else(|| "palette".to_string());
+                    cloud_state.palettes.retain(|p| p.id != deleted_id);
+                    cloud_state.notification = Some((
+                        t!("palette_library.cloud_delete_success", name = name).to_string(),
+                        false,
+                    ));
+                }
+                Err(e) => {
+                    cloud_state.notification = Some((
+                        t!("palette_library.cloud_delete_error", error = e).to_string(),
+                        true,
+                    ));
+                }
+            }
+            ui.ctx().request_repaint();
+        }
+    }
 }

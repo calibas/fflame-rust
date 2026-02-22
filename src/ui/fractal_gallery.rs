@@ -39,10 +39,8 @@ pub struct GalleryResponse {
     /// Request to close the panel
     pub close_requested: bool,
     /// API flame ID (when loading from Online tab)
-    #[cfg(feature = "api")]
     pub api_flame_id: Option<String>,
     /// API notification message (message, is_error) — e.g. delete result
-    #[cfg(feature = "api")]
     pub api_notification: Option<(String, bool)>,
 }
 

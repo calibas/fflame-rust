@@ -8,6 +8,7 @@ mod formatting;
 pub mod fractal_browser;
 pub mod fractal_gallery;
 mod help;
+pub mod login_dialog;
 pub mod histogram;
 mod menu_bar;
 mod menu_context;
@@ -38,7 +39,6 @@ pub use font_loader::{ensure_font_for_locale, initialize_default_fonts};
 pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
-#[cfg(feature = "api")]
 pub use response::ApiSaveAction;
 pub use workspace::Workspace;
 pub use xaos_editor::XaosEditorState;
@@ -65,17 +65,43 @@ pub struct PathClickInfo {
 }
 
 /// API notification for toast-style feedback overlay
-#[cfg(feature = "api")]
 pub struct ApiNotification {
     pub message: String,
     pub is_error: bool,
     pub created_at: web_time::Instant,
 }
 
-#[cfg(feature = "api")]
 impl ApiNotification {
     const DURATION_SECS: f32 = 4.0;
     const FADE_START_SECS: f32 = 3.0;
+}
+
+/// State for cloud palette browsing in Palette Library
+pub struct CloudPaletteState {
+    pub palettes: Vec<crate::api::types::PaletteResponse>,
+    pub fetched: bool,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub list_result: std::sync::Arc<std::sync::Mutex<Option<Result<Vec<crate::api::types::PaletteResponse>, String>>>>,
+    pub deleting: bool,
+    pub delete_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
+    /// Notification from palette operations (message, is_error)
+    pub notification: Option<(String, bool)>,
+}
+
+impl Default for CloudPaletteState {
+    fn default() -> Self {
+        Self {
+            palettes: Vec::new(),
+            fetched: false,
+            loading: false,
+            error: None,
+            list_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            deleting: false,
+            delete_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            notification: None,
+        }
+    }
 }
 
 use egui_wgpu::wgpu::*;
@@ -125,25 +151,25 @@ pub struct EguiLayer {
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
 
     // API: flame ID loaded from Online tab (passed through to UiResponse)
-    #[cfg(feature = "api")]
     loaded_api_flame_id: Option<String>,
 
     // API: notification toast
-    #[cfg(feature = "api")]
     api_notification: Option<ApiNotification>,
 
     // API: save dialog state
-    #[cfg(feature = "api")]
     api_save_dialog_open: bool,
-    #[cfg(feature = "api")]
     api_save_dialog_name: String,
     /// Whether the save dialog is for a "new copy" (true) or first save (false)
-    #[cfg(feature = "api")]
     api_save_dialog_is_copy: bool,
 
     /// API notification from browser panel (e.g. delete result)
-    #[cfg(feature = "api")]
     api_browser_notification: Option<(String, bool)>,
+
+    // Login dialog state
+    login_dialog_state: login_dialog::LoginDialogState,
+
+    // Cloud palette state (for Palette Library panel)
+    cloud_palette_state: CloudPaletteState,
 
     // Histogram for density visualization (levels now in ConfigManager)
     density_histogram: crate::renderer::DensityHistogram,
@@ -242,18 +268,14 @@ impl EguiLayer {
             generated_flame: None,
             generated_batch: None,
             fractal_browser_panel: None,
-            #[cfg(feature = "api")]
             loaded_api_flame_id: None,
-            #[cfg(feature = "api")]
             api_notification: None,
-            #[cfg(feature = "api")]
             api_save_dialog_open: false,
-            #[cfg(feature = "api")]
             api_save_dialog_name: String::new(),
-            #[cfg(feature = "api")]
             api_save_dialog_is_copy: false,
-            #[cfg(feature = "api")]
             api_browser_notification: None,
+            login_dialog_state: login_dialog::LoginDialogState::default(),
+            cloud_palette_state: CloudPaletteState::default(),
             density_histogram: crate::renderer::DensityHistogram::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
@@ -318,7 +340,6 @@ impl EguiLayer {
     }
 
     /// Show an API notification toast
-    #[cfg(feature = "api")]
     pub fn show_api_notification(&mut self, message: &str, is_error: bool) {
         self.api_notification = Some(ApiNotification {
             message: message.to_string(),
@@ -328,7 +349,6 @@ impl EguiLayer {
     }
 
     /// Request the Online tab to refresh its flame list
-    #[cfg(feature = "api")]
     pub fn request_online_refresh(&mut self) {
         if let Some(ref mut panel) = self.fractal_browser_panel {
             panel.request_online_refresh();
@@ -336,7 +356,6 @@ impl EguiLayer {
     }
 
     /// Render API notification toast overlay (bottom-center)
-    #[cfg(feature = "api")]
     fn render_api_notification(&mut self, ctx: &egui::Context) {
         let notification = match &self.api_notification {
             Some(n) => n,
@@ -388,7 +407,6 @@ impl EguiLayer {
     }
 
     /// Render the API save dialog window
-    #[cfg(feature = "api")]
     fn render_api_save_dialog(&mut self, ctx: &egui::Context) -> Option<response::ApiSaveAction> {
         if !self.api_save_dialog_open {
             return None;
@@ -448,7 +466,6 @@ impl EguiLayer {
     }
 
     /// Open the API save dialog with a pre-filled name
-    #[cfg(feature = "api")]
     pub fn open_save_dialog(&mut self, name: &str, is_copy: bool) {
         self.api_save_dialog_name = name.to_string();
         self.api_save_dialog_open = true;
@@ -529,7 +546,7 @@ impl EguiLayer {
         audio_capture: &mut crate::audio::AudioCapture,
         signal_manager: &mut crate::signal::SignalManager,
         signal_names: &[String],
-        #[cfg(feature = "api")] api_flame_id: &Option<String>,
+        api_flame_id: &Option<String>,
     ) -> UiResponse {
         let mut raw_input = self.state.take_egui_input(window);
 
@@ -608,10 +625,10 @@ impl EguiLayer {
             can_redo,
             is_paused: *paused,
             render_mode_2d: config_manager.active_config().flame.render_mode == crate::scene::transforms::RenderMode::TwoD,
-            #[cfg(feature = "api")]
+            online_mode: config_manager.system_settings().online_mode,
             has_api_flame_id: api_flame_id.is_some(),
-            #[cfg(feature = "api")]
             flame_name: config_manager.config().flame.name.clone(),
+            auth_email: read_auth_email(config_manager),
         };
 
         // Log ConfigManager state at start of UI render
@@ -742,12 +759,16 @@ impl EguiLayer {
                         selected_preset_config: &mut self.selected_preset_config,
 
                         // API flame ID loaded from Online tab
-                        #[cfg(feature = "api")]
                         loaded_api_flame_id: &mut self.loaded_api_flame_id,
 
                         // API notification from browser panel
-                        #[cfg(feature = "api")]
                         api_notification: &mut self.api_browser_notification,
+
+                        // Login dialog state
+                        login_dialog_state: &mut self.login_dialog_state,
+
+                        // Cloud palette state
+                        cloud_palette_state: &mut self.cloud_palette_state,
 
                         // File browser open request (shared by FractalBrowser)
                         file_browser_open_requested: &mut file_browser_open_requested,
@@ -843,19 +864,16 @@ impl EguiLayer {
         });
 
         // API notification toast and save dialog (rendered outside ctx.run to avoid borrow conflicts with self)
-        #[cfg(feature = "api")]
         {
             let ctx = self.ctx.clone();
             self.render_api_notification(&ctx);
         }
-        #[cfg(feature = "api")]
         let api_save_dialog_action = {
             let ctx = self.ctx.clone();
             self.render_api_save_dialog(&ctx)
         };
 
         // Process browser notifications (e.g. delete results) through the toast system
-        #[cfg(feature = "api")]
         if let Some((message, is_error)) = self.api_browser_notification.take() {
             self.show_api_notification(&message, is_error);
         }
@@ -970,7 +988,6 @@ impl EguiLayer {
         }
         *quit_requested |= menu_actions.file.quit;
 
-        #[cfg(feature = "api")]
         let api_save_action = if menu_actions.file.update_online {
             // "Update Online" — update existing flame in place
             response::ApiSaveAction::Update
@@ -989,6 +1006,43 @@ impl EguiLayer {
         } else {
             response::ApiSaveAction::None
         };
+
+        // Handle sign out action
+        if menu_actions.file.sign_out {
+            // Clear auth from SystemSettings (cross-platform)
+            {
+                let settings = config_manager.system_settings_mut();
+                settings.auth_token = None;
+                settings.auth_email = None;
+                let _ = settings.save();
+            }
+
+            // Also clear localStorage (WASM — for external page compatibility)
+            #[cfg(target_arch = "wasm32")]
+            {
+                if let Some(storage) = web_sys::window()
+                    .and_then(|w| w.local_storage().ok().flatten())
+                {
+                    let _ = storage.remove_item("fflame_auth_token");
+                    let _ = storage.remove_item("fflame_auth_email");
+                }
+            }
+
+            // Clear cloud palette state
+            self.cloud_palette_state = CloudPaletteState::default();
+
+            // Clear online tab in fractal browser
+            if let Some(ref mut panel) = self.fractal_browser_panel {
+                panel.clear_online_data();
+            }
+
+            // Show notification
+            self.api_notification = Some(ApiNotification {
+                message: t!("auth.signed_out_success").to_string(),
+                is_error: false,
+                created_at: web_time::Instant::now(),
+            });
+        }
 
         // Combine undo/redo from both menu and panels (OR to not override panel buttons)
         undo_requested |= menu_actions.edit.undo;
@@ -1019,7 +1073,6 @@ impl EguiLayer {
         let selected_preset_config = self.selected_preset_config.take();
 
         // Take API flame ID (reset to None after returning)
-        #[cfg(feature = "api")]
         let loaded_api_flame_id = self.loaded_api_flame_id.take();
 
         // Take generated flame from random generator panel
@@ -1066,9 +1119,7 @@ impl EguiLayer {
             load_audio_file,
             load_signal_file,
             save_signal_file,
-            #[cfg(feature = "api")]
             api_save_action,
-            #[cfg(feature = "api")]
             loaded_api_flame_id,
         }
     }
@@ -1176,6 +1227,11 @@ impl EguiLayer {
     pub fn density_histogram(&self) -> &crate::renderer::DensityHistogram {
         &self.density_histogram
     }
+}
+
+/// Read auth email from SystemSettings (cross-platform).
+fn read_auth_email(config_manager: &crate::config::ConfigManager) -> Option<String> {
+    config_manager.system_settings().auth_email.clone()
 }
 
 /// Reset all rendering settings to their defaults
