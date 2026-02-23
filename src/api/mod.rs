@@ -202,6 +202,18 @@ impl ApiState {
         client::api_get(&url, &token).await
     }
 
+    /// Search public flames without auth (for gallery browsing).
+    pub async fn search_public_flames(
+        &self,
+        params: &SearchFlamesParams,
+    ) -> FetchResult<Vec<FlameListItem>> {
+        let url = build_url(
+            &self.base_url,
+            &format!("/api/search/flames{}", params.to_query_string()),
+        );
+        client::api_get_unauth(&url).await
+    }
+
     // --- Palette operations ---
 
     /// List palettes, optionally filtered by scope.

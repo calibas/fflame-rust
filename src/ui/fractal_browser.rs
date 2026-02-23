@@ -442,6 +442,9 @@ impl FractalBrowserPanel {
                             self.online_error = None;
                         }
                         Err(e) => {
+                            if is_auth_error(&e) {
+                                response.session_expired = true;
+                            }
                             self.online_error = Some(e);
                         }
                     }
@@ -460,6 +463,9 @@ impl FractalBrowserPanel {
                             response.api_flame_id = Some(flame_id);
                         }
                         Err(e) => {
+                            if is_auth_error(&e) {
+                                response.session_expired = true;
+                            }
                             self.online_error = Some(e);
                         }
                     }
@@ -482,6 +488,9 @@ impl FractalBrowserPanel {
                             self.online_fetched = false;
                         }
                         Err(e) => {
+                            if is_auth_error(&e) {
+                                response.session_expired = true;
+                            }
                             response.api_notification = Some((
                                 rust_i18n::t!("api.delete_error", error = e).to_string(),
                                 true,
@@ -896,4 +905,9 @@ async fn delete_online_flame(base_url: &str, token: &str, flame_id: &str) -> Res
     api.delete_flame(flame_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Check if an error string indicates an authentication/authorization failure (401/403)
+fn is_auth_error(error: &str) -> bool {
+    error.contains("Authentication required") || error.contains("Access denied")
 }

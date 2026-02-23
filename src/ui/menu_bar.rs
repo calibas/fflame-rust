@@ -40,7 +40,7 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator, ctx);
                 }
 
-                if menu_state.online_mode {
+                if menu_state.online_mode && menu_state.auth_email.is_some() {
                     ui.separator();
 
                     if menu_state.has_api_flame_id {
@@ -381,9 +381,8 @@ pub fn render_menu_bar(
                 if menu_state.online_mode {
                     ui.separator();
                     if let Some(ref email) = menu_state.auth_email {
-                        ui.weak(email);
-                        if ui.small_button(t!("auth.sign_out")).clicked() {
-                            menu_actions.file.sign_out = true;
+                        if ui.small_button(email.as_str()).clicked() {
+                            workspace.open_floating_panel(super::workspace::PanelType::LoginDialog, ctx);
                         }
                     } else {
                         if ui.small_button(t!("auth.not_signed_in")).clicked() {

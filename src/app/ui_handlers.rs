@@ -950,6 +950,12 @@ impl App {
         let action = &ui_response.api_save_action;
         let should_act = !matches!(action, ApiSaveAction::None) && !self.api_save_in_progress;
         if should_act {
+            // Clear any stale result from a previous attempt (e.g. "Not signed in" error
+            // that was written while api_save_in_progress was false and never consumed)
+            if let Ok(mut slot) = self.api_save_result.lock() {
+                slot.take();
+            }
+
             let config = self.export_config();
             let result_slot = self.api_save_result.clone();
             self.api_save_in_progress = true;
@@ -961,9 +967,10 @@ impl App {
                 Some(t) => t,
                 None => {
                     self.api_save_in_progress = false;
-                    if let Ok(mut slot) = self.api_save_result.lock() {
-                        *slot = Some(Err("Not signed in — click Sign In first".to_string()));
-                    }
+                    self.egui_layer.show_api_notification(
+                        &rust_i18n::t!("api.save_error", error = "Not signed in"),
+                        true,
+                    );
                     return;
                 }
             };

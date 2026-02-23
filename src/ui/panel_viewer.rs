@@ -82,6 +82,9 @@ pub struct PanelContext<'a> {
     // Save Online dialog state
     pub save_online_dialog_state: &'a mut super::save_online_dialog::SaveOnlineDialogState,
 
+    // Sign out requested (from account panel or 401 detection)
+    pub sign_out_requested: &'a mut bool,
+
     // Cloud palette state (for Palette Library cloud section)
     pub cloud_palette_state: &'a mut super::CloudPaletteState,
 
@@ -1077,6 +1080,11 @@ impl<'a> PanelViewer<'a> {
             if let Some(notification) = response.api_notification {
                 *self.context.api_notification = Some(notification);
             }
+
+            // Handle session expiry (401 from API)
+            if response.session_expired {
+                *self.context.sign_out_requested = true;
+            }
         }
     }
 
@@ -1101,25 +1109,29 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Save Online Dialog panel (name input)
     fn render_save_online_dialog(&mut self, ui: &mut egui::Ui) {
-        let _should_close = super::save_online_dialog::render_save_online_dialog(
+        super::save_online_dialog::render_save_online_dialog(
             ui,
             self.context.save_online_dialog_state,
         );
-        // Panel closes via the dock's X button; action is polled in render_ui
     }
 
-    /// Render Login Dialog panel (email/password form)
+    /// Render Login Dialog panel (sign in / register / account info)
     fn render_login_dialog(&mut self, ui: &mut egui::Ui) {
+        let mut sign_out = false;
         if let Some(success) = super::login_dialog::render_login_dialog(
             ui,
             self.context.login_dialog_state,
             self.context.config_manager,
+            &mut sign_out,
         ) {
-            // Login succeeded — show notification
+            // Login/register succeeded — show notification
             *self.context.api_notification = Some((
                 format!("Signed in as {}", success.email),
                 false,
             ));
+        }
+        if sign_out {
+            *self.context.sign_out_requested = true;
         }
     }
 

@@ -533,6 +533,9 @@ impl EguiLayer {
         // File browser
         let mut file_browser_open_requested = false;
 
+        // Sign out requested (from account panel or 401 detection)
+        let mut sign_out_requested = false;
+
         // Animation export
         let mut animation_export_requested: Option<animation_panel::AnimationExportSettings> = None;
         let mut animation_seek_changed = false;
@@ -701,6 +704,9 @@ impl EguiLayer {
                         // Save Online dialog state
                         save_online_dialog_state: &mut self.save_online_dialog_state,
 
+                        // Sign out requested flag
+                        sign_out_requested: &mut sign_out_requested,
+
                         // Cloud palette state
                         cloud_palette_state: &mut self.cloud_palette_state,
 
@@ -805,6 +811,14 @@ impl EguiLayer {
 
         // Poll save dialog action from the docked panel
         let api_save_dialog_action = self.save_online_dialog_state.take_action();
+
+        // Close save dialog panel if requested (Cancel or after Save)
+        if self.save_online_dialog_state.close_requested {
+            self.save_online_dialog_state.close_requested = false;
+            if let Some((surface, node, tab)) = workspace.dock_state.find_tab(&workspace::PanelType::SaveOnlineDialog) {
+                workspace.dock_state.remove_tab((surface, node, tab));
+            }
+        }
 
         // Process browser notifications (e.g. delete results) through the toast system
         if let Some((message, is_error)) = self.api_browser_notification.take() {
@@ -931,8 +945,8 @@ impl EguiLayer {
             response::ApiSaveAction::None
         };
 
-        // Handle sign out action
-        if menu_actions.file.sign_out {
+        // Handle sign out action (from menu bar or account panel)
+        if menu_actions.file.sign_out || sign_out_requested {
             // Clear auth from SystemSettings (cross-platform)
             {
                 let settings = config_manager.system_settings_mut();
@@ -960,10 +974,16 @@ impl EguiLayer {
                 panel.clear_online_data();
             }
 
-            // Show notification
+            // Show notification (different message for session expiry vs user sign-out)
+            let is_session_expired = sign_out_requested && !menu_actions.file.sign_out;
+            let message = if is_session_expired {
+                t!("auth.session_expired").to_string()
+            } else {
+                t!("auth.signed_out_success").to_string()
+            };
             self.api_notification = Some(ApiNotification {
-                message: t!("auth.signed_out_success").to_string(),
-                is_error: false,
+                message,
+                is_error: is_session_expired,
                 created_at: web_time::Instant::now(),
             });
         }

@@ -264,6 +264,11 @@ pub async fn api_put<T: DeserializeOwned, B: Serialize>(
     api_request("PUT", url, Some(json), Some(token)).await
 }
 
+/// GET request without auth (for public endpoints).
+pub async fn api_get_unauth<T: DeserializeOwned>(url: &str) -> FetchResult<T> {
+    api_request("GET", url, None, None).await
+}
+
 /// DELETE request with auth token. Returns Ok(()) on 204.
 pub async fn api_delete(url: &str, token: &str) -> FetchResult<()> {
     api_request_raw("DELETE", url, None, Some(token)).await?;
