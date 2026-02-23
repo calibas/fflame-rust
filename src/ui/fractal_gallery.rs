@@ -42,6 +42,8 @@ pub struct GalleryResponse {
     pub api_flame_id: Option<String>,
     /// API notification message (message, is_error) — e.g. delete result
     pub api_notification: Option<(String, bool)>,
+    /// Session expired (401 detected) — triggers sign-out flow
+    pub session_expired: bool,
 }
 
 /// Shared state for async thumbnail results (WASM only)

@@ -12,6 +12,8 @@ pub struct SaveOnlineDialogState {
     pub is_copy: bool,
     /// Action produced by the dialog (polled after render)
     pub action: Option<ApiSaveAction>,
+    /// Whether the dialog should be closed (Cancel or after Save)
+    pub close_requested: bool,
 }
 
 impl Default for SaveOnlineDialogState {
@@ -20,6 +22,7 @@ impl Default for SaveOnlineDialogState {
             name: String::new(),
             is_copy: false,
             action: None,
+            close_requested: false,
         }
     }
 }
@@ -30,6 +33,7 @@ impl SaveOnlineDialogState {
         self.name = name.to_string();
         self.is_copy = is_copy;
         self.action = None;
+        self.close_requested = false;
     }
 
     /// Take the pending action (if any)
@@ -39,13 +43,10 @@ impl SaveOnlineDialogState {
 }
 
 /// Render the Save Online dialog contents.
-/// Returns true if the dialog should be closed.
 pub fn render_save_online_dialog(
     ui: &mut egui::Ui,
     state: &mut SaveOnlineDialogState,
-) -> bool {
-    let mut should_close = false;
-
+) {
     ui.add_space(8.0);
 
     ui.horizontal(|ui| {
@@ -62,7 +63,7 @@ pub fn render_save_online_dialog(
             let name = state.name.trim().to_string();
             if !name.is_empty() {
                 state.action = Some(ApiSaveAction::SaveNew { name });
-                should_close = true;
+                state.close_requested = true;
             }
         }
     });
@@ -74,13 +75,11 @@ pub fn render_save_online_dialog(
             let name = state.name.trim().to_string();
             if !name.is_empty() {
                 state.action = Some(ApiSaveAction::SaveNew { name });
-                should_close = true;
+                state.close_requested = true;
             }
         }
         if ui.button(t!("api.save_dialog_cancel")).clicked() {
-            should_close = true;
+            state.close_requested = true;
         }
     });
-
-    should_close
 }
