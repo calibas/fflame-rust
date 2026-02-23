@@ -169,6 +169,9 @@ pub struct EguiLayer {
     // Cloud palette state (for Palette Library panel)
     cloud_palette_state: CloudPaletteState,
 
+    // API connectivity state (set by App each frame before render_ui)
+    pub(crate) api_connectivity: crate::api::ApiConnectivity,
+
     // Histogram for density visualization (levels now in ConfigManager)
     density_histogram: crate::renderer::DensityHistogram,
 
@@ -272,6 +275,7 @@ impl EguiLayer {
             api_browser_notification: None,
             login_dialog_state: login_dialog::LoginDialogState::default(),
             cloud_palette_state: CloudPaletteState::default(),
+            api_connectivity: crate::api::ApiConnectivity::Unknown,
             density_histogram: crate::renderer::DensityHistogram::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
@@ -348,6 +352,14 @@ impl EguiLayer {
     pub fn request_online_refresh(&mut self) {
         if let Some(ref mut panel) = self.fractal_browser_panel {
             panel.request_online_refresh();
+        }
+    }
+
+    /// Clear cloud-related state (called on sign-out or session expiry)
+    pub fn clear_cloud_state(&mut self) {
+        self.cloud_palette_state = CloudPaletteState::default();
+        if let Some(ref mut panel) = self.fractal_browser_panel {
+            panel.clear_online_data();
         }
     }
 
@@ -562,6 +574,7 @@ impl EguiLayer {
             has_api_flame_id: api_flame_id.is_some(),
             flame_name: config_manager.config().flame.name.clone(),
             auth_email: read_auth_email(config_manager),
+            api_connectivity: self.api_connectivity,
         };
 
         // Log ConfigManager state at start of UI render

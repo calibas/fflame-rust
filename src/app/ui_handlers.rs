@@ -913,6 +913,144 @@ impl App {
         }
     }
 
+    /// Poll for completed health check results and trigger periodic checks.
+    pub(super) fn poll_health_check(&mut self) {
+
+        // 1. Poll async result
+        if self.health_check_in_progress {
+            let outcome = self.health_check_result.lock().ok().and_then(|mut slot| slot.take());
+            if let Some(outcome) = outcome {
+                self.health_check_in_progress = false;
+                self.last_health_check = Some(web_time::Instant::now());
+                self.process_health_check_outcome(outcome);
+            }
+        }
+
+        // 2. Trigger periodic check (every 30 seconds)
+        if !self.health_check_in_progress {
+            let settings = self.config_manager.system_settings();
+            let should_check = settings.online_mode
+                && settings.auth_token.is_some()
+                && self.last_health_check
+                    .map(|t| t.elapsed().as_secs() >= 30)
+                    .unwrap_or(true);
+
+            if should_check {
+                self.trigger_health_check();
+            }
+        }
+    }
+
+    fn process_health_check_outcome(&mut self, outcome: crate::api::HealthCheckOutcome) {
+        use crate::api::{ApiConnectivity, HealthCheckOutcome};
+
+        let prev = self.api_connectivity;
+
+        match outcome {
+            HealthCheckOutcome::Authenticated => {
+                self.api_connectivity = ApiConnectivity::Online;
+                log::debug!("Health check OK: authenticated");
+            }
+            HealthCheckOutcome::TokenExpired => {
+                self.api_connectivity = ApiConnectivity::Online;
+                log::info!("Health check: token expired, clearing auth");
+
+                // Clear auth from SystemSettings
+                {
+                    let settings = self.config_manager.system_settings_mut();
+                    settings.auth_token = None;
+                    settings.auth_email = None;
+                    let _ = settings.save();
+                }
+
+                // Clear WASM localStorage
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Some(storage) = web_sys::window()
+                        .and_then(|w| w.local_storage().ok().flatten())
+                    {
+                        let _ = storage.remove_item("fflame_auth_token");
+                        let _ = storage.remove_item("fflame_auth_email");
+                    }
+                }
+
+                // Clear cloud state in UI
+                self.egui_layer.clear_cloud_state();
+
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("auth.session_expired"),
+                    true,
+                );
+            }
+            HealthCheckOutcome::ServerError(ref msg) => {
+                self.api_connectivity = ApiConnectivity::Online;
+                log::warn!("Health check server error: {}", msg);
+            }
+            HealthCheckOutcome::NetworkError(ref msg) => {
+                self.api_connectivity = ApiConnectivity::Unreachable;
+                log::warn!("Health check network error: {}", msg);
+            }
+        }
+
+        // Transition notifications
+        if prev == ApiConnectivity::Online && self.api_connectivity == ApiConnectivity::Unreachable {
+            self.egui_layer.show_api_notification(
+                &rust_i18n::t!("auth.connection_lost"),
+                true,
+            );
+        }
+        if prev == ApiConnectivity::Unreachable && self.api_connectivity == ApiConnectivity::Online {
+            self.egui_layer.show_api_notification(
+                &rust_i18n::t!("auth.connection_restored"),
+                false,
+            );
+        }
+    }
+
+    fn trigger_health_check(&mut self) {
+        let settings = self.config_manager.system_settings();
+        let base_url = settings.api_base_url.clone();
+        let token = match settings.auth_token.clone() {
+            Some(t) => t,
+            None => return,
+        };
+
+        self.health_check_in_progress = true;
+        let result_slot = self.health_check_result.clone();
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            wasm_bindgen_futures::spawn_local(async move {
+                let outcome = crate::api::check_api_health(&base_url, &token).await;
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(outcome);
+                }
+            });
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            std::thread::spawn(move || {
+                let outcome = pollster::block_on(
+                    crate::api::check_api_health(&base_url, &token)
+                );
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(outcome);
+                }
+            });
+        }
+    }
+
+    /// Trigger a health check if conditions are met (has token, online mode, not in flight).
+    pub(super) fn maybe_trigger_health_check(&mut self) {
+        if !self.health_check_in_progress
+            && self.config_manager.system_settings().online_mode
+            && self.config_manager.system_settings().auth_token.is_some()
+        {
+            self.trigger_health_check();
+        }
+    }
+
     /// Handle API save/update — process async results and new requests
     fn handle_save_online(&mut self, ui_response: &UiResponse) {
         use crate::ui::ApiSaveAction;
