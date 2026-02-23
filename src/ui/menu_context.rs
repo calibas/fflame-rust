@@ -66,4 +66,5 @@ pub struct MenuState {
     pub has_api_flame_id: bool,
     pub flame_name: String,
     pub auth_email: Option<String>,
+    pub api_connectivity: crate::api::ApiConnectivity,
 }

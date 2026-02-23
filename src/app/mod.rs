@@ -365,6 +365,12 @@ pub struct App {
     pub(super) api_flame_id: Option<String>,
     pub(super) api_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
     pub(super) api_save_in_progress: bool,
+
+    // API connectivity tracking
+    pub(super) health_check_result: std::sync::Arc<std::sync::Mutex<Option<crate::api::HealthCheckOutcome>>>,
+    pub(super) health_check_in_progress: bool,
+    pub(super) api_connectivity: crate::api::ApiConnectivity,
+    pub(super) last_health_check: Option<web_time::Instant>,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -463,6 +469,10 @@ impl App {
             api_flame_id: None,
             api_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_save_in_progress: false,
+            health_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            health_check_in_progress: false,
+            api_connectivity: crate::api::ApiConnectivity::Unknown,
+            last_health_check: None,
         };
 
         // Register live audio capture as a signal producer so live_* signals
@@ -501,6 +511,9 @@ impl App {
                 }
             }
         }
+
+        // Trigger initial API health check if a token exists
+        app.maybe_trigger_health_check();
 
         #[allow(deprecated)]
         event_loop.run(move |event, elwt| {
@@ -871,6 +884,9 @@ impl App {
         // Get signal names for track editor dropdown
         let signal_names: Vec<String> = self.signal_manager.signal_names();
 
+        // Pass current connectivity state to UI layer
+        self.egui_layer.api_connectivity = self.api_connectivity;
+
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -990,6 +1006,9 @@ impl App {
 
         // Handle UI responses via extracted handlers
         self.handle_ui_responses(&ui_response);
+
+        // Poll API health check and trigger periodic checks
+        self.poll_health_check();
 
                 // Handle PNG export
         if ui_response.png_export_with_background || ui_response.png_export_transparent {

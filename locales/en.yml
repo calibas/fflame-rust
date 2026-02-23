@@ -1578,6 +1578,10 @@ auth:
   sign_out: "Sign Out"
   signed_out_success: "Signed out"
   session_expired: "Session expired — please sign in again"
+  offline: "Offline"
+  checking: "Checking..."
+  connection_lost: "Connection to server lost"
+  connection_restored: "Connection restored"
 
 login:
   title: "Account"

@@ -19,6 +19,41 @@ use auth::AuthState;
 use client::build_url;
 use types::*;
 
+/// API server connectivity state (orthogonal to auth status).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiConnectivity {
+    /// Haven't checked yet (app just started)
+    Unknown,
+    /// Server reachable (got any HTTP response)
+    Online,
+    /// Server unreachable (network error, timeout, DNS failure)
+    Unreachable,
+}
+
+/// Result of a health check call to GET /api/users/me.
+#[derive(Debug, Clone)]
+pub enum HealthCheckOutcome {
+    /// 200 — token valid, user authenticated
+    Authenticated,
+    /// 401 — token expired or invalid
+    TokenExpired,
+    /// Other HTTP error (5xx, etc.) — server reachable but unhappy
+    ServerError(String),
+    /// Network error (timeout, DNS, connection refused)
+    NetworkError(String),
+}
+
+/// Perform an API health check by calling GET /api/users/me.
+pub async fn check_api_health(base_url: &str, token: &str) -> HealthCheckOutcome {
+    let url = build_url(base_url, "/api/users/me");
+    match client::api_get::<ApiUser>(&url, token).await {
+        Ok(_) => HealthCheckOutcome::Authenticated,
+        Err(FetchError::Unauthorized) => HealthCheckOutcome::TokenExpired,
+        Err(FetchError::Network(msg)) => HealthCheckOutcome::NetworkError(msg),
+        Err(other) => HealthCheckOutcome::ServerError(other.to_string()),
+    }
+}
+
 /// Central API state coordinator.
 ///
 /// Manages auth, base URL, and cached API data (flame list, etc.).
