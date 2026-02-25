@@ -400,12 +400,38 @@ pub fn config_to_create_request(config: &FractalConfig, name: Option<&str>) -> C
 
 /// Create a palette request from a FractalConfig's palette.
 pub fn palette_to_create_request(palette: &Palette) -> CreatePaletteRequest {
-    CreatePaletteRequest {
-        visibility: ApiPaletteVisibility::Private,
-        name: Some(palette.name.clone()),
-        stops: Some(palette_stops_to_json(palette)),
-        color_data: None,
-        metadata: None,
+    // Use compact color_data for indexed 256-color palettes (~1KB),
+    // fall back to stops for gradient palettes with arbitrary positions.
+    if palette.stops.len() == 256 && palette.stops.iter().enumerate().all(|(i, s)| {
+        (s.position - i as f32 / 255.0).abs() < 0.001
+    }) {
+        // Packed R,G,B,R,G,B,... as u32 (0-255)
+        let color_data: Vec<u32> = palette
+            .stops
+            .iter()
+            .flat_map(|s| {
+                [
+                    (s.color[0] * 255.0).round() as u32,
+                    (s.color[1] * 255.0).round() as u32,
+                    (s.color[2] * 255.0).round() as u32,
+                ]
+            })
+            .collect();
+        CreatePaletteRequest {
+            visibility: ApiPaletteVisibility::Private,
+            name: Some(palette.name.clone()),
+            stops: None,
+            color_data: Some(color_data),
+            metadata: None,
+        }
+    } else {
+        CreatePaletteRequest {
+            visibility: ApiPaletteVisibility::Private,
+            name: Some(palette.name.clone()),
+            stops: Some(palette_stops_to_json(palette)),
+            color_data: None,
+            metadata: None,
+        }
     }
 }
 
