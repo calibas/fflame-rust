@@ -360,6 +360,17 @@ pub struct App {
     pub(super) audio_player: crate::audio::AudioPlayer,
     pub(super) audio_capture: crate::audio::AudioCapture,
     pub(super) signal_manager: crate::signal::SignalManager,
+
+    // API integration
+    pub(super) api_flame_id: Option<String>,
+    pub(super) api_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
+    pub(super) api_save_in_progress: bool,
+
+    // API connectivity tracking
+    pub(super) health_check_result: std::sync::Arc<std::sync::Mutex<Option<crate::api::HealthCheckOutcome>>>,
+    pub(super) health_check_in_progress: bool,
+    pub(super) api_connectivity: crate::api::ApiConnectivity,
+    pub(super) last_health_check: Option<web_time::Instant>,
 }
 impl App {
     pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
@@ -455,6 +466,13 @@ impl App {
             audio_player: crate::audio::AudioPlayer::new(),
             audio_capture: crate::audio::AudioCapture::new(),
             signal_manager: crate::signal::SignalManager::new(),
+            api_flame_id: None,
+            api_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            api_save_in_progress: false,
+            health_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            health_check_in_progress: false,
+            api_connectivity: crate::api::ApiConnectivity::Unknown,
+            last_health_check: None,
         };
 
         // Register live audio capture as a signal producer so live_* signals
@@ -471,6 +489,31 @@ impl App {
             let help_size = egui::vec2(400.0, 450.0); // Fixed size for Help panel
             app.workspace.open_floating_panel_centered(PanelType::Help, help_size, screen_size);
         }
+
+        // WASM: Adopt auth token from localStorage if SystemSettings has none.
+        // This supports external login pages on the same domain setting the token.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let has_saved_token = app.config_manager.system_settings().auth_token.is_some();
+            if !has_saved_token {
+                if let Some(token) = web_sys::window()
+                    .and_then(|w| w.local_storage().ok().flatten())
+                    .and_then(|s| s.get_item("fflame_auth_token").ok().flatten())
+                {
+                    let email = web_sys::window()
+                        .and_then(|w| w.local_storage().ok().flatten())
+                        .and_then(|s| s.get_item("fflame_auth_email").ok().flatten());
+                    let settings = app.config_manager.system_settings_mut();
+                    settings.auth_token = Some(token);
+                    settings.auth_email = email;
+                    let _ = settings.save();
+                    log::info!("Adopted auth token from localStorage");
+                }
+            }
+        }
+
+        // Trigger initial API health check if a token exists
+        app.maybe_trigger_health_check();
 
         #[allow(deprecated)]
         event_loop.run(move |event, elwt| {
@@ -841,6 +884,9 @@ impl App {
         // Get signal names for track editor dropdown
         let signal_names: Vec<String> = self.signal_manager.signal_names();
 
+        // Pass current connectivity state to UI layer
+        self.egui_layer.api_connectivity = self.api_connectivity;
+
         let ui_response = self.egui_layer.render_ui(
             &self.gpu.device,
             &self.gpu.queue,
@@ -871,6 +917,7 @@ impl App {
             &mut self.audio_capture,
             &mut self.signal_manager,
             &signal_names,
+            &self.api_flame_id,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);
@@ -959,6 +1006,9 @@ impl App {
 
         // Handle UI responses via extracted handlers
         self.handle_ui_responses(&ui_response);
+
+        // Poll API health check and trigger periodic checks
+        self.poll_health_check();
 
                 // Handle PNG export
         if ui_response.png_export_with_background || ui_response.png_export_transparent {

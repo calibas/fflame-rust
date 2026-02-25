@@ -52,3 +52,4 @@ Fractal renderers:
 - [Iterated Dynamics](https://github.com/LegalizeAdulthood/iterated-dynamics)
 - [Incendia](https://www.incendia.net/)
 - [StrataVoxel](https://maierfelix.github.io/strata-voxel/)
+- [IFStile](https://ifstile.com/)

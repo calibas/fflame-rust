@@ -27,6 +27,7 @@ pub struct WasmApi {
     config: Option<FractalConfig>,
     current_iterations: u64,
     target_iterations: u64,
+    api_state: crate::api::ApiState,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -39,6 +40,7 @@ impl WasmApi {
             config: None,
             current_iterations: 0,
             target_iterations: 0,
+            api_state: crate::api::ApiState::default(),
         }
     }
 
@@ -239,6 +241,153 @@ impl WasmApi {
             .map_err(|e| JsValue::from_str(&e))?;
 
         Ok(png_data)
+    }
+}
+
+// ============================================================================
+// API integration methods (feature-gated)
+// ============================================================================
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl WasmApi {
+    /// Set the API base URL (e.g., "https://api.fflame.app").
+    /// Must be called before any API operations.
+    #[wasm_bindgen]
+    pub fn api_set_base_url(&mut self, url: &str) {
+        self.api_state.base_url = url.to_string();
+    }
+
+    /// Set the auth token (called by JS wrapper after website login).
+    /// After setting, call `api_validate_token()` to verify and fetch user info.
+    #[wasm_bindgen]
+    pub fn api_set_token(&mut self, token: &str) {
+        self.api_state.set_token(token);
+    }
+
+    /// Clear auth state (sign out).
+    #[wasm_bindgen]
+    pub fn api_clear_token(&mut self) {
+        self.api_state.clear_auth();
+    }
+
+    /// Get current auth status as JSON.
+    /// Returns: `{"status": "signed_out"|"signed_in"|"loading"|"error", "email": "...", "user_id": "..."}`
+    #[wasm_bindgen]
+    pub fn api_get_auth_status(&self) -> String {
+        use crate::api::auth::AuthStatus;
+
+        let status_str = match &self.api_state.auth.status {
+            AuthStatus::SignedOut => "signed_out",
+            AuthStatus::SignedIn => "signed_in",
+            AuthStatus::Loading => "loading",
+            AuthStatus::Error(_) => "error",
+        };
+
+        let email = self
+            .api_state
+            .auth
+            .user
+            .as_ref()
+            .and_then(|u| u.email.as_deref())
+            .unwrap_or("");
+
+        let user_id = self
+            .api_state
+            .auth
+            .user
+            .as_ref()
+            .map(|u| u.id.as_str())
+            .unwrap_or("");
+
+        let error_msg = match &self.api_state.auth.status {
+            AuthStatus::Error(msg) => msg.as_str(),
+            _ => "",
+        };
+
+        serde_json::json!({
+            "status": status_str,
+            "email": email,
+            "user_id": user_id,
+            "error": error_msg,
+        })
+        .to_string()
+    }
+
+    /// Validate the current token by calling /api/users/me.
+    /// Must be called after `api_set_token()` to complete sign-in.
+    #[wasm_bindgen]
+    pub async fn api_validate_token(&mut self) -> Result<(), JsValue> {
+        self.api_state
+            .validate_token()
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Save the current flame to the API. Returns the flame ID.
+    #[wasm_bindgen]
+    pub async fn api_save_current_flame(&mut self, name: &str) -> Result<String, JsValue> {
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("No config loaded"))?;
+
+        self.api_state
+            .save_flame(config, Some(name))
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// Update an existing flame on the API.
+    #[wasm_bindgen]
+    pub async fn api_update_flame(&mut self, flame_id: &str, name: &str) -> Result<(), JsValue> {
+        let config = self
+            .config
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("No config loaded"))?;
+
+        self.api_state
+            .update_flame(flame_id, config, Some(name))
+            .await
+            .map(|_| ())
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+
+    /// List the user's flames. Returns JSON array of FlameListItem.
+    #[wasm_bindgen]
+    pub async fn api_list_flames(&mut self, page: u32, per_page: u32) -> Result<String, JsValue> {
+        let flames = self
+            .api_state
+            .list_my_flames(page, per_page)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        serde_json::to_string(&flames)
+            .map_err(|e| JsValue::from_str(&format!("Failed to serialize flame list: {}", e)))
+    }
+
+    /// Load a flame from the API into the current config.
+    #[wasm_bindgen]
+    pub async fn api_load_flame(&mut self, flame_id: &str) -> Result<(), JsValue> {
+        let config = self
+            .api_state
+            .load_flame(flame_id)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        self.target_iterations = config.max_iterations;
+        self.current_iterations = 0;
+        self.config = Some(config);
+        Ok(())
+    }
+
+    /// Delete a flame from the API.
+    #[wasm_bindgen]
+    pub async fn api_delete_flame(&mut self, flame_id: &str) -> Result<(), JsValue> {
+        self.api_state
+            .delete_flame(flame_id)
+            .await
+            .map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }
 

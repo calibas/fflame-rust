@@ -17,6 +17,9 @@ menu:
   new: "📄 New"
   open: "📂 Open..."
   save_as: "💾 Save As..."
+  save_online: "☁ Save Online..."
+  update_online: "☁ Update Online"
+  save_online_new_copy: "☁ Save Online (New Copy)..."
   from_preset_library: "📚 From Preset Library..."
   random_flame: "🎲 Random Flame"
   random_batch: "🎲 Random Batch..."
@@ -803,6 +806,16 @@ palette_library:
   tooltip_select_palette: "Click to use this palette (creates an editable copy)"
   tooltip_retry: "Click to retry loading this pack"
 
+  # Cloud Palettes
+  cloud_section: "Cloud Palettes"
+  cloud_loading: "Loading palettes..."
+  cloud_empty: "No palettes saved online"
+  cloud_empty_hint: "Palettes are saved automatically with your flames"
+  cloud_refresh: "Refresh"
+  cloud_load_success: "Loaded palette: %{name}"
+  cloud_delete_success: "Deleted palette: %{name}"
+  cloud_delete_error: "Failed to delete: %{error}"
+
 # Preset Library Panel
 preset_library:
   title: "Preset Library"
@@ -831,6 +844,34 @@ browser:
   tab_files: "Files"
   batch_empty_title: "No random batch results"
   batch_empty_hint: "Use the Random Generator to create a batch of flames"
+  tab_online: "Online"
+  online_refresh: "⟳ Refresh"
+  online_loading_list: "Loading flames..."
+  online_loading_flame: "Loading flame..."
+  online_empty: "No flames saved online"
+  online_empty_hint: "Use File → Save Online to upload a flame"
+  online_delete: "Delete"
+  online_deleting: "Deleting..."
+  search_placeholder: "Search by name..."
+  search_all: "All"
+  search_2d: "2D"
+  search_3d: "3D"
+  search_button: "Search"
+  search_clear: "Clear"
+
+# API (cloud save/update)
+api:
+  save_dialog_title: "Save Online"
+  save_dialog_name_label: "Flame Name:"
+  save_dialog_thumbnail: "Upload thumbnail"
+  save_dialog_public: "Make public"
+  save_dialog_save: "Save"
+  save_dialog_cancel: "Cancel"
+  save_success: "Saved online: %{name}"
+  update_success: "Updated online: %{name}"
+  save_error: "Failed to save: %{error}"
+  delete_success: "Deleted: %{name}"
+  delete_error: "Failed to delete: %{error}"
 
 # Config Import/Export Dialog
 config_dialog:
@@ -1531,3 +1572,29 @@ errors:
   export_failed: "Export failed"
   gpu_error: "GPU error"
   shader_compilation_failed: "Shader compilation failed"
+
+# Auth status (menu bar)
+auth:
+  signed_in: "Signed in"
+  not_signed_in: "Not signed in"
+  sign_out: "Sign Out"
+  signed_out_success: "Signed out"
+  session_expired: "Session expired — please sign in again"
+  offline: "Offline"
+  checking: "Checking..."
+  connection_lost: "Connection to server lost"
+  connection_restored: "Connection restored"
+
+login:
+  title: "Account"
+  email: "Email:"
+  password: "Password:"
+  confirm_password: "Confirm:"
+  sign_in: "Sign In"
+  signing_in: "Signing in..."
+  register: "Create Account"
+  registering: "Creating account..."
+  no_account: "Don't have an account?"
+  have_account: "Already have an account?"
+  passwords_mismatch: "Passwords do not match"
+  account_heading: "Account"
