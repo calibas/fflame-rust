@@ -649,7 +649,12 @@ impl FlameRenderer {
         self.fog_start = config.fog_start;
         self.burn_in = burn_in;
 
-        // 5. Update palette with rotation and squeeze
+        // 5. Update palette size (recreates texture + bind groups if changed)
+        if self.set_palette_size(device, queue, &config.flame, config.palette_size) {
+            log::info!("Palette size changed to {} during config load", config.palette_size);
+        }
+
+        // 5b. Update palette with rotation and squeeze
         self.buffers.update_palette(queue, palette, config.palette_rotation, config.palette_squeeze);
 
         // Note: scale_buffer removed - scale is now in params.histogram_color_scale

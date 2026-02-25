@@ -171,9 +171,11 @@ impl UpdateAction {
 
             UpdateType::IterationReset => Self {
                 update_flame: true,
+                update_palette: true,
+                update_view: true,
+                update_tone_curve: true,
                 reset_accumulation: false, // Don't reset - use overwrite mode for smooth transition
                 rebuild_shader: false, // TODO: detect variation changes
-                ..Default::default()
             },
         }
     }
