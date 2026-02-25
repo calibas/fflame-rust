@@ -92,7 +92,11 @@ pub struct UiResponse {
 pub enum ApiSaveAction {
     #[default]
     None,
-    SaveNew { name: String },
+    SaveNew {
+        name: String,
+        upload_thumbnail: bool,
+        make_public: bool,
+    },
     Update,
 }
 

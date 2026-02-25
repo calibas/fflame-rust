@@ -329,6 +329,7 @@ pub fn config_to_create_request(config: &FractalConfig, name: Option<&str>) -> C
     CreateFlameRequest {
         name: name.map(|n| n.to_string()).unwrap_or_else(|| flame.name.clone()),
         transforms: flame.transforms.iter().map(transform_to_api).collect(),
+        visibility: None, // Set by caller if needed
         final_transform: flame.final_transform.as_ref().map(transform_to_api),
         render_mode: Some(flame.render_mode.into()),
         perspective_strength: Some(flame.perspective_strength),

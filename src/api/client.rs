@@ -134,10 +134,88 @@ mod wasm {
         let text = api_request_raw(method, url, body, token).await?;
         serde_json::from_str(&text).map_err(FetchError::from)
     }
+
+    /// PUT request with raw binary body (WASM).
+    ///
+    /// Used for uploading binary data like PNG thumbnails.
+    /// Expects 204 No Content on success.
+    pub async fn api_put_binary_raw(
+        url: &str,
+        data: &[u8],
+        content_type: &str,
+        token: &str,
+    ) -> FetchResult<()> {
+        let mut opts = RequestInit::new();
+        opts.method("PUT");
+        opts.mode(RequestMode::Cors);
+
+        let headers = Headers::new()
+            .map_err(|e| FetchError::Network(format!("Failed to create headers: {:?}", e)))?;
+
+        headers
+            .set("Content-Type", content_type)
+            .map_err(|e| FetchError::Network(format!("Failed to set content-type: {:?}", e)))?;
+        headers
+            .set("Authorization", &format!("Bearer {}", token))
+            .map_err(|e| FetchError::Network(format!("Failed to set auth header: {:?}", e)))?;
+
+        opts.headers(&headers);
+
+        // Create Uint8Array from bytes for binary body
+        let uint8_array = js_sys::Uint8Array::new_with_length(data.len() as u32);
+        uint8_array.copy_from(data);
+        opts.body(Some(&uint8_array));
+
+        let request = Request::new_with_str_and_init(url, &opts)
+            .map_err(|e| FetchError::Network(format!("Failed to create request: {:?}", e)))?;
+
+        let window = web_sys::window()
+            .ok_or_else(|| FetchError::Network("No window object".to_string()))?;
+
+        let resp_value = JsFuture::from(window.fetch_with_request(&request))
+            .await
+            .map_err(|e| FetchError::Network(format!("Fetch failed: {:?}", e)))?;
+
+        let resp: Response = resp_value
+            .dyn_into()
+            .map_err(|_| FetchError::Network("Response is not a Response object".to_string()))?;
+
+        let status = resp.status();
+
+        if status == 401 {
+            return Err(FetchError::Unauthorized);
+        }
+        if status == 403 {
+            return Err(FetchError::Forbidden);
+        }
+        if status == 404 {
+            return Err(FetchError::NotFound(url.to_string()));
+        }
+        if status == 204 || (status >= 200 && status < 300) {
+            return Ok(());
+        }
+
+        let error_body = JsFuture::from(
+            resp.text()
+                .map_err(|_| FetchError::Http {
+                    status,
+                    message: resp.status_text(),
+                })?,
+        )
+        .await
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_else(|| resp.status_text());
+
+        Err(FetchError::Http {
+            status,
+            message: error_body,
+        })
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use wasm::{api_request, api_request_raw};
+pub use wasm::{api_put_binary_raw, api_request, api_request_raw};
 
 // ============================================================================
 // Desktop stub (to be implemented)
@@ -221,10 +299,60 @@ mod native {
         let text = api_request_raw(method, url, body, token).await?;
         serde_json::from_str(&text).map_err(FetchError::from)
     }
+
+    /// PUT request with raw binary body (desktop via ureq).
+    ///
+    /// Used for uploading binary data like PNG thumbnails.
+    /// Expects 204 No Content on success.
+    pub async fn api_put_binary_raw(
+        url: &str,
+        data: &[u8],
+        content_type: &str,
+        token: &str,
+    ) -> FetchResult<()> {
+        let req = AGENT
+            .request("PUT", url)
+            .set("Authorization", &format!("Bearer {}", token))
+            .set("Content-Type", content_type);
+
+        let result = req.send_bytes(data);
+
+        match result {
+            Ok(resp) => {
+                let status = resp.status();
+                if status == 204 || (status >= 200 && status < 300) {
+                    Ok(())
+                } else {
+                    let message = resp
+                        .into_string()
+                        .unwrap_or_else(|_| format!("HTTP error {}", status));
+                    Err(FetchError::Http { status, message })
+                }
+            }
+            Err(ureq::Error::Status(status, resp)) => {
+                if status == 401 {
+                    return Err(FetchError::Unauthorized);
+                }
+                if status == 403 {
+                    return Err(FetchError::Forbidden);
+                }
+                if status == 404 {
+                    return Err(FetchError::NotFound(url.to_string()));
+                }
+                let message = resp
+                    .into_string()
+                    .unwrap_or_else(|_| format!("HTTP error {}", status));
+                Err(FetchError::Http { status, message })
+            }
+            Err(ureq::Error::Transport(e)) => {
+                Err(FetchError::Network(format!("Network error: {}", e)))
+            }
+        }
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{api_request, api_request_raw};
+pub use native::{api_put_binary_raw, api_request, api_request_raw};
 
 // ============================================================================
 // Convenience wrappers
@@ -273,4 +401,14 @@ pub async fn api_get_unauth<T: DeserializeOwned>(url: &str) -> FetchResult<T> {
 pub async fn api_delete(url: &str, token: &str) -> FetchResult<()> {
     api_request_raw("DELETE", url, None, Some(token)).await?;
     Ok(())
+}
+
+/// PUT request with raw binary body and auth token. Returns Ok(()) on success.
+pub async fn api_put_binary(
+    url: &str,
+    data: &[u8],
+    content_type: &str,
+    token: &str,
+) -> FetchResult<()> {
+    api_put_binary_raw(url, data, content_type, token).await
 }

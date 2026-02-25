@@ -1051,6 +1051,37 @@ impl App {
         }
     }
 
+    /// Render a thumbnail for the given config and encode as PNG bytes.
+    ///
+    /// Must be called on the main thread (needs GPU device/queue access).
+    /// Returns None if rendering or encoding fails.
+    /// Desktop only — on WASM, thumbnail rendering is done inside spawn_local.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_thumbnail_png(&self, config: &FractalConfig) -> Option<Vec<u8>> {
+        let image = pollster::block_on(
+            crate::renderer::thumbnail::render_thumbnail_async(
+                &self.gpu.device,
+                &self.gpu.queue,
+                config,
+            )
+        );
+        match crate::renderer::compute_kernel::encode_png_from_rgba(
+            image.width(),
+            image.height(),
+            image.into_raw(),
+            None,
+        ) {
+            Ok(data) => {
+                log::info!("Thumbnail rendered: {} bytes", data.len());
+                Some(data)
+            }
+            Err(e) => {
+                log::error!("Failed to encode thumbnail PNG: {}", e);
+                None
+            }
+        }
+    }
+
     /// Handle API save/update — process async results and new requests
     fn handle_save_online(&mut self, ui_response: &UiResponse) {
         use crate::ui::ApiSaveAction;
@@ -1114,12 +1145,31 @@ impl App {
             };
 
             match action {
-                ApiSaveAction::SaveNew { name } => {
+                ApiSaveAction::SaveNew { name, upload_thumbnail, make_public } => {
                     let name = name.clone();
+                    let upload_thumbnail = *upload_thumbnail;
+                    let make_public = *make_public;
+
+                    let visibility = if make_public {
+                        Some(crate::api::types::ApiVisibility::Public)
+                    } else {
+                        None
+                    };
+
                     #[cfg(target_arch = "wasm32")]
                     {
+                        // On WASM, render thumbnail inside spawn_local (same thread,
+                        // device/queue are Arc-wrapped so clone is cheap)
+                        let device = self.gpu.device.clone();
+                        let queue = self.gpu.queue.clone();
                         wasm_bindgen_futures::spawn_local(async move {
-                            let save_result = save_flame_online(&base_url, &token, config, &name).await;
+                            let thumbnail_png = if upload_thumbnail {
+                                log::info!("Rendering thumbnail for upload...");
+                                render_thumbnail_png_async(&device, &queue, &config).await
+                            } else {
+                                None
+                            };
+                            let save_result = save_flame_online(&base_url, &token, config, &name, visibility, thumbnail_png).await;
                             if let Ok(mut slot) = result_slot.lock() {
                                 *slot = Some(save_result);
                             }
@@ -1127,8 +1177,15 @@ impl App {
                     }
                     #[cfg(not(target_arch = "wasm32"))]
                     {
+                        // On desktop, render thumbnail synchronously before spawning thread
+                        let thumbnail_png = if upload_thumbnail {
+                            log::info!("Rendering thumbnail for upload...");
+                            self.render_thumbnail_png(&config)
+                        } else {
+                            None
+                        };
                         std::thread::spawn(move || {
-                            let result = pollster::block_on(save_flame_online(&base_url, &token, config, &name));
+                            let result = pollster::block_on(save_flame_online(&base_url, &token, config, &name, visibility, thumbnail_png));
                             if let Ok(mut slot) = result_slot.lock() {
                                 *slot = Some(result);
                             }
@@ -1167,16 +1224,43 @@ impl App {
     }
 }
 
+/// Render a thumbnail and encode as PNG bytes (async helper for WASM).
+#[cfg(target_arch = "wasm32")]
+async fn render_thumbnail_png_async(
+    device: &egui_wgpu::wgpu::Device,
+    queue: &egui_wgpu::wgpu::Queue,
+    config: &crate::config::FractalConfig,
+) -> Option<Vec<u8>> {
+    let image = crate::renderer::thumbnail::render_thumbnail_async(device, queue, config).await;
+    match crate::renderer::compute_kernel::encode_png_from_rgba(
+        image.width(),
+        image.height(),
+        image.into_raw(),
+        None,
+    ) {
+        Ok(data) => {
+            log::info!("Thumbnail rendered: {} bytes", data.len());
+            Some(data)
+        }
+        Err(e) => {
+            log::error!("Failed to encode thumbnail PNG: {}", e);
+            None
+        }
+    }
+}
+
 /// Save a flame to the API as new (async helper).
 async fn save_flame_online(
     base_url: &str,
     token: &str,
     config: crate::config::FractalConfig,
     name: &str,
+    visibility: Option<crate::api::types::ApiVisibility>,
+    thumbnail_png: Option<Vec<u8>>,
 ) -> Result<String, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    api.save_flame(&config, Some(name))
+    api.save_flame(&config, Some(name), visibility, thumbnail_png.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
