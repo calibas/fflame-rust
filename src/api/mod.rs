@@ -151,16 +151,19 @@ impl ApiState {
     /// Returns the server-assigned flame ID.
     ///
     /// Order: create flame first, then palette, then update the flame
-    /// to link the palette.
+    /// to link the palette. Optionally upload thumbnail and set visibility.
     pub async fn save_flame(
         &self,
         config: &FractalConfig,
         name: Option<&str>,
+        visibility: Option<ApiVisibility>,
+        thumbnail_png: Option<&[u8]>,
     ) -> FetchResult<String> {
         let token = self.require_token()?;
 
         // 1. Create the flame (without palette)
-        let flame_req = sync::config_to_create_request(config, name);
+        let mut flame_req = sync::config_to_create_request(config, name);
+        flame_req.visibility = visibility;
         let flame_url = build_url(&self.base_url, "/api/flames");
         let flame_resp: FlameResponse =
             client::api_post(&flame_url, &flame_req, &token).await?;
@@ -176,9 +179,38 @@ impl ApiState {
         let update_url = build_url(&self.base_url, &format!("/api/flames/{}", flame_id));
         let mut update_req = sync::config_to_create_request(config, name);
         update_req.palette_id = Some(palette_resp.id);
+        update_req.visibility = visibility;
         let _: FlameResponse = client::api_put(&update_url, &update_req, &token).await?;
 
+        // 4. Upload thumbnail if provided
+        if let Some(png_data) = thumbnail_png {
+            self.upload_thumbnail(&flame_id, png_data, 512, 512).await?;
+        }
+
         Ok(flame_id)
+    }
+
+    /// Upload a PNG thumbnail for a flame.
+    ///
+    /// PUT /api/flames/{id}/thumbnail?width={w}&height={h}
+    /// Body: raw PNG bytes, Content-Type: image/png
+    /// Returns 204 No Content on success.
+    pub async fn upload_thumbnail(
+        &self,
+        flame_id: &str,
+        png_data: &[u8],
+        width: u32,
+        height: u32,
+    ) -> FetchResult<()> {
+        let token = self.require_token()?;
+        let url = build_url(
+            &self.base_url,
+            &format!(
+                "/api/flames/{}/thumbnail?width={}&height={}",
+                flame_id, width, height
+            ),
+        );
+        client::api_put_binary(&url, png_data, "image/png", &token).await
     }
 
     /// Update an existing flame on the API.

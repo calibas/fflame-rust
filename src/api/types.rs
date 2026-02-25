@@ -98,13 +98,17 @@ pub enum ApiPathTrackingMode {
     Recent,
 }
 
+/// Visibility for flames and palettes (private/unlisted/public).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ApiPaletteVisibility {
+pub enum ApiVisibility {
     Private,
     Unlisted,
     Public,
 }
+
+/// Backward-compatible alias.
+pub type ApiPaletteVisibility = ApiVisibility;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -239,6 +243,8 @@ pub struct CreateFlameRequest {
     pub name: String,
     pub transforms: Vec<CreateTransformInput>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<ApiVisibility>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_transform: Option<CreateTransformInput>,
     #[serde(skip_serializing_if = "Option::is_none")]

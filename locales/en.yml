@@ -863,6 +863,8 @@ browser:
 api:
   save_dialog_title: "Save Online"
   save_dialog_name_label: "Flame Name:"
+  save_dialog_thumbnail: "Upload thumbnail"
+  save_dialog_public: "Make public"
   save_dialog_save: "Save"
   save_dialog_cancel: "Cancel"
   save_success: "Saved online: %{name}"
