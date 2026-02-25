@@ -7,6 +7,7 @@ pub fn render_menu_bar(
     workspace: &mut super::workspace::Workspace,
     menu_actions: &mut MenuActions,
     menu_state: &MenuState,
+    save_online_dialog_state: &mut super::save_online_dialog::SaveOnlineDialogState,
 ) {
     egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
@@ -37,6 +38,30 @@ pub fn render_menu_bar(
 
                 if ui.button(t!("menu.random_batch")).clicked() {
                     workspace.open_floating_panel(super::workspace::PanelType::RandomGenerator, ctx);
+                }
+
+                if menu_state.online_mode && menu_state.auth_email.is_some() {
+                    ui.separator();
+
+                    let api_available = menu_state.api_connectivity == crate::api::ApiConnectivity::Online;
+
+                    if menu_state.has_api_flame_id {
+                        // Currently editing a cloud flame — show Update + Save as New Copy
+                        if ui.add_enabled(api_available, egui::Button::new(t!("menu.update_online"))).clicked() {
+                            menu_actions.file.update_online = true;
+                        }
+                        if ui.add_enabled(api_available, egui::Button::new(t!("menu.save_online_new_copy"))).clicked() {
+                            let name = format!("{} (copy)", menu_state.flame_name);
+                            save_online_dialog_state.open(&name, true);
+                            workspace.open_floating_panel(super::workspace::PanelType::SaveOnlineDialog, ctx);
+                        }
+                    } else {
+                        // No cloud flame loaded — show Save Online
+                        if ui.add_enabled(api_available, egui::Button::new(t!("menu.save_online"))).clicked() {
+                            save_online_dialog_state.open(&menu_state.flame_name, false);
+                            workspace.open_floating_panel(super::workspace::PanelType::SaveOnlineDialog, ctx);
+                        }
+                    }
                 }
 
                 ui.separator();
@@ -303,9 +328,9 @@ pub fn render_menu_bar(
                 }
             });
 
-            // Push language selector to the right side
+            // Push right-side controls (right-to-left: language, then auth status)
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Language selector menu (globe icon)
+                // Language selector menu (globe icon) — rightmost
                 ui.menu_button("🌐", |ui| {
                     let locales = crate::i18n::supported_locales();
                     let current_locale = crate::i18n::current_locale();
@@ -353,6 +378,35 @@ pub fn render_menu_bar(
                         }
                     }
                 });
+
+                // Auth status display (left of language selector)
+                if menu_state.online_mode {
+                    ui.separator();
+
+                    // Connectivity indicator
+                    match menu_state.api_connectivity {
+                        crate::api::ApiConnectivity::Unreachable => {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(220, 160, 60),
+                                t!("auth.offline"),
+                            );
+                        }
+                        crate::api::ApiConnectivity::Unknown if menu_state.auth_email.is_some() => {
+                            ui.weak(t!("auth.checking"));
+                        }
+                        _ => {}
+                    }
+
+                    if let Some(ref email) = menu_state.auth_email {
+                        if ui.small_button(email.as_str()).clicked() {
+                            workspace.open_floating_panel(super::workspace::PanelType::LoginDialog, ctx);
+                        }
+                    } else {
+                        if ui.small_button(t!("auth.not_signed_in")).clicked() {
+                            workspace.open_floating_panel(super::workspace::PanelType::LoginDialog, ctx);
+                        }
+                    }
+                }
             });
         });
     });

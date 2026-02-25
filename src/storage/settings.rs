@@ -14,12 +14,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Current system settings format version
-pub const CURRENT_SETTINGS_VERSION: u32 = 1;
+pub const CURRENT_SETTINGS_VERSION: u32 = 2;
 
 /// Version history for settings migrations
 #[allow(dead_code)]
 pub const VERSION_HISTORY: &[&str] = &[
     "1: Initial versioned release with compact serialization",
+    "2: Added online_mode, api_base_url, auth credentials",
 ];
 
 /// System settings - device-specific application preferences
@@ -50,6 +51,23 @@ pub struct SystemSettings {
     /// Show the Help panel on startup (default: true)
     #[serde(default = "default_show_help_on_startup")]
     pub show_help_on_startup: bool,
+
+    // Online / API
+    /// Enable online features (cloud save, browse, palettes)
+    #[serde(default = "default_online_mode")]
+    pub online_mode: bool,
+
+    /// Base URL for the API
+    #[serde(default = "default_api_base_url")]
+    pub api_base_url: String,
+
+    /// Auth token (None = signed out)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
+
+    /// Email of the signed-in user (display only)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_email: Option<String>,
 
     // Export Defaults
     /// Default export width in pixels
@@ -102,6 +120,14 @@ fn default_show_help_on_startup() -> bool {
     true
 }
 
+fn default_online_mode() -> bool {
+    true
+}
+
+fn default_api_base_url() -> String {
+    "http://localhost:3000".to_string()
+}
+
 fn default_export_width() -> u32 {
     1920
 }
@@ -119,6 +145,10 @@ impl Default for SystemSettings {
             burn_in: default_burn_in(),
             language: default_language(),
             show_help_on_startup: default_show_help_on_startup(),
+            online_mode: default_online_mode(),
+            api_base_url: default_api_base_url(),
+            auth_token: None,
+            auth_email: None,
             default_export_width: default_export_width(),
             default_export_height: default_export_height(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -185,6 +215,15 @@ impl SystemSettings {
             obj.remove("show_help_on_startup");
         }
 
+        // Online / API
+        if current.online_mode == defaults.online_mode {
+            obj.remove("online_mode");
+        }
+        if current.api_base_url == defaults.api_base_url {
+            obj.remove("api_base_url");
+        }
+        // auth_token and auth_email use skip_serializing_if = "Option::is_none"
+
         // Export Defaults
         if current.default_export_width == defaults.default_export_width {
             obj.remove("default_export_width");
@@ -239,8 +278,7 @@ impl SystemSettings {
         while version < CURRENT_SETTINGS_VERSION {
             settings = match version {
                 0 => Self::migrate_v0_to_v1(settings)?,
-                // Add new migrations here:
-                // 1 => Self::migrate_v1_to_v2(settings)?,
+                1 => Self::migrate_v1_to_v2(settings)?,
                 _ => {
                     return Err(serde_json::Error::io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -260,6 +298,13 @@ impl SystemSettings {
     fn migrate_v0_to_v1(settings: Self) -> Result<Self, serde_json::Error> {
         // No field changes needed - serde(default) handles missing fields
         // This migration exists for logging and future-proofing
+        Ok(settings)
+    }
+
+    /// Migrate from v1 to v2
+    /// v2: Added online_mode, api_base_url, auth credentials
+    fn migrate_v1_to_v2(settings: Self) -> Result<Self, serde_json::Error> {
+        // No field changes needed - serde(default) handles new fields
         Ok(settings)
     }
 
@@ -346,7 +391,7 @@ mod tests {
         let json = settings.to_json().unwrap();
 
         // Version should be present
-        assert!(json.contains("\"version\": 1"));
+        assert!(json.contains(&format!("\"version\": {}", CURRENT_SETTINGS_VERSION)));
 
         // Default fields should be omitted (compact serialization)
         assert!(!json.contains("\"vsync_enabled\""), "default vsync_enabled should be omitted");
@@ -369,7 +414,7 @@ mod tests {
         let json = settings.to_json().unwrap();
 
         // Version always present
-        assert!(json.contains("\"version\": 1"));
+        assert!(json.contains(&format!("\"version\": {}", CURRENT_SETTINGS_VERSION)));
 
         // Changed fields should be present
         assert!(json.contains("\"vsync_enabled\": false"));

@@ -79,6 +79,25 @@ pub struct UiResponse {
 
     // Signal file save requested (signal name to save)
     pub save_signal_file: Option<String>,
+
+    // API: Save action (save new, update existing)
+    pub api_save_action: ApiSaveAction,
+
+    // API: Flame ID loaded from Online tab
+    pub loaded_api_flame_id: Option<String>,
+}
+
+/// API save action type
+#[derive(Debug, Clone, Default)]
+pub enum ApiSaveAction {
+    #[default]
+    None,
+    SaveNew {
+        name: String,
+        upload_thumbnail: bool,
+        make_public: bool,
+    },
+    Update,
 }
 
 impl Default for UiResponse {
@@ -123,6 +142,8 @@ impl Default for UiResponse {
             load_audio_file: false,
             load_signal_file: false,
             save_signal_file: None,
+            api_save_action: ApiSaveAction::None,
+            loaded_api_flame_id: None,
         }
     }
 }

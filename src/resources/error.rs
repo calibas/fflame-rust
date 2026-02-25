@@ -15,6 +15,10 @@ pub enum FetchError {
     NotFound(String),
     /// Request was cancelled
     Cancelled,
+    /// Authentication required (401)
+    Unauthorized,
+    /// Access denied (403)
+    Forbidden,
 }
 
 impl fmt::Display for FetchError {
@@ -27,6 +31,8 @@ impl fmt::Display for FetchError {
             FetchError::Parse(msg) => write!(f, "Parse error: {}", msg),
             FetchError::NotFound(url) => write!(f, "Not found: {}", url),
             FetchError::Cancelled => write!(f, "Request cancelled"),
+            FetchError::Unauthorized => write!(f, "Authentication required"),
+            FetchError::Forbidden => write!(f, "Access denied"),
         }
     }
 }

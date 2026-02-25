@@ -33,6 +33,7 @@ impl App {
         self.handle_animation_requests(ui_response);
         self.handle_animation_seek(ui_response);
         self.handle_path_filters(ui_response);
+        self.handle_save_online(ui_response);
     }
 
     /// Handle config export, save, and import operations
@@ -195,6 +196,9 @@ impl App {
             if let Err(e) = self.load_config_with_undo(new_config, "history.action.new_flame".to_string()) {
                 eprintln!("Failed to create new flame: {}", e);
             }
+
+            // Clear API flame ID — this is a new local flame
+            self.api_flame_id = None;
         }
     }
 
@@ -732,6 +736,9 @@ impl App {
                 log::error!("Failed to load preset: {}", e);
             } else {
                 log::info!("Preset loaded successfully");
+
+                // Track API flame ID if loaded from Online tab, clear otherwise
+                self.api_flame_id = ui_response.loaded_api_flame_id.clone();
             }
         }
     }
@@ -905,4 +912,384 @@ impl App {
             }
         }
     }
+
+    /// Poll for completed health check results and trigger periodic checks.
+    pub(super) fn poll_health_check(&mut self) {
+
+        // 1. Poll async result
+        if self.health_check_in_progress {
+            let outcome = self.health_check_result.lock().ok().and_then(|mut slot| slot.take());
+            if let Some(outcome) = outcome {
+                self.health_check_in_progress = false;
+                self.last_health_check = Some(web_time::Instant::now());
+                self.process_health_check_outcome(outcome);
+            }
+        }
+
+        // 2. Trigger periodic check (every 30 seconds)
+        if !self.health_check_in_progress {
+            let settings = self.config_manager.system_settings();
+            let should_check = settings.online_mode
+                && settings.auth_token.is_some()
+                && self.last_health_check
+                    .map(|t| t.elapsed().as_secs() >= 30)
+                    .unwrap_or(true);
+
+            if should_check {
+                self.trigger_health_check();
+            }
+        }
+    }
+
+    fn process_health_check_outcome(&mut self, outcome: crate::api::HealthCheckOutcome) {
+        use crate::api::{ApiConnectivity, HealthCheckOutcome};
+
+        let prev = self.api_connectivity;
+
+        match outcome {
+            HealthCheckOutcome::Authenticated => {
+                self.api_connectivity = ApiConnectivity::Online;
+                log::debug!("Health check OK: authenticated");
+            }
+            HealthCheckOutcome::TokenExpired => {
+                self.api_connectivity = ApiConnectivity::Online;
+                log::info!("Health check: token expired, clearing auth");
+
+                // Clear auth from SystemSettings
+                {
+                    let settings = self.config_manager.system_settings_mut();
+                    settings.auth_token = None;
+                    settings.auth_email = None;
+                    let _ = settings.save();
+                }
+
+                // Clear WASM localStorage
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Some(storage) = web_sys::window()
+                        .and_then(|w| w.local_storage().ok().flatten())
+                    {
+                        let _ = storage.remove_item("fflame_auth_token");
+                        let _ = storage.remove_item("fflame_auth_email");
+                    }
+                }
+
+                // Clear cloud state in UI
+                self.egui_layer.clear_cloud_state();
+
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("auth.session_expired"),
+                    true,
+                );
+            }
+            HealthCheckOutcome::ServerError(ref msg) => {
+                self.api_connectivity = ApiConnectivity::Online;
+                log::warn!("Health check server error: {}", msg);
+            }
+            HealthCheckOutcome::NetworkError(ref msg) => {
+                self.api_connectivity = ApiConnectivity::Unreachable;
+                log::warn!("Health check network error: {}", msg);
+            }
+        }
+
+        // Transition notifications
+        if prev == ApiConnectivity::Online && self.api_connectivity == ApiConnectivity::Unreachable {
+            self.egui_layer.show_api_notification(
+                &rust_i18n::t!("auth.connection_lost"),
+                true,
+            );
+        }
+        if prev == ApiConnectivity::Unreachable && self.api_connectivity == ApiConnectivity::Online {
+            self.egui_layer.show_api_notification(
+                &rust_i18n::t!("auth.connection_restored"),
+                false,
+            );
+        }
+    }
+
+    fn trigger_health_check(&mut self) {
+        let settings = self.config_manager.system_settings();
+        let base_url = settings.api_base_url.clone();
+        let token = match settings.auth_token.clone() {
+            Some(t) => t,
+            None => return,
+        };
+
+        self.health_check_in_progress = true;
+        let result_slot = self.health_check_result.clone();
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            wasm_bindgen_futures::spawn_local(async move {
+                let outcome = crate::api::check_api_health(&base_url, &token).await;
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(outcome);
+                }
+            });
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            std::thread::spawn(move || {
+                let outcome = pollster::block_on(
+                    crate::api::check_api_health(&base_url, &token)
+                );
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(outcome);
+                }
+            });
+        }
+    }
+
+    /// Trigger a health check if conditions are met (has token, online mode, not in flight).
+    pub(super) fn maybe_trigger_health_check(&mut self) {
+        if !self.health_check_in_progress
+            && self.config_manager.system_settings().online_mode
+            && self.config_manager.system_settings().auth_token.is_some()
+        {
+            self.trigger_health_check();
+        }
+    }
+
+    /// Render a thumbnail for the given config and encode as PNG bytes.
+    ///
+    /// Must be called on the main thread (needs GPU device/queue access).
+    /// Returns None if rendering or encoding fails.
+    /// Desktop only — on WASM, thumbnail rendering is done inside spawn_local.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn render_thumbnail_png(&self, config: &FractalConfig) -> Option<Vec<u8>> {
+        let image = pollster::block_on(
+            crate::renderer::thumbnail::render_thumbnail_async(
+                &self.gpu.device,
+                &self.gpu.queue,
+                config,
+            )
+        );
+        match crate::renderer::compute_kernel::encode_png_from_rgba(
+            image.width(),
+            image.height(),
+            image.into_raw(),
+            None,
+        ) {
+            Ok(data) => {
+                log::info!("Thumbnail rendered: {} bytes", data.len());
+                Some(data)
+            }
+            Err(e) => {
+                log::error!("Failed to encode thumbnail PNG: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Handle API save/update — process async results and new requests
+    fn handle_save_online(&mut self, ui_response: &UiResponse) {
+        use crate::ui::ApiSaveAction;
+
+        // Check for completed async save
+        if self.api_save_in_progress {
+            if let Ok(mut result) = self.api_save_result.lock() {
+                if let Some(save_result) = result.take() {
+                    self.api_save_in_progress = false;
+                    match save_result {
+                        Ok(flame_id) => {
+                            log::info!("Flame saved/updated online: {}", flame_id);
+                            self.api_flame_id = Some(flame_id.clone());
+                            let name = self.config_manager.active_config().flame.name.clone();
+                            self.egui_layer.show_api_notification(
+                                &rust_i18n::t!("api.save_success", name = name),
+                                false,
+                            );
+                            // Auto-refresh the Online tab
+                            self.egui_layer.request_online_refresh();
+                        }
+                        Err(e) => {
+                            log::error!("Failed to save flame online: {}", e);
+                            self.egui_layer.show_api_notification(
+                                &rust_i18n::t!("api.save_error", error = e),
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle new save/update request
+        let action = &ui_response.api_save_action;
+        let should_act = !matches!(action, ApiSaveAction::None) && !self.api_save_in_progress;
+        if should_act {
+            // Clear any stale result from a previous attempt (e.g. "Not signed in" error
+            // that was written while api_save_in_progress was false and never consumed)
+            if let Ok(mut slot) = self.api_save_result.lock() {
+                slot.take();
+            }
+
+            let config = self.export_config();
+            let result_slot = self.api_save_result.clone();
+            self.api_save_in_progress = true;
+
+            // Read credentials from SystemSettings
+            let settings = self.config_manager.system_settings();
+            let base_url = settings.api_base_url.clone();
+            let token = match settings.auth_token.clone() {
+                Some(t) => t,
+                None => {
+                    self.api_save_in_progress = false;
+                    self.egui_layer.show_api_notification(
+                        &rust_i18n::t!("api.save_error", error = "Not signed in"),
+                        true,
+                    );
+                    return;
+                }
+            };
+
+            match action {
+                ApiSaveAction::SaveNew { name, upload_thumbnail, make_public } => {
+                    let name = name.clone();
+                    let upload_thumbnail = *upload_thumbnail;
+                    let make_public = *make_public;
+
+                    let visibility = if make_public {
+                        Some(crate::api::types::ApiVisibility::Public)
+                    } else {
+                        None
+                    };
+
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        // On WASM, render thumbnail inside spawn_local (same thread,
+                        // device/queue are Arc-wrapped so clone is cheap)
+                        let device = self.gpu.device.clone();
+                        let queue = self.gpu.queue.clone();
+                        wasm_bindgen_futures::spawn_local(async move {
+                            let thumbnail_png = if upload_thumbnail {
+                                log::info!("Rendering thumbnail for upload...");
+                                render_thumbnail_png_async(&device, &queue, &config).await
+                            } else {
+                                None
+                            };
+                            let save_result = save_flame_online(&base_url, &token, config, &name, visibility, thumbnail_png).await;
+                            if let Ok(mut slot) = result_slot.lock() {
+                                *slot = Some(save_result);
+                            }
+                        });
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        // On desktop, render thumbnail synchronously before spawning thread
+                        let thumbnail_png = if upload_thumbnail {
+                            log::info!("Rendering thumbnail for upload...");
+                            self.render_thumbnail_png(&config)
+                        } else {
+                            None
+                        };
+                        std::thread::spawn(move || {
+                            let result = pollster::block_on(save_flame_online(&base_url, &token, config, &name, visibility, thumbnail_png));
+                            if let Ok(mut slot) = result_slot.lock() {
+                                *slot = Some(result);
+                            }
+                        });
+                    }
+                }
+                ApiSaveAction::Update => {
+                    if let Some(flame_id) = self.api_flame_id.clone() {
+                        let name = config.flame.name.clone();
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            wasm_bindgen_futures::spawn_local(async move {
+                                let save_result = update_flame_online(&base_url, &token, config, &flame_id, &name).await;
+                                if let Ok(mut slot) = result_slot.lock() {
+                                    *slot = Some(save_result);
+                                }
+                            });
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            std::thread::spawn(move || {
+                                let result = pollster::block_on(update_flame_online(&base_url, &token, config, &flame_id, &name));
+                                if let Ok(mut slot) = result_slot.lock() {
+                                    *slot = Some(result);
+                                }
+                            });
+                        }
+                    } else {
+                        log::error!("Update requested but no api_flame_id");
+                        self.api_save_in_progress = false;
+                    }
+                }
+                ApiSaveAction::None => unreachable!(),
+            }
+        }
+    }
+}
+
+/// Render a thumbnail and encode as PNG bytes (async helper for WASM).
+#[cfg(target_arch = "wasm32")]
+async fn render_thumbnail_png_async(
+    device: &egui_wgpu::wgpu::Device,
+    queue: &egui_wgpu::wgpu::Queue,
+    config: &crate::config::FractalConfig,
+) -> Option<Vec<u8>> {
+    let image = crate::renderer::thumbnail::render_thumbnail_async(device, queue, config).await;
+    match crate::renderer::compute_kernel::encode_png_from_rgba(
+        image.width(),
+        image.height(),
+        image.into_raw(),
+        None,
+    ) {
+        Ok(data) => {
+            log::info!("Thumbnail rendered: {} bytes", data.len());
+            Some(data)
+        }
+        Err(e) => {
+            log::error!("Failed to encode thumbnail PNG: {}", e);
+            None
+        }
+    }
+}
+
+/// Save a flame to the API as new (async helper).
+async fn save_flame_online(
+    base_url: &str,
+    token: &str,
+    config: crate::config::FractalConfig,
+    name: &str,
+    visibility: Option<crate::api::types::ApiVisibility>,
+    thumbnail_png: Option<Vec<u8>>,
+) -> Result<String, String> {
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
+    api.save_flame(&config, Some(name), visibility, thumbnail_png.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Update an existing flame on the API (async helper).
+async fn update_flame_online(
+    base_url: &str,
+    token: &str,
+    config: crate::config::FractalConfig,
+    flame_id: &str,
+    name: &str,
+) -> Result<String, String> {
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
+    api.update_flame(flame_id, &config, Some(name))
+        .await
+        .map(|resp| resp.id)
+        .map_err(|e| e.to_string())
+}
+
+/// Delete a flame from the API (async helper).
+async fn delete_flame_online(
+    base_url: &str,
+    token: &str,
+    flame_id: &str,
+) -> Result<(), String> {
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
+    api.delete_flame(flame_id)
+        .await
+        .map_err(|e| e.to_string())
 }
