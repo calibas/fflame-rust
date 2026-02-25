@@ -400,9 +400,8 @@ pub fn config_to_create_request(config: &FractalConfig, name: Option<&str>) -> C
 /// Create a palette request from a FractalConfig's palette.
 pub fn palette_to_create_request(palette: &Palette) -> CreatePaletteRequest {
     CreatePaletteRequest {
-        scope: ApiPaletteScope::Custom,
+        visibility: ApiPaletteVisibility::Private,
         name: Some(palette.name.clone()),
-        flame_id: None,
         stops: Some(palette_stops_to_json(palette)),
         color_data: None,
         metadata: None,

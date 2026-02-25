@@ -150,8 +150,8 @@ impl ApiState {
     /// Save a FractalConfig to the API as a new flame.
     /// Returns the server-assigned flame ID.
     ///
-    /// Order: create flame first, then palette with flame_id (API requires it
-    /// for custom palettes), then update the flame to link the palette.
+    /// Order: create flame first, then palette, then update the flame
+    /// to link the palette.
     pub async fn save_flame(
         &self,
         config: &FractalConfig,
@@ -166,9 +166,8 @@ impl ApiState {
             client::api_post(&flame_url, &flame_req, &token).await?;
         let flame_id = flame_resp.id;
 
-        // 2. Create the palette with the flame_id (required for custom palettes)
-        let mut palette_req = sync::palette_to_create_request(&config.palette);
-        palette_req.flame_id = Some(flame_id.clone());
+        // 2. Create the palette
+        let palette_req = sync::palette_to_create_request(&config.palette);
         let palette_url = build_url(&self.base_url, "/api/palettes");
         let palette_resp: PaletteResponse =
             client::api_post(&palette_url, &palette_req, &token).await?;
@@ -251,26 +250,26 @@ impl ApiState {
 
     // --- Palette operations ---
 
-    /// List palettes, optionally filtered by scope.
+    /// List palettes, optionally filtered by visibility.
     pub async fn list_palettes(
         &self,
-        scope: Option<ApiPaletteScope>,
+        visibility: Option<ApiPaletteVisibility>,
         page: u32,
         per_page: u32,
     ) -> FetchResult<Vec<PaletteResponse>> {
         let token = self.require_token()?;
-        let scope_param = scope
-            .map(|s| {
-                let s = serde_json::to_value(s)
+        let visibility_param = visibility
+            .map(|v| {
+                let v = serde_json::to_value(v)
                     .ok()
                     .and_then(|v| v.as_str().map(|s| s.to_string()))
                     .unwrap_or_default();
-                format!("&scope={}", s)
+                format!("&visibility={}", v)
             })
             .unwrap_or_default();
         let url = build_url(
             &self.base_url,
-            &format!("/api/palettes?page={}&per_page={}{}", page, per_page, scope_param),
+            &format!("/api/palettes?page={}&per_page={}{}", page, per_page, visibility_param),
         );
         client::api_get(&url, &token).await
     }

@@ -100,9 +100,9 @@ pub enum ApiPathTrackingMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ApiPaletteScope {
-    Custom,
+pub enum ApiPaletteVisibility {
     Private,
+    Unlisted,
     Public,
 }
 
@@ -501,11 +501,9 @@ impl SearchFlamesParams {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CreatePaletteRequest {
-    pub scope: ApiPaletteScope,
+    pub visibility: ApiPaletteVisibility,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub flame_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stops: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -529,10 +527,9 @@ pub struct UpdatePaletteRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PaletteResponse {
     pub id: String,
-    pub scope: ApiPaletteScope,
+    pub visibility: ApiPaletteVisibility,
     pub owner_id: String,
     pub name: Option<String>,
-    pub flame_id: Option<String>,
     pub stops: Option<serde_json::Value>,
     pub color_data: Option<Vec<u32>>,
     pub color_count: Option<i32>,
