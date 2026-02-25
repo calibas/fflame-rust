@@ -44,11 +44,24 @@ pub enum HealthCheckOutcome {
 }
 
 /// Perform an API health check by calling GET /api/users/me.
+///
+/// On 401, retries once before reporting TokenExpired. This avoids
+/// false logouts caused by stale pooled connections after sleep/wake
+/// — a dead TCP socket can produce spurious 401s on the first attempt.
 pub async fn check_api_health(base_url: &str, token: &str) -> HealthCheckOutcome {
     let url = build_url(base_url, "/api/users/me");
     match client::api_get::<ApiUser>(&url, token).await {
         Ok(_) => HealthCheckOutcome::Authenticated,
-        Err(FetchError::Unauthorized) => HealthCheckOutcome::TokenExpired,
+        Err(FetchError::Unauthorized) => {
+            // Retry once — stale connections after sleep can produce spurious 401s
+            log::info!("Health check got 401, retrying once...");
+            match client::api_get::<ApiUser>(&url, token).await {
+                Ok(_) => HealthCheckOutcome::Authenticated,
+                Err(FetchError::Unauthorized) => HealthCheckOutcome::TokenExpired,
+                Err(FetchError::Network(msg)) => HealthCheckOutcome::NetworkError(msg),
+                Err(other) => HealthCheckOutcome::ServerError(other.to_string()),
+            }
+        }
         Err(FetchError::Network(msg)) => HealthCheckOutcome::NetworkError(msg),
         Err(other) => HealthCheckOutcome::ServerError(other.to_string()),
     }
