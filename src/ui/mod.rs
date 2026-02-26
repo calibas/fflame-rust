@@ -968,17 +968,6 @@ impl EguiLayer {
                 let _ = settings.save();
             }
 
-            // Also clear localStorage (WASM — for external page compatibility)
-            #[cfg(target_arch = "wasm32")]
-            {
-                if let Some(storage) = web_sys::window()
-                    .and_then(|w| w.local_storage().ok().flatten())
-                {
-                    let _ = storage.remove_item("fflame_auth_token");
-                    let _ = storage.remove_item("fflame_auth_email");
-                }
-            }
-
             // Clear cloud palette state
             self.cloud_palette_state = CloudPaletteState::default();
 

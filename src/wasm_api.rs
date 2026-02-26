@@ -258,19 +258,6 @@ impl WasmApi {
         self.api_state.base_url = url.to_string();
     }
 
-    /// Set the auth token (called by JS wrapper after website login).
-    /// After setting, call `api_validate_token()` to verify and fetch user info.
-    #[wasm_bindgen]
-    pub fn api_set_token(&mut self, token: &str) {
-        self.api_state.set_token(token);
-    }
-
-    /// Clear auth state (sign out).
-    #[wasm_bindgen]
-    pub fn api_clear_token(&mut self) {
-        self.api_state.clear_auth();
-    }
-
     /// Get current auth status as JSON.
     /// Returns: `{"status": "signed_out"|"signed_in"|"loading"|"error", "email": "...", "user_id": "..."}`
     #[wasm_bindgen]
@@ -314,8 +301,8 @@ impl WasmApi {
         .to_string()
     }
 
-    /// Validate the current token by calling /api/users/me.
-    /// Must be called after `api_set_token()` to complete sign-in.
+    /// Check auth status by calling /api/users/me (uses cookies).
+    /// If authenticated, fetches and caches user info.
     #[wasm_bindgen]
     pub async fn api_validate_token(&mut self) -> Result<(), JsValue> {
         self.api_state

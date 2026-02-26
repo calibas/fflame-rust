@@ -357,17 +357,6 @@ fn poll_result(
                 settings.auth_email = Some(success.email.clone());
                 let _ = settings.save();
 
-                // On WASM, also save to localStorage for async helper compatibility
-                #[cfg(target_arch = "wasm32")]
-                {
-                    if let Some(storage) = web_sys::window()
-                        .and_then(|w| w.local_storage().ok().flatten())
-                    {
-                        let _ = storage.set_item("fflame_auth_token", &success.token);
-                        let _ = storage.set_item("fflame_auth_email", &success.email);
-                    }
-                }
-
                 // Clear form fields
                 if is_register {
                     state.reg_error = None;
