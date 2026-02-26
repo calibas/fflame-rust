@@ -341,6 +341,11 @@ pub struct App {
 
     // Histogram computation (computed periodically, not every frame)
     pub(super) histogram_frame_counter: u32,
+    // WASM: async histogram result slot + in-flight guard
+    #[cfg(target_arch = "wasm32")]
+    pub(super) histogram_result_slot: Option<std::sync::Arc<std::sync::Mutex<Option<crate::renderer::DensityHistogram>>>>,
+    #[cfg(target_arch = "wasm32")]
+    pub(super) histogram_in_flight: bool,
 
     // Post-processing effect chain
     pub(super) effect_chain: crate::renderer::effect_chain::EffectChainRunner,
@@ -457,6 +462,10 @@ impl App {
             png_export_progress: Arc::new(Mutex::new(PngExportProgress::default())),
             render_mode: RenderModeFSM::new(),
             histogram_frame_counter: 0,
+            #[cfg(target_arch = "wasm32")]
+            histogram_result_slot: None,
+            #[cfg(target_arch = "wasm32")]
+            histogram_in_flight: false,
             effect_chain,
             was_video_exporting: false,
             needs_surface_recreate: false,
@@ -1744,29 +1753,73 @@ impl App {
         self.metrics.record_submit_time(t_submit.elapsed().as_secs_f64() * 1000.0);
 
         // Update density histogram for Levels controls (every ~30 frames)
-        // Skip during animation playback to avoid frame drops from blocking GPU readback
-        // Only on desktop - WASM would need async handling
-        #[cfg(not(target_arch = "wasm32"))]
+        // Skip during animation playback to avoid frame drops from GPU readback
         if !self.animation_controller.is_playing() {
+            // On WASM, check if an async histogram computation has completed
+            #[cfg(target_arch = "wasm32")]
+            if let Some(ref slot) = self.histogram_result_slot {
+                if let Ok(mut guard) = slot.try_lock() {
+                    if let Some(histogram) = guard.take() {
+                        self.egui_layer.update_histogram(histogram);
+                        self.histogram_in_flight = false;
+                    }
+                }
+            }
+
             self.histogram_frame_counter += 1;
             if self.histogram_frame_counter >= 30 {
                 self.histogram_frame_counter = 0;
 
                 if let Some(ref renderer) = self.flame_renderer {
                     let texture = renderer.accumulation_texture();
-                    match pollster::block_on(crate::renderer::compute_histogram_async(
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        texture,
-                        renderer.width,
-                        renderer.height,
-                    )) {
-                        Ok(histogram) => {
-                            self.egui_layer.update_histogram(histogram);
+
+                    // Desktop: blocking readback via pollster
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        match pollster::block_on(crate::renderer::compute_histogram_async(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            texture,
+                            renderer.width,
+                            renderer.height,
+                        )) {
+                            Ok(histogram) => {
+                                self.egui_layer.update_histogram(histogram);
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to compute histogram: {}", e);
+                            }
                         }
-                        Err(e) => {
-                            log::warn!("Failed to compute histogram: {}", e);
-                        }
+                    }
+
+                    // WASM: submit GPU copy synchronously, then spawn_local for async readback
+                    #[cfg(target_arch = "wasm32")]
+                    if !self.histogram_in_flight {
+                        let readback = crate::renderer::histogram::submit_histogram_readback(
+                            &self.gpu.device,
+                            &self.gpu.queue,
+                            texture,
+                            renderer.width,
+                            renderer.height,
+                        );
+
+                        let slot = self.histogram_result_slot.get_or_insert_with(|| {
+                            std::sync::Arc::new(std::sync::Mutex::new(None))
+                        }).clone();
+                        self.histogram_in_flight = true;
+
+                        wasm_bindgen_futures::spawn_local(async move {
+                            match readback.compute().await {
+                                Ok(histogram) => {
+                                    if let Ok(mut guard) = slot.lock() {
+                                        *guard = Some(histogram);
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to compute histogram: {}", e);
+                                }
+                            }
+                        });
                     }
                 }
             }

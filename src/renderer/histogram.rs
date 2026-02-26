@@ -3,6 +3,7 @@
 //! Reads the accumulation buffer and computes a histogram of density values,
 //! providing statistics useful for Levels-style tone mapping controls.
 
+use std::sync::Arc;
 use egui_wgpu::wgpu::*;
 
 /// Number of bins in the histogram
@@ -177,14 +178,31 @@ impl DensityHistogram {
     }
 }
 
-/// Async function to compute histogram from FlameRenderer's accumulation buffer
-pub async fn compute_histogram_async(
-    device: &Device,
+/// Pending histogram readback — owns the staging buffer after GPU copy is submitted.
+/// Call `compute()` to async-map the buffer and produce the histogram.
+///
+/// This is `'static` so it can be moved into `spawn_local` on WASM.
+pub struct HistogramReadback {
+    #[cfg(not(target_arch = "wasm32"))]
+    device: Arc<Device>,
+    buffer: Buffer,
+    width: u32,
+    height: u32,
+    padded_bytes_per_row: u32,
+}
+
+/// Submit a GPU texture-to-buffer copy for histogram computation.
+///
+/// This is synchronous and borrows the texture only briefly. The returned
+/// `HistogramReadback` owns the staging buffer and can be sent into an
+/// async task (e.g. `spawn_local` on WASM) to finish the work.
+pub fn submit_histogram_readback(
+    device: &Arc<Device>,
     queue: &Queue,
     accumulation_texture: &Texture,
     width: u32,
     height: u32,
-) -> Result<DensityHistogram, String> {
+) -> HistogramReadback {
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
         label: Some("Histogram Compute Encoder"),
     });
@@ -228,28 +246,64 @@ pub async fn compute_histogram_async(
 
     queue.submit(Some(encoder.finish()));
 
-    // Map buffer and read data
-    let buffer_slice = buffer.slice(..);
-    let (tx, rx) = futures::channel::oneshot::channel();
-    buffer_slice.map_async(MapMode::Read, move |result| {
-        let _ = tx.send(result);
-    });
-    let _ = device.poll(PollType::Wait { submission_index: None, timeout: None });
+    HistogramReadback {
+        #[cfg(not(target_arch = "wasm32"))]
+        device: device.clone(),
+        buffer,
+        width,
+        height,
+        padded_bytes_per_row,
+    }
+}
 
-    rx.await
-        .map_err(|_| "Failed to receive buffer map result".to_string())?
-        .map_err(|e| format!("Buffer map error: {:?}", e))?;
+impl HistogramReadback {
+    /// Async map the staging buffer, read back the data, and compute the histogram.
+    ///
+    /// On desktop this is typically called via `pollster::block_on()`.
+    /// On WASM this runs inside `spawn_local`.
+    pub async fn compute(self) -> Result<DensityHistogram, String> {
+        let buffer_slice = self.buffer.slice(..);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
 
-    let data = buffer_slice.get_mapped_range();
+        // On desktop, poll the device to drive the GPU work to completion.
+        // On WASM, the browser's WebGPU implementation handles this automatically
+        // via the event loop — explicit polling would panic.
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = self.device.poll(PollType::Wait { submission_index: None, timeout: None });
 
-    // Compute histogram
-    let mut histogram = DensityHistogram::new();
-    histogram.compute_from_f16_data(&data, width, height, padded_bytes_per_row);
+        rx.await
+            .map_err(|_| "Failed to receive buffer map result".to_string())?
+            .map_err(|e| format!("Buffer map error: {:?}", e))?;
 
-    drop(data);
-    buffer.unmap();
+        let data = buffer_slice.get_mapped_range();
 
-    Ok(histogram)
+        // Compute histogram
+        let mut histogram = DensityHistogram::new();
+        histogram.compute_from_f16_data(&data, self.width, self.height, self.padded_bytes_per_row);
+
+        drop(data);
+        self.buffer.unmap();
+
+        Ok(histogram)
+    }
+}
+
+/// Async function to compute histogram from FlameRenderer's accumulation buffer.
+///
+/// Convenience wrapper that combines `submit_histogram_readback` + `compute`.
+/// Primarily used on desktop where both steps can run in one `pollster::block_on`.
+pub async fn compute_histogram_async(
+    device: &Arc<Device>,
+    queue: &Queue,
+    accumulation_texture: &Texture,
+    width: u32,
+    height: u32,
+) -> Result<DensityHistogram, String> {
+    let readback = submit_histogram_readback(device, queue, accumulation_texture, width, height);
+    readback.compute().await
 }
 
 #[cfg(test)]
