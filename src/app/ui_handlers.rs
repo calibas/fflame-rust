@@ -963,17 +963,6 @@ impl App {
                     let _ = settings.save();
                 }
 
-                // Clear WASM localStorage
-                #[cfg(target_arch = "wasm32")]
-                {
-                    if let Some(storage) = web_sys::window()
-                        .and_then(|w| w.local_storage().ok().flatten())
-                    {
-                        let _ = storage.remove_item("fflame_auth_token");
-                        let _ = storage.remove_item("fflame_auth_email");
-                    }
-                }
-
                 // Clear cloud state in UI
                 self.egui_layer.clear_cloud_state();
 

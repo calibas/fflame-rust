@@ -837,7 +837,8 @@ impl FractalBrowserPanel {
     }
 }
 
-/// Read auth credentials from WASM localStorage (DRY helper for WASM trigger methods)
+/// Read API base URL from WASM localStorage. Auth is handled via cookies.
+/// Returns (base_url, token) where token is empty (kept for API compatibility with desktop).
 #[cfg(target_arch = "wasm32")]
 fn get_wasm_credentials() -> Result<(String, String), String> {
     let window = web_sys::window().ok_or("No window")?;
@@ -845,16 +846,12 @@ fn get_wasm_credentials() -> Result<(String, String), String> {
         .local_storage()
         .map_err(|_| "Failed to access localStorage")?
         .ok_or("No localStorage")?;
-    let token = storage
-        .get_item("fflame_auth_token")
-        .map_err(|_| "Failed to read token")?
-        .ok_or("Not signed in — click Sign In first")?;
     let base_url = storage
         .get_item("fflame_api_base_url")
         .ok()
         .flatten()
         .unwrap_or_else(|| "http://localhost:3000".to_string());
-    Ok((base_url, token))
+    Ok((base_url, String::new()))
 }
 
 /// Fetch the list of flames from the API (cross-platform async helper)

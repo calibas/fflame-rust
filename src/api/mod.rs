@@ -113,13 +113,10 @@ impl ApiState {
         self.flames_load_state = LoadState::NotLoaded;
     }
 
-    /// Validate the current token by fetching user info.
+    /// Validate auth by fetching user info from /api/users/me.
+    /// On desktop, uses the stored Bearer token. On WASM, uses cookies.
     pub async fn validate_token(&mut self) -> FetchResult<()> {
-        let token = self
-            .auth
-            .get_token()
-            .ok_or_else(|| FetchError::Network("No auth token set".to_string()))?
-            .to_string();
+        let token = self.require_token()?;
 
         let url = build_url(&self.base_url, "/api/users/me");
         match client::api_get::<ApiUser>(&url, &token).await {
@@ -347,6 +344,12 @@ impl ApiState {
     // --- Helpers ---
 
     fn require_token(&self) -> FetchResult<String> {
+        // On WASM, auth is handled via cookies — no token needed.
+        // Return empty string so the client signature is satisfied (it ignores the token).
+        #[cfg(target_arch = "wasm32")]
+        return Ok(String::new());
+
+        #[cfg(not(target_arch = "wasm32"))]
         self.auth
             .get_token()
             .map(|t| t.to_string())

@@ -499,29 +499,7 @@ impl App {
             app.workspace.open_floating_panel_centered(PanelType::Help, help_size, screen_size);
         }
 
-        // WASM: Adopt auth token from localStorage if SystemSettings has none.
-        // This supports external login pages on the same domain setting the token.
-        #[cfg(target_arch = "wasm32")]
-        {
-            let has_saved_token = app.config_manager.system_settings().auth_token.is_some();
-            if !has_saved_token {
-                if let Some(token) = web_sys::window()
-                    .and_then(|w| w.local_storage().ok().flatten())
-                    .and_then(|s| s.get_item("fflame_auth_token").ok().flatten())
-                {
-                    let email = web_sys::window()
-                        .and_then(|w| w.local_storage().ok().flatten())
-                        .and_then(|s| s.get_item("fflame_auth_email").ok().flatten());
-                    let settings = app.config_manager.system_settings_mut();
-                    settings.auth_token = Some(token);
-                    settings.auth_email = email;
-                    let _ = settings.save();
-                    log::info!("Adopted auth token from localStorage");
-                }
-            }
-        }
-
-        // Trigger initial API health check if a token exists
+        // Trigger initial API health check if a token exists (desktop: Bearer token, WASM: cookie)
         app.maybe_trigger_health_check();
 
         #[allow(deprecated)]

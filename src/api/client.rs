@@ -23,20 +23,25 @@ mod wasm {
     use super::*;
     use wasm_bindgen::prelude::*;
     use wasm_bindgen_futures::JsFuture;
-    use web_sys::{Headers, Request, RequestInit, RequestMode, Response};
+    use web_sys::{Headers, Request, RequestCredentials, RequestInit, RequestMode, Response};
 
     /// Make an authenticated API request (WASM).
     ///
-    /// Supports GET, POST, PUT, DELETE with optional JSON body and Bearer token.
+    /// Supports GET, POST, PUT, DELETE with optional JSON body.
+    /// Auth is handled via cookies (`credentials: "include"`) — the `token`
+    /// parameter is accepted for API compatibility with desktop but ignored.
     pub async fn api_request_raw(
         method: &str,
         url: &str,
         body: Option<String>,
         token: Option<&str>,
     ) -> FetchResult<String> {
+        let _ = token; // Auth via cookies, not Bearer tokens
+
         let mut opts = RequestInit::new();
         opts.method(method);
         opts.mode(RequestMode::Cors);
+        opts.credentials(RequestCredentials::Include);
 
         // Set headers
         let headers = Headers::new()
@@ -46,12 +51,6 @@ mod wasm {
             headers
                 .set("Content-Type", "application/json")
                 .map_err(|e| FetchError::Network(format!("Failed to set content-type: {:?}", e)))?;
-        }
-
-        if let Some(token) = token {
-            headers
-                .set("Authorization", &format!("Bearer {}", token))
-                .map_err(|e| FetchError::Network(format!("Failed to set auth header: {:?}", e)))?;
         }
 
         opts.headers(&headers);
@@ -145,9 +144,12 @@ mod wasm {
         content_type: &str,
         token: &str,
     ) -> FetchResult<()> {
+        let _ = token; // Auth via cookies, not Bearer tokens
+
         let mut opts = RequestInit::new();
         opts.method("PUT");
         opts.mode(RequestMode::Cors);
+        opts.credentials(RequestCredentials::Include);
 
         let headers = Headers::new()
             .map_err(|e| FetchError::Network(format!("Failed to create headers: {:?}", e)))?;
@@ -155,9 +157,6 @@ mod wasm {
         headers
             .set("Content-Type", content_type)
             .map_err(|e| FetchError::Network(format!("Failed to set content-type: {:?}", e)))?;
-        headers
-            .set("Authorization", &format!("Bearer {}", token))
-            .map_err(|e| FetchError::Network(format!("Failed to set auth header: {:?}", e)))?;
 
         opts.headers(&headers);
 
