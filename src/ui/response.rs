@@ -83,6 +83,9 @@ pub struct UiResponse {
     // API: Save action (save new, update existing)
     pub api_save_action: ApiSaveAction,
 
+    // API: Animation save action (from Animation Panel)
+    pub api_animation_save_action: ApiAnimationSaveAction,
+
     // API: Flame ID loaded from Online tab
     pub loaded_api_flame_id: Option<String>,
 }
@@ -96,7 +99,19 @@ pub enum ApiSaveAction {
         name: String,
         upload_thumbnail: bool,
         make_public: bool,
+        save_animation: bool,
     },
+    Update,
+}
+
+/// API animation save action type (from Animation Panel buttons)
+#[derive(Debug, Clone, Default)]
+pub enum ApiAnimationSaveAction {
+    #[default]
+    None,
+    /// Save as new animation linked to current flame
+    SaveNew,
+    /// Update existing animation
     Update,
 }
 
@@ -143,6 +158,7 @@ impl Default for UiResponse {
             load_signal_file: false,
             save_signal_file: None,
             api_save_action: ApiSaveAction::None,
+            api_animation_save_action: ApiAnimationSaveAction::None,
             loaded_api_flame_id: None,
         }
     }

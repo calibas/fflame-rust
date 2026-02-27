@@ -547,3 +547,84 @@ pub struct PaletteResponse {
     pub created_at: String,
     pub updated_at: String,
 }
+
+// ============================================================================
+// Animations
+// ============================================================================
+
+/// Loop mode for animations (matches API enum).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiLoopMode {
+    Once,
+    Loop,
+    PingPong,
+}
+
+impl From<crate::animation::LoopMode> for ApiLoopMode {
+    fn from(mode: crate::animation::LoopMode) -> Self {
+        match mode {
+            crate::animation::LoopMode::Once => ApiLoopMode::Once,
+            crate::animation::LoopMode::Loop => ApiLoopMode::Loop,
+            crate::animation::LoopMode::PingPong => ApiLoopMode::PingPong,
+        }
+    }
+}
+
+impl From<ApiLoopMode> for crate::animation::LoopMode {
+    fn from(mode: ApiLoopMode) -> Self {
+        match mode {
+            ApiLoopMode::Once => crate::animation::LoopMode::Once,
+            ApiLoopMode::Loop => crate::animation::LoopMode::Loop,
+            ApiLoopMode::PingPong => crate::animation::LoopMode::PingPong,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateAnimationRequest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flame_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loop_mode: Option<ApiLoopMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracks: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generators: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_config: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<ApiVisibility>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AnimationResponse {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub duration: f64,
+    pub loop_mode: ApiLoopMode,
+    pub visibility: ApiVisibility,
+    pub tracks: Option<serde_json::Value>,
+    pub generators: Option<serde_json::Value>,
+    pub base_config: Option<serde_json::Value>,
+    pub flame_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnimationListItem {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub duration: f64,
+    pub loop_mode: ApiLoopMode,
+    pub visibility: ApiVisibility,
+    pub flame_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}

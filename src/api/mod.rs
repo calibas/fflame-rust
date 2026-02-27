@@ -341,6 +341,68 @@ impl ApiState {
         client::api_delete(&url, &token).await
     }
 
+    // --- Animation operations ---
+
+    /// Save an animation to the API as a new entry.
+    /// Returns the server-assigned animation ID.
+    pub async fn save_animation(
+        &self,
+        animation: &crate::animation::Animation,
+        name: Option<&str>,
+        flame_id: Option<&str>,
+        visibility: Option<ApiVisibility>,
+    ) -> FetchResult<String> {
+        let token = self.require_token()?;
+        let req = sync::animation_to_create_request(animation, name, flame_id, visibility);
+        let url = build_url(&self.base_url, "/api/animations");
+        let resp: AnimationResponse = client::api_post(&url, &req, &token).await?;
+        Ok(resp.id)
+    }
+
+    /// Update an existing animation on the API.
+    pub async fn update_animation(
+        &self,
+        animation_id: &str,
+        animation: &crate::animation::Animation,
+        name: Option<&str>,
+    ) -> FetchResult<AnimationResponse> {
+        let token = self.require_token()?;
+        let req = sync::animation_to_create_request(animation, name, None, None);
+        let url = build_url(&self.base_url, &format!("/api/animations/{}", animation_id));
+        client::api_put(&url, &req, &token).await
+    }
+
+    /// Load an animation from the API and convert to Animation.
+    pub async fn load_animation(
+        &self,
+        animation_id: &str,
+    ) -> FetchResult<crate::animation::Animation> {
+        let token = self.require_token()?;
+        let url = build_url(&self.base_url, &format!("/api/animations/{}", animation_id));
+        let resp: AnimationResponse = client::api_get(&url, &token).await?;
+        Ok(sync::animation_response_to_animation(&resp))
+    }
+
+    /// Delete an animation from the API.
+    pub async fn delete_animation(&self, animation_id: &str) -> FetchResult<()> {
+        let token = self.require_token()?;
+        let url = build_url(&self.base_url, &format!("/api/animations/{}", animation_id));
+        client::api_delete(&url, &token).await
+    }
+
+    /// List animations for a specific flame.
+    pub async fn list_flame_animations(
+        &self,
+        flame_id: &str,
+    ) -> FetchResult<Vec<AnimationListItem>> {
+        let token = self.require_token()?;
+        let url = build_url(
+            &self.base_url,
+            &format!("/api/flames/{}/animations", flame_id),
+        );
+        client::api_get(&url, &token).await
+    }
+
     // --- Helpers ---
 
     fn require_token(&self) -> FetchResult<String> {

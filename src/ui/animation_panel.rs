@@ -138,6 +138,10 @@ pub struct AnimationPanelResponse {
     /// Trigger animation load file picker (WASM only - handled in app render loop)
     #[cfg(target_arch = "wasm32")]
     pub trigger_animation_load: bool,
+    /// Save animation online (new)
+    pub api_save_animation: bool,
+    /// Update existing animation online
+    pub api_update_animation: bool,
 }
 
 /// Render animation panel content
@@ -290,14 +294,26 @@ fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, r
     });
 }
 
+/// Context for online API buttons in the animation panel
+pub struct AnimationApiContext<'a> {
+    /// Current flame's API ID (None if flame not saved online)
+    pub api_flame_id: &'a Option<String>,
+    /// Current animation's API ID (None if animation not saved online)
+    pub api_animation_id: &'a Option<String>,
+    /// Whether the user is signed in
+    pub is_signed_in: bool,
+}
+
 /// Render file and export controls (Name, Save, Load, Export button)
 /// Call this after rendering tracks section
 pub fn render_file_controls(
     ui: &mut Ui,
     controller: &mut AnimationController,
     response: &mut AnimationPanelResponse,
+    api_context: Option<&AnimationApiContext>,
 ) {
     let has_animation = controller.animation.is_some();
+    let has_tracks = controller.animation.as_ref().map_or(false, |a| !a.tracks.is_empty());
 
     // Row 1: Name
     // ui.label(t!("animation_panel.name"));
@@ -358,6 +374,29 @@ pub fn render_file_controls(
             response.open_export_panel = true;
         }
     });
+
+    // Row 4: Online Save/Update buttons (only shown when signed in with a flame saved)
+    if let Some(ctx) = api_context {
+        if ctx.is_signed_in {
+            ui.horizontal(|ui| {
+                // Save Online — requires flame to be saved first and animation to have tracks
+                let can_save = has_tracks && ctx.api_flame_id.is_some();
+                if ui.add_enabled(can_save, egui::Button::new(t!("api.animation_save_online")))
+                    .clicked()
+                {
+                    response.api_save_animation = true;
+                }
+
+                // Update Online — only when animation was previously saved
+                let can_update = ctx.api_animation_id.is_some();
+                if ui.add_enabled(can_update, egui::Button::new(t!("api.animation_update_online")))
+                    .clicked()
+                {
+                    response.api_update_animation = true;
+                }
+            });
+        }
+    }
 }
 
 /// Layout information for timeline alignment between scrubber and tracks

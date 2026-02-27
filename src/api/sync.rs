@@ -633,3 +633,55 @@ mod tests {
         assert!(!req.transforms.is_empty());
     }
 }
+
+// ============================================================================
+// Animation conversion: App ↔ API
+// ============================================================================
+
+/// Convert an Animation to a CreateAnimationRequest.
+///
+/// Serializes tracks, generators, and base_config as opaque JSON values —
+/// the API stores them verbatim without interpreting the structure.
+pub fn animation_to_create_request(
+    animation: &crate::animation::Animation,
+    name: Option<&str>,
+    flame_id: Option<&str>,
+    visibility: Option<ApiVisibility>,
+) -> CreateAnimationRequest {
+    CreateAnimationRequest {
+        name: name.unwrap_or(&animation.name).to_string(),
+        flame_id: flame_id.map(|s| s.to_string()),
+        duration: Some(animation.duration),
+        loop_mode: Some(animation.loop_mode.into()),
+        tracks: serde_json::to_value(&animation.tracks).ok(),
+        generators: serde_json::to_value(&animation.generators).ok(),
+        base_config: animation.base_config.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        visibility,
+    }
+}
+
+/// Convert an AnimationResponse back to an Animation.
+///
+/// Deserializes tracks, generators, and base_config from the opaque JSON
+/// values stored on the server.
+pub fn animation_response_to_animation(resp: &AnimationResponse) -> crate::animation::Animation {
+    let tracks = resp.tracks.as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let generators = resp.generators.as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let base_config = resp.base_config.as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    crate::animation::Animation {
+        name: resp.name.clone(),
+        base_config,
+        duration: resp.duration,
+        tracks,
+        generators,
+        loop_mode: resp.loop_mode.into(),
+    }
+}

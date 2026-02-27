@@ -52,13 +52,13 @@ pub fn render_menu_bar(
                         }
                         if ui.add_enabled(api_available, egui::Button::new(t!("menu.save_online_new_copy"))).clicked() {
                             let name = format!("{} (copy)", menu_state.flame_name);
-                            save_online_dialog_state.open(&name, true);
+                            save_online_dialog_state.open(&name, true, menu_state.has_animation_tracks);
                             workspace.open_floating_panel(super::workspace::PanelType::SaveOnlineDialog, ctx);
                         }
                     } else {
                         // No cloud flame loaded — show Save Online
                         if ui.add_enabled(api_available, egui::Button::new(t!("menu.save_online"))).clicked() {
-                            save_online_dialog_state.open(&menu_state.flame_name, false);
+                            save_online_dialog_state.open(&menu_state.flame_name, false, menu_state.has_animation_tracks);
                             workspace.open_floating_panel(super::workspace::PanelType::SaveOnlineDialog, ctx);
                         }
                     }

@@ -64,6 +64,7 @@ pub struct MenuState {
     pub render_mode_2d: bool, // true = 2D, false = 3D
     pub online_mode: bool,
     pub has_api_flame_id: bool,
+    pub has_animation_tracks: bool,
     pub flame_name: String,
     pub auth_email: Option<String>,
     pub api_connectivity: crate::api::ApiConnectivity,
