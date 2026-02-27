@@ -144,6 +144,14 @@ pub struct PanelContext<'a> {
     pub load_audio_file: &'a mut bool,
     pub load_signal_file: &'a mut bool,
     pub save_signal_file: &'a mut Option<String>,
+
+    // API animation state (for Save/Update Online buttons in animation panel)
+    pub api_flame_id: &'a Option<String>,
+    pub api_animation_id: &'a Option<String>,
+    pub is_signed_in: bool,
+
+    // API animation save action (from animation panel)
+    pub api_animation_save_action: &'a mut super::response::ApiAnimationSaveAction,
 }
 
 /// Viewer for rendering each panel type
@@ -394,7 +402,25 @@ impl<'a> PanelViewer<'a> {
 
         // File controls (after tracks section)
         ui.separator();
-        super::animation_panel::render_file_controls(ui, self.context.animation_controller, &mut response);
+        let api_context = super::animation_panel::AnimationApiContext {
+            api_flame_id: self.context.api_flame_id,
+            api_animation_id: self.context.api_animation_id,
+            is_signed_in: self.context.is_signed_in,
+        };
+        super::animation_panel::render_file_controls(
+            ui,
+            self.context.animation_controller,
+            &mut response,
+            Some(&api_context),
+        );
+
+        // Handle animation API save/update responses
+        if response.api_save_animation {
+            *self.context.api_animation_save_action = super::response::ApiAnimationSaveAction::SaveNew;
+        }
+        if response.api_update_animation {
+            *self.context.api_animation_save_action = super::response::ApiAnimationSaveAction::Update;
+        }
 
         // Handle file control responses (must be after render_file_controls)
         // Handle open export panel request (Phase 5)

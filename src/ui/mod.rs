@@ -41,6 +41,7 @@ pub use menu_context::{MenuActions, MenuState};
 pub use palette_editor::PaletteEditor;
 pub use response::UiResponse;
 pub use response::ApiSaveAction;
+pub use response::ApiAnimationSaveAction;
 pub use workspace::Workspace;
 pub use xaos_editor::XaosEditorState;
 
@@ -489,6 +490,7 @@ impl EguiLayer {
         signal_manager: &mut crate::signal::SignalManager,
         signal_names: &[String],
         api_flame_id: &Option<String>,
+        api_animation_id: &Option<String>,
     ) -> UiResponse {
         let mut raw_input = self.state.take_egui_input(window);
 
@@ -553,6 +555,9 @@ impl EguiLayer {
         let mut animation_seek_changed = false;
         let mut animation_seek_drag_stopped = false;
 
+        // Animation API save action
+        let mut api_animation_save_action = response::ApiAnimationSaveAction::None;
+
         // Path filters
         let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
 
@@ -565,6 +570,9 @@ impl EguiLayer {
 
         // Menu actions and state
         let mut menu_actions = MenuActions::default();
+        let has_animation_tracks = animation_controller.animation
+            .as_ref()
+            .map_or(false, |a| !a.tracks.is_empty());
         let menu_state = MenuState {
             can_undo,
             can_redo,
@@ -572,6 +580,7 @@ impl EguiLayer {
             render_mode_2d: config_manager.active_config().flame.render_mode == crate::scene::transforms::RenderMode::TwoD,
             online_mode: config_manager.system_settings().online_mode,
             has_api_flame_id: api_flame_id.is_some(),
+            has_animation_tracks,
             flame_name: config_manager.config().flame.name.clone(),
             auth_email: read_auth_email(config_manager),
             api_connectivity: self.api_connectivity,
@@ -624,6 +633,9 @@ impl EguiLayer {
 
                 return;
             }
+
+            // Compute auth state before struct init (avoids borrow conflict)
+            let is_signed_in = read_auth_email(config_manager).is_some();
 
             // Normal mode: render menu bar and dock panels
             menu_bar::render_menu_bar(
@@ -779,6 +791,12 @@ impl EguiLayer {
                         load_audio_file: &mut load_audio_file,
                         load_signal_file: &mut load_signal_file,
                         save_signal_file: &mut save_signal_file,
+
+                        // API animation state
+                        api_flame_id,
+                        api_animation_id,
+                        is_signed_in,
+                        api_animation_save_action: &mut api_animation_save_action,
                     },
                 });
 
@@ -1066,6 +1084,7 @@ impl EguiLayer {
             load_signal_file,
             save_signal_file,
             api_save_action,
+            api_animation_save_action,
             loaded_api_flame_id,
         }
     }

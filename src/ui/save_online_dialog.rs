@@ -14,6 +14,10 @@ pub struct SaveOnlineDialogState {
     pub upload_thumbnail: bool,
     /// Make the flame publicly visible
     pub make_public: bool,
+    /// Also save the current animation alongside the flame
+    pub save_animation: bool,
+    /// Whether animation tracks exist (controls default for save_animation)
+    pub has_animation_tracks: bool,
     /// Action produced by the dialog (polled after render)
     pub action: Option<ApiSaveAction>,
     /// Whether the dialog should be closed (Cancel or after Save)
@@ -27,6 +31,8 @@ impl Default for SaveOnlineDialogState {
             is_copy: false,
             upload_thumbnail: true,
             make_public: false,
+            save_animation: false,
+            has_animation_tracks: false,
             action: None,
             close_requested: false,
         }
@@ -35,11 +41,13 @@ impl Default for SaveOnlineDialogState {
 
 impl SaveOnlineDialogState {
     /// Pre-fill the dialog before opening
-    pub fn open(&mut self, name: &str, is_copy: bool) {
+    pub fn open(&mut self, name: &str, is_copy: bool, has_animation_tracks: bool) {
         self.name = name.to_string();
         self.is_copy = is_copy;
         self.upload_thumbnail = true;
         self.make_public = false;
+        self.save_animation = has_animation_tracks;
+        self.has_animation_tracks = has_animation_tracks;
         self.action = None;
         self.close_requested = false;
     }
@@ -74,6 +82,7 @@ pub fn render_save_online_dialog(
                     name,
                     upload_thumbnail: state.upload_thumbnail,
                     make_public: state.make_public,
+                    save_animation: state.save_animation,
                 });
                 state.close_requested = true;
             }
@@ -85,6 +94,9 @@ pub fn render_save_online_dialog(
     // Options checkboxes
     ui.checkbox(&mut state.upload_thumbnail, t!("api.save_dialog_thumbnail"));
     ui.checkbox(&mut state.make_public, t!("api.save_dialog_public"));
+    if state.has_animation_tracks {
+        ui.checkbox(&mut state.save_animation, t!("api.save_dialog_animation"));
+    }
 
     ui.add_space(8.0);
 
@@ -96,6 +108,7 @@ pub fn render_save_online_dialog(
                     name,
                     upload_thumbnail: state.upload_thumbnail,
                     make_public: state.make_public,
+                    save_animation: state.save_animation,
                 });
                 state.close_requested = true;
             }

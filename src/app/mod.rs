@@ -366,10 +366,17 @@ pub struct App {
     pub(super) audio_capture: crate::audio::AudioCapture,
     pub(super) signal_manager: crate::signal::SignalManager,
 
-    // API integration
+    // API integration — flame
     pub(super) api_flame_id: Option<String>,
     pub(super) api_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
     pub(super) api_save_in_progress: bool,
+
+    // API integration — animation
+    pub(super) api_animation_id: Option<String>,
+    pub(super) api_animation_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
+    pub(super) api_animation_save_in_progress: bool,
+    /// Flag: save animation after flame save completes (from Save Online dialog checkbox)
+    pub(super) pending_animation_save: bool,
 
     // API connectivity tracking
     pub(super) health_check_result: std::sync::Arc<std::sync::Mutex<Option<crate::api::HealthCheckOutcome>>>,
@@ -478,6 +485,10 @@ impl App {
             api_flame_id: None,
             api_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_save_in_progress: false,
+            api_animation_id: None,
+            api_animation_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            api_animation_save_in_progress: false,
+            pending_animation_save: false,
             health_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             health_check_in_progress: false,
             api_connectivity: crate::api::ApiConnectivity::Unknown,
@@ -905,6 +916,7 @@ impl App {
             &mut self.signal_manager,
             &signal_names,
             &self.api_flame_id,
+            &self.api_animation_id,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);

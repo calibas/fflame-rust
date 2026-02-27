@@ -867,11 +867,16 @@ api:
   save_dialog_public: "Make public"
   save_dialog_save: "Save"
   save_dialog_cancel: "Cancel"
+  save_dialog_animation: "Save animation"
   save_success: "Saved online: %{name}"
   update_success: "Updated online: %{name}"
   save_error: "Failed to save: %{error}"
   delete_success: "Deleted: %{name}"
   delete_error: "Failed to delete: %{error}"
+  animation_save_online: "Save Online"
+  animation_update_online: "Update Online"
+  animation_save_success: "Animation saved online: %{name}"
+  animation_save_error: "Failed to save animation: %{error}"
 
 # Config Import/Export Dialog
 config_dialog:

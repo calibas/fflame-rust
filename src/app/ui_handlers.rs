@@ -34,6 +34,7 @@ impl App {
         self.handle_animation_seek(ui_response);
         self.handle_path_filters(ui_response);
         self.handle_save_online(ui_response);
+        self.handle_save_animation_online(ui_response);
     }
 
     /// Handle config export, save, and import operations
@@ -1075,30 +1076,37 @@ impl App {
     fn handle_save_online(&mut self, ui_response: &UiResponse) {
         use crate::ui::ApiSaveAction;
 
-        // Check for completed async save
+        // Check for completed async flame save
         if self.api_save_in_progress {
-            if let Ok(mut result) = self.api_save_result.lock() {
-                if let Some(save_result) = result.take() {
-                    self.api_save_in_progress = false;
-                    match save_result {
-                        Ok(flame_id) => {
-                            log::info!("Flame saved/updated online: {}", flame_id);
-                            self.api_flame_id = Some(flame_id.clone());
-                            let name = self.config_manager.active_config().flame.name.clone();
-                            self.egui_layer.show_api_notification(
-                                &rust_i18n::t!("api.save_success", name = name),
-                                false,
-                            );
-                            // Auto-refresh the Online tab
-                            self.egui_layer.request_online_refresh();
+            // Extract result from mutex first, then act on it (avoids borrow conflict)
+            let save_result = self.api_save_result.lock().ok().and_then(|mut r| r.take());
+            if let Some(save_result) = save_result {
+                self.api_save_in_progress = false;
+                match save_result {
+                    Ok(flame_id) => {
+                        log::info!("Flame saved/updated online: {}", flame_id);
+                        self.api_flame_id = Some(flame_id.clone());
+                        let name = self.config_manager.active_config().flame.name.clone();
+                        self.egui_layer.show_api_notification(
+                            &rust_i18n::t!("api.save_success", name = name),
+                            false,
+                        );
+                        // Auto-refresh the Online tab
+                        self.egui_layer.request_online_refresh();
+
+                        // If pending animation save was requested, trigger it now
+                        if self.pending_animation_save {
+                            self.pending_animation_save = false;
+                            self.trigger_animation_save(&flame_id);
                         }
-                        Err(e) => {
-                            log::error!("Failed to save flame online: {}", e);
-                            self.egui_layer.show_api_notification(
-                                &rust_i18n::t!("api.save_error", error = e),
-                                true,
-                            );
-                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to save flame online: {}", e);
+                        self.pending_animation_save = false;
+                        self.egui_layer.show_api_notification(
+                            &rust_i18n::t!("api.save_error", error = e),
+                            true,
+                        );
                     }
                 }
             }
@@ -1134,10 +1142,13 @@ impl App {
             };
 
             match action {
-                ApiSaveAction::SaveNew { name, upload_thumbnail, make_public } => {
+                ApiSaveAction::SaveNew { name, upload_thumbnail, make_public, save_animation } => {
                     let name = name.clone();
                     let upload_thumbnail = *upload_thumbnail;
                     let make_public = *make_public;
+
+                    // Track that we need to save animation after flame save completes
+                    self.pending_animation_save = *save_animation;
 
                     let visibility = if make_public {
                         Some(crate::api::types::ApiVisibility::Public)
@@ -1211,6 +1222,166 @@ impl App {
             }
         }
     }
+
+    /// Handle animation API save/update — process async results and new requests
+    fn handle_save_animation_online(&mut self, ui_response: &UiResponse) {
+        use crate::ui::ApiAnimationSaveAction;
+
+        // Check for completed async animation save
+        if self.api_animation_save_in_progress {
+            if let Ok(mut result) = self.api_animation_save_result.lock() {
+                if let Some(save_result) = result.take() {
+                    self.api_animation_save_in_progress = false;
+                    match save_result {
+                        Ok(animation_id) => {
+                            log::info!("Animation saved/updated online: {}", animation_id);
+                            self.api_animation_id = Some(animation_id);
+                            let name = self.animation_controller.animation
+                                .as_ref()
+                                .map(|a| a.name.clone())
+                                .unwrap_or_default();
+                            self.egui_layer.show_api_notification(
+                                &rust_i18n::t!("api.animation_save_success", name = name),
+                                false,
+                            );
+                        }
+                        Err(e) => {
+                            log::error!("Failed to save animation online: {}", e);
+                            self.egui_layer.show_api_notification(
+                                &rust_i18n::t!("api.animation_save_error", error = e),
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle new animation save/update request (from Animation Panel buttons)
+        let action = &ui_response.api_animation_save_action;
+        let should_act = !matches!(action, ApiAnimationSaveAction::None) && !self.api_animation_save_in_progress;
+        if should_act {
+            match action {
+                ApiAnimationSaveAction::SaveNew => {
+                    if let Some(flame_id) = self.api_flame_id.clone() {
+                        self.trigger_animation_save(&flame_id);
+                    } else {
+                        log::error!("Animation save requested but no api_flame_id");
+                    }
+                }
+                ApiAnimationSaveAction::Update => {
+                    if let Some(animation_id) = self.api_animation_id.clone() {
+                        self.trigger_animation_update(&animation_id);
+                    } else {
+                        log::error!("Animation update requested but no api_animation_id");
+                    }
+                }
+                ApiAnimationSaveAction::None => unreachable!(),
+            }
+        }
+    }
+
+    /// Trigger saving the current animation to the API as a new entry.
+    fn trigger_animation_save(&mut self, flame_id: &str) {
+        let animation = match self.animation_controller.animation.as_ref() {
+            Some(a) => a.clone(),
+            None => return,
+        };
+
+        let settings = self.config_manager.system_settings();
+        let base_url = settings.api_base_url.clone();
+        let token = match settings.auth_token.clone() {
+            Some(t) => t,
+            None => {
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("api.animation_save_error", error = "Not signed in"),
+                    true,
+                );
+                return;
+            }
+        };
+
+        let result_slot = self.api_animation_save_result.clone();
+        self.api_animation_save_in_progress = true;
+
+        // Clear stale result
+        if let Ok(mut slot) = result_slot.lock() {
+            slot.take();
+        }
+
+        let flame_id = flame_id.to_string();
+        let name = animation.name.clone();
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = save_animation_online(&base_url, &token, animation, &name, &flame_id).await;
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(result);
+                }
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            std::thread::spawn(move || {
+                let result = pollster::block_on(save_animation_online(&base_url, &token, animation, &name, &flame_id));
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(result);
+                }
+            });
+        }
+    }
+
+    /// Trigger updating an existing animation on the API.
+    fn trigger_animation_update(&mut self, animation_id: &str) {
+        let animation = match self.animation_controller.animation.as_ref() {
+            Some(a) => a.clone(),
+            None => return,
+        };
+
+        let settings = self.config_manager.system_settings();
+        let base_url = settings.api_base_url.clone();
+        let token = match settings.auth_token.clone() {
+            Some(t) => t,
+            None => {
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("api.animation_save_error", error = "Not signed in"),
+                    true,
+                );
+                return;
+            }
+        };
+
+        let result_slot = self.api_animation_save_result.clone();
+        self.api_animation_save_in_progress = true;
+
+        // Clear stale result
+        if let Ok(mut slot) = result_slot.lock() {
+            slot.take();
+        }
+
+        let animation_id = animation_id.to_string();
+        let name = animation.name.clone();
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = update_animation_online(&base_url, &token, animation, &animation_id, &name).await;
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(result);
+                }
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            std::thread::spawn(move || {
+                let result = pollster::block_on(update_animation_online(&base_url, &token, animation, &animation_id, &name));
+                if let Ok(mut slot) = result_slot.lock() {
+                    *slot = Some(result);
+                }
+            });
+        }
+    }
 }
 
 /// Render a thumbnail and encode as PNG bytes (async helper for WASM).
@@ -1280,5 +1451,36 @@ async fn delete_flame_online(
     api.set_token(token);
     api.delete_flame(flame_id)
         .await
+        .map_err(|e| e.to_string())
+}
+
+/// Save an animation to the API as new (async helper).
+async fn save_animation_online(
+    base_url: &str,
+    token: &str,
+    animation: crate::animation::Animation,
+    name: &str,
+    flame_id: &str,
+) -> Result<String, String> {
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
+    api.save_animation(&animation, Some(name), Some(flame_id), None)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Update an existing animation on the API (async helper).
+async fn update_animation_online(
+    base_url: &str,
+    token: &str,
+    animation: crate::animation::Animation,
+    animation_id: &str,
+    name: &str,
+) -> Result<String, String> {
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token(token);
+    api.update_animation(animation_id, &animation, Some(name))
+        .await
+        .map(|resp| resp.id)
         .map_err(|e| e.to_string())
 }
