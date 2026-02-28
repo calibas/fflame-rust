@@ -1095,14 +1095,13 @@ impl App {
                         self.egui_layer.request_online_refresh();
 
                         // If pending animation save was requested, trigger it now
-                        if self.pending_animation_save {
-                            self.pending_animation_save = false;
-                            self.trigger_animation_save(&flame_id);
+                        if let Some(anim_visibility) = self.pending_animation_save.take() {
+                            self.trigger_animation_save(&flame_id, anim_visibility);
                         }
                     }
                     Err(e) => {
                         log::error!("Failed to save flame online: {}", e);
-                        self.pending_animation_save = false;
+                        self.pending_animation_save = None;
                         self.egui_layer.show_api_notification(
                             &rust_i18n::t!("api.save_error", error = e),
                             true,
@@ -1147,11 +1146,15 @@ impl App {
                     let upload_thumbnail = *upload_thumbnail;
                     let make_public = *make_public;
 
-                    // Track that we need to save animation after flame save completes
-                    self.pending_animation_save = *save_animation;
-
                     let visibility = if make_public {
                         Some(crate::api::types::ApiVisibility::Public)
+                    } else {
+                        None
+                    };
+
+                    // Track that we need to save animation after flame save completes
+                    self.pending_animation_save = if *save_animation {
+                        Some(visibility)
                     } else {
                         None
                     };
@@ -1264,7 +1267,7 @@ impl App {
             match action {
                 ApiAnimationSaveAction::SaveNew => {
                     if let Some(flame_id) = self.api_flame_id.clone() {
-                        self.trigger_animation_save(&flame_id);
+                        self.trigger_animation_save(&flame_id, None);
                     } else {
                         log::error!("Animation save requested but no api_flame_id");
                     }
@@ -1282,7 +1285,7 @@ impl App {
     }
 
     /// Trigger saving the current animation to the API as a new entry.
-    fn trigger_animation_save(&mut self, flame_id: &str) {
+    fn trigger_animation_save(&mut self, flame_id: &str, visibility: Option<crate::api::types::ApiVisibility>) {
         let animation = match self.animation_controller.animation.as_ref() {
             Some(a) => a.clone(),
             None => return,
@@ -1315,7 +1318,7 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         {
             wasm_bindgen_futures::spawn_local(async move {
-                let result = save_animation_online(&base_url, &token, animation, &name, &flame_id).await;
+                let result = save_animation_online(&base_url, &token, animation, &name, &flame_id, visibility).await;
                 if let Ok(mut slot) = result_slot.lock() {
                     *slot = Some(result);
                 }
@@ -1324,7 +1327,7 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         {
             std::thread::spawn(move || {
-                let result = pollster::block_on(save_animation_online(&base_url, &token, animation, &name, &flame_id));
+                let result = pollster::block_on(save_animation_online(&base_url, &token, animation, &name, &flame_id, visibility));
                 if let Ok(mut slot) = result_slot.lock() {
                     *slot = Some(result);
                 }
@@ -1461,10 +1464,11 @@ async fn save_animation_online(
     animation: crate::animation::Animation,
     name: &str,
     flame_id: &str,
+    visibility: Option<crate::api::types::ApiVisibility>,
 ) -> Result<String, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    api.save_animation(&animation, Some(name), Some(flame_id), None)
+    api.save_animation(&animation, Some(name), Some(flame_id), visibility)
         .await
         .map_err(|e| e.to_string())
 }
