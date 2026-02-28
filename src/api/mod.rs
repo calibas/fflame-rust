@@ -179,8 +179,8 @@ impl ApiState {
             client::api_post(&flame_url, &flame_req, &token).await?;
         let flame_id = flame_resp.id;
 
-        // 2. Create the palette
-        let palette_req = sync::palette_to_create_request(&config.palette);
+        // 2. Create the palette (same visibility as flame)
+        let palette_req = sync::palette_to_create_request(&config.palette, visibility);
         let palette_url = build_url(&self.base_url, "/api/palettes");
         let palette_resp: PaletteResponse =
             client::api_post(&palette_url, &palette_req, &token).await?;
