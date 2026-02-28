@@ -411,3 +411,10 @@ pub async fn api_put_binary(
 ) -> FetchResult<()> {
     api_put_binary_raw(url, data, content_type, token).await
 }
+
+/// POST logout (clears server session/cookie). Expects 204 No Content.
+pub async fn api_post_logout(base_url: &str) -> FetchResult<()> {
+    let url = build_url(base_url, "/api/auth/logout");
+    api_request_raw("POST", &url, None, None).await?;
+    Ok(())
+}

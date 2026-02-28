@@ -270,12 +270,12 @@
 </head>
 <body>
     <!-- Auth bar (top-right corner) -->
-    <div id="auth-bar">
+<!--     <div id="auth-bar">
         <span id="auth-status"></span>
-    </div>
+    </div> -->
 
     <!-- Auth modal (login / register) -->
-    <div id="auth-modal">
+<!--     <div id="auth-modal">
         <div class="modal-box">
             <h2 id="auth-modal-title">Sign In</h2>
             <div class="auth-error" id="auth-error"></div>
@@ -293,7 +293,7 @@
                 Don't have an account? <a id="auth-toggle-link">Register</a>
             </div>
         </div>
-    </div>
+    </div> -->
 
     <div id="canvas-container">
         <canvas id="canvas"></canvas>
@@ -527,7 +527,7 @@
 
                 // Initialize auth wrapper (WasmApi is constructed inside WASM,
                 // but we can also create a standalone instance for API ops)
-                try {
+/*                 try {
                     const wasmApi = new WasmApi();
                     fflameAuth.init(wasmApi);
                     window.wasmApi = wasmApi;
@@ -535,7 +535,7 @@
                 } catch (e) {
                     // WasmApi may not be available if built without --features api
                     console.log('WasmApi not available (built without api feature?):', e.message);
-                }
+                } */
 
                 // Window resize handler
                 let resizeTimeout;

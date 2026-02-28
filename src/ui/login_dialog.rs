@@ -77,6 +77,10 @@ pub fn render_login_dialog(
     // Poll for completed async register
     completed = completed.or_else(|| poll_result(state, config_manager, true));
 
+    // On WASM, cookies handle auth — use auth_email as sign-in indicator
+    #[cfg(target_arch = "wasm32")]
+    let is_signed_in = config_manager.system_settings().auth_email.is_some();
+    #[cfg(not(target_arch = "wasm32"))]
     let is_signed_in = config_manager.system_settings().auth_token.is_some();
 
     if is_signed_in {
@@ -353,9 +357,13 @@ fn poll_result(
             Ok(success) => {
                 // Save to SystemSettings
                 let settings = config_manager.system_settings_mut();
-                settings.auth_token = Some(success.token.clone());
                 settings.auth_email = Some(success.email.clone());
-                let _ = settings.save();
+                // On desktop, save token and persist; on WASM, cookies handle auth
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    settings.auth_token = Some(success.token.clone());
+                    let _ = settings.save();
+                }
 
                 // Clear form fields
                 if is_register {
