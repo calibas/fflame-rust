@@ -383,6 +383,15 @@ impl ApiState {
         Ok(sync::animation_response_to_animation(&resp))
     }
 
+    /// Load an animation from the API, also returning its linked flame_id if any.
+    pub async fn load_animation_with_flame_id(&self, animation_id: &str) -> FetchResult<(crate::animation::Animation, Option<String>)> {
+        let token = self.require_token()?;
+        let url = build_url(&self.base_url, &format!("/api/animations/{}", animation_id));
+        let resp: AnimationResponse = client::api_get(&url, &token).await?;
+        let flame_id = resp.flame_id.clone();
+        Ok((sync::animation_response_to_animation(&resp), flame_id))
+    }
+
     /// Delete an animation from the API.
     pub async fn delete_animation(&self, animation_id: &str) -> FetchResult<()> {
         let token = self.require_token()?;

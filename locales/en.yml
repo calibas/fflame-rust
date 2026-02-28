@@ -877,6 +877,9 @@ api:
   animation_update_online: "Update Online"
   animation_save_success: "Animation saved online: %{name}"
   animation_save_error: "Failed to save animation: %{error}"
+  url_load_flame_success: "Loaded flame '%{name}' from URL"
+  url_load_animation_success: "Loaded animation '%{name}' from URL"
+  url_load_error: "Failed to load from URL: %{error}"
 
 # Config Import/Export Dialog
 config_dialog:

@@ -274,6 +274,14 @@ use crate::util::PerformanceMetrics;
 use crate::config::ConfigManager;
 use crate::animation::AnimationController;
 
+/// Data loaded from a URL deep-link (?flame=uuid or ?animation=uuid)
+pub(super) enum UrlLoadedData {
+    /// A flame config loaded from the API, with its server ID
+    Flame(crate::config::FractalConfig, String),
+    /// An animation loaded from the API, with optional flame config, animation ID, and flame ID
+    Animation(crate::animation::Animation, Option<crate::config::FractalConfig>, String, Option<String>),
+}
+
 pub struct App {
     // Window reference (needed for fullscreen toggle)
     pub(super) window: Arc<Window>,
@@ -379,6 +387,10 @@ pub struct App {
     /// The inner Option carries the visibility to apply.
     pub(super) pending_animation_save: Option<Option<crate::api::types::ApiVisibility>>,
 
+    // URL deep-link loading (WASM: ?flame=uuid or ?animation=uuid)
+    pub(super) url_load_result: std::sync::Arc<std::sync::Mutex<Option<Result<UrlLoadedData, String>>>>,
+    pub(super) url_load_in_progress: bool,
+
     // API connectivity tracking
     pub(super) health_check_result: std::sync::Arc<std::sync::Mutex<Option<crate::api::HealthCheckOutcome>>>,
     pub(super) health_check_in_progress: bool,
@@ -386,7 +398,12 @@ pub struct App {
     pub(super) last_health_check: Option<web_time::Instant>,
 }
 impl App {
-    pub async fn run(event_loop: EventLoop<()>, window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(
+        event_loop: EventLoop<()>,
+        window: Arc<Window>,
+        #[cfg(target_arch = "wasm32")] url_flame_id: Option<String>,
+        #[cfg(target_arch = "wasm32")] url_animation_id: Option<String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let gpu = GpuContext::new(window.clone()).await.expect("GPU init failed");
         let egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
@@ -490,6 +507,8 @@ impl App {
             api_animation_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_animation_save_in_progress: false,
             pending_animation_save: None,
+            url_load_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            url_load_in_progress: false,
             health_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             health_check_in_progress: false,
             api_connectivity: crate::api::ApiConnectivity::Unknown,
@@ -513,6 +532,12 @@ impl App {
 
         // Trigger initial API health check if a token exists (desktop: Bearer token, WASM: cookie)
         app.maybe_trigger_health_check();
+
+        // WASM: trigger deep-link load from URL params (?flame=uuid or ?animation=uuid)
+        #[cfg(target_arch = "wasm32")]
+        if url_flame_id.is_some() || url_animation_id.is_some() {
+            app.trigger_url_load(url_flame_id, url_animation_id);
+        }
 
         #[allow(deprecated)]
         event_loop.run(move |event, elwt| {
