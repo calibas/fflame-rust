@@ -35,6 +35,7 @@ impl App {
         self.handle_path_filters(ui_response);
         self.handle_save_online(ui_response);
         self.handle_save_animation_online(ui_response);
+        self.handle_url_load();
     }
 
     /// Handle config export, save, and import operations
@@ -1385,6 +1386,93 @@ impl App {
             });
         }
     }
+
+    /// Trigger loading a flame or animation from URL deep-link params (WASM only).
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn trigger_url_load(&mut self, flame_id: Option<String>, animation_id: Option<String>) {
+        use super::UrlLoadedData;
+
+        let base_url = self.config_manager.system_settings().api_base_url.clone();
+        let result_slot = self.url_load_result.clone();
+        self.url_load_in_progress = true;
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = load_from_url(&base_url, flame_id, animation_id).await;
+            if let Ok(mut slot) = result_slot.lock() {
+                *slot = Some(result);
+            }
+        });
+    }
+
+    /// Poll for completed URL deep-link load and apply the result.
+    fn handle_url_load(&mut self) {
+        use super::UrlLoadedData;
+
+        if !self.url_load_in_progress {
+            return;
+        }
+
+        let loaded = self.url_load_result.lock().ok().and_then(|mut r| r.take());
+        let Some(result) = loaded else { return };
+
+        self.url_load_in_progress = false;
+
+        match result {
+            Ok(UrlLoadedData::Flame(config, flame_id)) => {
+                let name = config.flame.name.clone();
+                log::info!("URL load: flame '{}' ({})", name, flame_id);
+                if let Err(e) = self.load_config_with_undo(config, format!("Load flame from URL: {}", name)) {
+                    log::error!("Failed to load flame from URL: {}", e);
+                    self.egui_layer.show_api_notification(
+                        &rust_i18n::t!("api.url_load_error", error = e),
+                        true,
+                    );
+                    return;
+                }
+                self.api_flame_id = Some(flame_id);
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("api.url_load_flame_success", name = name),
+                    false,
+                );
+            }
+            Ok(UrlLoadedData::Animation(animation, flame_config, animation_id, flame_id)) => {
+                let anim_name = animation.name.clone();
+                log::info!("URL load: animation '{}' ({})", anim_name, animation_id);
+
+                // Load the flame config first if we have one
+                if let Some(config) = flame_config {
+                    let flame_name = config.flame.name.clone();
+                    if let Err(e) = self.load_config_with_undo(config, format!("Load flame for animation: {}", flame_name)) {
+                        log::error!("Failed to load flame for animation: {}", e);
+                    }
+                }
+
+                // Load the animation
+                let generators = animation.generators.clone();
+                let duration = animation.duration;
+                self.animation_controller.load(animation);
+                self.egui_layer.signal_panel_state.restore_generators(
+                    generators, &mut self.signal_manager, duration,
+                );
+
+                self.api_animation_id = Some(animation_id);
+                if let Some(fid) = flame_id {
+                    self.api_flame_id = Some(fid);
+                }
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("api.url_load_animation_success", name = anim_name),
+                    false,
+                );
+            }
+            Err(e) => {
+                log::error!("Failed to load from URL: {}", e);
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("api.url_load_error", error = e),
+                    true,
+                );
+            }
+        }
+    }
 }
 
 /// Render a thumbnail and encode as PNG bytes (async helper for WASM).
@@ -1487,4 +1575,46 @@ async fn update_animation_online(
         .await
         .map(|resp| resp.id)
         .map_err(|e| e.to_string())
+}
+
+/// Load a flame and/or animation from the API by URL params (async helper).
+/// Prioritizes `animation_id` over `flame_id` if both are present.
+#[cfg(target_arch = "wasm32")]
+async fn load_from_url(
+    base_url: &str,
+    flame_id: Option<String>,
+    animation_id: Option<String>,
+) -> Result<super::UrlLoadedData, String> {
+    // WASM uses cookie auth — empty token is fine (require_token returns Ok(""))
+    let mut api = crate::api::ApiState::new(base_url);
+    api.set_token("");
+
+    if let Some(animation_id) = animation_id {
+        // Load animation and its linked flame_id from the API
+        let (animation, resp_flame_id) = api.load_animation_with_flame_id(&animation_id).await
+            .map_err(|e| format!("Failed to load animation: {}", e))?;
+
+        // Use flame_id from URL param, or fall back to the one from the animation response
+        let effective_flame_id = flame_id.or(resp_flame_id);
+
+        let flame_config = if let Some(ref fid) = effective_flame_id {
+            match api.load_flame(fid).await {
+                Ok(config) => Some(config),
+                Err(e) => {
+                    log::warn!("Could not load linked flame {}: {}", fid, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        Ok(super::UrlLoadedData::Animation(animation, flame_config, animation_id, effective_flame_id))
+    } else if let Some(flame_id) = flame_id {
+        let config = api.load_flame(&flame_id).await
+            .map_err(|e| format!("Failed to load flame: {}", e))?;
+        Ok(super::UrlLoadedData::Flame(config, flame_id))
+    } else {
+        Err("No flame or animation ID provided".to_string())
+    }
 }

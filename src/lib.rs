@@ -250,6 +250,35 @@ async fn export_animation_async(
     Ok(())
 }
 
+/// Parse URL query parameters for deep-linking (?flame=uuid or ?animation=uuid).
+/// Returns (flame_id, animation_id).
+#[cfg(target_arch = "wasm32")]
+fn parse_url_load_params() -> (Option<String>, Option<String>) {
+    let search = match web_sys::window()
+        .and_then(|w| w.location().search().ok())
+    {
+        Some(s) if !s.is_empty() => s,
+        _ => return (None, None),
+    };
+
+    // Strip leading '?'
+    let query = search.trim_start_matches('?');
+    let mut flame_id = None;
+    let mut animation_id = None;
+
+    for pair in query.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            match key {
+                "flame" if !value.is_empty() => flame_id = Some(value.to_string()),
+                "animation" if !value.is_empty() => animation_id = Some(value.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    (flame_id, animation_id)
+}
+
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = winit::event_loop::EventLoop::new()?;
 
@@ -306,7 +335,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             window
         };
 
-        App::run(event_loop, std::sync::Arc::new(window)).await
+        // Parse URL query params for deep-linking (?flame=uuid or ?animation=uuid)
+        let (url_flame_id, url_animation_id) = parse_url_load_params();
+        if url_flame_id.is_some() || url_animation_id.is_some() {
+            log::info!("URL params: flame={:?}, animation={:?}", url_flame_id, url_animation_id);
+        }
+
+        App::run(event_loop, std::sync::Arc::new(window), url_flame_id, url_animation_id).await
     }
 
     #[cfg(not(target_arch = "wasm32"))]
