@@ -931,8 +931,14 @@ impl App {
         // 2. Trigger periodic check (every 30 seconds)
         if !self.health_check_in_progress {
             let settings = self.config_manager.system_settings();
+            // On WASM, cookies handle auth — don't require auth_token
+            #[cfg(target_arch = "wasm32")]
+            let has_auth = true;
+            #[cfg(not(target_arch = "wasm32"))]
+            let has_auth = settings.auth_token.is_some();
+
             let should_check = settings.online_mode
-                && settings.auth_token.is_some()
+                && has_auth
                 && self.last_health_check
                     .map(|t| t.elapsed().as_secs() >= 30)
                     .unwrap_or(true);
@@ -949,9 +955,17 @@ impl App {
         let prev = self.api_connectivity;
 
         match outcome {
-            HealthCheckOutcome::Authenticated => {
+            HealthCheckOutcome::Authenticated(email) => {
                 self.api_connectivity = ApiConnectivity::Online;
-                log::debug!("Health check OK: authenticated");
+                log::debug!("Health check OK: authenticated (email: {:?})", email);
+
+                // On WASM, store email from cookie-based session (no token needed)
+                #[cfg(target_arch = "wasm32")]
+                if email.is_some() {
+                    let settings = self.config_manager.system_settings_mut();
+                    settings.auth_email = email;
+                    // Don't persist — in-memory only for WASM cookie auth
+                }
             }
             HealthCheckOutcome::TokenExpired => {
                 self.api_connectivity = ApiConnectivity::Online;
@@ -960,8 +974,13 @@ impl App {
                 // Clear auth from SystemSettings
                 {
                     let settings = self.config_manager.system_settings_mut();
-                    settings.auth_token = None;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        settings.auth_token = None;
+                    }
                     settings.auth_email = None;
+                    // On WASM, don't persist — cookie is already expired server-side
+                    #[cfg(not(target_arch = "wasm32"))]
                     let _ = settings.save();
                 }
 
@@ -1001,6 +1020,11 @@ impl App {
     fn trigger_health_check(&mut self) {
         let settings = self.config_manager.system_settings();
         let base_url = settings.api_base_url.clone();
+
+        // On WASM, cookies handle auth — no token needed
+        #[cfg(target_arch = "wasm32")]
+        let token = String::new();
+        #[cfg(not(target_arch = "wasm32"))]
         let token = match settings.auth_token.clone() {
             Some(t) => t,
             None => return,
@@ -1032,11 +1056,17 @@ impl App {
         }
     }
 
-    /// Trigger a health check if conditions are met (has token, online mode, not in flight).
+    /// Trigger a health check if conditions are met (has token/cookies, online mode, not in flight).
     pub(super) fn maybe_trigger_health_check(&mut self) {
+        // On WASM, cookies handle auth — don't require auth_token
+        #[cfg(target_arch = "wasm32")]
+        let has_auth = true;
+        #[cfg(not(target_arch = "wasm32"))]
+        let has_auth = self.config_manager.system_settings().auth_token.is_some();
+
         if !self.health_check_in_progress
             && self.config_manager.system_settings().online_mode
-            && self.config_manager.system_settings().auth_token.is_some()
+            && has_auth
         {
             self.trigger_health_check();
         }

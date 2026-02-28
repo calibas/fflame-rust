@@ -978,12 +978,25 @@ impl EguiLayer {
 
         // Handle sign out action (from menu bar or account panel)
         if menu_actions.file.sign_out || sign_out_requested {
-            // Clear auth from SystemSettings (cross-platform)
+            // Clear auth from SystemSettings
             {
                 let settings = config_manager.system_settings_mut();
-                settings.auth_token = None;
                 settings.auth_email = None;
-                let _ = settings.save();
+                // On desktop, clear token and persist; on WASM, cookies handle auth
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    settings.auth_token = None;
+                    let _ = settings.save();
+                }
+            }
+
+            // On WASM, call logout endpoint to clear server cookie (fire-and-forget)
+            #[cfg(target_arch = "wasm32")]
+            {
+                let base_url = config_manager.system_settings().api_base_url.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let _ = crate::api::client::api_post_logout(&base_url).await;
+                });
             }
 
             // Clear cloud palette state
