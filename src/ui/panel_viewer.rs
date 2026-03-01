@@ -1084,9 +1084,18 @@ impl<'a> PanelViewer<'a> {
         if let Some(panel) = self.context.fractal_browser_panel.as_mut() {
             let settings = self.context.config_manager.system_settings();
             let online_mode = settings.online_mode;
+            // Desktop: use Bearer token for auth; WASM: cookies handle auth,
+            // use auth_email as sign-in indicator (empty token — cookies sent automatically)
+            #[cfg(not(target_arch = "wasm32"))]
             let auth: Option<(&str, &str)> = settings.auth_token.as_ref().map(|token| {
                 (settings.api_base_url.as_str(), token.as_str())
             });
+            #[cfg(target_arch = "wasm32")]
+            let auth: Option<(&str, &str)> = if settings.auth_email.is_some() {
+                Some((settings.api_base_url.as_str(), ""))
+            } else {
+                None
+            };
             let response = panel.render(ui, online_mode, auth);
 
             // Handle file open request from Files tab

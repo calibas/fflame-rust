@@ -224,14 +224,22 @@ impl FractalBrowserPanel {
         std::mem::take(&mut self.files_open_requested)
     }
 
-    /// Clear online tab data (used when signing out)
+    /// Clear online tab data (used when signing out).
+    /// Keeps `online_fetched = true` so the auto-fetch doesn't re-trigger
+    /// and hammer the API with 401s. User must sign in + click Refresh.
     pub fn clear_online_data(&mut self) {
         self.online_flames.clear();
-        self.online_fetched = false;
+        self.online_fetched = true; // Don't auto-retry after sign-out
         self.online_loading = false;
         self.online_error = None;
         self.online_search_name.clear();
         self.online_search_render_mode = 0;
+    }
+
+    /// Reset online tab for a fresh session (used after sign-in).
+    /// Sets `online_fetched = false` so the next visit auto-fetches.
+    pub fn reset_online_for_new_session(&mut self) {
+        self.online_fetched = false;
     }
 
     // ========== Thumbnail generation (desktop) ==========
@@ -435,10 +443,10 @@ impl FractalBrowserPanel {
             if let Ok(mut slot) = self.online_list_result.lock() {
                 if let Some(result) = slot.take() {
                     self.online_loading = false;
+                    self.online_fetched = true; // Mark as fetched even on error (don't auto-retry)
                     match result {
                         Ok(flames) => {
                             self.online_flames = flames;
-                            self.online_fetched = true;
                             self.online_error = None;
                         }
                         Err(e) => {
@@ -501,8 +509,8 @@ impl FractalBrowserPanel {
             }
         }
 
-        // Auto-fetch on first visit
-        if !self.online_fetched && !self.online_loading {
+        // Auto-fetch on first visit (only if signed in — avoids 401 loop after sign-out)
+        if !self.online_fetched && !self.online_loading && self.auth_credentials.is_some() {
             self.trigger_fetch_flames();
         }
 
