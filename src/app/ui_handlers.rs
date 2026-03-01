@@ -931,9 +931,9 @@ impl App {
         // 2. Trigger periodic check (every 30 seconds)
         if !self.health_check_in_progress {
             let settings = self.config_manager.system_settings();
-            // On WASM, cookies handle auth — don't require auth_token
+            // On WASM, use auth_email as session indicator (cleared on TokenExpired)
             #[cfg(target_arch = "wasm32")]
-            let has_auth = true;
+            let has_auth = settings.auth_email.is_some();
             #[cfg(not(target_arch = "wasm32"))]
             let has_auth = settings.auth_token.is_some();
 
