@@ -14,13 +14,14 @@
 use serde::{Deserialize, Serialize};
 
 /// Current system settings format version
-pub const CURRENT_SETTINGS_VERSION: u32 = 2;
+pub const CURRENT_SETTINGS_VERSION: u32 = 3;
 
 /// Version history for settings migrations
 #[allow(dead_code)]
 pub const VERSION_HISTORY: &[&str] = &[
     "1: Initial versioned release with compact serialization",
     "2: Added online_mode, api_base_url, auth credentials",
+    "3: Added encrypted saved_credentials for desktop auto-login",
 ];
 
 /// System settings - device-specific application preferences
@@ -68,6 +69,11 @@ pub struct SystemSettings {
     /// Email of the signed-in user (display only)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_email: Option<String>,
+
+    /// Encrypted saved credentials for auto-login (desktop only)
+    #[cfg(not(target_arch = "wasm32"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_credentials: Option<crate::storage::credentials::SavedCredentials>,
 
     // Export Defaults
     /// Default export width in pixels
@@ -149,6 +155,8 @@ impl Default for SystemSettings {
             api_base_url: default_api_base_url(),
             auth_token: None,
             auth_email: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            saved_credentials: None,
             default_export_width: default_export_width(),
             default_export_height: default_export_height(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -279,6 +287,7 @@ impl SystemSettings {
             settings = match version {
                 0 => Self::migrate_v0_to_v1(settings)?,
                 1 => Self::migrate_v1_to_v2(settings)?,
+                2 => Self::migrate_v2_to_v3(settings)?,
                 _ => {
                     return Err(serde_json::Error::io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -305,6 +314,13 @@ impl SystemSettings {
     /// v2: Added online_mode, api_base_url, auth credentials
     fn migrate_v1_to_v2(settings: Self) -> Result<Self, serde_json::Error> {
         // No field changes needed - serde(default) handles new fields
+        Ok(settings)
+    }
+
+    /// Migrate from v2 to v3
+    /// v3: Added encrypted saved_credentials for desktop auto-login
+    fn migrate_v2_to_v3(settings: Self) -> Result<Self, serde_json::Error> {
+        // No field changes needed - serde(default) handles new Optional field
         Ok(settings)
     }
 

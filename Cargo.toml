@@ -111,6 +111,8 @@ pollster = { version = "0.4", features = ["macro"] }
 clap = { version = "4.5", features = ["derive"] }
 egui-wgpu = "0.33"
 ureq = "2"
+aes-gcm = "0.10"
+base64 = "0.22"
 
 [features]
 default = []

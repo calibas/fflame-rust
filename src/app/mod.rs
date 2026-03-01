@@ -533,6 +533,15 @@ impl App {
         // Trigger initial API health check if a token exists (desktop: Bearer token, WASM: cookie)
         app.maybe_trigger_health_check();
 
+        // Desktop: attempt auto-login from saved encrypted credentials
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            crate::ui::login_dialog::try_auto_login(
+                app.egui_layer.login_dialog_state_mut(),
+                &app.config_manager,
+            );
+        }
+
         // WASM: trigger deep-link load from URL params (?flame=uuid or ?animation=uuid)
         #[cfg(target_arch = "wasm32")]
         if url_flame_id.is_some() || url_animation_id.is_some() {

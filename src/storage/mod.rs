@@ -13,6 +13,8 @@
 //! - WASM (Browser): localStorage for small data, IndexedDB for large data
 
 pub mod backend;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod credentials;
 pub mod custom_palettes;
 pub mod settings;
 pub mod thumbnail_cache;
