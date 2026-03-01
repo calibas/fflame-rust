@@ -285,6 +285,12 @@ impl EguiLayer {
         }
     }
 
+    /// Mutable access to login dialog state (for auto-login on startup)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn login_dialog_state_mut(&mut self) -> &mut login_dialog::LoginDialogState {
+        &mut self.login_dialog_state
+    }
+
     pub fn handle_event(&mut self, event: &WindowEvent, window: &Window) -> bool {
         let response = self.state.on_window_event(window, event);
 
@@ -498,6 +504,23 @@ impl EguiLayer {
         #[cfg(target_arch = "wasm32")]
         if let Some(text) = self.web_clipboard.take_paste() {
             raw_input.events.push(egui_dock::egui::Event::Paste(text));
+        }
+
+        // Desktop: poll auto-login result (runs even when Login panel is not visible)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.login_dialog_state.loading {
+                if let Some(success) = login_dialog::poll_auto_login_result(
+                    &mut self.login_dialog_state,
+                    config_manager,
+                ) {
+                    self.api_notification = Some(ApiNotification {
+                        message: format!("{} ({})", t!("auth.signed_in"), success.email),
+                        is_error: false,
+                        created_at: web_time::Instant::now(),
+                    });
+                }
+            }
         }
 
         // Note: Config change tracking now handled by ConfigManager.get_pending_actions()
@@ -986,6 +1009,7 @@ impl EguiLayer {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     settings.auth_token = None;
+                    settings.saved_credentials = None;
                     let _ = settings.save();
                 }
             }

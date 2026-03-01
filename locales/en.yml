@@ -1606,3 +1606,4 @@ login:
   have_account: "Already have an account?"
   passwords_mismatch: "Passwords do not match"
   account_heading: "Account"
+  remember_me: "Remember me"

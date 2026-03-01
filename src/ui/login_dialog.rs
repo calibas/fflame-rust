@@ -34,6 +34,10 @@ pub struct LoginDialogState {
     pub reg_loading: bool,
     pub reg_error: Option<String>,
     pub reg_result: Arc<Mutex<Option<Result<LoginSuccess, String>>>>,
+
+    // Remember me (desktop only)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub remember_me: bool,
 }
 
 /// Successful login/register response data
@@ -57,6 +61,8 @@ impl Default for LoginDialogState {
             reg_loading: false,
             reg_error: None,
             reg_result: Arc::new(Mutex::new(None)),
+            #[cfg(not(target_arch = "wasm32"))]
+            remember_me: false,
         }
     }
 }
@@ -188,6 +194,13 @@ fn render_sign_in_form(
                 }
             }
         });
+
+        // Remember me checkbox (desktop only)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            ui.add_space(4.0);
+            ui.checkbox(&mut state.remember_me, t!("login.remember_me"));
+        }
 
         ui.add_space(8.0);
 
@@ -362,6 +375,27 @@ fn poll_result(
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     settings.auth_token = Some(success.token.clone());
+
+                    // Save or clear encrypted credentials based on "Remember me"
+                    if !is_register && state.remember_me {
+                        match crate::storage::credentials::save_credentials(
+                            &state.email,
+                            &state.password,
+                        ) {
+                            Ok(saved) => {
+                                settings.saved_credentials = Some(saved);
+                                log::info!("Saved encrypted credentials for auto-login");
+                            }
+                            Err(e) => {
+                                log::error!("Failed to encrypt credentials: {}", e);
+                                settings.saved_credentials = None;
+                            }
+                        }
+                    } else if !is_register {
+                        // Explicitly unchecked — clear any previously saved credentials
+                        settings.saved_credentials = None;
+                    }
+
                     let _ = settings.save();
                 }
 
@@ -384,6 +418,7 @@ fn poll_result(
                     state.reg_error = Some(err);
                 } else {
                     state.error = Some(err);
+                    state.password.clear();
                 }
             }
         }
@@ -465,6 +500,52 @@ async fn do_login(base_url: &str, email: &str, password: &str) -> Result<LoginSu
         token: resp.token,
         email: email.to_string(),
     })
+}
+
+/// Poll for auto-login result (called from main render loop, desktop only).
+/// Ensures the async login result is processed even when the Login panel isn't visible.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn poll_auto_login_result(
+    state: &mut LoginDialogState,
+    config_manager: &mut crate::config::ConfigManager,
+) -> Option<LoginSuccess> {
+    poll_result(state, config_manager, false)
+}
+
+/// Attempt auto-login from saved encrypted credentials (desktop only).
+/// Decrypts saved credentials, fills form fields, and triggers login.
+/// Returns true if auto-login was triggered.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn try_auto_login(
+    state: &mut LoginDialogState,
+    config_manager: &crate::config::ConfigManager,
+) -> bool {
+    let settings = config_manager.system_settings();
+
+    // Skip if already signed in or login in progress
+    if settings.auth_token.is_some() || state.loading {
+        return false;
+    }
+
+    let saved = match &settings.saved_credentials {
+        Some(s) => s.clone(),
+        None => return false,
+    };
+
+    match crate::storage::credentials::load_credentials(&saved) {
+        Ok((email, password)) => {
+            log::info!("Auto-login: decrypted saved credentials");
+            state.email = email;
+            state.password = password;
+            state.remember_me = true;
+            trigger_login(state, config_manager);
+            true
+        }
+        Err(e) => {
+            log::error!("Auto-login: failed to decrypt credentials: {}", e);
+            false
+        }
+    }
 }
 
 /// Perform the actual register API call
