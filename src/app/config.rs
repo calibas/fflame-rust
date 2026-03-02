@@ -6,6 +6,22 @@ impl App {
     /// Load config via ConfigManager and sync app state
     /// Creates snapshot-based undo entry and triggers GPU update
     pub fn load_config_with_undo(&mut self, config: FractalConfig, description: String) -> Result<(), String> {
+        // Log effects being loaded (diagnostic for API-loaded configs)
+        let color_count = config.color_effects.iter().filter(|e| e.enabled).count();
+        let density_count = config.density_effects.iter().filter(|e| e.enabled).count();
+        if color_count > 0 || density_count > 0 {
+            let color_names: Vec<&str> = config.color_effects.iter()
+                .filter(|e| e.enabled)
+                .map(|e| e.effect_type.as_str())
+                .collect();
+            let density_names: Vec<&str> = config.density_effects.iter()
+                .filter(|e| e.enabled)
+                .map(|e| e.effect_type.as_str())
+                .collect();
+            log::info!("Loading config with {} color effects {:?}, {} density effects {:?}",
+                color_count, color_names, density_count, density_names);
+        }
+
         // Load via ConfigManager (creates before/after snapshots for undo)
         self.config_manager
             .load_config(config, description)
@@ -14,6 +30,11 @@ impl App {
         // Sync all app state from ConfigManager (triggers GPU update)
         let active_config = self.config_manager.active_config().clone();
         self.import_config(active_config);
+
+        // Enable overwrite mode for immediate rendering (same as restore_base_config).
+        // Without this, the first frames after loading use normal blend mode (e.g. 10%),
+        // making the image very dim and effects invisible until accumulation builds up.
+        self.use_overwrite_next_frame = true;
 
         Ok(())
     }

@@ -493,7 +493,7 @@ impl EffectChainRunner {
         if enabled_effects.is_empty() {
             return false;
         }
-        log::info!("Running {} density effects", enabled_effects.len());
+        log::debug!("Running {} density effects (chain: {}x{})", enabled_effects.len(), self.width, self.height);
 
         // First, ensure all effects are compiled (before taking texture borrow)
         self.compile_effects(device, effects, EffectCategory::Density);
@@ -564,11 +564,18 @@ impl EffectChainRunner {
         if enabled_effects.is_empty() {
             return false;
         }
-        log::info!("Running {} color effects", enabled_effects.len());
+        log::debug!("Running {} color effects (chain: {}x{})", enabled_effects.len(), self.width, self.height);
 
         // First, ensure all effects are compiled (before taking texture borrow)
         self.compile_effects(device, effects, EffectCategory::Color);
         self.ensure_textures(device, EffectCategory::Color);
+
+        // Verify all enabled effects are actually compiled (diagnostic)
+        for effect in &enabled_effects {
+            if !self.compiled_effects.contains_key(&effect.effect_type) {
+                log::warn!("Effect '{}' is enabled but NOT compiled — likely unknown to registry", effect.effect_type);
+            }
+        }
 
         // Pre-allocate slots for all effects (before borrowing textures)
         let slot_offsets: Vec<u64> = enabled_effects.iter().map(|_| self.allocate_slot()).collect();
