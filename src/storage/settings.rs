@@ -170,6 +170,28 @@ impl Default for SystemSettings {
 }
 
 impl SystemSettings {
+    /// Check if the user is signed in (cross-platform).
+    /// Desktop: requires auth_token. WASM: requires auth_email (cookies handle auth).
+    pub fn is_signed_in(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        { self.auth_email.is_some() }
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.auth_token.is_some() }
+    }
+
+    /// Get the auth token for API requests (cross-platform).
+    /// Desktop: returns the stored Bearer token. WASM: returns empty string (cookies handle auth).
+    /// Returns None if not signed in.
+    pub fn get_auth_token(&self) -> Option<String> {
+        if !self.is_signed_in() {
+            return None;
+        }
+        #[cfg(target_arch = "wasm32")]
+        { Some(String::new()) }
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.auth_token.clone() }
+    }
+
     /// Export settings to JSON string with version header
     /// Uses compact serialization: omits fields that match defaults
     pub fn to_json(&self) -> Result<String, serde_json::Error> {

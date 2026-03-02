@@ -931,11 +931,7 @@ impl App {
         // 2. Trigger periodic check (every 30 seconds)
         if !self.health_check_in_progress {
             let settings = self.config_manager.system_settings();
-            // On WASM, use auth_email as session indicator (cleared on TokenExpired)
-            #[cfg(target_arch = "wasm32")]
-            let has_auth = settings.auth_email.is_some();
-            #[cfg(not(target_arch = "wasm32"))]
-            let has_auth = settings.auth_token.is_some();
+            let has_auth = settings.is_signed_in();
 
             let should_check = settings.online_mode
                 && has_auth
@@ -1021,12 +1017,13 @@ impl App {
         let settings = self.config_manager.system_settings();
         let base_url = settings.api_base_url.clone();
 
-        // On WASM, cookies handle auth — no token needed
-        #[cfg(target_arch = "wasm32")]
-        let token = String::new();
-        #[cfg(not(target_arch = "wasm32"))]
-        let token = match settings.auth_token.clone() {
+        // get_auth_token returns empty string on WASM (cookies handle auth)
+        let token = match settings.get_auth_token() {
             Some(t) => t,
+            // On WASM startup, auth_email may not be set yet — use empty token
+            #[cfg(target_arch = "wasm32")]
+            None => String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             None => return,
         };
 
@@ -1057,12 +1054,14 @@ impl App {
     }
 
     /// Trigger a health check if conditions are met (has token/cookies, online mode, not in flight).
+    /// Called once at startup — on WASM, always tries (cookies may already be valid).
     pub(super) fn maybe_trigger_health_check(&mut self) {
-        // On WASM, cookies handle auth — don't require auth_token
+        // On WASM, always try at startup — cookies may hold a valid session
+        // even before auth_email is set (the health check discovers the session)
         #[cfg(target_arch = "wasm32")]
         let has_auth = true;
         #[cfg(not(target_arch = "wasm32"))]
-        let has_auth = self.config_manager.system_settings().auth_token.is_some();
+        let has_auth = self.config_manager.system_settings().is_signed_in();
 
         if !self.health_check_in_progress
             && self.config_manager.system_settings().online_mode
@@ -1159,7 +1158,7 @@ impl App {
             // Read credentials from SystemSettings
             let settings = self.config_manager.system_settings();
             let base_url = settings.api_base_url.clone();
-            let token = match settings.auth_token.clone() {
+            let token = match settings.get_auth_token() {
                 Some(t) => t,
                 None => {
                     self.api_save_in_progress = false;
@@ -1324,7 +1323,7 @@ impl App {
 
         let settings = self.config_manager.system_settings();
         let base_url = settings.api_base_url.clone();
-        let token = match settings.auth_token.clone() {
+        let token = match settings.get_auth_token() {
             Some(t) => t,
             None => {
                 self.egui_layer.show_api_notification(
@@ -1375,7 +1374,7 @@ impl App {
 
         let settings = self.config_manager.system_settings();
         let base_url = settings.api_base_url.clone();
-        let token = match settings.auth_token.clone() {
+        let token = match settings.get_auth_token() {
             Some(t) => t,
             None => {
                 self.egui_layer.show_api_notification(

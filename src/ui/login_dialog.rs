@@ -83,11 +83,7 @@ pub fn render_login_dialog(
     // Poll for completed async register
     completed = completed.or_else(|| poll_result(state, config_manager, true));
 
-    // On WASM, cookies handle auth — use auth_email as sign-in indicator
-    #[cfg(target_arch = "wasm32")]
-    let is_signed_in = config_manager.system_settings().auth_email.is_some();
-    #[cfg(not(target_arch = "wasm32"))]
-    let is_signed_in = config_manager.system_settings().auth_token.is_some();
+    let is_signed_in = config_manager.system_settings().is_signed_in();
 
     if is_signed_in {
         render_account_info(ui, config_manager, sign_out);
@@ -523,7 +519,7 @@ pub fn try_auto_login(
     let settings = config_manager.system_settings();
 
     // Skip if already signed in or login in progress
-    if settings.auth_token.is_some() || state.loading {
+    if settings.is_signed_in() || state.loading {
         return false;
     }
 

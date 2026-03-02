@@ -308,9 +308,12 @@ impl<'a> PanelViewer<'a> {
             let (online_mode, auth_pair) = {
                 let settings = self.context.config_manager.system_settings();
                 let online = settings.online_mode;
-                let auth = settings.auth_token.as_ref().map(|token| {
-                    (settings.api_base_url.clone(), token.clone())
-                });
+                let auth = if settings.is_signed_in() {
+                    let token = settings.auth_token.clone().unwrap_or_default();
+                    Some((settings.api_base_url.clone(), token))
+                } else {
+                    None
+                };
                 (online, auth)
             };
             if online_mode {
@@ -1084,15 +1087,9 @@ impl<'a> PanelViewer<'a> {
         if let Some(panel) = self.context.fractal_browser_panel.as_mut() {
             let settings = self.context.config_manager.system_settings();
             let online_mode = settings.online_mode;
-            // Desktop: use Bearer token for auth; WASM: cookies handle auth,
-            // use auth_email as sign-in indicator (empty token — cookies sent automatically)
-            #[cfg(not(target_arch = "wasm32"))]
-            let auth: Option<(&str, &str)> = settings.auth_token.as_ref().map(|token| {
-                (settings.api_base_url.as_str(), token.as_str())
-            });
-            #[cfg(target_arch = "wasm32")]
-            let auth: Option<(&str, &str)> = if settings.auth_email.is_some() {
-                Some((settings.api_base_url.as_str(), ""))
+            let auth: Option<(&str, &str)> = if settings.is_signed_in() {
+                let token = settings.auth_token.as_deref().unwrap_or("");
+                Some((settings.api_base_url.as_str(), token))
             } else {
                 None
             };

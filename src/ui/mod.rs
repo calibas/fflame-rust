@@ -658,7 +658,7 @@ impl EguiLayer {
             }
 
             // Compute auth state before struct init (avoids borrow conflict)
-            let is_signed_in = read_auth_email(config_manager).is_some();
+            let is_signed_in = config_manager.system_settings().is_signed_in();
 
             // Normal mode: render menu bar and dock panels
             menu_bar::render_menu_bar(
