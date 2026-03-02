@@ -884,7 +884,14 @@ impl App {
         // - Otherwise, use the renderer's fractal texture
         if let Some(ref renderer) = self.flame_renderer {
             // Check if we have enabled color effects
-            let has_enabled_effects = self.config_manager.active_config().color_effects.iter().any(|e| e.enabled);
+            let config = self.config_manager.active_config();
+            let has_enabled_effects = config.color_effects.iter().any(|e| e.enabled);
+            let has_enabled_density_effects = config.density_effects.iter().any(|e| e.enabled);
+
+            // Ensure effect chain dimensions match renderer (defensive sync)
+            if has_enabled_effects || has_enabled_density_effects {
+                self.effect_chain.resize(&self.gpu.device, renderer.width, renderer.height);
+            }
 
             // Use effect output if available and effects are enabled
             let texture_view = if has_enabled_effects {
@@ -1747,6 +1754,7 @@ impl App {
             self.metrics.record_tonemap_time(t_tonemap.elapsed().as_secs_f64() * 1000.0);
 
             // Run color effects (after tonemap)
+            let color_effect_count = final_config.color_effects.iter().filter(|e| e.enabled).count();
             let effects_ran = self.effect_chain.run_color_effects(
                 &self.gpu.device,
                 &self.gpu.queue,
@@ -1757,7 +1765,6 @@ impl App {
 
             // If effects ran, re-register the effect output texture with egui
             if effects_ran {
-                log::info!("Effects ran, registering effect output texture");
                 if let Some(output_view) = self.effect_chain.get_color_output() {
                     self.egui_layer.register_fractal_texture(
                         &self.gpu.device,
@@ -1768,6 +1775,9 @@ impl App {
                 } else {
                     log::warn!("Effects ran but no output texture available!");
                 }
+            } else if color_effect_count > 0 {
+                // Effects are enabled in config but didn't run - log why
+                log::warn!("Config has {} enabled color effects but run_color_effects returned false", color_effect_count);
             }
         }
 
