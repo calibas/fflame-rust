@@ -1464,12 +1464,12 @@ impl App {
                     false,
                 );
             }
-            Ok(UrlLoadedData::Animation(animation, flame_config, animation_id, flame_id)) => {
+            Ok(UrlLoadedData::Animation(animation, animation_id, flame_id)) => {
                 let anim_name = animation.name.clone();
                 log::info!("URL load: animation '{}' ({})", anim_name, animation_id);
 
-                // Load the flame config first if we have one
-                if let Some(config) = flame_config {
+                // Load the flame config from the animation's base_config (populated from embedded flame)
+                if let Some(config) = animation.base_config.clone() {
                     let flame_name = config.flame.name.clone();
                     if let Err(e) = self.load_config_with_undo(config, format!("Load flame for animation: {}", flame_name)) {
                         log::error!("Failed to load flame for animation: {}", e);
@@ -1619,26 +1619,14 @@ async fn load_from_url(
     api.set_token("");
 
     if let Some(animation_id) = animation_id {
-        // Load animation and its linked flame_id from the API
-        let (animation, resp_flame_id) = api.load_animation_with_flame_id(&animation_id).await
+        // Load animation with embedded flame config (single request)
+        let (animation, flame_config, resp_flame_id) = api.load_animation_full(&animation_id).await
             .map_err(|e| format!("Failed to load animation: {}", e))?;
 
         // Use flame_id from URL param, or fall back to the one from the animation response
         let effective_flame_id = flame_id.or(resp_flame_id);
 
-        let flame_config = if let Some(ref fid) = effective_flame_id {
-            match api.load_flame(fid).await {
-                Ok(config) => Some(config),
-                Err(e) => {
-                    log::warn!("Could not load linked flame {}: {}", fid, e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        Ok(super::UrlLoadedData::Animation(animation, flame_config, animation_id, effective_flame_id))
+        Ok(super::UrlLoadedData::Animation(animation, animation_id, effective_flame_id))
     } else if let Some(flame_id) = flame_id {
         let config = api.load_flame(&flame_id).await
             .map_err(|e| format!("Failed to load flame: {}", e))?;
