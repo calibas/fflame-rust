@@ -612,6 +612,9 @@ pub struct AnimationResponse {
     pub generators: Option<serde_json::Value>,
     pub base_config: Option<serde_json::Value>,
     pub flame_id: Option<String>,
+    /// Full flame data embedded by the server (same shape as FlameResponse).
+    /// Authoritative source for the flame config — no separate flame request needed.
+    pub flame: Option<FlameResponse>,
     pub created_at: String,
     pub updated_at: String,
 }
