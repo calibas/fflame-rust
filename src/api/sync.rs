@@ -214,6 +214,7 @@ fn effect_to_api(e: &EffectInstance) -> CreateEffectInput {
     CreateEffectInput {
         effect_name: e.effect_type.clone(),
         params,
+        enabled: e.enabled,
     }
 }
 
@@ -226,7 +227,7 @@ fn effect_from_api(resp: &ConfigEffectResponse) -> EffectInstance {
 
     EffectInstance {
         effect_type: resp.effect_name.clone(),
-        enabled: true, // API doesn't have enabled field, assume true
+        enabled: resp.enabled,
         params,
     }
 }
