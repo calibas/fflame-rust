@@ -278,8 +278,8 @@ use crate::animation::AnimationController;
 pub(super) enum UrlLoadedData {
     /// A flame config loaded from the API, with its server ID
     Flame(crate::config::FractalConfig, String),
-    /// An animation loaded from the API, with optional flame config, animation ID, and flame ID
-    Animation(crate::animation::Animation, Option<crate::config::FractalConfig>, String, Option<String>),
+    /// An animation loaded from the API (flame config is in animation.base_config)
+    Animation(crate::animation::Animation, String /* animation_id */, Option<String> /* flame_id */),
 }
 
 pub struct App {

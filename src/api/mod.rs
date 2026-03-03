@@ -372,24 +372,45 @@ impl ApiState {
         client::api_put(&url, &req, &token).await
     }
 
-    /// Load an animation from the API and convert to Animation.
-    pub async fn load_animation(
+    /// Load an animation from the API with its embedded flame config.
+    ///
+    /// Returns (Animation, Option<FractalConfig>, Option<flame_id>).
+    /// The embedded flame from the animation response is authoritative —
+    /// no separate flame endpoint request needed.
+    pub async fn load_animation_full(
         &self,
         animation_id: &str,
-    ) -> FetchResult<crate::animation::Animation> {
-        let token = self.require_token()?;
-        let url = build_url(&self.base_url, &format!("/api/animations/{}", animation_id));
-        let resp: AnimationResponse = client::api_get(&url, &token).await?;
-        Ok(sync::animation_response_to_animation(&resp))
-    }
-
-    /// Load an animation from the API, also returning its linked flame_id if any.
-    pub async fn load_animation_with_flame_id(&self, animation_id: &str) -> FetchResult<(crate::animation::Animation, Option<String>)> {
+    ) -> FetchResult<(crate::animation::Animation, Option<FractalConfig>, Option<String>)> {
         let token = self.require_token()?;
         let url = build_url(&self.base_url, &format!("/api/animations/{}", animation_id));
         let resp: AnimationResponse = client::api_get(&url, &token).await?;
         let flame_id = resp.flame_id.clone();
-        Ok((sync::animation_response_to_animation(&resp), flame_id))
+
+        // Convert embedded flame to FractalConfig (fetch palette if referenced)
+        let flame_config = if let Some(ref flame_resp) = resp.flame {
+            let palette_resp = if let Some(ref palette_id) = flame_resp.palette_id {
+                let palette_url = build_url(&self.base_url, &format!("/api/palettes/{}", palette_id));
+                client::api_get::<PaletteResponse>(&palette_url, &token)
+                    .await
+                    .ok()
+            } else {
+                None
+            };
+            Some(sync::flame_response_to_config(flame_resp, palette_resp.as_ref()))
+        } else {
+            None
+        };
+
+        let mut animation = sync::animation_response_to_animation(&resp);
+
+        // Use the embedded flame as the animation's base_config (authoritative source)
+        if animation.base_config.is_none() {
+            if let Some(ref config) = flame_config {
+                animation.base_config = Some(config.clone());
+            }
+        }
+
+        Ok((animation, flame_config, flame_id))
     }
 
     /// Delete an animation from the API.
