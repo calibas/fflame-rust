@@ -167,7 +167,7 @@ impl ApiState {
         config: &FractalConfig,
         name: Option<&str>,
         visibility: Option<ApiVisibility>,
-        thumbnail_png: Option<&[u8]>,
+        thumbnail_jpg: Option<&[u8]>,
     ) -> FetchResult<String> {
         let token = self.require_token()?;
 
@@ -193,22 +193,22 @@ impl ApiState {
         let _: FlameResponse = client::api_put(&update_url, &update_req, &token).await?;
 
         // 4. Upload thumbnail if provided
-        if let Some(png_data) = thumbnail_png {
-            self.upload_thumbnail(&flame_id, png_data, 512, 512).await?;
+        if let Some(jpg_data) = thumbnail_jpg {
+            self.upload_thumbnail(&flame_id, jpg_data, 512, 512).await?;
         }
 
         Ok(flame_id)
     }
 
-    /// Upload a PNG thumbnail for a flame.
+    /// Upload a JPEG thumbnail for a flame.
     ///
     /// PUT /api/flames/{id}/thumbnail?width={w}&height={h}
-    /// Body: raw PNG bytes, Content-Type: image/png
+    /// Body: raw JPEG bytes, Content-Type: image/jpeg
     /// Returns 204 No Content on success.
     pub async fn upload_thumbnail(
         &self,
         flame_id: &str,
-        png_data: &[u8],
+        jpg_data: &[u8],
         width: u32,
         height: u32,
     ) -> FetchResult<()> {
@@ -220,7 +220,7 @@ impl ApiState {
                 flame_id, width, height
             ),
         );
-        client::api_put_binary(&url, png_data, "image/png", &token).await
+        client::api_put_binary(&url, jpg_data, "image/jpeg", &token).await
     }
 
     /// Update an existing flame on the API.

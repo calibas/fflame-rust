@@ -1077,7 +1077,7 @@ impl App {
     /// Returns None if rendering or encoding fails.
     /// Desktop only — on WASM, thumbnail rendering is done inside spawn_local.
     #[cfg(not(target_arch = "wasm32"))]
-    fn render_thumbnail_png(&self, config: &FractalConfig) -> Option<Vec<u8>> {
+    fn render_thumbnail_jpg(&self, config: &FractalConfig) -> Option<Vec<u8>> {
         let image = pollster::block_on(
             crate::renderer::thumbnail::render_thumbnail_async(
                 &self.gpu.device,
@@ -1085,18 +1085,13 @@ impl App {
                 config,
             )
         );
-        match crate::renderer::compute_kernel::encode_png_from_rgba(
-            image.width(),
-            image.height(),
-            image.into_raw(),
-            None,
-        ) {
+        match encode_rgba_to_jpeg(image.width(), image.height(), &image.into_raw()) {
             Ok(data) => {
-                log::info!("Thumbnail rendered: {} bytes", data.len());
+                log::info!("Thumbnail rendered: {} JPEG bytes", data.len());
                 Some(data)
             }
             Err(e) => {
-                log::error!("Failed to encode thumbnail PNG: {}", e);
+                log::error!("Failed to encode thumbnail JPEG: {}", e);
                 None
             }
         }
@@ -1196,13 +1191,13 @@ impl App {
                         let device = self.gpu.device.clone();
                         let queue = self.gpu.queue.clone();
                         wasm_bindgen_futures::spawn_local(async move {
-                            let thumbnail_png = if upload_thumbnail {
+                            let thumbnail_jpg = if upload_thumbnail {
                                 log::info!("Rendering thumbnail for upload...");
-                                render_thumbnail_png_async(&device, &queue, &config).await
+                                render_thumbnail_jpg_async(&device, &queue, &config).await
                             } else {
                                 None
                             };
-                            let save_result = save_flame_online(&base_url, &token, config, &name, visibility, thumbnail_png).await;
+                            let save_result = save_flame_online(&base_url, &token, config, &name, visibility, thumbnail_jpg).await;
                             if let Ok(mut slot) = result_slot.lock() {
                                 *slot = Some(save_result);
                             }
@@ -1211,14 +1206,14 @@ impl App {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
                         // On desktop, render thumbnail synchronously before spawning thread
-                        let thumbnail_png = if upload_thumbnail {
+                        let thumbnail_jpg = if upload_thumbnail {
                             log::info!("Rendering thumbnail for upload...");
-                            self.render_thumbnail_png(&config)
+                            self.render_thumbnail_jpg(&config)
                         } else {
                             None
                         };
                         std::thread::spawn(move || {
-                            let result = pollster::block_on(save_flame_online(&base_url, &token, config, &name, visibility, thumbnail_png));
+                            let result = pollster::block_on(save_flame_online(&base_url, &token, config, &name, visibility, thumbnail_jpg));
                             if let Ok(mut slot) = result_slot.lock() {
                                 *slot = Some(result);
                             }
@@ -1506,24 +1501,19 @@ impl App {
 
 /// Render a thumbnail and encode as PNG bytes (async helper for WASM).
 #[cfg(target_arch = "wasm32")]
-async fn render_thumbnail_png_async(
+async fn render_thumbnail_jpg_async(
     device: &egui_wgpu::wgpu::Device,
     queue: &egui_wgpu::wgpu::Queue,
     config: &crate::config::FractalConfig,
 ) -> Option<Vec<u8>> {
     let image = crate::renderer::thumbnail::render_thumbnail_async(device, queue, config).await;
-    match crate::renderer::compute_kernel::encode_png_from_rgba(
-        image.width(),
-        image.height(),
-        image.into_raw(),
-        None,
-    ) {
+    match encode_rgba_to_jpeg(image.width(), image.height(), &image.into_raw()) {
         Ok(data) => {
-            log::info!("Thumbnail rendered: {} bytes", data.len());
+            log::info!("Thumbnail rendered: {} JPEG bytes", data.len());
             Some(data)
         }
         Err(e) => {
-            log::error!("Failed to encode thumbnail PNG: {}", e);
+            log::error!("Failed to encode thumbnail JPEG: {}", e);
             None
         }
     }
@@ -1536,11 +1526,11 @@ async fn save_flame_online(
     config: crate::config::FractalConfig,
     name: &str,
     visibility: Option<crate::api::types::ApiVisibility>,
-    thumbnail_png: Option<Vec<u8>>,
+    thumbnail_jpg: Option<Vec<u8>>,
 ) -> Result<String, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    api.save_flame(&config, Some(name), visibility, thumbnail_png.as_deref())
+    api.save_flame(&config, Some(name), visibility, thumbnail_jpg.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
@@ -1634,4 +1624,24 @@ async fn load_from_url(
     } else {
         Err("No flame or animation ID provided".to_string())
     }
+}
+
+/// Encode RGBA pixel data to JPEG bytes (quality 90).
+/// Used for API thumbnail uploads — separate from the PNG export pipeline.
+fn encode_rgba_to_jpeg(width: u32, height: u32, rgba_data: &[u8]) -> Result<Vec<u8>, String> {
+    use image::codecs::jpeg::JpegEncoder;
+    use std::io::Cursor;
+
+    // JPEG doesn't support alpha — strip A channel
+    let rgb_data: Vec<u8> = rgba_data
+        .chunks_exact(4)
+        .flat_map(|px| [px[0], px[1], px[2]])
+        .collect();
+
+    let mut buf = Cursor::new(Vec::new());
+    let mut encoder = JpegEncoder::new_with_quality(&mut buf, 90);
+    encoder
+        .encode(&rgb_data, width, height, image::ExtendedColorType::Rgb8)
+        .map_err(|e| format!("JPEG encode failed: {}", e))?;
+    Ok(buf.into_inner())
 }
