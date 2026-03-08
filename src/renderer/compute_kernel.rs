@@ -1244,26 +1244,13 @@ impl FlameRenderer {
 
     /// Change palette texture size (requires recreating buffers)
     /// Returns true if size actually changed
-    pub fn set_palette_size(&mut self, device: &Device, queue: &Queue, flame: &Flame, new_size: u32) -> bool {
-        let current_size = self.buffers.palette_size();
-        if current_size == new_size {
+    pub fn set_palette_size(&mut self, device: &Device, _queue: &Queue, _flame: &Flame, new_size: u32) -> bool {
+        if !self.buffers.resize_palette(device, new_size) {
             return false;
         }
 
-        // Recreate buffers with new palette size (preserves viewport dimensions)
-        self.buffers = FlameBuffers::with_palette_size(
-            device,
-            queue,
-            self.width,
-            self.height,
-            flame,
-            new_size,
-        );
-
-        // Recreate all bind groups
+        // Only the compute bind group references the palette texture view
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
-        self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
-        self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
 
         true
     }

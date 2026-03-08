@@ -1111,6 +1111,37 @@ impl FlameBuffers {
         );
     }
 
+    /// Resize the palette texture to a new size.
+    ///
+    /// Only recreates the palette texture and view — all other buffers are untouched.
+    /// Returns true if the size actually changed.
+    pub fn resize_palette(&mut self, device: &Device, new_size: u32) -> bool {
+        let new_size = new_size.clamp(DEFAULT_PALETTE_SIZE, MAX_PALETTE_SIZE);
+        if self.palette_size == new_size {
+            return false;
+        }
+
+        self.palette_size = new_size;
+
+        self.palette_texture = device.create_texture(&TextureDescriptor {
+            label: Some("Palette Texture"),
+            size: Extent3d {
+                width: new_size,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8Unorm,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.palette_view = self.palette_texture.create_view(&TextureViewDescriptor::default());
+
+        true
+    }
+
     /// Update tone curve LUT texture
     pub fn update_curve_lut(&self, queue: &Queue, curve: &crate::scene::tonemap::ToneCurve) {
         let curve_lut_data = curve.generate_lut();

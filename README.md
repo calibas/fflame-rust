@@ -53,3 +53,4 @@ Fractal renderers:
 - [Incendia](https://www.incendia.net/)
 - [StrataVoxel](https://maierfelix.github.io/strata-voxel/)
 - [IFStile](https://ifstile.com/)
+- [Fracterm](https://github.com/dovskyi/fracterm)
