@@ -77,10 +77,10 @@ impl App {
                 }
             }
 
-            // Only restore base config when animation is STOPPED (not paused)
+            // Only seek to t=0 when STOPPED (not paused)
             // When paused, the fractal should stay at the current timeline position
             if self.animation_controller.state == PlaybackState::Stopped {
-                self.restore_base_config();
+                self.seek_to_animation_start();
             }
         }
     }
@@ -110,8 +110,8 @@ impl App {
                 self.audio_player.stop();
             }
 
-            // Restore base config when animation stops (returns to original state)
-            self.restore_base_config();
+            // Seek to t=0
+            self.seek_to_animation_start();
         } else {
             // Animation still playing - evaluate all tracks and apply values to ConfigManager
             self.apply_animated_values();
@@ -142,20 +142,18 @@ impl App {
         self.flame = self.config_manager.active_config().flame.clone();
     }
 
-    /// Restore base config after animation stops.
-    fn restore_base_config(&mut self) {
-        if let Some(ref animation) = self.animation_controller.animation {
-            if let Some(ref base_config) = animation.base_config {
-                // Load the base config silently (the undo entry was already created by handle_animation_exit)
-                if let Err(e) = self.config_manager.load_config_silent(base_config.clone()) {
-                    log::error!("Failed to restore base config: {}", e);
-                }
-                self.flame = base_config.flame.clone();
-                self.use_overwrite_next_frame = true;
-
-                // Reset accumulation to start fresh (same as Reset Accumulation button)
-                self.config_manager.request_reset();
-            }
+    /// Seek animation to t=0 and apply track values.
+    ///
+    /// Evaluates all animation tracks at t=0 on top of the current config.
+    /// Any edits made during or before animation playback are preserved for
+    /// non-animated parameters.
+    fn seek_to_animation_start(&mut self) {
+        if self.animation_controller.animation.is_some() {
+            self.animation_controller.current_time = 0.0;
+            self.apply_animated_values();
         }
+
+        self.use_overwrite_next_frame = true;
+        self.config_manager.request_reset();
     }
 }
