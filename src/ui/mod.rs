@@ -1017,7 +1017,7 @@ impl EguiLayer {
             // On WASM, call logout endpoint to clear server cookie (fire-and-forget)
             #[cfg(target_arch = "wasm32")]
             {
-                let base_url = config_manager.system_settings().api_base_url.clone();
+                let base_url = crate::api::API_BASE_URL.to_string();
                 wasm_bindgen_futures::spawn_local(async move {
                     let _ = crate::api::client::api_post_logout(&base_url).await;
                 });

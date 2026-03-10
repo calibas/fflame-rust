@@ -251,11 +251,11 @@ impl WasmApi {
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 impl WasmApi {
-    /// Set the API base URL (e.g., "https://api.fflame.app").
-    /// Must be called before any API operations.
+    /// Deprecated: API base URL is now hard-coded at compile time.
+    /// Kept for backward compatibility with existing JS callers.
     #[wasm_bindgen]
-    pub fn api_set_base_url(&mut self, url: &str) {
-        self.api_state.base_url = url.to_string();
+    pub fn api_set_base_url(&mut self, _url: &str) {
+        // No-op: API_BASE_URL is a compile-time constant
     }
 
     /// Get current auth status as JSON.

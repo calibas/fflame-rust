@@ -1015,7 +1015,7 @@ impl App {
 
     fn trigger_health_check(&mut self) {
         let settings = self.config_manager.system_settings();
-        let base_url = settings.api_base_url.clone();
+        let base_url = crate::api::API_BASE_URL.to_string();
 
         // get_auth_token returns empty string on WASM (cookies handle auth)
         let token = match settings.get_auth_token() {
@@ -1152,7 +1152,7 @@ impl App {
 
             // Read credentials from SystemSettings
             let settings = self.config_manager.system_settings();
-            let base_url = settings.api_base_url.clone();
+            let base_url = crate::api::API_BASE_URL.to_string();
             let token = match settings.get_auth_token() {
                 Some(t) => t,
                 None => {
@@ -1317,7 +1317,7 @@ impl App {
         };
 
         let settings = self.config_manager.system_settings();
-        let base_url = settings.api_base_url.clone();
+        let base_url = crate::api::API_BASE_URL.to_string();
         let token = match settings.get_auth_token() {
             Some(t) => t,
             None => {
@@ -1368,7 +1368,7 @@ impl App {
         };
 
         let settings = self.config_manager.system_settings();
-        let base_url = settings.api_base_url.clone();
+        let base_url = crate::api::API_BASE_URL.to_string();
         let token = match settings.get_auth_token() {
             Some(t) => t,
             None => {
@@ -1416,7 +1416,7 @@ impl App {
     pub(super) fn trigger_url_load(&mut self, flame_id: Option<String>, animation_id: Option<String>) {
         use super::UrlLoadedData;
 
-        let base_url = self.config_manager.system_settings().api_base_url.clone();
+        let base_url = crate::api::API_BASE_URL.to_string();
         let result_slot = self.url_load_result.clone();
         self.url_load_in_progress = true;
 
