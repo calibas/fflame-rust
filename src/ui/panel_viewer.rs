@@ -310,7 +310,7 @@ impl<'a> PanelViewer<'a> {
                 let online = settings.online_mode;
                 let auth = if settings.is_signed_in() {
                     let token = settings.auth_token.clone().unwrap_or_default();
-                    Some((settings.api_base_url.clone(), token))
+                    Some((crate::api::API_BASE_URL.to_string(), token))
                 } else {
                     None
                 };
@@ -1089,7 +1089,7 @@ impl<'a> PanelViewer<'a> {
             let online_mode = settings.online_mode;
             let auth: Option<(&str, &str)> = if settings.is_signed_in() {
                 let token = settings.auth_token.as_deref().unwrap_or("");
-                Some((settings.api_base_url.as_str(), token))
+                Some((crate::api::API_BASE_URL, token))
             } else {
                 None
             };

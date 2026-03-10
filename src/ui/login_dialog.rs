@@ -430,7 +430,7 @@ fn trigger_login(state: &mut LoginDialogState, config_manager: &crate::config::C
 
     let email = state.email.clone();
     let password = state.password.clone();
-    let base_url = config_manager.system_settings().api_base_url.clone();
+    let base_url = crate::api::API_BASE_URL.to_string();
     let result_slot = state.login_result.clone();
 
     #[cfg(target_arch = "wasm32")]
@@ -457,7 +457,7 @@ fn trigger_register(state: &mut LoginDialogState, config_manager: &crate::config
 
     let email = state.reg_email.clone();
     let password = state.reg_password.clone();
-    let base_url = config_manager.system_settings().api_base_url.clone();
+    let base_url = crate::api::API_BASE_URL.to_string();
     let result_slot = state.reg_result.clone();
 
     #[cfg(target_arch = "wasm32")]

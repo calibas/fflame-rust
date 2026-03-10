@@ -58,8 +58,10 @@ pub struct SystemSettings {
     #[serde(default = "default_online_mode")]
     pub online_mode: bool,
 
-    /// Base URL for the API
-    #[serde(default = "default_api_base_url")]
+    /// Deprecated: API URL is now hard-coded in api::API_BASE_URL.
+    /// Kept for deserialization compatibility with existing settings files.
+    #[serde(default = "default_api_base_url", skip_serializing)]
+    #[allow(dead_code)]
     pub api_base_url: String,
 
     /// Auth token (None = signed out)
@@ -249,9 +251,7 @@ impl SystemSettings {
         if current.online_mode == defaults.online_mode {
             obj.remove("online_mode");
         }
-        if current.api_base_url == defaults.api_base_url {
-            obj.remove("api_base_url");
-        }
+        // api_base_url: skip_serializing handles this (deprecated field)
         // auth_token and auth_email use skip_serializing_if = "Option::is_none"
 
         // Export Defaults

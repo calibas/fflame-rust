@@ -15,6 +15,9 @@ pub mod types;
 use crate::config::FractalConfig;
 use crate::resources::{FetchError, FetchResult, LoadState};
 
+/// Hard-coded API base URL. Change this for release builds.
+pub const API_BASE_URL: &str = "http://localhost:3000";
+
 use auth::AuthState;
 use client::build_url;
 use types::*;
@@ -69,12 +72,11 @@ pub async fn check_api_health(base_url: &str, token: &str) -> HealthCheckOutcome
 
 /// Central API state coordinator.
 ///
-/// Manages auth, base URL, and cached API data (flame list, etc.).
+/// Manages auth and cached API data (flame list, etc.).
+/// API base URL is the hard-coded `API_BASE_URL` constant.
 pub struct ApiState {
     /// Authentication state (token, user info)
     pub auth: AuthState,
-    /// Base URL for the API (e.g., "https://api.fflame.app")
-    pub base_url: String,
     /// Cached list of user's flames
     pub flames: Vec<FlameListItem>,
     /// Load state for the flames list
@@ -85,7 +87,6 @@ impl Default for ApiState {
     fn default() -> Self {
         Self {
             auth: AuthState::new(),
-            base_url: String::new(),
             flames: Vec::new(),
             flames_load_state: LoadState::NotLoaded,
         }
@@ -93,9 +94,8 @@ impl Default for ApiState {
 }
 
 impl ApiState {
-    pub fn new(base_url: &str) -> Self {
+    pub fn new(_base_url: &str) -> Self {
         Self {
-            base_url: base_url.to_string(),
             ..Default::default()
         }
     }
@@ -118,7 +118,7 @@ impl ApiState {
     pub async fn validate_token(&mut self) -> FetchResult<()> {
         let token = self.require_token()?;
 
-        let url = build_url(&self.base_url, "/api/users/me");
+        let url = build_url(API_BASE_URL, "/api/users/me");
         match client::api_get::<ApiUser>(&url, &token).await {
             Ok(user) => {
                 self.auth.set_user(user);
@@ -139,7 +139,7 @@ impl ApiState {
     ) -> FetchResult<Vec<FlameListItem>> {
         let token = self.require_token()?;
         let url = build_url(
-            &self.base_url,
+            API_BASE_URL,
             &format!("/api/flames?page={}&per_page={}", page, per_page),
         );
 
@@ -174,19 +174,19 @@ impl ApiState {
         // 1. Create the flame (without palette)
         let mut flame_req = sync::config_to_create_request(config, name);
         flame_req.visibility = visibility;
-        let flame_url = build_url(&self.base_url, "/api/flames");
+        let flame_url = build_url(API_BASE_URL, "/api/flames");
         let flame_resp: FlameResponse =
             client::api_post(&flame_url, &flame_req, &token).await?;
         let flame_id = flame_resp.id;
 
         // 2. Create the palette (same visibility as flame)
         let palette_req = sync::palette_to_create_request(&config.palette, visibility);
-        let palette_url = build_url(&self.base_url, "/api/palettes");
+        let palette_url = build_url(API_BASE_URL, "/api/palettes");
         let palette_resp: PaletteResponse =
             client::api_post(&palette_url, &palette_req, &token).await?;
 
         // 3. Update the flame to link the palette
-        let update_url = build_url(&self.base_url, &format!("/api/flames/{}", flame_id));
+        let update_url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
         let mut update_req = sync::config_to_create_request(config, name);
         update_req.palette_id = Some(palette_resp.id);
         update_req.visibility = visibility;
@@ -214,7 +214,7 @@ impl ApiState {
     ) -> FetchResult<()> {
         let token = self.require_token()?;
         let url = build_url(
-            &self.base_url,
+            API_BASE_URL,
             &format!(
                 "/api/flames/{}/thumbnail?width={}&height={}",
                 flame_id, width, height
@@ -232,19 +232,19 @@ impl ApiState {
     ) -> FetchResult<FlameResponse> {
         let token = self.require_token()?;
         let req = sync::config_to_create_request(config, name);
-        let url = build_url(&self.base_url, &format!("/api/flames/{}", flame_id));
+        let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
         client::api_put(&url, &req, &token).await
     }
 
     /// Load a flame from the API and convert to FractalConfig.
     pub async fn load_flame(&self, flame_id: &str) -> FetchResult<FractalConfig> {
         let token = self.require_token()?;
-        let url = build_url(&self.base_url, &format!("/api/flames/{}", flame_id));
+        let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
         let resp: FlameResponse = client::api_get(&url, &token).await?;
 
         // Load palette if referenced
         let palette_resp = if let Some(ref palette_id) = resp.palette_id {
-            let palette_url = build_url(&self.base_url, &format!("/api/palettes/{}", palette_id));
+            let palette_url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
             client::api_get::<PaletteResponse>(&palette_url, &token)
                 .await
                 .ok()
@@ -261,7 +261,7 @@ impl ApiState {
     /// Delete a flame from the API.
     pub async fn delete_flame(&self, flame_id: &str) -> FetchResult<()> {
         let token = self.require_token()?;
-        let url = build_url(&self.base_url, &format!("/api/flames/{}", flame_id));
+        let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
         client::api_delete(&url, &token).await
     }
 
@@ -272,7 +272,7 @@ impl ApiState {
     ) -> FetchResult<Vec<FlameListItem>> {
         let token = self.require_token()?;
         let url = build_url(
-            &self.base_url,
+            API_BASE_URL,
             &format!("/api/search/flames{}", params.to_query_string()),
         );
         client::api_get(&url, &token).await
@@ -284,7 +284,7 @@ impl ApiState {
         params: &SearchFlamesParams,
     ) -> FetchResult<Vec<FlameListItem>> {
         let url = build_url(
-            &self.base_url,
+            API_BASE_URL,
             &format!("/api/search/flames{}", params.to_query_string()),
         );
         client::api_get_unauth(&url).await
@@ -310,7 +310,7 @@ impl ApiState {
             })
             .unwrap_or_default();
         let url = build_url(
-            &self.base_url,
+            API_BASE_URL,
             &format!("/api/palettes?page={}&per_page={}{}", page, per_page, visibility_param),
         );
         client::api_get(&url, &token).await
@@ -319,7 +319,7 @@ impl ApiState {
     /// Get a single palette by ID.
     pub async fn get_palette(&self, palette_id: &str) -> FetchResult<PaletteResponse> {
         let token = self.require_token()?;
-        let url = build_url(&self.base_url, &format!("/api/palettes/{}", palette_id));
+        let url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
         client::api_get(&url, &token).await
     }
 
@@ -330,14 +330,14 @@ impl ApiState {
         req: &UpdatePaletteRequest,
     ) -> FetchResult<PaletteResponse> {
         let token = self.require_token()?;
-        let url = build_url(&self.base_url, &format!("/api/palettes/{}", palette_id));
+        let url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
         client::api_put(&url, req, &token).await
     }
 
     /// Delete a palette.
     pub async fn delete_palette(&self, palette_id: &str) -> FetchResult<()> {
         let token = self.require_token()?;
-        let url = build_url(&self.base_url, &format!("/api/palettes/{}", palette_id));
+        let url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
         client::api_delete(&url, &token).await
     }
 
@@ -354,7 +354,7 @@ impl ApiState {
     ) -> FetchResult<String> {
         let token = self.require_token()?;
         let req = sync::animation_to_create_request(animation, name, flame_id, visibility);
-        let url = build_url(&self.base_url, "/api/animations");
+        let url = build_url(API_BASE_URL, "/api/animations");
         let resp: AnimationResponse = client::api_post(&url, &req, &token).await?;
         Ok(resp.id)
     }
@@ -368,7 +368,7 @@ impl ApiState {
     ) -> FetchResult<AnimationResponse> {
         let token = self.require_token()?;
         let req = sync::animation_to_create_request(animation, name, None, None);
-        let url = build_url(&self.base_url, &format!("/api/animations/{}", animation_id));
+        let url = build_url(API_BASE_URL, &format!("/api/animations/{}", animation_id));
         client::api_put(&url, &req, &token).await
     }
 
@@ -382,14 +382,14 @@ impl ApiState {
         animation_id: &str,
     ) -> FetchResult<(crate::animation::Animation, Option<FractalConfig>, Option<String>)> {
         let token = self.require_token()?;
-        let url = build_url(&self.base_url, &format!("/api/animations/{}", animation_id));
+        let url = build_url(API_BASE_URL, &format!("/api/animations/{}", animation_id));
         let resp: AnimationResponse = client::api_get(&url, &token).await?;
         let flame_id = resp.flame_id.clone();
 
         // Convert embedded flame to FractalConfig (fetch palette if referenced)
         let flame_config = if let Some(ref flame_resp) = resp.flame {
             let palette_resp = if let Some(ref palette_id) = flame_resp.palette_id {
-                let palette_url = build_url(&self.base_url, &format!("/api/palettes/{}", palette_id));
+                let palette_url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
                 client::api_get::<PaletteResponse>(&palette_url, &token)
                     .await
                     .ok()
@@ -416,7 +416,7 @@ impl ApiState {
     /// Delete an animation from the API.
     pub async fn delete_animation(&self, animation_id: &str) -> FetchResult<()> {
         let token = self.require_token()?;
-        let url = build_url(&self.base_url, &format!("/api/animations/{}", animation_id));
+        let url = build_url(API_BASE_URL, &format!("/api/animations/{}", animation_id));
         client::api_delete(&url, &token).await
     }
 
@@ -427,7 +427,7 @@ impl ApiState {
     ) -> FetchResult<Vec<AnimationListItem>> {
         let token = self.require_token()?;
         let url = build_url(
-            &self.base_url,
+            API_BASE_URL,
             &format!("/api/flames/{}/animations", flame_id),
         );
         client::api_get(&url, &token).await
