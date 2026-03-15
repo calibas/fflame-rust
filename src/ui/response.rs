@@ -88,6 +88,8 @@ pub struct UiResponse {
 
     // API: Flame ID loaded from Online tab
     pub loaded_api_flame_id: Option<String>,
+    // API: Visibility of the flame loaded from Online tab (None = unknown)
+    pub loaded_api_flame_is_public: Option<bool>,
 }
 
 /// API save action type
@@ -101,7 +103,12 @@ pub enum ApiSaveAction {
         make_public: bool,
         save_animation: bool,
     },
-    Update,
+    Update {
+        name: String,
+        upload_thumbnail: bool,
+        make_public: Option<bool>,
+        save_animation: bool,
+    },
 }
 
 /// API animation save action type (from Animation Panel buttons)
@@ -160,6 +167,7 @@ impl Default for UiResponse {
             api_save_action: ApiSaveAction::None,
             api_animation_save_action: ApiAnimationSaveAction::None,
             loaded_api_flame_id: None,
+            loaded_api_flame_is_public: None,
         }
     }
 }

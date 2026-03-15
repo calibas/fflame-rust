@@ -72,6 +72,8 @@ pub struct PanelContext<'a> {
 
     // API flame ID loaded from Online tab
     pub loaded_api_flame_id: &'a mut Option<String>,
+    // Visibility of flame loaded from Online tab
+    pub loaded_api_flame_is_public: &'a mut Option<bool>,
 
     // API notification from browser panel (e.g., delete result)
     pub api_notification: &'a mut Option<(String, bool)>,
@@ -1104,8 +1106,9 @@ impl<'a> PanelViewer<'a> {
             if let Some(config) = response.selected {
                 *self.context.selected_preset_config = Some(config);
 
-                // Pass API flame ID through (for Online tab loads)
+                // Pass API flame ID and visibility through (for Online tab loads)
                 *self.context.loaded_api_flame_id = response.api_flame_id;
+                *self.context.loaded_api_flame_is_public = response.api_flame_is_public;
             }
 
             // Pass API notifications through (e.g., delete result)

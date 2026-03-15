@@ -16,6 +16,7 @@ use crate::config::FractalConfig;
 use crate::resources::{FetchError, FetchResult, LoadState};
 
 /// Hard-coded API base URL. Change this for release builds.
+// pub const API_BASE_URL: &str = "https://fractalsforall.com";
 pub const API_BASE_URL: &str = "http://localhost:3000";
 
 use auth::AuthState;
@@ -224,16 +225,59 @@ impl ApiState {
     }
 
     /// Update an existing flame on the API.
+    ///
+    /// Fetches the current flame first to:
+    /// 1. Get the existing palette ID so it can be updated (not unlinked)
+    /// 2. Preserve visibility when `visibility` is `None`
+    ///
+    /// If `thumbnail_jpg` is `Some`, uploads a new thumbnail.
     pub async fn update_flame(
         &self,
         flame_id: &str,
         config: &FractalConfig,
         name: Option<&str>,
+        visibility: Option<ApiVisibility>,
+        thumbnail_jpg: Option<&[u8]>,
     ) -> FetchResult<FlameResponse> {
         let token = self.require_token()?;
-        let req = sync::config_to_create_request(config, name);
+
+        // Fetch current flame to preserve palette link and visibility
+        let current_url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
+        let current: FlameResponse = client::api_get(&current_url, &token).await?;
+
+        // Update or create the palette, keeping the same palette_id link
+        let final_palette_id = match current.palette_id {
+            Some(ref pid) => {
+                let palette_req = sync::palette_to_update_request(&config.palette);
+                let palette_url = build_url(API_BASE_URL, &format!("/api/palettes/{}", pid));
+                client::api_put::<PaletteResponse, _>(&palette_url, &palette_req, &token).await?;
+                Some(pid.clone())
+            }
+            None => {
+                // Flame had no palette — create one now
+                let palette_req = sync::palette_to_create_request(&config.palette, None);
+                let palette_url = build_url(API_BASE_URL, "/api/palettes");
+                let palette_resp: PaletteResponse =
+                    client::api_post(&palette_url, &palette_req, &token).await?;
+                Some(palette_resp.id)
+            }
+        };
+
+        // Use explicit visibility if provided, otherwise preserve existing
+        let effective_visibility = visibility.or(current.visibility);
+
+        let mut req = sync::config_to_create_request(config, name);
+        req.visibility = effective_visibility;
+        req.palette_id = final_palette_id;
+
         let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
-        client::api_put(&url, &req, &token).await
+        let resp: FlameResponse = client::api_put(&url, &req, &token).await?;
+
+        if let Some(jpg_data) = thumbnail_jpg {
+            self.upload_thumbnail(flame_id, jpg_data, 512, 512).await?;
+        }
+
+        Ok(resp)
     }
 
     /// Load a flame from the API and convert to FractalConfig.
@@ -256,6 +300,26 @@ impl ApiState {
             &resp,
             palette_resp.as_ref(),
         ))
+    }
+
+    /// Load a flame and also return its visibility (true = public).
+    pub async fn load_flame_with_visibility(&self, flame_id: &str) -> FetchResult<(FractalConfig, Option<bool>)> {
+        let token = self.require_token()?;
+        let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
+        let resp: FlameResponse = client::api_get(&url, &token).await?;
+
+        let palette_resp = if let Some(ref palette_id) = resp.palette_id {
+            let palette_url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
+            client::api_get::<PaletteResponse>(&palette_url, &token)
+                .await
+                .ok()
+        } else {
+            None
+        };
+
+        let is_public = resp.visibility.as_ref().map(|v| matches!(v, ApiVisibility::Public));
+        let config = sync::flame_response_to_config(&resp, palette_resp.as_ref());
+        Ok((config, is_public))
     }
 
     /// Delete a flame from the API.

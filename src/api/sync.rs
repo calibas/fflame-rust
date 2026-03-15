@@ -437,6 +437,38 @@ pub fn palette_to_create_request(palette: &Palette, visibility: Option<ApiPalett
     }
 }
 
+/// Build an UpdatePaletteRequest from a Palette (same encoding as create).
+pub fn palette_to_update_request(palette: &Palette) -> UpdatePaletteRequest {
+    if palette.stops.len() == 256 && palette.stops.iter().enumerate().all(|(i, s)| {
+        (s.position - i as f32 / 255.0).abs() < 0.001
+    }) {
+        let color_data: Vec<u32> = palette
+            .stops
+            .iter()
+            .flat_map(|s| {
+                [
+                    (s.color[0] * 255.0).round() as u32,
+                    (s.color[1] * 255.0).round() as u32,
+                    (s.color[2] * 255.0).round() as u32,
+                ]
+            })
+            .collect();
+        UpdatePaletteRequest {
+            name: Some(palette.name.clone()),
+            stops: None,
+            color_data: Some(color_data),
+            metadata: None,
+        }
+    } else {
+        UpdatePaletteRequest {
+            name: Some(palette.name.clone()),
+            stops: Some(palette_stops_to_json(palette)),
+            color_data: None,
+            metadata: None,
+        }
+    }
+}
+
 // ============================================================================
 // API response → FractalConfig
 // ============================================================================

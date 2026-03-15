@@ -40,6 +40,8 @@ pub struct GalleryResponse {
     pub close_requested: bool,
     /// API flame ID (when loading from Online tab)
     pub api_flame_id: Option<String>,
+    /// Whether the loaded flame is public (None = unknown)
+    pub api_flame_is_public: Option<bool>,
     /// API notification message (message, is_error) — e.g. delete result
     pub api_notification: Option<(String, bool)>,
     /// Session expired (401 detected) — triggers sign-out flow
