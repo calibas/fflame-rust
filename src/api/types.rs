@@ -425,6 +425,8 @@ pub struct FlameResponse {
     pub transform_count: i32,
     pub variation_names: Vec<String>,
     pub has_3d: bool,
+    #[serde(default)]
+    pub visibility: Option<ApiVisibility>,
     pub created_at: String,
     pub updated_at: String,
 }

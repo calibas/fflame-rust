@@ -45,22 +45,14 @@ pub fn render_menu_bar(
 
                     let api_available = menu_state.api_connectivity == crate::api::ApiConnectivity::Online;
 
-                    if menu_state.has_api_flame_id {
-                        // Currently editing a cloud flame — show Update + Save as New Copy
-                        if ui.add_enabled(api_available, egui::Button::new(t!("menu.update_online"))).clicked() {
-                            menu_actions.file.update_online = true;
-                        }
-                        if ui.add_enabled(api_available, egui::Button::new(t!("menu.save_online_new_copy"))).clicked() {
-                            let name = format!("{} (copy)", menu_state.flame_name);
-                            save_online_dialog_state.open(&name, true, menu_state.has_animation_tracks);
-                            workspace.open_floating_panel(super::workspace::PanelType::SaveOnlineDialog, ctx);
-                        }
-                    } else {
-                        // No cloud flame loaded — show Save Online
-                        if ui.add_enabled(api_available, egui::Button::new(t!("menu.save_online"))).clicked() {
-                            save_online_dialog_state.open(&menu_state.flame_name, false, menu_state.has_animation_tracks);
-                            workspace.open_floating_panel(super::workspace::PanelType::SaveOnlineDialog, ctx);
-                        }
+                    if ui.add_enabled(api_available, egui::Button::new(t!("menu.save_online"))).clicked() {
+                        let api_flame_id = if menu_state.has_api_flame_id {
+                            menu_state.api_flame_id.clone()
+                        } else {
+                            None
+                        };
+                        save_online_dialog_state.open(&menu_state.flame_name, api_flame_id, menu_state.api_flame_is_public, menu_state.has_animation_tracks);
+                        workspace.open_floating_panel(super::workspace::PanelType::SaveOnlineDialog, ctx);
                     }
                 }
 

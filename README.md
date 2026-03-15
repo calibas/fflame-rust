@@ -54,3 +54,4 @@ Fractal renderers:
 - [StrataVoxel](https://maierfelix.github.io/strata-voxel/)
 - [IFStile](https://ifstile.com/)
 - [Fracterm](https://github.com/dovskyi/fracterm)
+- [Fractal Path Tracer](https://github.com/adam-pa/FPT)

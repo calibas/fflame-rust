@@ -201,6 +201,7 @@ impl App {
 
             // Clear API flame ID — this is a new local flame
             self.api_flame_id = None;
+            self.api_flame_is_public = None;
         }
     }
 
@@ -741,6 +742,8 @@ impl App {
 
                 // Track API flame ID if loaded from Online tab, clear otherwise
                 self.api_flame_id = ui_response.loaded_api_flame_id.clone();
+                // Visibility unknown until save; loaded flames carry it via FlameResponse.visibility
+                self.api_flame_is_public = ui_response.loaded_api_flame_is_public;
             }
         }
     }
@@ -1111,6 +1114,7 @@ impl App {
                     Ok(flame_id) => {
                         log::info!("Flame saved/updated online: {}", flame_id);
                         self.api_flame_id = Some(flame_id.clone());
+                        self.api_flame_is_public = self.api_pending_visibility.take();
                         let name = self.config_manager.active_config().flame.name.clone();
                         self.egui_layer.show_api_notification(
                             &rust_i18n::t!("api.save_success", name = name),
@@ -1177,6 +1181,8 @@ impl App {
                         None
                     };
 
+                    self.api_pending_visibility = Some(make_public);
+
                     // Track that we need to save animation after flame save completes
                     self.pending_animation_save = if *save_animation {
                         Some(visibility)
@@ -1220,13 +1226,44 @@ impl App {
                         });
                     }
                 }
-                ApiSaveAction::Update => {
+                ApiSaveAction::Update { name, upload_thumbnail, make_public, save_animation } => {
+                    let name = name.clone();
+                    let upload_thumbnail = *upload_thumbnail;
+
+                    let visibility = match make_public {
+                        Some(true) => Some(crate::api::types::ApiVisibility::Public),
+                        Some(false) => Some(crate::api::types::ApiVisibility::Private),
+                        None => None, // preserve existing
+                    };
+
+                    // Remember visibility intent; applied to api_flame_is_public on success
+                    // For None (preserve existing), we'll keep whatever was stored before
+                    if let Some(is_public) = *make_public {
+                        self.api_pending_visibility = Some(is_public);
+                    } else {
+                        self.api_pending_visibility = self.api_flame_is_public;
+                    }
+
+                    // Track that we need to save animation after flame save completes
+                    self.pending_animation_save = if *save_animation {
+                        Some(visibility)
+                    } else {
+                        None
+                    };
+
                     if let Some(flame_id) = self.api_flame_id.clone() {
-                        let name = config.flame.name.clone();
                         #[cfg(target_arch = "wasm32")]
                         {
+                            let device = self.gpu.device.clone();
+                            let queue = self.gpu.queue.clone();
                             wasm_bindgen_futures::spawn_local(async move {
-                                let save_result = update_flame_online(&base_url, &token, config, &flame_id, &name).await;
+                                let thumbnail_jpg = if upload_thumbnail {
+                                    log::info!("Rendering thumbnail for upload...");
+                                    render_thumbnail_jpg_async(&device, &queue, &config).await
+                                } else {
+                                    None
+                                };
+                                let save_result = update_flame_online(&base_url, &token, config, &flame_id, &name, visibility, thumbnail_jpg).await;
                                 if let Ok(mut slot) = result_slot.lock() {
                                     *slot = Some(save_result);
                                 }
@@ -1234,8 +1271,14 @@ impl App {
                         }
                         #[cfg(not(target_arch = "wasm32"))]
                         {
+                            let thumbnail_jpg = if upload_thumbnail {
+                                log::info!("Rendering thumbnail for upload...");
+                                self.render_thumbnail_jpg(&config)
+                            } else {
+                                None
+                            };
                             std::thread::spawn(move || {
-                                let result = pollster::block_on(update_flame_online(&base_url, &token, config, &flame_id, &name));
+                                let result = pollster::block_on(update_flame_online(&base_url, &token, config, &flame_id, &name, visibility, thumbnail_jpg));
                                 if let Ok(mut slot) = result_slot.lock() {
                                     *slot = Some(result);
                                 }
@@ -1542,10 +1585,12 @@ async fn update_flame_online(
     config: crate::config::FractalConfig,
     flame_id: &str,
     name: &str,
+    visibility: Option<crate::api::types::ApiVisibility>,
+    thumbnail_jpg: Option<Vec<u8>>,
 ) -> Result<String, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    api.update_flame(flame_id, &config, Some(name))
+    api.update_flame(flame_id, &config, Some(name), visibility, thumbnail_jpg.as_deref())
         .await
         .map(|resp| resp.id)
         .map_err(|e| e.to_string())

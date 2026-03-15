@@ -376,6 +376,10 @@ pub struct App {
 
     // API integration — flame
     pub(super) api_flame_id: Option<String>,
+    /// Whether the currently-loaded API flame is public (None = unknown)
+    pub(super) api_flame_is_public: Option<bool>,
+    /// Visibility intent for the in-flight save — applied to api_flame_is_public on success
+    pub(super) api_pending_visibility: Option<bool>,
     pub(super) api_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
     pub(super) api_save_in_progress: bool,
 
@@ -501,6 +505,8 @@ impl App {
             audio_capture: crate::audio::AudioCapture::new(),
             signal_manager: crate::signal::SignalManager::new(),
             api_flame_id: None,
+            api_flame_is_public: None,
+            api_pending_visibility: None,
             api_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_save_in_progress: false,
             api_animation_id: None,
@@ -958,6 +964,7 @@ impl App {
             &mut self.signal_manager,
             &signal_names,
             &self.api_flame_id,
+            &self.api_flame_is_public,
             &self.api_animation_id,
         );
 

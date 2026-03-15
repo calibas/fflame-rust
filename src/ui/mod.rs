@@ -154,6 +154,8 @@ pub struct EguiLayer {
 
     // API: flame ID loaded from Online tab (passed through to UiResponse)
     loaded_api_flame_id: Option<String>,
+    // API: visibility of flame loaded from Online tab
+    loaded_api_flame_is_public: Option<bool>,
 
     // API: notification toast
     api_notification: Option<ApiNotification>,
@@ -271,6 +273,7 @@ impl EguiLayer {
             generated_batch: None,
             fractal_browser_panel: None,
             loaded_api_flame_id: None,
+            loaded_api_flame_is_public: None,
             api_notification: None,
             save_online_dialog_state: save_online_dialog::SaveOnlineDialogState::default(),
             api_browser_notification: None,
@@ -496,6 +499,7 @@ impl EguiLayer {
         signal_manager: &mut crate::signal::SignalManager,
         signal_names: &[String],
         api_flame_id: &Option<String>,
+        api_flame_is_public: &Option<bool>,
         api_animation_id: &Option<String>,
     ) -> UiResponse {
         let mut raw_input = self.state.take_egui_input(window);
@@ -603,6 +607,8 @@ impl EguiLayer {
             render_mode_2d: config_manager.active_config().flame.render_mode == crate::scene::transforms::RenderMode::TwoD,
             online_mode: config_manager.system_settings().online_mode,
             has_api_flame_id: api_flame_id.is_some(),
+            api_flame_id: api_flame_id.clone(),
+            api_flame_is_public: *api_flame_is_public,
             has_animation_tracks,
             flame_name: config_manager.config().flame.name.clone(),
             auth_email: read_auth_email(config_manager),
@@ -742,6 +748,7 @@ impl EguiLayer {
 
                         // API flame ID loaded from Online tab
                         loaded_api_flame_id: &mut self.loaded_api_flame_id,
+                        loaded_api_flame_is_public: &mut self.loaded_api_flame_is_public,
 
                         // API notification from browser panel
                         api_notification: &mut self.api_browser_notification,
@@ -989,11 +996,7 @@ impl EguiLayer {
         }
         *quit_requested |= menu_actions.file.quit;
 
-        let api_save_action = if menu_actions.file.update_online {
-            // "Update Online" — update existing flame in place
-            response::ApiSaveAction::Update
-        } else if let Some(action) = api_save_dialog_action {
-            // From save dialog panel submission
+        let api_save_action = if let Some(action) = api_save_dialog_action {
             action
         } else {
             response::ApiSaveAction::None
@@ -1073,8 +1076,9 @@ impl EguiLayer {
         // Take selected preset config (reset to None after returning)
         let selected_preset_config = self.selected_preset_config.take();
 
-        // Take API flame ID (reset to None after returning)
+        // Take API flame ID and visibility (reset to None after returning)
         let loaded_api_flame_id = self.loaded_api_flame_id.take();
+        let loaded_api_flame_is_public = self.loaded_api_flame_is_public.take();
 
         // Take generated flame from random generator panel
         let generated_flame = self.generated_flame.take();
@@ -1123,6 +1127,7 @@ impl EguiLayer {
             api_save_action,
             api_animation_save_action,
             loaded_api_flame_id,
+            loaded_api_flame_is_public,
         }
     }
 

@@ -334,7 +334,7 @@ impl WasmApi {
             .ok_or_else(|| JsValue::from_str("No config loaded"))?;
 
         self.api_state
-            .update_flame(flame_id, config, Some(name))
+            .update_flame(flame_id, config, Some(name), None, None)
             .await
             .map(|_| ())
             .map_err(|e| JsValue::from_str(&e.to_string()))
