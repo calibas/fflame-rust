@@ -399,11 +399,10 @@ pub fn config_to_create_request(config: &FractalConfig, name: Option<&str>) -> C
     }
 }
 
-/// Create a palette request from a FractalConfig's palette.
-pub fn palette_to_create_request(palette: &Palette, visibility: Option<ApiPaletteVisibility>) -> CreatePaletteRequest {
-    let vis = visibility.unwrap_or(ApiPaletteVisibility::Private);
-    // Use compact color_data for indexed 256-color palettes (~1KB),
-    // fall back to stops for gradient palettes with arbitrary positions.
+/// Encode a palette as either compact color_data (for 256-stop indexed palettes)
+/// or as JSON stops (for gradient palettes with arbitrary positions).
+/// Returns (stops, color_data).
+fn encode_palette_data(palette: &Palette) -> (Option<serde_json::Value>, Option<Vec<u32>>) {
     if palette.stops.len() == 256 && palette.stops.iter().enumerate().all(|(i, s)| {
         (s.position - i as f32 / 255.0).abs() < 0.001
     }) {
@@ -419,53 +418,33 @@ pub fn palette_to_create_request(palette: &Palette, visibility: Option<ApiPalett
                 ]
             })
             .collect();
-        CreatePaletteRequest {
-            visibility: vis,
-            name: Some(palette.name.clone()),
-            stops: None,
-            color_data: Some(color_data),
-            metadata: None,
-        }
+        (None, Some(color_data))
     } else {
-        CreatePaletteRequest {
-            visibility: vis,
-            name: Some(palette.name.clone()),
-            stops: Some(palette_stops_to_json(palette)),
-            color_data: None,
-            metadata: None,
-        }
+        (Some(palette_stops_to_json(palette)), None)
+    }
+}
+
+/// Create a palette request from a FractalConfig's palette.
+pub fn palette_to_create_request(palette: &Palette, visibility: Option<ApiPaletteVisibility>) -> CreatePaletteRequest {
+    let vis = visibility.unwrap_or(ApiPaletteVisibility::Private);
+    let (stops, color_data) = encode_palette_data(palette);
+    CreatePaletteRequest {
+        visibility: vis,
+        name: Some(palette.name.clone()),
+        stops,
+        color_data,
+        metadata: None,
     }
 }
 
 /// Build an UpdatePaletteRequest from a Palette (same encoding as create).
 pub fn palette_to_update_request(palette: &Palette) -> UpdatePaletteRequest {
-    if palette.stops.len() == 256 && palette.stops.iter().enumerate().all(|(i, s)| {
-        (s.position - i as f32 / 255.0).abs() < 0.001
-    }) {
-        let color_data: Vec<u32> = palette
-            .stops
-            .iter()
-            .flat_map(|s| {
-                [
-                    (s.color[0] * 255.0).round() as u32,
-                    (s.color[1] * 255.0).round() as u32,
-                    (s.color[2] * 255.0).round() as u32,
-                ]
-            })
-            .collect();
-        UpdatePaletteRequest {
-            name: Some(palette.name.clone()),
-            stops: None,
-            color_data: Some(color_data),
-            metadata: None,
-        }
-    } else {
-        UpdatePaletteRequest {
-            name: Some(palette.name.clone()),
-            stops: Some(palette_stops_to_json(palette)),
-            color_data: None,
-            metadata: None,
-        }
+    let (stops, color_data) = encode_palette_data(palette);
+    UpdatePaletteRequest {
+        name: Some(palette.name.clone()),
+        stops,
+        color_data,
+        metadata: None,
     }
 }
 

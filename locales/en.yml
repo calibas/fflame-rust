@@ -870,7 +870,6 @@ api:
   save_dialog_save_as_copy: "Save As Copy"
   save_dialog_cancel: "Cancel"
   save_dialog_animation: "Save animation"
-  save_dialog_visibility_unchanged: "(unchanged from current)"
   save_success: "Saved online: %{name}"
   update_success: "Updated online: %{name}"
   save_error: "Failed to save: %{error}"

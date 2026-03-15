@@ -282,24 +282,8 @@ impl ApiState {
 
     /// Load a flame from the API and convert to FractalConfig.
     pub async fn load_flame(&self, flame_id: &str) -> FetchResult<FractalConfig> {
-        let token = self.require_token()?;
-        let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
-        let resp: FlameResponse = client::api_get(&url, &token).await?;
-
-        // Load palette if referenced
-        let palette_resp = if let Some(ref palette_id) = resp.palette_id {
-            let palette_url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
-            client::api_get::<PaletteResponse>(&palette_url, &token)
-                .await
-                .ok()
-        } else {
-            None
-        };
-
-        Ok(sync::flame_response_to_config(
-            &resp,
-            palette_resp.as_ref(),
-        ))
+        let (config, _visibility) = self.load_flame_with_visibility(flame_id).await?;
+        Ok(config)
     }
 
     /// Load a flame and also return its visibility (true = public).
@@ -308,6 +292,7 @@ impl ApiState {
         let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
         let resp: FlameResponse = client::api_get(&url, &token).await?;
 
+        // Load palette if referenced
         let palette_resp = if let Some(ref palette_id) = resp.palette_id {
             let palette_url = build_url(API_BASE_URL, &format!("/api/palettes/{}", palette_id));
             client::api_get::<PaletteResponse>(&palette_url, &token)
