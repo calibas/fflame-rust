@@ -12,8 +12,8 @@ pub struct SaveOnlineDialogState {
     pub api_flame_id: Option<String>,
     /// Upload a thumbnail after saving
     pub upload_thumbnail: bool,
-    /// Make the flame publicly visible (None = keep existing for updates)
-    pub make_public: Option<bool>,
+    /// Make the flame publicly visible
+    pub make_public: bool,
     /// Also save the current animation alongside the flame
     pub save_animation: bool,
     /// Whether animation tracks exist (controls default for save_animation)
@@ -30,7 +30,7 @@ impl Default for SaveOnlineDialogState {
             name: String::new(),
             api_flame_id: None,
             upload_thumbnail: true,
-            make_public: Some(false),
+            make_public: false,
             save_animation: false,
             has_animation_tracks: false,
             action: None,
@@ -45,12 +45,7 @@ impl SaveOnlineDialogState {
         self.name = name.to_string();
         self.api_flame_id = api_flame_id;
         self.upload_thumbnail = true;
-        // For new flames: default private. For updates: use known visibility, or None = keep existing.
-        self.make_public = if self.api_flame_id.is_some() {
-            is_public // Some(true/false) if known, None if unknown
-        } else {
-            Some(false)
-        };
+        self.make_public = is_public.unwrap_or(false);
         self.save_animation = has_animation_tracks;
         self.has_animation_tracks = has_animation_tracks;
         self.action = None;
@@ -101,23 +96,7 @@ pub fn render_save_online_dialog(
     // Options checkboxes
     ui.checkbox(&mut state.upload_thumbnail, t!("api.save_dialog_thumbnail"));
 
-    // Visibility toggle
-    if is_update {
-        // Three-state for updates: None (keep existing), Some(false), Some(true)
-        let mut checked = state.make_public.unwrap_or(false);
-        let response = ui.checkbox(&mut checked, t!("api.save_dialog_public"));
-        if response.changed() {
-            state.make_public = Some(checked);
-        }
-        if state.make_public.is_none() {
-            ui.label(egui::RichText::new(t!("api.save_dialog_visibility_unchanged")).weak().small());
-        }
-    } else {
-        let mut checked = state.make_public.unwrap_or(false);
-        if ui.checkbox(&mut checked, t!("api.save_dialog_public")).changed() {
-            state.make_public = Some(checked);
-        }
-    }
+    ui.checkbox(&mut state.make_public, t!("api.save_dialog_public"));
 
     if state.has_animation_tracks {
         ui.checkbox(&mut state.save_animation, t!("api.save_dialog_animation"));
@@ -147,7 +126,7 @@ pub fn render_save_online_dialog(
                     state.action = Some(ApiSaveAction::SaveNew {
                         name,
                         upload_thumbnail: state.upload_thumbnail,
-                        make_public: state.make_public.unwrap_or(false),
+                        make_public: state.make_public,
                         save_animation: state.save_animation,
                     });
                     state.close_requested = true;
@@ -161,7 +140,7 @@ pub fn render_save_online_dialog(
                     state.action = Some(ApiSaveAction::SaveNew {
                         name,
                         upload_thumbnail: state.upload_thumbnail,
-                        make_public: state.make_public.unwrap_or(false),
+                        make_public: state.make_public,
                         save_animation: state.save_animation,
                     });
                     state.close_requested = true;
@@ -187,7 +166,7 @@ fn make_primary_action(state: &SaveOnlineDialogState, name: &str) -> ApiSaveActi
         ApiSaveAction::SaveNew {
             name: name.to_string(),
             upload_thumbnail: state.upload_thumbnail,
-            make_public: state.make_public.unwrap_or(false),
+            make_public: state.make_public,
             save_animation: state.save_animation,
         }
     }

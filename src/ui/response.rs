@@ -106,7 +106,7 @@ pub enum ApiSaveAction {
     Update {
         name: String,
         upload_thumbnail: bool,
-        make_public: Option<bool>,
+        make_public: bool,
         save_animation: bool,
     },
 }
