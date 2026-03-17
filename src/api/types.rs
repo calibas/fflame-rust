@@ -543,6 +543,8 @@ pub struct PaletteResponse {
     pub visibility: ApiPaletteVisibility,
     pub owner_id: String,
     pub name: Option<String>,
+    #[serde(default)]
+    pub data_hash: Option<String>,
     pub stops: Option<serde_json::Value>,
     pub color_data: Option<Vec<u32>>,
     pub color_count: Option<i32>,

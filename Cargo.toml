@@ -34,6 +34,7 @@ quick-xml = "0.36"
 rust-i18n = "3.1"
 directories = "6.0"
 rayon = "1.10"
+sha2 = "0.10"
 
 # Audio (for audio-reactive animations)
 cpal = "0.15"

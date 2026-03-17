@@ -227,8 +227,12 @@ impl ApiState {
     /// Update an existing flame on the API.
     ///
     /// Fetches the current flame first to:
-    /// 1. Get the existing palette ID so it can be updated (not unlinked)
+    /// 1. Get the existing palette's data_hash for comparison
     /// 2. Preserve visibility when `visibility` is `None`
+    ///
+    /// Palette handling: compares content hashes to avoid overwriting shared palettes.
+    /// If the palette hasn't changed, keeps the existing palette_id.
+    /// If it has changed, creates a new palette (copy) to avoid mutating shared data.
     ///
     /// If `thumbnail_jpg` is `Some`, uploads a new thumbnail.
     pub async fn update_flame(
@@ -245,13 +249,29 @@ impl ApiState {
         let current_url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
         let current: FlameResponse = client::api_get(&current_url, &token).await?;
 
-        // Update or create the palette, keeping the same palette_id link
+        // Determine palette: compare hashes to decide if we need a new palette
+        let local_hash = sync::compute_palette_hash(&config.palette);
         let final_palette_id = match current.palette_id {
             Some(ref pid) => {
-                let palette_req = sync::palette_to_update_request(&config.palette);
+                // Fetch the existing palette to compare data_hash
                 let palette_url = build_url(API_BASE_URL, &format!("/api/palettes/{}", pid));
-                client::api_put::<PaletteResponse, _>(&palette_url, &palette_req, &token).await?;
-                Some(pid.clone())
+                let existing_palette: PaletteResponse =
+                    client::api_get(&palette_url, &token).await?;
+
+                if existing_palette.data_hash.as_deref() == Some(&local_hash) {
+                    // Palette unchanged — keep existing link
+                    log::info!("Palette unchanged (hash: {}), keeping existing", local_hash);
+                    Some(pid.clone())
+                } else {
+                    // Palette changed — create a new one (don't overwrite shared palette)
+                    log::info!("Palette changed (local: {}, remote: {:?}), creating copy",
+                        local_hash, existing_palette.data_hash);
+                    let palette_req = sync::palette_to_create_request(&config.palette, None);
+                    let palette_url = build_url(API_BASE_URL, "/api/palettes");
+                    let palette_resp: PaletteResponse =
+                        client::api_post(&palette_url, &palette_req, &token).await?;
+                    Some(palette_resp.id)
+                }
             }
             None => {
                 // Flame had no palette — create one now

@@ -424,23 +424,88 @@ fn encode_palette_data(palette: &Palette) -> (Option<serde_json::Value>, Option<
     }
 }
 
+/// Compute the palette content hash matching the server's `palette_content_hash()`.
+///
+/// SHA-256 over:
+///   (0x63 + color_data_bytes | 0x43) || (0x73 + stops_utf8 | 0x53)
+///
+/// `color_data` bytes are raw u8 channel values (R,G,B,R,G,B,...).
+/// `stops` text must match PostgreSQL's `jsonb::text` canonical format
+/// (sorted keys, space after `:` and `,`).
+pub fn compute_palette_hash(palette: &Palette) -> String {
+    use sha2::{Sha256, Digest};
+
+    let (stops_json, color_data) = encode_palette_data(palette);
+
+    let mut hasher = Sha256::new();
+
+    // color_data component
+    match color_data {
+        Some(ref data) => {
+            hasher.update([0x63]); // tag: color_data present
+            // Convert u32 values (0-255) to raw bytes — matches BYTEA storage
+            let bytes: Vec<u8> = data.iter().map(|&v| v as u8).collect();
+            hasher.update(&bytes);
+        }
+        None => {
+            hasher.update([0x43]); // tag: color_data NULL
+        }
+    }
+
+    // stops component
+    match stops_json {
+        Some(ref val) => {
+            hasher.update([0x73]); // tag: stops present
+            let text = jsonb_text(val);
+            hasher.update(text.as_bytes());
+        }
+        None => {
+            hasher.update([0x53]); // tag: stops NULL
+        }
+    }
+
+    // Zero-pad each byte to 2 hex digits — matches PostgreSQL encode(..., 'hex')
+    hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Format a serde_json::Value to match PostgreSQL's `jsonb::text` canonical output.
+///
+/// PostgreSQL JSONB text format: sorted keys, space after `:` and `,`, no newlines.
+/// e.g. `{"color": [1.0, 0.0, 0.0], "position": 0.0}`
+fn jsonb_text(val: &serde_json::Value) -> String {
+    use serde::Serialize;
+
+    struct PostgresJsonFormatter;
+
+    impl serde_json::ser::Formatter for PostgresJsonFormatter {
+        fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
+        where W: ?Sized + std::io::Write {
+            if first { Ok(()) } else { writer.write_all(b", ") }
+        }
+
+        fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> std::io::Result<()>
+        where W: ?Sized + std::io::Write {
+            if first { Ok(()) } else { writer.write_all(b", ") }
+        }
+
+        fn begin_object_value<W>(&mut self, writer: &mut W) -> std::io::Result<()>
+        where W: ?Sized + std::io::Write {
+            writer.write_all(b": ")
+        }
+    }
+
+    let mut buf = Vec::new();
+    let mut ser = serde_json::Serializer::with_formatter(&mut buf, PostgresJsonFormatter);
+    val.serialize(&mut ser).unwrap();
+    String::from_utf8(buf).unwrap()
+}
+
 /// Create a palette request from a FractalConfig's palette.
 pub fn palette_to_create_request(palette: &Palette, visibility: Option<ApiPaletteVisibility>) -> CreatePaletteRequest {
     let vis = visibility.unwrap_or(ApiPaletteVisibility::Private);
     let (stops, color_data) = encode_palette_data(palette);
     CreatePaletteRequest {
         visibility: vis,
-        name: Some(palette.name.clone()),
-        stops,
-        color_data,
-        metadata: None,
-    }
-}
-
-/// Build an UpdatePaletteRequest from a Palette (same encoding as create).
-pub fn palette_to_update_request(palette: &Palette) -> UpdatePaletteRequest {
-    let (stops, color_data) = encode_palette_data(palette);
-    UpdatePaletteRequest {
         name: Some(palette.name.clone()),
         stops,
         color_data,
