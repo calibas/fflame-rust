@@ -1480,7 +1480,7 @@ impl App {
         self.url_load_in_progress = false;
 
         match result {
-            Ok(UrlLoadedData::Flame(config, flame_id)) => {
+            Ok(UrlLoadedData::Flame(config, flame_id, is_public)) => {
                 let name = config.flame.name.clone();
                 log::info!("URL load: flame '{}' ({})", name, flame_id);
                 if let Err(e) = self.load_config_with_undo(config, format!("Load flame from URL: {}", name)) {
@@ -1492,6 +1492,7 @@ impl App {
                     return;
                 }
                 self.api_flame_id = Some(flame_id);
+                self.api_flame_is_public = is_public;
                 self.egui_layer.show_api_notification(
                     &rust_i18n::t!("api.url_load_flame_success", name = name),
                     false,
@@ -1656,9 +1657,9 @@ async fn load_from_url(
 
         Ok(super::UrlLoadedData::Animation(animation, animation_id, effective_flame_id))
     } else if let Some(flame_id) = flame_id {
-        let config = api.load_flame(&flame_id).await
+        let (config, is_public) = api.load_flame_with_visibility(&flame_id).await
             .map_err(|e| format!("Failed to load flame: {}", e))?;
-        Ok(super::UrlLoadedData::Flame(config, flame_id))
+        Ok(super::UrlLoadedData::Flame(config, flame_id, is_public))
     } else {
         Err("No flame or animation ID provided".to_string())
     }

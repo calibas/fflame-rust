@@ -276,8 +276,8 @@ use crate::animation::AnimationController;
 
 /// Data loaded from a URL deep-link (?flame=uuid or ?animation=uuid)
 pub(super) enum UrlLoadedData {
-    /// A flame config loaded from the API, with its server ID
-    Flame(crate::config::FractalConfig, String),
+    /// A flame config loaded from the API, with its server ID and visibility
+    Flame(crate::config::FractalConfig, String, Option<bool>),
     /// An animation loaded from the API (flame config is in animation.base_config)
     Animation(crate::animation::Animation, String /* animation_id */, Option<String> /* flame_id */),
 }
