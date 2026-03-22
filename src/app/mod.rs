@@ -534,12 +534,22 @@ impl App {
                 Some(saved) => saved, // User has a saved preference
                 None => {
                     // Auto-detect: logical width < 600 means compact
-                    let scale_factor = window.scale_factor() as f32;
-                    let logical_width = app.gpu.size.width as f32 / scale_factor;
+                    // On WASM, use browser's CSS width directly (reliable logical size).
+                    // winit's scale_factor() may not reflect devicePixelRatio on all browsers.
+                    #[cfg(target_arch = "wasm32")]
+                    let logical_width = {
+                        let w = web_sys::window().unwrap();
+                        w.inner_width().unwrap().as_f64().unwrap() as f32
+                    };
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let logical_width = {
+                        let scale_factor = window.scale_factor() as f32;
+                        app.gpu.size.width as f32 / scale_factor
+                    };
                     let is_compact = logical_width < 600.0;
                     log::info!(
-                        "Compact mode auto-detected: {} (physical {}px, scale {:.1}x, logical {:.0}px)",
-                        is_compact, app.gpu.size.width, scale_factor, logical_width
+                        "Compact mode auto-detected: {} (logical width {:.0}px)",
+                        is_compact, logical_width
                     );
                     // Save auto-detected value so it persists
                     app.config_manager.system_settings_mut().compact_mode = Some(is_compact);
