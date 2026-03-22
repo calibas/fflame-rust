@@ -541,6 +541,9 @@ impl App {
                         "Compact mode auto-detected: {} (physical {}px, scale {:.1}x, logical {:.0}px)",
                         is_compact, app.gpu.size.width, scale_factor, logical_width
                     );
+                    // Save auto-detected value so it persists
+                    app.config_manager.system_settings_mut().compact_mode = Some(is_compact);
+                    let _ = app.config_manager.system_settings().save();
                     is_compact
                 }
             };

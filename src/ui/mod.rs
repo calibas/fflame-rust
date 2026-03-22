@@ -520,6 +520,9 @@ impl EguiLayer {
         let is_compact = workspace.is_compact();
         if is_compact != self.compact_mode {
             self.set_compact_mode(is_compact);
+            // Persist the change to system settings
+            config_manager.system_settings_mut().compact_mode = Some(is_compact);
+            let _ = config_manager.system_settings().save();
         }
 
         let mut raw_input = self.state.take_egui_input(window);
