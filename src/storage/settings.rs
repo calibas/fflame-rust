@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Current system settings format version
-pub const CURRENT_SETTINGS_VERSION: u32 = 3;
+pub const CURRENT_SETTINGS_VERSION: u32 = 4;
 
 /// Version history for settings migrations
 #[allow(dead_code)]
@@ -22,6 +22,7 @@ pub const VERSION_HISTORY: &[&str] = &[
     "1: Initial versioned release with compact serialization",
     "2: Added online_mode, api_base_url, auth credentials",
     "3: Added encrypted saved_credentials for desktop auto-login",
+    "4: Added compact_mode for mobile/small-screen layout",
 ];
 
 /// System settings - device-specific application preferences
@@ -52,6 +53,10 @@ pub struct SystemSettings {
     /// Show the Help panel on startup (default: true)
     #[serde(default = "default_show_help_on_startup")]
     pub show_help_on_startup: bool,
+
+    /// Compact (mobile) layout mode — detected on first run, user can override
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_mode: Option<bool>,
 
     // Online / API
     /// Enable online features (cloud save, browse, palettes)
@@ -153,6 +158,7 @@ impl Default for SystemSettings {
             burn_in: default_burn_in(),
             language: default_language(),
             show_help_on_startup: default_show_help_on_startup(),
+            compact_mode: None,
             online_mode: default_online_mode(),
             api_base_url: default_api_base_url(),
             auth_token: None,
@@ -310,6 +316,7 @@ impl SystemSettings {
                 0 => Self::migrate_v0_to_v1(settings)?,
                 1 => Self::migrate_v1_to_v2(settings)?,
                 2 => Self::migrate_v2_to_v3(settings)?,
+                3 => Self::migrate_v3_to_v4(settings)?,
                 _ => {
                     return Err(serde_json::Error::io(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -342,6 +349,13 @@ impl SystemSettings {
     /// Migrate from v2 to v3
     /// v3: Added encrypted saved_credentials for desktop auto-login
     fn migrate_v2_to_v3(settings: Self) -> Result<Self, serde_json::Error> {
+        // No field changes needed - serde(default) handles new Optional field
+        Ok(settings)
+    }
+
+    /// Migrate from v3 to v4
+    /// v4: Added compact_mode for mobile/small-screen layout
+    fn migrate_v3_to_v4(settings: Self) -> Result<Self, serde_json::Error> {
         // No field changes needed - serde(default) handles new Optional field
         Ok(settings)
     }
