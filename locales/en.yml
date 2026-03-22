@@ -1597,6 +1597,7 @@ auth:
 
 login:
   title: "Account"
+  display_name: "Display Name:"
   email: "Email:"
   password: "Password:"
   confirm_password: "Confirm:"
@@ -1606,6 +1607,9 @@ login:
   registering: "Creating account..."
   no_account: "Don't have an account?"
   have_account: "Already have an account?"
+  password_too_short: "Password must be at least 8 characters"
   passwords_mismatch: "Passwords do not match"
+  error_display_name_taken: "That display name is already taken"
+  error_email_taken: "That email is already registered"
   account_heading: "Account"
   remember_me: "Remember me"

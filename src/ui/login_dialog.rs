@@ -28,6 +28,7 @@ pub struct LoginDialogState {
     pub login_result: Arc<Mutex<Option<Result<LoginSuccess, String>>>>,
 
     // Register fields
+    pub reg_display_name: String,
     pub reg_email: String,
     pub reg_password: String,
     pub reg_confirm: String,
@@ -38,6 +39,11 @@ pub struct LoginDialogState {
     // Remember me (desktop only)
     #[cfg(not(target_arch = "wasm32"))]
     pub remember_me: bool,
+
+    // Profile info (fetched from /api/users/me when account panel is open)
+    pub profile: Option<crate::api::types::ApiUser>,
+    pub profile_loading: bool,
+    pub profile_result: Arc<Mutex<Option<Result<crate::api::types::ApiUser, String>>>>,
 }
 
 /// Successful login/register response data
@@ -55,6 +61,7 @@ impl Default for LoginDialogState {
             loading: false,
             error: None,
             login_result: Arc::new(Mutex::new(None)),
+            reg_display_name: String::new(),
             reg_email: String::new(),
             reg_password: String::new(),
             reg_confirm: String::new(),
@@ -63,6 +70,9 @@ impl Default for LoginDialogState {
             reg_result: Arc::new(Mutex::new(None)),
             #[cfg(not(target_arch = "wasm32"))]
             remember_me: false,
+            profile: None,
+            profile_loading: false,
+            profile_result: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -86,7 +96,7 @@ pub fn render_login_dialog(
     let is_signed_in = config_manager.system_settings().is_signed_in();
 
     if is_signed_in {
-        render_account_info(ui, config_manager, sign_out);
+        render_account_info(ui, state, config_manager, sign_out);
     } else {
         // Tab bar: Sign In / Register
         ui.horizontal(|ui| {
@@ -115,9 +125,44 @@ pub fn render_login_dialog(
 /// Render account info when signed in
 fn render_account_info(
     ui: &mut egui::Ui,
+    state: &mut LoginDialogState,
     config_manager: &crate::config::ConfigManager,
     sign_out: &mut bool,
 ) {
+    // Trigger profile fetch if not yet loaded
+    if state.profile.is_none() && !state.profile_loading {
+        state.profile_loading = true;
+        let result_slot = state.profile_result.clone();
+        let settings = config_manager.system_settings();
+        let token = settings.get_auth_token().unwrap_or_default();
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            wasm_bindgen_futures::spawn_local(async move {
+                let result = fetch_profile(&token).await;
+                *result_slot.lock().unwrap() = Some(result);
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            std::thread::spawn(move || {
+                let result = pollster::block_on(fetch_profile(&token));
+                *result_slot.lock().unwrap() = Some(result);
+            });
+        }
+    }
+
+    // Poll for completed profile fetch
+    if state.profile_loading {
+        if let Some(result) = state.profile_result.lock().ok().and_then(|mut r| r.take()) {
+            state.profile_loading = false;
+            match result {
+                Ok(user) => { state.profile = Some(user); }
+                Err(e) => { log::error!("Failed to fetch profile: {}", e); }
+            }
+        }
+    }
+
     let settings = config_manager.system_settings();
     let email = settings.auth_email.clone().unwrap_or_else(|| "Unknown".to_string());
 
@@ -127,6 +172,13 @@ fn render_account_info(
         ui.heading(t!("login.account_heading"));
         ui.add_space(8.0);
 
+        if let Some(ref profile) = state.profile {
+            ui.horizontal(|ui| {
+                ui.label(t!("login.display_name"));
+                ui.strong(&profile.display_name);
+            });
+        }
+
         ui.horizontal(|ui| {
             ui.label(t!("login.email"));
             ui.strong(&email);
@@ -135,9 +187,30 @@ fn render_account_info(
         ui.add_space(16.0);
 
         if ui.button(t!("auth.sign_out")).clicked() {
+            state.profile = None; // Clear cached profile on sign out
             *sign_out = true;
         }
     });
+}
+
+/// Map raw API error strings to user-friendly messages for registration.
+fn friendly_register_error(err: &str) -> String {
+    if err.contains("display_name_taken") {
+        t!("login.error_display_name_taken").to_string()
+    } else if err.contains("email_taken") {
+        t!("login.error_email_taken").to_string()
+    } else {
+        err.to_string()
+    }
+}
+
+/// Fetch the current user's profile from the API.
+async fn fetch_profile(token: &str) -> Result<crate::api::types::ApiUser, String> {
+    use crate::api::client::{build_url, api_get};
+    use crate::api::API_BASE_URL;
+
+    let url = build_url(API_BASE_URL, "/api/users/me");
+    api_get(&url, token).await.map_err(|e| e.to_string())
 }
 
 /// Render the sign-in form
@@ -158,17 +231,12 @@ fn render_sign_in_form(
         // Email field
         ui.horizontal(|ui| {
             ui.label(t!("login.email"));
-            let email_response = ui.add(
+            ui.add(
                 egui::TextEdit::singleline(&mut state.email)
                     .desired_width(200.0)
                     .hint_text("user@example.com")
                     .interactive(!state.loading),
             );
-
-            // Auto-focus email field when dialog opens
-            if state.email.is_empty() && state.password.is_empty() && state.error.is_none() {
-                email_response.request_focus();
-            }
         });
 
         ui.add_space(4.0);
@@ -241,19 +309,26 @@ fn render_register_form(
             ui.add_space(4.0);
         }
 
+        // Display name field
+        ui.horizontal(|ui| {
+            ui.label(t!("login.display_name"));
+            ui.add(
+                egui::TextEdit::singleline(&mut state.reg_display_name)
+                    .desired_width(200.0)
+                    .hint_text("User")
+                    .interactive(!state.reg_loading),
+            );
+        });
+
         // Email field
         ui.horizontal(|ui| {
             ui.label(t!("login.email"));
-            let email_response = ui.add(
+            ui.add(
                 egui::TextEdit::singleline(&mut state.reg_email)
                     .desired_width(200.0)
                     .hint_text("user@example.com")
                     .interactive(!state.reg_loading),
             );
-
-            if state.reg_email.is_empty() && state.reg_password.is_empty() && state.reg_error.is_none() {
-                email_response.request_focus();
-            }
         });
 
         ui.add_space(4.0);
@@ -289,8 +364,11 @@ fn render_register_form(
             }
         });
 
-        // Password mismatch warning
-        if !state.reg_confirm.is_empty() && state.reg_password != state.reg_confirm {
+        // Password validation warnings
+        if !state.reg_password.is_empty() && state.reg_password.len() < 8 {
+            ui.add_space(2.0);
+            ui.colored_label(egui::Color32::from_rgb(220, 160, 60), t!("login.password_too_short"));
+        } else if !state.reg_confirm.is_empty() && state.reg_password != state.reg_confirm {
             ui.add_space(2.0);
             ui.colored_label(egui::Color32::from_rgb(220, 160, 60), t!("login.passwords_mismatch"));
         }
@@ -324,8 +402,9 @@ fn render_register_form(
 
 /// Check if register form is ready to submit
 fn can_register(state: &LoginDialogState) -> bool {
-    !state.reg_email.is_empty()
-        && !state.reg_password.is_empty()
+    !state.reg_display_name.is_empty()
+        && !state.reg_email.is_empty()
+        && state.reg_password.len() >= 8
         && state.reg_password == state.reg_confirm
         && !state.reg_loading
 }
@@ -411,7 +490,7 @@ fn poll_result(
             }
             Err(err) => {
                 if is_register {
-                    state.reg_error = Some(err);
+                    state.reg_error = Some(friendly_register_error(&err));
                 } else {
                     state.error = Some(err);
                     state.password.clear();
@@ -455,6 +534,7 @@ fn trigger_register(state: &mut LoginDialogState, config_manager: &crate::config
     state.reg_loading = true;
     state.reg_error = None;
 
+    let display_name = state.reg_display_name.clone();
     let email = state.reg_email.clone();
     let password = state.reg_password.clone();
     let base_url = crate::api::API_BASE_URL.to_string();
@@ -463,7 +543,7 @@ fn trigger_register(state: &mut LoginDialogState, config_manager: &crate::config
     #[cfg(target_arch = "wasm32")]
     {
         wasm_bindgen_futures::spawn_local(async move {
-            let result = do_register(&base_url, &email, &password).await;
+            let result = do_register(&base_url, &display_name, &email, &password).await;
             *result_slot.lock().unwrap() = Some(result);
         });
     }
@@ -471,7 +551,7 @@ fn trigger_register(state: &mut LoginDialogState, config_manager: &crate::config
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::thread::spawn(move || {
-            let result = pollster::block_on(do_register(&base_url, &email, &password));
+            let result = pollster::block_on(do_register(&base_url, &display_name, &email, &password));
             *result_slot.lock().unwrap() = Some(result);
         });
     }
@@ -545,12 +625,13 @@ pub fn try_auto_login(
 }
 
 /// Perform the actual register API call
-async fn do_register(base_url: &str, email: &str, password: &str) -> Result<LoginSuccess, String> {
+async fn do_register(base_url: &str, display_name: &str, email: &str, password: &str) -> Result<LoginSuccess, String> {
     use crate::api::client::{build_url, api_post_unauth};
     use crate::api::types::{RegisterRequest, AuthResponse};
 
     let url = build_url(base_url, "/api/auth/register");
     let req = RegisterRequest {
+        display_name: display_name.to_string(),
         email: email.to_string(),
         password: password.to_string(),
     };
