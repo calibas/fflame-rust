@@ -57,6 +57,8 @@ pub struct PanelContext<'a> {
     // Fractal texture for display
     pub fractal_texture_id: Option<egui::TextureId>,
     pub fractal_viewport_size: &'a mut Option<(u32, u32)>,
+    /// Tab bar height from previous frame, used to inflate fractal texture size
+    pub viewport_tab_bar_height: f32,
 
     // Config dialog state
     pub config_json_buffer: &'a mut String,
@@ -166,6 +168,26 @@ impl<'a> TabViewer for PanelViewer<'a> {
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
         tab.to_string().into()
+    }
+
+    fn is_closeable(&self, tab: &Self::Tab) -> bool {
+        !matches!(tab, PanelType::FractalViewport)
+    }
+
+    fn tab_style_override(&self, tab: &Self::Tab, global_style: &egui_dock::TabStyle) -> Option<egui_dock::TabStyle> {
+        if matches!(tab, PanelType::FractalViewport) {
+            let mut style = global_style.clone();
+            // Remove body border and inner margin so fractal fills the entire area
+            style.tab_body.stroke = egui::Stroke::NONE;
+            style.tab_body.inner_margin = egui::Margin::ZERO;
+            Some(style)
+        } else {
+            None
+        }
+    }
+
+    fn clear_background(&self, tab: &Self::Tab) -> bool {
+        !matches!(tab, PanelType::FractalViewport)
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
@@ -575,14 +597,24 @@ impl<'a> PanelViewer<'a> {
         if let Some(texture_id) = self.context.fractal_texture_id {
             // Get the actual panel size and report it for texture sizing
             let available_size = ui.available_size();
+            let tab_bar_h = self.context.viewport_tab_bar_height;
+            // Inflate texture height to include the tab bar area so the fractal
+            // covers the entire node seamlessly (the tab bar cover draws the top slice)
+            let total_height = available_size.y + tab_bar_h;
             let width = available_size.x.max(1.0) as u32;
-            let height = available_size.y.max(1.0) as u32;
+            let height = total_height.max(1.0) as u32;
 
-            // Report the size back so texture can be resized to match
+            // Report the inflated size so the GPU renders a taller texture
             *self.context.fractal_viewport_size = Some((width, height));
 
-            // Display the fractal texture with drag and scroll interaction
+            // Display the fractal texture with UV offset to skip the top portion
+            // (which is drawn separately over the tab bar by the cover Area)
+            let uv_top = if total_height > 0.0 { tab_bar_h / total_height } else { 0.0 };
             let image = egui::Image::new(egui::load::SizedTexture::new(texture_id, available_size))
+                .uv(egui::Rect::from_min_max(
+                    egui::pos2(0.0, uv_top),
+                    egui::pos2(1.0, 1.0),
+                ))
                 .fit_to_exact_size(available_size)
                 .maintain_aspect_ratio(false) // Fill entire panel
                 .sense(egui::Sense::click_and_drag()); // Enable drag interaction

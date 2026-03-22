@@ -191,6 +191,10 @@ pub struct EguiLayer {
     /// Last time any input was received (for menu button fade)
     last_input_time: web_time::Instant,
 
+    /// Tab bar height of the FractalViewport leaf node (from previous frame).
+    /// Used to inflate the fractal texture so it covers the tab bar seamlessly.
+    viewport_tab_bar_height: f32,
+
     // WASM clipboard bridge
     #[cfg(target_arch = "wasm32")]
     web_clipboard: crate::web_clipboard::WebClipboard,
@@ -292,6 +296,7 @@ impl EguiLayer {
             signal_panel_state: signal_panel::SignalPanelState::new(),
             compact_mode: false,
             last_input_time: web_time::Instant::now(),
+            viewport_tab_bar_height: 0.0,
             #[cfg(target_arch = "wasm32")]
             web_clipboard: crate::web_clipboard::WebClipboard::install(),
         }
@@ -773,6 +778,7 @@ impl EguiLayer {
                         // Fractal texture for display
                         fractal_texture_id,
                         fractal_viewport_size: &mut fractal_viewport_size,
+                        viewport_tab_bar_height: self.viewport_tab_bar_height,
 
                         // Config dialog state
                         config_json_buffer: &mut self.config_json_buffer,
@@ -869,6 +875,55 @@ impl EguiLayer {
                         api_animation_save_action: &mut api_animation_save_action,
                     },
                 });
+
+            // Hide the FractalViewport's tab bar seamlessly.
+            // The GPU renders the fractal texture taller (body + tab bar height). The body
+            // shows the bottom portion via UV offset. Here we draw the top portion over the
+            // tab bar and block input so the hidden tab buttons can't be clicked.
+            if let Some((_surface, node_index, _tab)) = workspace.dock_state.find_tab(&workspace::PanelType::FractalViewport) {
+                if let Some(leaf) = workspace.dock_state.main_surface()[node_index].get_leaf() {
+                    let tab_bar_h = leaf.viewport.min.y - leaf.rect.min.y;
+                    // Store for next frame so render_fractal_viewport can inflate texture size
+                    self.viewport_tab_bar_height = tab_bar_h;
+
+                    if tab_bar_h > 0.0 {
+                        let tab_bar_rect = egui::Rect::from_min_max(
+                            leaf.rect.min,
+                            egui::pos2(leaf.rect.max.x, leaf.viewport.min.y),
+                        );
+                        let bg = config_manager.active_config().background_color;
+                        let color = egui::Color32::from_rgb(
+                            (bg[0] * 255.0) as u8,
+                            (bg[1] * 255.0) as u8,
+                            (bg[2] * 255.0) as u8,
+                        );
+                        let texture_id = fractal_texture_id;
+                        let full_height = leaf.rect.height();
+                        egui::Area::new(egui::Id::new("viewport_tab_cover"))
+                            .fixed_pos(tab_bar_rect.min)
+                            .order(egui::Order::Foreground)
+                            .interactable(true)
+                            .show(ctx, |ui| {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    tab_bar_rect.size(),
+                                    egui::Sense::click_and_drag(),
+                                );
+                                if let Some(tid) = texture_id {
+                                    // Draw the top slice of the inflated texture (matches the
+                                    // UV offset used in render_fractal_viewport for the body)
+                                    let uv_bottom = tab_bar_h / full_height;
+                                    let uv = egui::Rect::from_min_max(
+                                        egui::pos2(0.0, 0.0),
+                                        egui::pos2(1.0, uv_bottom),
+                                    );
+                                    ui.painter().image(tid, rect, uv, egui::Color32::WHITE);
+                                } else {
+                                    ui.painter().rect_filled(rect, 0.0, color);
+                                }
+                            });
+                    }
+                }
+            }
 
             // Show palette editor dialogs (fixed mode warning, overwrite/delete confirmations)
             palette_editor::render_palette_dialogs(
