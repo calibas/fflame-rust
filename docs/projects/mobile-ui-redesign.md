@@ -85,7 +85,6 @@ These APIs already exist in egui — the work is connecting them to the camera/v
 
 ## UI Scaling
 
-- Set `ctx.set_zoom_factor(1.4)` in compact mode for touch-friendly targets
 - Larger slider handles, bigger buttons
 - More padding between interactive elements
 

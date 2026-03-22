@@ -11,6 +11,7 @@ mod help;
 pub mod login_dialog;
 pub mod save_online_dialog;
 pub mod histogram;
+mod compact_menu;
 mod menu_bar;
 mod menu_context;
 mod palette_editor;
@@ -184,6 +185,12 @@ pub struct EguiLayer {
     // Signal panel state
     pub(crate) signal_panel_state: signal_panel::SignalPanelState,
 
+    // Compact mode state
+    /// Whether compact (mobile) layout is active
+    compact_mode: bool,
+    /// Last time any input was received (for menu button fade)
+    last_input_time: web_time::Instant,
+
     // WASM clipboard bridge
     #[cfg(target_arch = "wasm32")]
     web_clipboard: crate::web_clipboard::WebClipboard,
@@ -283,9 +290,16 @@ impl EguiLayer {
             density_histogram: crate::renderer::DensityHistogram::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
+            compact_mode: false,
+            last_input_time: web_time::Instant::now(),
             #[cfg(target_arch = "wasm32")]
             web_clipboard: crate::web_clipboard::WebClipboard::install(),
         }
+    }
+
+    /// Enable or disable compact (mobile) mode
+    pub fn set_compact_mode(&mut self, enabled: bool) {
+        self.compact_mode = enabled;
     }
 
     /// Mutable access to login dialog state (for auto-login on startup)
@@ -502,7 +516,18 @@ impl EguiLayer {
         api_flame_is_public: &Option<bool>,
         api_animation_id: &Option<String>,
     ) -> UiResponse {
+        // Sync compact mode from workspace (handles layout switches from menus)
+        let is_compact = workspace.is_compact();
+        if is_compact != self.compact_mode {
+            self.set_compact_mode(is_compact);
+        }
+
         let mut raw_input = self.state.take_egui_input(window);
+
+        // Track input activity for compact menu fade
+        if self.compact_mode && !raw_input.events.is_empty() {
+            self.last_input_time = web_time::Instant::now();
+        }
 
         // Inject clipboard paste events from the browser (WASM only)
         #[cfg(target_arch = "wasm32")]
@@ -666,14 +691,26 @@ impl EguiLayer {
             // Compute auth state before struct init (avoids borrow conflict)
             let is_signed_in = config_manager.system_settings().is_signed_in();
 
-            // Normal mode: render menu bar and dock panels
-            menu_bar::render_menu_bar(
-                ctx,
-                workspace,
-                &mut menu_actions,
-                &menu_state,
-                &mut self.save_online_dialog_state,
-            );
+            // Normal mode: render menu bar (desktop) or floating button (compact)
+            if self.compact_mode {
+                let seconds_since_input = self.last_input_time.elapsed().as_secs_f32();
+                compact_menu::render_compact_menu(
+                    ctx,
+                    workspace,
+                    &mut menu_actions,
+                    &menu_state,
+                    &mut self.save_online_dialog_state,
+                    seconds_since_input,
+                );
+            } else {
+                menu_bar::render_menu_bar(
+                    ctx,
+                    workspace,
+                    &mut menu_actions,
+                    &menu_state,
+                    &mut self.save_online_dialog_state,
+                );
+            }
 
             // All windows are now dockable panels (see Windows menu)
             // Fullscreen docking system with Fractal Viewport as a panel

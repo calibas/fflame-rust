@@ -528,8 +528,30 @@ impl App {
         // Initialize GPU state with initial config (ensures shaders are compiled with correct variations)
         app.import_config(initial_config);
 
+        // Detect compact (mobile) mode from logical window size
+        {
+            let compact_mode = match app.config_manager.system_settings().compact_mode {
+                Some(saved) => saved, // User has a saved preference
+                None => {
+                    // Auto-detect: logical width < 600 means compact
+                    let scale_factor = window.scale_factor() as f32;
+                    let logical_width = app.gpu.size.width as f32 / scale_factor;
+                    let is_compact = logical_width < 600.0;
+                    log::info!(
+                        "Compact mode auto-detected: {} (physical {}px, scale {:.1}x, logical {:.0}px)",
+                        is_compact, app.gpu.size.width, scale_factor, logical_width
+                    );
+                    is_compact
+                }
+            };
+            if compact_mode {
+                app.egui_layer.set_compact_mode(true);
+                app.workspace.apply_layout(crate::ui::workspace::WorkspaceLayout::Compact);
+            }
+        }
+
         // Open Help panel on startup if setting is enabled (centered, minimum 350px wide)
-        if app.config_manager.system_settings().show_help_on_startup {
+        if !app.workspace.is_compact() && app.config_manager.system_settings().show_help_on_startup {
             use crate::ui::workspace::PanelType;
             let screen_size = egui::vec2(app.gpu.size.width as f32, app.gpu.size.height as f32);
             let help_size = egui::vec2(400.0, 450.0); // Fixed size for Help panel
