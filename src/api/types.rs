@@ -18,6 +18,7 @@ pub struct LoginRequest {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RegisterRequest {
+    pub display_name: String,
     pub email: String,
     pub password: String,
 }
@@ -37,6 +38,7 @@ pub struct AuthResponse {
 pub struct ApiUser {
     pub id: String,
     pub auth_provider_id: String,
+    pub display_name: String,
     pub email: Option<String>,
     pub created_at: String,
     pub updated_at: String,
