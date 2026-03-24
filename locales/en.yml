@@ -731,9 +731,9 @@ triangle_editor:
   tooltip_affine_post: "Edit the post-affine transform (applied after variations)"
   tooltip_affine_a: "Horizontal scale. 1.0 = no change.\nAffects X component of X-axis vector."
   tooltip_affine_c: "Horizontal shear. Skews shape horizontally.\nAffects Y component of X-axis vector."
-  tooltip_affine_e: "X translation. Moves transform horizontally.\nOrigin X coordinate."
   tooltip_affine_b: "Vertical shear. Skews shape vertically.\nAffects X component of Y-axis vector."
   tooltip_affine_d: "Vertical scale. 1.0 = no change.\nAffects Y component of Y-axis vector."
+  tooltip_affine_e: "X translation. Moves transform horizontally.\nOrigin X coordinate."
   tooltip_affine_f: "Y translation. Moves transform vertically.\nOrigin Y coordinate."
 
 # Palette Editor Panel
