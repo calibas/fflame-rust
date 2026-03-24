@@ -920,9 +920,11 @@ impl EguiLayer {
                         );
                         let texture_id = fractal_texture_id;
                         let full_height = leaf.rect.height();
+                        // Draw fractal texture over the tab bar and block clicks on
+                        // hidden tab buttons. Order::Middle keeps this below floating windows.
                         egui::Area::new(egui::Id::new("viewport_tab_cover"))
                             .fixed_pos(tab_bar_rect.min)
-                            .order(egui::Order::Foreground)
+                            .order(egui::Order::Middle)
                             .interactable(true)
                             .show(ctx, |ui| {
                                 let (rect, _) = ui.allocate_exact_size(
@@ -942,6 +944,44 @@ impl EguiLayer {
                                     ui.painter().rect_filled(rect, 0.0, color);
                                 }
                             });
+                    }
+                }
+
+                // Eject any tabs that were docked into the viewport's leaf via drag-and-drop.
+                // egui_dock has no per-leaf docking restriction, so we undo it after the fact.
+                if let Some(leaf) = workspace.dock_state.main_surface()[node_index].get_leaf() {
+                    let extra_tabs: Vec<egui_dock::TabIndex> = leaf.tabs()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, tab)| !matches!(tab, workspace::PanelType::FractalViewport))
+                        .map(|(i, _)| egui_dock::TabIndex(i))
+                        .collect();
+                    if !extra_tabs.is_empty() {
+                        // Find a non-viewport leaf to receive ejected tabs
+                        let target = workspace.dock_state.main_surface()
+                            .iter()
+                            .enumerate()
+                            .find(|(i, node)| egui_dock::NodeIndex(*i) != node_index && node.is_leaf())
+                            .map(|(i, _)| egui_dock::NodeIndex(i));
+
+                        let mut removed = Vec::new();
+                        for tab_index in extra_tabs.into_iter().rev() {
+                            if let Some(tab) = workspace.dock_state.main_surface_mut().remove_tab(
+                                (node_index, tab_index)
+                            ) {
+                                removed.push(tab);
+                            }
+                        }
+                        if let Some(target_idx) = target {
+                            for tab in removed {
+                                let count = workspace.dock_state.main_surface()[target_idx]
+                                    .get_leaf()
+                                    .map(|l| l.tabs().len())
+                                    .unwrap_or(0);
+                                workspace.dock_state.main_surface_mut()[target_idx]
+                                    .insert_tab(egui_dock::TabIndex(count), tab);
+                            }
+                        }
                     }
                 }
             }
