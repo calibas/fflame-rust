@@ -34,7 +34,7 @@ Fractal renderers:
 - [Ultra Fractal](https://www.ultrafractal.com/)
 - [IFSRenderer](https://github.com/bezo97/IFSRenderer)
 - [Mandelbulber](https://github.com/buddhi1980/mandelbulber2)
-- [GPU Mandelbulb Tracer](https://gmt-0-8-152535429025.us-west1.run.app/)
+- [GMT Fractals](https://gamazama.github.io/GMT-fractals/)
 - [Iterator.it](https://iterator.it/)
 - [Fractility](https://sites.google.com/view/meltmixpix/fractility)
 - [GAPFix Fractal](https://github.com/bernds/GAPFixFractal)

@@ -530,6 +530,26 @@ impl EguiLayer {
             let _ = config_manager.system_settings().save();
         }
 
+        // Wider, always-visible scrollbars in compact mode (touch-friendly).
+        // Applied every frame since egui_dock may reset styles.
+        self.ctx.style_mut(|style| {
+            if self.compact_mode {
+                style.spacing.scroll = egui::style::ScrollStyle {
+                    bar_width: 10.0,
+                    bar_inner_margin: 2.0,
+                    bar_outer_margin: 2.0,
+                    foreground_color: true,
+                    ..egui::style::ScrollStyle::solid()
+                };
+            } else {
+                style.spacing.scroll = egui::style::ScrollStyle::floating();
+            }
+        });
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let raw_input = self.state.take_egui_input(window);
+
+        #[cfg(target_arch = "wasm32")]
         let mut raw_input = self.state.take_egui_input(window);
 
         // Track input activity for compact menu fade
@@ -701,14 +721,12 @@ impl EguiLayer {
 
             // Normal mode: render menu bar (desktop) or floating button (compact)
             if self.compact_mode {
-                let seconds_since_input = self.last_input_time.elapsed().as_secs_f32();
                 compact_menu::render_compact_menu(
                     ctx,
                     workspace,
                     &mut menu_actions,
                     &menu_state,
                     &mut self.save_online_dialog_state,
-                    seconds_since_input,
                 );
             } else {
                 menu_bar::render_menu_bar(
