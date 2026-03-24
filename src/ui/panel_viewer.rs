@@ -156,6 +156,9 @@ pub struct PanelContext<'a> {
 
     // API animation save action (from animation panel)
     pub api_animation_save_action: &'a mut super::response::ApiAnimationSaveAction,
+
+    // Compact mode (cached from system settings)
+    pub compact_mode: bool,
 }
 
 /// Viewer for rendering each panel type
@@ -186,11 +189,39 @@ impl<'a> TabViewer for PanelViewer<'a> {
         }
     }
 
+    fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
+        if self.context.compact_mode {
+            // In compact mode, disable egui_dock's ScrollArea entirely.
+            // We wrap panel content in our own ScrollArea with AlwaysVisible
+            // to prevent scrollbar oscillation (egui bug #1165).
+            [true, false]
+        } else if matches!(tab, PanelType::FractalViewport) {
+            [false, false]
+        } else {
+            [true, true]
+        }
+    }
+
     fn clear_background(&self, tab: &Self::Tab) -> bool {
         !matches!(tab, PanelType::FractalViewport)
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        if self.context.compact_mode && !matches!(tab, PanelType::FractalViewport) {
+            egui::ScrollArea::vertical()
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .show(ui, |ui| {
+                    self.render_panel(ui, tab);
+                });
+        } else {
+            self.render_panel(ui, tab);
+        }
+    }
+
+}
+
+impl<'a> PanelViewer<'a> {
+    fn render_panel(&mut self, ui: &mut egui::Ui, tab: &mut PanelType) {
         match tab {
             PanelType::FractalViewport => {
                 self.render_fractal_viewport(ui);
@@ -263,9 +294,6 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
         }
     }
-}
-
-impl<'a> PanelViewer<'a> {
     /// Render Transforms panel (transform list, affine, variations)
     fn render_transforms_panel(&mut self, ui: &mut egui::Ui) {
         let _ = super::transforms::render_transforms_content(

@@ -535,11 +535,13 @@ impl EguiLayer {
         self.ctx.style_mut(|style| {
             if self.compact_mode {
                 style.spacing.scroll = egui::style::ScrollStyle {
-                    bar_width: 10.0,
+                    bar_width: 7.0,
+                    floating_width: 7.0,
+                    floating_allocated_width:7.0,
                     bar_inner_margin: 2.0,
                     bar_outer_margin: 2.0,
-                    foreground_color: true,
-                    ..egui::style::ScrollStyle::solid()
+                    // foreground_color: true,
+                    ..egui::style::ScrollStyle::floating()
                 };
             } else {
                 style.spacing.scroll = egui::style::ScrollStyle::floating();
@@ -891,6 +893,7 @@ impl EguiLayer {
                         api_animation_id,
                         is_signed_in,
                         api_animation_save_action: &mut api_animation_save_action,
+                        compact_mode: self.compact_mode,
                     },
                 });
 
