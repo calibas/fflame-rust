@@ -68,6 +68,7 @@ menu:
   window_effects: "✨ Effects"
   window_xaos_editor: "🔀 Xaos Editor"
   window_signal: "📊 Signals"
+  window_account: "👤 Account"
 
   # Window Menu - Workspace layouts
   reset_workspace: "🔄 Reset Workspace"

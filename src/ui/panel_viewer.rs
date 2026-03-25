@@ -190,13 +190,13 @@ impl<'a> TabViewer for PanelViewer<'a> {
     }
 
     fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
-        if self.context.compact_mode {
-            // In compact mode, disable egui_dock's ScrollArea entirely.
+        if matches!(tab, PanelType::FractalViewport) {
+            [false, false]
+        } else if self.context.compact_mode {
+            // In compact mode, disable egui_dock's vertical ScrollArea.
             // We wrap panel content in our own ScrollArea with AlwaysVisible
             // to prevent scrollbar oscillation (egui bug #1165).
             [true, false]
-        } else if matches!(tab, PanelType::FractalViewport) {
-            [false, false]
         } else {
             [true, true]
         }
