@@ -76,9 +76,10 @@ menu:
   layout_beginner: "Beginner"
   layout_standard: "Standard"
   layout_animation: "Animation"
-  layout_compact: "Compact (Mobile)"
+  layout_compact: "📱 Mobile View"
   layout_advanced: "Advanced"
   layout_export: "Export"
+  desktop_view: "🖥 Desktop View"
 
   # Help Menu
   help_panel: "❓ Help"
@@ -1589,7 +1590,7 @@ errors:
 # Auth status (menu bar)
 auth:
   signed_in: "Signed in"
-  not_signed_in: "Not signed in"
+  not_signed_in: "👤 Not signed in"
   sign_out: "Sign Out"
   signed_out_success: "Signed out"
   session_expired: "Session expired — please sign in again"

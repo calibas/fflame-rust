@@ -349,35 +349,33 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Palette Library panel (browse and manage palette packs)
     fn render_palette_library_panel(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            super::palette_library::render_palette_library(
-                ui,
-                self.context.palette_library,
-                self.context.config_manager,
-                self.context.open_palette_editor,
-            );
+        super::palette_library::render_palette_library(
+            ui,
+            self.context.palette_library,
+            self.context.config_manager,
+            self.context.open_palette_editor,
+        );
 
-            let (online_mode, auth_pair) = {
-                let settings = self.context.config_manager.system_settings();
-                let online = settings.online_mode;
-                let auth = if settings.is_signed_in() {
-                    let token = settings.auth_token.clone().unwrap_or_default();
-                    Some((crate::api::API_BASE_URL.to_string(), token))
-                } else {
-                    None
-                };
-                (online, auth)
+        let (online_mode, auth_pair) = {
+            let settings = self.context.config_manager.system_settings();
+            let online = settings.online_mode;
+            let auth = if settings.is_signed_in() {
+                let token = settings.auth_token.clone().unwrap_or_default();
+                Some((crate::api::API_BASE_URL.to_string(), token))
+            } else {
+                None
             };
-            if online_mode {
-                let auth = auth_pair.as_ref().map(|(b, t)| (b.as_str(), t.as_str()));
-                super::palette_library::render_cloud_palettes_section(
-                    ui,
-                    self.context.cloud_palette_state,
-                    self.context.config_manager,
-                    auth,
-                );
-            }
-        });
+            (online, auth)
+        };
+        if online_mode {
+            let auth = auth_pair.as_ref().map(|(b, t)| (b.as_str(), t.as_str()));
+            super::palette_library::render_cloud_palettes_section(
+                ui,
+                self.context.cloud_palette_state,
+                self.context.config_manager,
+                auth,
+            );
+        }
     }
 
     /// Render the View panel (zoom, pan, rotation)
