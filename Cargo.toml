@@ -1,6 +1,6 @@
 [package]
 name = "fractal_flame_wgpu"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2021"
 default-run = "fractal_flame_wgpu"
 
@@ -65,6 +65,7 @@ web-sys = { version = "0.3", features = [
     "Event",
     "InputEvent",
     # Clipboard bridge (copy/paste between browser and egui)
+    "PointerEvent",
     "ClipboardEvent",
     "DataTransfer",
     "Clipboard",

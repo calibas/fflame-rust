@@ -4,6 +4,128 @@ use egui_dock::{egui, TabViewer};
 use rust_i18n::t;
 use super::workspace::PanelType;
 
+/// Result of processing touch events each frame.
+pub enum TouchGesture {
+    /// Single finger drag (translation delta)
+    Pan(egui::Vec2),
+    /// Two-finger pinch (zoom_delta, translation_delta, midpoint)
+    Pinch { zoom_delta: f32, translation: egui::Vec2, midpoint: egui::Pos2 },
+}
+
+/// Tracks active touch points for manual gesture detection.
+/// Needed because egui's built-in `multi_touch()` fails on web when winit
+/// assigns different `TouchDeviceId` per finger, and egui-winit's touch→mouse
+/// emulation breaks after multi-touch ends without proper End events.
+#[derive(Default)]
+pub struct TouchTracker {
+    /// Active touches: (id, current_position)
+    active: std::collections::HashMap<u64, egui::Pos2>,
+    /// Previous frame's distance between fingers (for zoom delta)
+    prev_distance: Option<f32>,
+    /// Previous frame's midpoint (for two-finger translation)
+    prev_midpoint: Option<egui::Pos2>,
+    /// Previous frame's single-finger position (for one-finger pan)
+    prev_single_pos: Option<egui::Pos2>,
+}
+
+impl TouchTracker {
+    /// Process touch events and return the detected gesture, if any.
+    pub fn update(&mut self, events: &[egui::Event]) -> Option<TouchGesture> {
+        if events.is_empty() {
+            return None;
+        }
+
+        // Collect IDs present in this event batch
+        let batch_ids: std::collections::HashSet<u64> = events.iter()
+            .filter_map(|e| if let egui::Event::Touch { id, .. } = e { Some(id.0) } else { None })
+            .collect();
+
+        // If a new finger starts, purge any stale touches not in this batch.
+        // This handles fingers that left the viewport without an End event.
+        let has_start = events.iter().any(|e|
+            matches!(e, egui::Event::Touch { phase: egui::TouchPhase::Start, .. })
+        );
+        if has_start {
+            self.active.retain(|id, _| batch_ids.contains(id));
+        }
+
+        for event in events {
+            if let egui::Event::Touch { device_id: _, id, phase, pos, .. } = event {
+                let touch_id = id.0;
+                match phase {
+                    egui::TouchPhase::Start => {
+                        self.active.insert(touch_id, *pos);
+                    }
+                    egui::TouchPhase::Move => {
+                        self.active.insert(touch_id, *pos);
+                    }
+                    egui::TouchPhase::End | egui::TouchPhase::Cancel => {
+                        self.active.remove(&touch_id);
+                    }
+                }
+            }
+        }
+
+        match self.active.len() {
+            0 => {
+                self.prev_distance = None;
+                self.prev_midpoint = None;
+                self.prev_single_pos = None;
+                None
+            }
+            1 => {
+                self.prev_distance = None;
+                self.prev_midpoint = None;
+
+                let pos = *self.active.values().next().unwrap();
+                let delta = if let Some(prev) = self.prev_single_pos {
+                    pos - prev
+                } else {
+                    egui::Vec2::ZERO
+                };
+                self.prev_single_pos = Some(pos);
+
+                if delta != egui::Vec2::ZERO {
+                    Some(TouchGesture::Pan(delta))
+                } else {
+                    None
+                }
+            }
+            _ => {
+                self.prev_single_pos = None;
+
+                let points: Vec<egui::Pos2> = self.active.values().copied().collect();
+                let p1 = points[0];
+                let p2 = points[1];
+                let distance = p1.distance(p2);
+                let midpoint = egui::pos2((p1.x + p2.x) * 0.5, (p1.y + p2.y) * 0.5);
+
+                let zoom_delta = if let Some(prev) = self.prev_distance {
+                    if prev > 0.0 { distance / prev } else { 1.0 }
+                } else {
+                    1.0
+                };
+
+                let translation = if let Some(prev_mid) = self.prev_midpoint {
+                    midpoint - prev_mid
+                } else {
+                    egui::Vec2::ZERO
+                };
+
+                self.prev_distance = Some(distance);
+                self.prev_midpoint = Some(midpoint);
+
+                Some(TouchGesture::Pinch { zoom_delta, translation, midpoint })
+            }
+        }
+    }
+
+    /// Returns true if any fingers are currently active
+    pub fn is_touch_active(&self) -> bool {
+        !self.active.is_empty()
+    }
+}
+
 /// Context needed by panels to render
 ///
 /// Holds references to all UI state from EguiLayer that panels might need.
@@ -164,6 +286,7 @@ pub struct PanelContext<'a> {
 /// Viewer for rendering each panel type
 pub struct PanelViewer<'a> {
     pub context: PanelContext<'a>,
+    pub touch_tracker: &'a mut TouchTracker,
 }
 
 impl<'a> TabViewer for PanelViewer<'a> {
@@ -647,8 +770,35 @@ impl<'a> PanelViewer<'a> {
 
             let response = ui.add(image);
 
-            // Handle mouse drag for panning
-            if response.dragged_by(egui::PointerButton::Primary) {
+            // Handle pinch-to-zoom on touchscreens (check before drag to avoid conflicts)
+            // Uses custom TouchTracker because egui's multi_touch() doesn't work on web
+            // (winit assigns different TouchDeviceId per finger, so egui never sees 2 fingers)
+            let touch_gesture = ui.input(|i| {
+                let touch_events: Vec<egui::Event> = i.events.iter()
+                    .filter(|e| matches!(e, egui::Event::Touch { .. }))
+                    .cloned()
+                    .collect();
+                self.touch_tracker.update(&touch_events)
+            });
+            let touch_active = self.touch_tracker.is_touch_active();
+
+            match touch_gesture {
+                Some(TouchGesture::Pan(delta)) => {
+                    self.handle_fractal_drag(delta, available_size);
+                }
+                Some(TouchGesture::Pinch { zoom_delta, translation, midpoint }) => {
+                    if zoom_delta != 1.0 {
+                        self.handle_fractal_pinch_zoom(zoom_delta, midpoint, response.rect, available_size);
+                    }
+                    if translation != egui::Vec2::ZERO {
+                        self.handle_fractal_drag(translation, available_size);
+                    }
+                }
+                None => {}
+            }
+
+            // Handle mouse drag for panning (skip during touch to avoid double-handling)
+            if !touch_active && response.dragged_by(egui::PointerButton::Primary) {
                 let drag_delta = response.drag_delta();
                 self.handle_fractal_drag(drag_delta, available_size);
             }
@@ -695,10 +845,11 @@ impl<'a> PanelViewer<'a> {
     fn handle_fractal_drag(&mut self, drag_delta: egui::Vec2, panel_size: egui::Vec2) {
         let config = self.context.config_manager.active_config();
 
-        // Convert screen pixel delta to fractal space
-        // Use width for both axes so drag speed is uniform regardless of aspect ratio
-        // (dividing Y by panel_size.y made vertical panning slow on tall viewports)
-        let scale = 4.0 / (config.zoom * panel_size.x);
+        // Convert screen pixel delta to fractal space.
+        // Use the smaller dimension for both axes so drag speed is consistent
+        // regardless of landscape vs portrait orientation.
+        let ref_size = panel_size.x.min(panel_size.y);
+        let scale = 4.0 / (config.zoom * ref_size);
         let dx = -drag_delta.x * scale;
         let dy = -drag_delta.y * scale;
 
@@ -730,7 +881,7 @@ impl<'a> PanelViewer<'a> {
 
         // Use power-based zoom for smooth scrolling (matches original code)
         let zoom_factor = if scroll_delta.abs() > 0.1 {
-            1.1f32.powf(scroll_delta * 0.05)
+            1.1f32.powf(scroll_delta * 0.03)
         } else {
             1.0
         };
@@ -799,6 +950,45 @@ impl<'a> PanelViewer<'a> {
                 );
             }
         }
+    }
+
+    fn handle_fractal_pinch_zoom(
+        &mut self,
+        zoom_delta: f32,
+        pinch_center: egui::Pos2,
+        panel_rect: egui::Rect,
+        panel_size: egui::Vec2,
+    ) {
+        let config = self.context.config_manager.active_config();
+        let new_zoom = (config.zoom * zoom_delta).clamp(0.01, 1000.0);
+
+        // Zoom toward the midpoint between the two fingers (same math as scroll zoom)
+        let center_x = panel_rect.center().x;
+        let center_y = panel_rect.center().y;
+        let offset_x = pinch_center.x - center_x;
+        let offset_y = pinch_center.y - center_y;
+
+        let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
+        let cos_r = (-config.rotation).cos();
+        let sin_r = (-config.rotation).sin();
+        let rot_x = offset_x * cos_r - offset_y * sin_r;
+        let rot_y = offset_x * sin_r + offset_y * cos_r;
+
+        // Fractal-space point under the pinch center at old zoom
+        let point_x = config.pan_x + rot_x / (scale * config.zoom);
+        let point_y = config.pan_y + rot_y / (scale * config.zoom);
+
+        // Adjust pan so that same fractal point stays under the pinch center at new zoom
+        let new_pan_x = point_x - rot_x / (scale * new_zoom);
+        let new_pan_y = point_y - rot_y / (scale * new_zoom);
+
+        let _ = self.context.config_manager.update_batch(
+            vec![
+                (crate::config::ConfigPath::Zoom, new_zoom.into()),
+                (crate::config::ConfigPath::Pan, (new_pan_x, new_pan_y).into()),
+            ],
+            "history.action.pinch_zoom".to_string()
+        );
     }
 
     /// Render path overlay showing pixel info, coordinates, path, and color preview

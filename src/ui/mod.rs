@@ -185,6 +185,9 @@ pub struct EguiLayer {
     // Signal panel state
     pub(crate) signal_panel_state: signal_panel::SignalPanelState,
 
+    // Touch gesture tracking (for multi-touch on web)
+    touch_tracker: panel_viewer::TouchTracker,
+
     // Compact mode state
     /// Whether compact (mobile) layout is active
     compact_mode: bool,
@@ -294,6 +297,7 @@ impl EguiLayer {
             density_histogram: crate::renderer::DensityHistogram::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
+            touch_tracker: panel_viewer::TouchTracker::default(),
             compact_mode: false,
             last_input_time: web_time::Instant::now(),
             viewport_tab_bar_height: 0.0,
@@ -895,6 +899,7 @@ impl EguiLayer {
                         api_animation_save_action: &mut api_animation_save_action,
                         compact_mode: self.compact_mode,
                     },
+                    touch_tracker: &mut self.touch_tracker,
                 });
 
             // Hide the FractalViewport's tab bar seamlessly.
