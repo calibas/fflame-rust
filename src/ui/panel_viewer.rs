@@ -47,6 +47,11 @@ impl TouchTracker {
         );
         if has_start {
             self.active.retain(|id, _| batch_ids.contains(id));
+            // Reset position tracking so the first frame of a new touch
+            // doesn't compute a delta from a previous finger's position
+            self.prev_single_pos = None;
+            self.prev_midpoint = None;
+            self.prev_distance = None;
         }
 
         for event in events {
