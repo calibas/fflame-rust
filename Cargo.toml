@@ -66,6 +66,7 @@ web-sys = { version = "0.3", features = [
     "InputEvent",
     # Clipboard bridge (copy/paste between browser and egui)
     "PointerEvent",
+    "PointerEventInit",
     "ClipboardEvent",
     "DataTransfer",
     "Clipboard",

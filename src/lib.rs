@@ -317,6 +317,37 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap();
             touch_fix.forget(); // Leak closure so it lives for the app lifetime
 
+            // When pointer capture is released (above), pointerup/pointercancel events
+            // won't fire on the canvas if the finger lifts outside it. This leaves egui's
+            // interaction state stuck (thinks drag is still in progress, blocks all UI).
+            // Fix: listen on document and re-dispatch to the canvas so winit/egui see the End.
+            let canvas_for_up = canvas.clone();
+            let touch_up_fix = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::PointerEvent)>::new(
+                move |event: web_sys::PointerEvent| {
+                    if event.pointer_type() == "touch" {
+                        // Only re-dispatch if the event didn't originate on the canvas
+                        if event.target().as_ref() != Some(canvas_for_up.as_ref()) {
+                            let new_event = web_sys::PointerEvent::new_with_event_init_dict(
+                                event.type_().as_str(),
+                                web_sys::PointerEventInit::new()
+                                    .pointer_id(event.pointer_id())
+                                    .pointer_type(&event.pointer_type())
+                                    .client_x(event.client_x())
+                                    .client_y(event.client_y()),
+                            ).unwrap();
+                            let _ = canvas_for_up.dispatch_event(&new_event);
+                        }
+                    }
+                },
+            );
+            document
+                .add_event_listener_with_callback("pointerup", touch_up_fix.as_ref().unchecked_ref())
+                .unwrap();
+            document
+                .add_event_listener_with_callback("pointercancel", touch_up_fix.as_ref().unchecked_ref())
+                .unwrap();
+            touch_up_fix.forget();
+
             let attributes = winit::window::Window::default_attributes()
                 .with_title("FAR")
                 .with_canvas(Some(canvas));
