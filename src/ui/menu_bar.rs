@@ -170,6 +170,10 @@ pub fn render_menu_bar(
                     workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
                 }
 
+                if ui.button(t!("menu.layout_compact")).clicked() {
+                    workspace.apply_layout(super::workspace::WorkspaceLayout::Compact);
+                }
+
                 ui.separator();
 
                 // Performance opens as floating window in docking system (only one instance)
@@ -295,9 +299,6 @@ pub fn render_menu_bar(
                     }
                     if ui.selectable_label(current == super::workspace::WorkspaceLayout::Animation, t!("menu.layout_animation").as_ref()).clicked() {
                         workspace.apply_layout(super::workspace::WorkspaceLayout::Animation);
-                    }
-                    if ui.selectable_label(current == super::workspace::WorkspaceLayout::Compact, t!("menu.layout_compact").as_ref()).clicked() {
-                        workspace.apply_layout(super::workspace::WorkspaceLayout::Compact);
                     }
                     // if ui.selectable_label(current == super::workspace::WorkspaceLayout::Advanced, t!("menu.layout_advanced").as_ref()).clicked() {
                     //     workspace.apply_layout(super::workspace::WorkspaceLayout::Advanced);

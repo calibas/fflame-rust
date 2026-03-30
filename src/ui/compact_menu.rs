@@ -202,7 +202,7 @@ fn render_compact_menu_items(
 
     // --- Layout switch ---
     ui.separator();
-    if ui.button(t!("menu.reset_workspace")).clicked() {
+    if ui.button(t!("menu.desktop_view")).clicked() {
         workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
         ui.close();
     }
