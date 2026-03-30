@@ -1589,7 +1589,7 @@ errors:
 
 # Auth status (menu bar)
 auth:
-  signed_in: "Signed in"
+  signed_in: "👤 Signed in"
   not_signed_in: "👤 Not signed in"
   sign_out: "Sign Out"
   signed_out_success: "Signed out"

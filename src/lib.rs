@@ -348,7 +348,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         let attributes = winit::window::Window::default_attributes()
             .with_title("FAR")
-            .with_inner_size(PhysicalSize::new(1920, 1080));
+            .with_inner_size(PhysicalSize::new(1920, 1080))
+            .with_min_inner_size(PhysicalSize::new(300, 200));
 
         #[allow(deprecated)]
         let window = event_loop.create_window(attributes)?;
