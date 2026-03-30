@@ -295,6 +295,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .dyn_into::<web_sys::HtmlCanvasElement>()
                 .unwrap();
 
+            // Prevent browser from intercepting touch gestures (pinch-zoom, scroll)
+            // so they reach winit as raw touch events for multi-touch handling
+            canvas.style().set_property("touch-action", "none").unwrap();
+
+            // Release implicit pointer capture on touch so multi-touch events
+            // reach the canvas (winit 0.30 doesn't do this; fixed in 0.31+)
+            let canvas_for_touch = canvas.clone();
+            let touch_fix = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::PointerEvent)>::new(
+                move |event: web_sys::PointerEvent| {
+                    if event.pointer_type() == "touch" {
+                        let _ = canvas_for_touch.release_pointer_capture(event.pointer_id());
+                    }
+                },
+            );
+            canvas
+                .add_event_listener_with_callback(
+                    "pointerdown",
+                    touch_fix.as_ref().unchecked_ref(),
+                )
+                .unwrap();
+            touch_fix.forget(); // Leak closure so it lives for the app lifetime
+
             let attributes = winit::window::Window::default_attributes()
                 .with_title("FAR")
                 .with_canvas(Some(canvas));

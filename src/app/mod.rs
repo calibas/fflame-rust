@@ -602,9 +602,12 @@ impl App {
                         WindowEvent::CursorMoved { .. } |
                         WindowEvent::MouseInput { .. } |
                         WindowEvent::MouseWheel { .. } |
-                        WindowEvent::KeyboardInput { .. } |
-                        WindowEvent::Touch { .. } => {
+                        WindowEvent::KeyboardInput { .. } => {
                             // Track last input time for UI idle detection (tooltips, animations)
+                            app.last_input_time = Some(web_time::Instant::now());
+                            window.request_redraw();
+                        }
+                        WindowEvent::Touch(ref touch) => {
                             app.last_input_time = Some(web_time::Instant::now());
                             window.request_redraw();
                         }
