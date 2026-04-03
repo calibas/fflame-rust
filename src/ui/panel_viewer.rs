@@ -807,12 +807,7 @@ impl<'a> PanelViewer<'a> {
                     self.handle_fractal_drag(delta, available_size);
                 }
                 Some(TouchGesture::Pinch { zoom_delta, translation, midpoint }) => {
-                    if zoom_delta != 1.0 {
-                        self.handle_fractal_pinch_zoom(zoom_delta, midpoint, response.rect, available_size);
-                    }
-                    if translation != egui::Vec2::ZERO {
-                        self.handle_fractal_drag(translation, available_size);
-                    }
+                    self.handle_fractal_pinch_zoom(zoom_delta, translation, midpoint, response.rect, available_size);
                 }
                 None => {}
             }
@@ -975,6 +970,7 @@ impl<'a> PanelViewer<'a> {
     fn handle_fractal_pinch_zoom(
         &mut self,
         zoom_delta: f32,
+        translation: egui::Vec2,
         pinch_center: egui::Pos2,
         panel_rect: egui::Rect,
         panel_size: egui::Vec2,
@@ -982,26 +978,44 @@ impl<'a> PanelViewer<'a> {
         let config = self.context.config_manager.active_config();
         let new_zoom = (config.zoom * zoom_delta).clamp(0.01, 1000.0);
 
-        // Zoom toward the midpoint between the two fingers (same math as scroll zoom)
-        let center_x = panel_rect.center().x;
-        let center_y = panel_rect.center().y;
-        let offset_x = pinch_center.x - center_x;
-        let offset_y = pinch_center.y - center_y;
+        // Start with current pan, then apply zoom-toward-center adjustment
+        let mut new_pan_x = config.pan_x;
+        let mut new_pan_y = config.pan_y;
 
-        let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
-        let cos_r = (-config.rotation).cos();
-        let sin_r = (-config.rotation).sin();
-        let rot_x = offset_x * cos_r - offset_y * sin_r;
-        let rot_y = offset_x * sin_r + offset_y * cos_r;
+        if zoom_delta != 1.0 {
+            // Zoom toward the midpoint between the two fingers
+            let center_x = panel_rect.center().x;
+            let center_y = panel_rect.center().y;
+            let offset_x = pinch_center.x - center_x;
+            let offset_y = pinch_center.y - center_y;
 
-        // Fractal-space point under the pinch center at old zoom
-        let point_x = config.pan_x + rot_x / (scale * config.zoom);
-        let point_y = config.pan_y + rot_y / (scale * config.zoom);
+            let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
+            let cos_r = (-config.rotation).cos();
+            let sin_r = (-config.rotation).sin();
+            let rot_x = offset_x * cos_r - offset_y * sin_r;
+            let rot_y = offset_x * sin_r + offset_y * cos_r;
 
-        // Adjust pan so that same fractal point stays under the pinch center at new zoom
-        let new_pan_x = point_x - rot_x / (scale * new_zoom);
-        let new_pan_y = point_y - rot_y / (scale * new_zoom);
+            let point_x = config.pan_x + rot_x / (scale * config.zoom);
+            let point_y = config.pan_y + rot_y / (scale * config.zoom);
 
+            new_pan_x = point_x - rot_x / (scale * new_zoom);
+            new_pan_y = point_y - rot_y / (scale * new_zoom);
+        }
+
+        // Apply two-finger translation on top of the zoom pan adjustment
+        if translation != egui::Vec2::ZERO {
+            let ref_size = panel_size.x.min(panel_size.y);
+            let drag_scale = 4.0 / (new_zoom * ref_size);
+            let dx = -translation.x * drag_scale;
+            let dy = -translation.y * drag_scale;
+
+            let cos_r = (-config.rotation).cos();
+            let sin_r = (-config.rotation).sin();
+            new_pan_x += dx * cos_r - dy * sin_r;
+            new_pan_y += dx * sin_r + dy * cos_r;
+        }
+
+        // Single batch update: zoom + combined pan = one history entry
         let _ = self.context.config_manager.update_batch(
             vec![
                 (crate::config::ConfigPath::Zoom, new_zoom.into()),
