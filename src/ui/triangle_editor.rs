@@ -170,16 +170,20 @@ fn render_triangle_editor_core(
 
             ui.separator();
 
-            // Canvas for drawing triangles
-            let canvas_side = ui.available_width().clamp(100.0, 500.0);
+            // Canvas for drawing triangles (smaller in compact mode to avoid scroll conflicts)
+            let max_side = if compact { 200.0 } else { 500.0 };
+            let canvas_side = ui.available_width().clamp(100.0, max_side);
             let canvas_size = Vec2::new(canvas_side, canvas_side);
             let (response, painter) = ui.allocate_painter(canvas_size, egui::Sense::drag());
             let rect = response.rect;
 
-            // Calculate dynamic bounds from all transform vertices
-            // Find the maximum extent of any vertex across all transforms
+            // Calculate dynamic bounds from the selected transform's vertices
             let mut max_extent = 2.0f32; // Minimum bounds
-            for transform in flame.transforms.iter() {
+            let selected_xform = match selected_transform {
+                Some(i) => flame.transforms.get(i),
+                None => flame.final_transform.as_ref(),
+            };
+            if let Some(transform) = selected_xform {
                 let (o, x, y) = transform.to_triangle_apophysis();
                 max_extent = max_extent
                     .max(o[0].abs())
@@ -188,27 +192,8 @@ fn render_triangle_editor_core(
                     .max(x[1].abs())
                     .max(y[0].abs())
                     .max(y[1].abs());
-                // Include post-affine triangle vertices in bounds
                 if transform.post_affine_enabled {
                     let (po, px, py) = transform.post_to_triangle_apophysis();
-                    max_extent = max_extent
-                        .max(po[0].abs()).max(po[1].abs())
-                        .max(px[0].abs()).max(px[1].abs())
-                        .max(py[0].abs()).max(py[1].abs());
-                }
-            }
-            // Also check final transform if it exists
-            if let Some(ref final_xform) = flame.final_transform {
-                let (o, x, y) = final_xform.to_triangle_apophysis();
-                max_extent = max_extent
-                    .max(o[0].abs())
-                    .max(o[1].abs())
-                    .max(x[0].abs())
-                    .max(x[1].abs())
-                    .max(y[0].abs())
-                    .max(y[1].abs());
-                if final_xform.post_affine_enabled {
-                    let (po, px, py) = final_xform.post_to_triangle_apophysis();
                     max_extent = max_extent
                         .max(po[0].abs()).max(po[1].abs())
                         .max(px[0].abs()).max(px[1].abs())
