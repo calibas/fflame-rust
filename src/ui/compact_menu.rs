@@ -20,13 +20,13 @@ pub fn render_compact_menu(
 ) {
 
     // Semi-transparent background frame
-    let bg_alpha = 180;
+    let bg_alpha = 200;
     let text_alpha = 255;
 
     let frame = egui::Frame::NONE
         .fill(egui::Color32::from_rgba_unmultiplied(40, 40, 40, bg_alpha))
         .corner_radius(6.0)
-        .inner_margin(egui::Margin::same(4));
+        .inner_margin(egui::Margin { left: 8, right: 4, top: 4, bottom: 4 });
 
     egui::Area::new(egui::Id::new("compact_menu_button"))
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 16.0))
@@ -34,13 +34,23 @@ pub fn render_compact_menu(
         .show(ctx, |ui| {
             frame.show(ui, |ui| {
                 let button_text = egui::RichText::new("\u{2630}") // hamburger icon
-                    .size(20.0)
+                    .size(23.0)
                     .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, text_alpha));
 
-                let response = ui.add(egui::Button::new(button_text).frame(false));
+                let response = ui.add(
+                    egui::Button::new(button_text)
+                        .frame(false)
+                        .min_size(egui::vec2(25.0, 25.0))
+                );
+                // Expand clickable area by 5px beyond the visible button
+                let expanded = ui.interact(
+                    response.rect.expand(18.0),
+                    response.id.with("touch_padding"),
+                    egui::Sense::click(),
+                );
                 let popup_id = ui.id().with("compact_menu_popup");
 
-                if response.clicked() {
+                if response.clicked() || expanded.clicked() {
                     ui.memory_mut(|mem| mem.toggle_popup(popup_id));
                 }
 
