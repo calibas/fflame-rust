@@ -125,6 +125,11 @@ impl TouchTracker {
         }
     }
 
+    /// Returns true if a specific touch ID is being tracked
+    pub fn is_tracking(&self, id: u64) -> bool {
+        self.active.contains_key(&id)
+    }
+
     /// Returns true if any fingers are currently active
     pub fn is_touch_active(&self) -> bool {
         !self.active.is_empty()
@@ -778,9 +783,19 @@ impl<'a> PanelViewer<'a> {
             // Handle pinch-to-zoom on touchscreens (check before drag to avoid conflicts)
             // Uses custom TouchTracker because egui's multi_touch() doesn't work on web
             // (winit assigns different TouchDeviceId per finger, so egui never sees 2 fingers)
+            // Gate new touches on response.hovered() which is layer-aware — returns false
+            // when a floating panel is on top of the viewport.
+            let accept_new_touches = response.hovered();
             let touch_gesture = ui.input(|i| {
                 let touch_events: Vec<egui::Event> = i.events.iter()
-                    .filter(|e| matches!(e, egui::Event::Touch { .. }))
+                    .filter(|e| match e {
+                        egui::Event::Touch { phase: egui::TouchPhase::Start, .. } =>
+                            accept_new_touches,
+                        // Accept Move/End/Cancel only for touches we're already tracking
+                        egui::Event::Touch { id, .. } =>
+                            self.touch_tracker.is_tracking(id.0),
+                        _ => false,
+                    })
                     .cloned()
                     .collect();
                 self.touch_tracker.update(&touch_events)
