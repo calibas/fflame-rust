@@ -201,6 +201,9 @@ pub struct EguiLayer {
     // WASM clipboard bridge
     #[cfg(target_arch = "wasm32")]
     web_clipboard: crate::web_clipboard::WebClipboard,
+    // WASM text input agent (virtual keyboard)
+    #[cfg(target_arch = "wasm32")]
+    web_text_agent: crate::web_text_agent::WebTextAgent,
 }
 
 impl EguiLayer {
@@ -303,6 +306,8 @@ impl EguiLayer {
             viewport_tab_bar_height: 0.0,
             #[cfg(target_arch = "wasm32")]
             web_clipboard: crate::web_clipboard::WebClipboard::install(),
+            #[cfg(target_arch = "wasm32")]
+            web_text_agent: crate::web_text_agent::WebTextAgent::install(),
         }
     }
 
@@ -568,6 +573,10 @@ impl EguiLayer {
         if let Some(text) = self.web_clipboard.take_paste() {
             raw_input.events.push(egui_dock::egui::Event::Paste(text));
         }
+
+        // Inject virtual keyboard text/IME events (WASM only)
+        #[cfg(target_arch = "wasm32")]
+        self.web_text_agent.drain_events(&mut raw_input);
 
         // Desktop: poll auto-login result (runs even when Login panel is not visible)
         #[cfg(not(target_arch = "wasm32"))]
@@ -1056,6 +1065,16 @@ impl EguiLayer {
             if let egui_dock::egui::OutputCommand::CopyText(text) = cmd {
                 crate::web_clipboard::WebClipboard::copy_text(text);
             }
+        }
+
+        // Update virtual keyboard focus based on egui's keyboard input state (WASM only)
+        #[cfg(target_arch = "wasm32")]
+        {
+            let wants_keyboard = self.ctx.wants_keyboard_input();
+            if wants_keyboard || full_output.platform_output.ime.is_some() {
+                log::info!("wants_keyboard={}, ime={:?}", wants_keyboard, full_output.platform_output.ime);
+            }
+            self.web_text_agent.update_focus(wants_keyboard);
         }
 
         self.state
