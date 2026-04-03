@@ -82,20 +82,19 @@ impl WebTextAgent {
         let events: Rc<RefCell<Vec<TextAgentEvent>>> = Rc::new(RefCell::new(Vec::new()));
 
         // input event — regular text input
+        // Use event.data() for the inserted text instead of reading the full value,
+        // so the hidden input can keep its value and show it in the keyboard preview.
         {
             let events = events.clone();
-            let input_clone = input.clone();
             let on_input = Closure::<dyn FnMut(web_sys::InputEvent)>::new(
                 move |event: web_sys::InputEvent| {
-                    let text = input_clone.value();
-                    // Android Gboard fix: blur/focus cycle to reset suggestions
-                    if !event.is_composing() {
-                        let _ = input_clone.blur();
-                        let _ = input_clone.focus();
+                    if event.is_composing() {
+                        return;
                     }
-                    if !text.is_empty() && !event.is_composing() {
-                        input_clone.set_value("");
-                        events.borrow_mut().push(TextAgentEvent::Text(text));
+                    if let Some(data) = event.data() {
+                        if !data.is_empty() {
+                            events.borrow_mut().push(TextAgentEvent::Text(data));
+                        }
                     }
                 },
             );
@@ -226,7 +225,7 @@ impl WebTextAgent {
 
     /// Update focus state based on whether egui wants keyboard input.
     /// Call after each egui frame.
-    pub fn update_focus(&mut self, wants_keyboard: bool) {
+    pub fn update_focus(&mut self, wants_keyboard: bool, editing_text: Option<&str>) {
         // Update the shared flag so the touchend handler knows whether to focus.
         // The touchend handler runs in a user gesture context (required by iOS
         // for the virtual keyboard to appear), so the actual .focus() happens there.
@@ -234,14 +233,24 @@ impl WebTextAgent {
 
         if wants_keyboard && !self.is_focused {
             log::info!("WebTextAgent: wants keyboard (will focus on next touch)");
-            // Don't call .focus() here — it's inside rAF, not a user gesture,
-            // so iOS won't show the keyboard. The touchend handler will do it.
+            // Sync the hidden input with the text field's current content
+            if let Some(text) = editing_text {
+                self.input.set_value(text);
+            }
             self.is_focused = true;
         } else if !wants_keyboard && self.is_focused {
             log::info!("WebTextAgent: blurring (keyboard should dismiss)");
             let _ = self.input.blur();
             self.input.set_value("");
             self.is_focused = false;
+        } else if wants_keyboard {
+            // Keep the hidden input in sync while editing
+            if let Some(text) = editing_text {
+                let current = self.input.value();
+                if current != text {
+                    self.input.set_value(text);
+                }
+            }
         }
     }
 

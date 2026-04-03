@@ -1071,10 +1071,7 @@ impl EguiLayer {
         #[cfg(target_arch = "wasm32")]
         {
             let wants_keyboard = self.ctx.wants_keyboard_input();
-            if wants_keyboard || full_output.platform_output.ime.is_some() {
-                log::info!("wants_keyboard={}, ime={:?}", wants_keyboard, full_output.platform_output.ime);
-            }
-            self.web_text_agent.update_focus(wants_keyboard);
+            self.web_text_agent.update_focus(wants_keyboard, None);
         }
 
         self.state
