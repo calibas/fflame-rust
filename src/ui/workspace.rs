@@ -96,6 +96,8 @@ pub enum WorkspaceLayout {
     Standard,
     /// Animation: Standard layout with Animation panel at bottom
     Animation,
+    /// Compact: Full-screen viewport only (mobile / small screens)
+    Compact,
 }
 
 /// Manages the docking workspace state
@@ -149,8 +151,78 @@ impl Workspace {
         self.dock_state = match layout {
             WorkspaceLayout::Standard => Self::create_standard_layout(),
             WorkspaceLayout::Animation => Self::create_animation_layout(),
+            WorkspaceLayout::Compact => Self::create_compact_layout(),
         };
         self.current_layout = layout;
+    }
+
+    /// Whether the workspace is in compact (mobile) layout
+    pub fn is_compact(&self) -> bool {
+        self.current_layout == WorkspaceLayout::Compact
+    }
+
+    /// Open a panel docked into the main surface (compact mode).
+    /// If a non-viewport panel node already exists, adds as a tab there.
+    /// Otherwise splits from viewport (bottom in portrait, right in landscape).
+    pub fn open_compact_panel(&mut self, panel_type: PanelType, ctx: &egui::Context) {
+        if let Some((surface_index, node_index, tab_index)) = self.find_tab(panel_type) {
+            // Already exists — focus it
+            self.dock_state.set_focused_node_and_surface((surface_index, node_index));
+            self.dock_state.set_active_tab((surface_index, node_index, tab_index));
+            return;
+        }
+
+        // Look for an existing non-viewport tab node to add to
+        let existing_panel_node = self.find_non_viewport_node();
+
+        if let Some(node_index) = existing_panel_node {
+            // Add as a new tab in the existing panel node
+            self.dock_state.main_surface_mut()[node_index]
+                .append_tab(panel_type);
+            // Find the newly added tab to focus it
+            if let Some((si, ni, ti)) = self.find_tab(panel_type) {
+                self.dock_state.set_focused_node_and_surface((si, ni));
+                self.dock_state.set_active_tab((si, ni, ti));
+            }
+            return;
+        }
+
+        // No panel node exists yet — split from viewport
+        let viewport_location = self.find_tab(PanelType::FractalViewport);
+
+        if let Some((_, viewport_node, _)) = viewport_location {
+            let screen = ctx.input(|i| i.content_rect());
+            let is_portrait = screen.height() > screen.width();
+
+            if is_portrait {
+                self.dock_state.main_surface_mut().split_below(
+                    viewport_node, 0.67, vec![panel_type],
+                );
+            } else {
+                self.dock_state.main_surface_mut().split_right(
+                    viewport_node, 0.67, vec![panel_type],
+                );
+            }
+        } else {
+            self.open_floating_panel(panel_type, ctx);
+        }
+    }
+
+    /// Find a leaf node on the main surface that contains a non-viewport tab.
+    /// Used by compact mode to add new tabs to an existing panel area.
+    /// Find a node on the main surface that contains a non-viewport tab.
+    /// Used by compact mode to add new tabs to an existing panel area.
+    fn find_non_viewport_node(&self) -> Option<egui_dock::NodeIndex> {
+        // Find any non-viewport tab and return its node index
+        for ((_surface, _tab), &ref panel) in self.dock_state.iter_all_tabs() {
+            if *panel != PanelType::FractalViewport {
+                // Found a non-viewport tab — look up its full location
+                if let Some((_si, ni, _ti)) = self.dock_state.find_tab(panel) {
+                    return Some(ni);
+                }
+            }
+        }
+        None
     }
 
     /// Check if a panel type already exists in the dock state
@@ -285,6 +357,11 @@ impl Workspace {
         );
 
         state
+    }
+
+    /// Create Compact layout: Full-screen viewport only (mobile / small screens)
+    fn create_compact_layout() -> DockState<PanelType> {
+        DockState::new(vec![PanelType::FractalViewport])
     }
 
     /// Create Animation layout: Standard layout with Animation panel at bottom center

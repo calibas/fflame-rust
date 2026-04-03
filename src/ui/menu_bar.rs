@@ -170,6 +170,10 @@ pub fn render_menu_bar(
                     workspace.apply_layout(super::workspace::WorkspaceLayout::Standard);
                 }
 
+                if ui.button(t!("menu.layout_compact")).clicked() {
+                    workspace.apply_layout(super::workspace::WorkspaceLayout::Compact);
+                }
+
                 ui.separator();
 
                 // Performance opens as floating window in docking system (only one instance)
@@ -274,6 +278,15 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::Signal, ctx);
                 }
 
+                // Account / Login
+                if menu_state.online_mode {
+                    ui.separator();
+                    let login_open = workspace.panel_exists(super::workspace::PanelType::LoginDialog);
+                    if ui.selectable_label(login_open, t!("menu.window_account").as_ref()).clicked() {
+                        workspace.open_floating_panel(super::workspace::PanelType::LoginDialog, ctx);
+                    }
+                }
+
                 ui.separator();
                 ui.menu_button(t!("menu.workspace_layout"), |ui| {
                     let current = workspace.current_layout;
@@ -321,6 +334,9 @@ pub fn render_menu_bar(
             });
 
             // Push right-side controls (right-to-left: language, then auth status)
+            // Hide when window is too narrow to prevent overlap with left-side menus.
+            let available_width = ui.ctx().screen_rect().width();
+            if available_width >= 500.0 {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Language selector menu (globe icon) — rightmost
                 ui.menu_button("🌐", |ui| {
@@ -400,6 +416,7 @@ pub fn render_menu_bar(
                     }
                 }
             });
+            } // available_width >= 500.0
         });
     });
 }

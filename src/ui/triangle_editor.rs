@@ -39,9 +39,12 @@ fn render_triangle_editor_core(
     flame: &mut Flame,
 ) -> UpdateType {
     let mut max_update = UpdateType::None;
-            ui.heading(t!("triangle_editor.heading"));
-            ui.label(t!("triangle_editor.description"));
-            ui.separator();
+            let compact = config_manager.system_settings().compact_mode.unwrap_or(false);
+            if !compact {
+                ui.heading(t!("triangle_editor.heading"));
+                ui.label(t!("triangle_editor.description"));
+                ui.separator();
+            }
 
             // Transform selector (persisted across frames)
             // Option<usize>: Some(i) for regular transform, None for final transform
@@ -62,8 +65,10 @@ fn render_triangle_editor_core(
             }
 
             ui.horizontal(|ui| {
-                ui.label(t!("triangle_editor.transform_label"))
-                    .on_hover_text(t!("triangle_editor.tooltip_transform_selector"));
+                if !compact {
+                    ui.label(t!("triangle_editor.transform_label"))
+                        .on_hover_text(t!("triangle_editor.tooltip_transform_selector"));
+                }
                 let old_selection = selected_transform;
                 let display_text = match selected_transform {
                     Some(i) => t!("triangle_editor.transform_n", n = i + 1).to_string(),
@@ -97,8 +102,10 @@ fn render_triangle_editor_core(
                     .unwrap_or_default()
             });
 
-            ui.horizontal(|ui| {
-                ui.label(t!("triangle_editor.mode_label"));
+            ui.horizontal_wrapped(|ui| {
+                if !compact {
+                    ui.label(t!("triangle_editor.mode_label"));
+                }
                 let old_mode = mouse_mode;
 
                 if ui.selectable_value(&mut mouse_mode, MouseMode::Rotate, format!("↻ {}", t!("triangle_editor.mode_rotate")))
@@ -119,13 +126,15 @@ fn render_triangle_editor_core(
             });
 
             // Mode description
-            let mode_desc = match mouse_mode {
-                MouseMode::MovePoints => t!("triangle_editor.mode_desc_move_points"),
-                MouseMode::Translate => t!("triangle_editor.mode_desc_translate"),
-                MouseMode::Rotate => t!("triangle_editor.mode_desc_rotate"),
-                MouseMode::Scale => t!("triangle_editor.mode_desc_scale"),
-            };
-            ui.label(egui::RichText::new(mode_desc.as_ref()).italics().small());
+            if !compact {
+                let mode_desc = match mouse_mode {
+                    MouseMode::MovePoints => t!("triangle_editor.mode_desc_move_points"),
+                    MouseMode::Translate => t!("triangle_editor.mode_desc_translate"),
+                    MouseMode::Rotate => t!("triangle_editor.mode_desc_rotate"),
+                    MouseMode::Scale => t!("triangle_editor.mode_desc_scale"),
+                };
+                ui.label(egui::RichText::new(mode_desc.as_ref()).italics().small());
+            }
 
             // Pre/Post affine toggle - only show when selected transform has post-affine enabled
             let selected_has_post_affine = match selected_transform {
@@ -161,15 +170,20 @@ fn render_triangle_editor_core(
 
             ui.separator();
 
-            // Canvas for drawing triangles
-            let canvas_size = Vec2::new(400.0, 400.0);
+            // Canvas for drawing triangles (smaller in compact mode to avoid scroll conflicts)
+            let max_side = if compact { 200.0 } else { 500.0 };
+            let canvas_side = ui.available_width().clamp(100.0, max_side);
+            let canvas_size = Vec2::new(canvas_side, canvas_side);
             let (response, painter) = ui.allocate_painter(canvas_size, egui::Sense::drag());
             let rect = response.rect;
 
-            // Calculate dynamic bounds from all transform vertices
-            // Find the maximum extent of any vertex across all transforms
+            // Calculate dynamic bounds from the selected transform's vertices
             let mut max_extent = 2.0f32; // Minimum bounds
-            for transform in flame.transforms.iter() {
+            let selected_xform = match selected_transform {
+                Some(i) => flame.transforms.get(i),
+                None => flame.final_transform.as_ref(),
+            };
+            if let Some(transform) = selected_xform {
                 let (o, x, y) = transform.to_triangle_apophysis();
                 max_extent = max_extent
                     .max(o[0].abs())
@@ -178,27 +192,8 @@ fn render_triangle_editor_core(
                     .max(x[1].abs())
                     .max(y[0].abs())
                     .max(y[1].abs());
-                // Include post-affine triangle vertices in bounds
                 if transform.post_affine_enabled {
                     let (po, px, py) = transform.post_to_triangle_apophysis();
-                    max_extent = max_extent
-                        .max(po[0].abs()).max(po[1].abs())
-                        .max(px[0].abs()).max(px[1].abs())
-                        .max(py[0].abs()).max(py[1].abs());
-                }
-            }
-            // Also check final transform if it exists
-            if let Some(ref final_xform) = flame.final_transform {
-                let (o, x, y) = final_xform.to_triangle_apophysis();
-                max_extent = max_extent
-                    .max(o[0].abs())
-                    .max(o[1].abs())
-                    .max(x[0].abs())
-                    .max(x[1].abs())
-                    .max(y[0].abs())
-                    .max(y[1].abs());
-                if final_xform.post_affine_enabled {
-                    let (po, px, py) = final_xform.post_to_triangle_apophysis();
                     max_extent = max_extent
                         .max(po[0].abs()).max(po[1].abs())
                         .max(px[0].abs()).max(px[1].abs())
@@ -832,20 +827,166 @@ fn render_triangle_editor_core(
             };
 
             if let Some(transform) = transform_for_coords {
-                let (mut o, mut x, mut y) = match affine_target {
-                    AffineTarget::Pre => transform.to_triangle_apophysis(),
-                    AffineTarget::Post => transform.post_to_triangle_apophysis(),
-                };
+                // --- Quick action buttons (directly under canvas) ---
+                {
+                    // Helper macro to get current triangle based on affine target
+                    macro_rules! get_triangle {
+                        ($t:expr) => {
+                            match affine_target {
+                                AffineTarget::Pre => $t.to_triangle_apophysis(),
+                                AffineTarget::Post => $t.post_to_triangle_apophysis(),
+                            }
+                        };
+                    }
 
-                ui.label(t!("triangle_editor.triangle_coords", name = transform_name.as_str()));
+                    // Helper closure to apply triangle changes via ConfigManager
+                    let mut apply_triangle_change = |transform_ref: &crate::scene::transforms::Transform,
+                                                       o: [f32; 2], x: [f32; 2], y: [f32; 2],
+                                                       description: &str| {
+                        let mut temp = transform_ref.clone();
+                        match affine_target {
+                            AffineTarget::Pre => temp.from_triangle_apophysis(o, x, y),
+                            AffineTarget::Post => temp.post_from_triangle_apophysis(o, x, y),
+                        }
+                        let changes = make_affine_changes(&temp);
+                        config_manager.update_batch(changes, description.to_string())
+                    };
 
-                let mut coords_changed = false;
-                let mut dragging = false;
-                let mut drag_stopped = false;
+                    // Quick actions: 5-column grid (2 rows)
+                    // Row 1: [empty] [^ Up] [empty] [↻ CW] [🔺 Up]
+                    // Row 2: [< Left] [v Down] [> Right] [↺ CCW] [🔻 Down]
+                    egui::Grid::new("triangle_quick_actions").min_col_width(0.0).show(ui, |ui| {
+                        // Row 1
+                        ui.label("");
+                        if ui.button(" ^ ").on_hover_text(t!("triangle_editor.tooltip_translate_up")).clicked() {
+                            let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
+                            o_new[1] += 0.1; x_new[1] += 0.1; y_new[1] += 0.1;
+                            if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                &format!("history.action.translate_up|name={}", transform_name)) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        ui.label("");
+                        if ui.button("↻")
+                            .on_hover_text(t!("triangle_editor.tooltip_rotate_cw")).clicked()
+                        {
+                            let angle = -15.0_f32.to_radians();
+                            let (cos_a, sin_a) = (angle.cos(), angle.sin());
+                            let (o_curr, x_curr, y_curr) = get_triangle!(transform);
+                            let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
+                            let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
+                            let x_new = [o_curr[0] + x_vec[0]*cos_a - x_vec[1]*sin_a, o_curr[1] + x_vec[0]*sin_a + x_vec[1]*cos_a];
+                            let y_new = [o_curr[0] + y_vec[0]*cos_a - y_vec[1]*sin_a, o_curr[1] + y_vec[0]*sin_a + y_vec[1]*cos_a];
+                            if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                &format!("history.action.rotate_cw|name={}", transform_name)) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.button(format!("🔺 {}", t!("triangle_editor.scale")))
+                            .on_hover_text(t!("triangle_editor.tooltip_scale_up")).clicked()
+                        {
+                            let (o_curr, x_curr, y_curr) = get_triangle!(transform);
+                            let x_new = [o_curr[0] + (x_curr[0]-o_curr[0])*1.1, o_curr[1] + (x_curr[1]-o_curr[1])*1.1];
+                            let y_new = [o_curr[0] + (y_curr[0]-o_curr[0])*1.1, o_curr[1] + (y_curr[1]-o_curr[1])*1.1];
+                            if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                &format!("history.action.scale_up|name={}", transform_name)) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        ui.end_row();
 
-                ui.columns(2, |columns| {
-                    // Left column: Coordinates
-                    columns[0].vertical(|ui| {
+                        // Row 2
+                        if ui.button(" < ").on_hover_text(t!("triangle_editor.tooltip_translate_left")).clicked() {
+                            let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
+                            o_new[0] -= 0.1; x_new[0] -= 0.1; y_new[0] -= 0.1;
+                            if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                &format!("history.action.translate_left|name={}", transform_name)) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.button(" v ").on_hover_text(t!("triangle_editor.tooltip_translate_down")).clicked() {
+                            let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
+                            o_new[1] -= 0.1; x_new[1] -= 0.1; y_new[1] -= 0.1;
+                            if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                &format!("history.action.translate_down|name={}", transform_name)) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.button(" > ").on_hover_text(t!("triangle_editor.tooltip_translate_right")).clicked() {
+                            let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
+                            o_new[0] += 0.1; x_new[0] += 0.1; y_new[0] += 0.1;
+                            if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
+                                &format!("history.action.translate_right|name={}", transform_name)) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.button("↺")
+                            .on_hover_text(t!("triangle_editor.tooltip_rotate_ccw")).clicked()
+                        {
+                            let angle = 15.0_f32.to_radians();
+                            let (cos_a, sin_a) = (angle.cos(), angle.sin());
+                            let (o_curr, x_curr, y_curr) = get_triangle!(transform);
+                            let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
+                            let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
+                            let x_new = [o_curr[0] + x_vec[0]*cos_a - x_vec[1]*sin_a, o_curr[1] + x_vec[0]*sin_a + x_vec[1]*cos_a];
+                            let y_new = [o_curr[0] + y_vec[0]*cos_a - y_vec[1]*sin_a, o_curr[1] + y_vec[0]*sin_a + y_vec[1]*cos_a];
+                            if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                &format!("history.action.rotate_ccw|name={}", transform_name)) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        if ui.button(format!("🔻 {}", t!("triangle_editor.scale")))
+                            .on_hover_text(t!("triangle_editor.tooltip_scale_down")).clicked()
+                        {
+                            let (o_curr, x_curr, y_curr) = get_triangle!(transform);
+                            let x_new = [o_curr[0] + (x_curr[0]-o_curr[0])*0.9, o_curr[1] + (x_curr[1]-o_curr[1])*0.9];
+                            let y_new = [o_curr[0] + (y_curr[0]-o_curr[0])*0.9, o_curr[1] + (y_curr[1]-o_curr[1])*0.9];
+                            if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
+                                &format!("history.action.scale_down|name={}", transform_name)) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                        ui.end_row();
+                    });
+                }
+
+                ui.separator();
+
+                // --- Tabbed view: Triangle Coords / Affine Coefficients ---
+                #[derive(Clone, Copy, PartialEq)]
+                enum CoordTab { TriangleCoords, AffineCoeffs }
+
+                let mut coord_tab = ui.ctx().data_mut(|d| {
+                    d.get_persisted::<u8>(egui::Id::new("triangle_editor_coord_tab"))
+                        .map(|v| if v == 1 { CoordTab::AffineCoeffs } else { CoordTab::TriangleCoords })
+                        .unwrap_or(CoordTab::TriangleCoords)
+                });
+
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(coord_tab == CoordTab::TriangleCoords, t!("triangle_editor.triangle_coords_tab")).clicked() {
+                        coord_tab = CoordTab::TriangleCoords;
+                    }
+                    if ui.selectable_label(coord_tab == CoordTab::AffineCoeffs, t!("triangle_editor.affine_coeffs_tab")).clicked() {
+                        coord_tab = CoordTab::AffineCoeffs;
+                    }
+                });
+
+                ui.ctx().data_mut(|d| {
+                    d.insert_persisted(egui::Id::new("triangle_editor_coord_tab"),
+                        match coord_tab { CoordTab::TriangleCoords => 0u8, CoordTab::AffineCoeffs => 1u8 });
+                });
+
+                match coord_tab {
+                    CoordTab::TriangleCoords => {
+                        let (mut o, mut x, mut y) = match affine_target {
+                            AffineTarget::Pre => transform.to_triangle_apophysis(),
+                            AffineTarget::Post => transform.post_to_triangle_apophysis(),
+                        };
+
+                        let mut coords_changed = false;
+                        let mut dragging = false;
+                        let mut drag_stopped = false;
+
                         ui.horizontal(|ui| {
                             ui.label(t!("triangle_editor.point_x")).on_hover_text(t!("triangle_editor.tooltip_point_x"));
                             let x0_resp = ui.add(egui::DragValue::new(&mut x[0]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_x"))));
@@ -870,331 +1011,128 @@ fn render_triangle_editor_core(
                             dragging |= o0_resp.dragged() || o1_resp.dragged();
                             drag_stopped |= o0_resp.drag_stopped() || o1_resp.drag_stopped();
                         });
-                    });
 
-                    // Right column: Quick action buttons
-                    columns[1].vertical(|ui| {
-                        ui.label(t!("triangle_editor.quick_actions"));
-
-                        // Helper closure to apply triangle changes via ConfigManager
-                        let mut apply_triangle_change = |transform_ref: &crate::scene::transforms::Transform,
-                                                           o: [f32; 2], x: [f32; 2], y: [f32; 2],
-                                                           description: &str| {
-                            let mut temp = transform_ref.clone();
+                        if coords_changed {
+                            let mut temp_transform = transform.clone();
                             match affine_target {
-                                AffineTarget::Pre => temp.from_triangle_apophysis(o, x, y),
-                                AffineTarget::Post => temp.post_from_triangle_apophysis(o, x, y),
+                                AffineTarget::Pre => temp_transform.from_triangle_apophysis(o, x, y),
+                                AffineTarget::Post => temp_transform.post_from_triangle_apophysis(o, x, y),
                             }
-                            let changes = make_affine_changes(&temp);
-                            config_manager.update_batch(changes, description.to_string())
+                            let changes = make_affine_changes(&temp_transform);
+                            if let Ok(update) = config_manager.update_batch(
+                                changes,
+                                format!("history.action.triangle_edit_coords|name={}", transform_name)
+                            ) {
+                                max_update = max_update.max(update);
+                            }
+                        }
+                    }
+                    CoordTab::AffineCoeffs => {
+                        let mut dragging = false;
+                        let mut drag_stopped = false;
+
+                        let make_coeff_path = |param: AffineParam| -> ConfigPath {
+                            match (selected_transform, affine_target) {
+                                (Some(index), AffineTarget::Pre) => ConfigPath::TransformAffine { index, param },
+                                (Some(index), AffineTarget::Post) => ConfigPath::TransformPostAffine { index, param },
+                                (None, AffineTarget::Pre) => ConfigPath::FinalTransformAffine { param },
+                                (None, AffineTarget::Post) => ConfigPath::FinalTransformPostAffine { param },
+                            }
                         };
 
-                        // Helper macro to get current triangle based on affine target
-                        macro_rules! get_triangle {
-                            ($t:expr) => {
-                                match affine_target {
-                                    AffineTarget::Pre => $t.to_triangle_apophysis(),
-                                    AffineTarget::Post => $t.post_to_triangle_apophysis(),
-                                }
-                            };
-                        }
+                        let (mut val_a, mut val_b, mut val_c, mut val_d, mut val_e, mut val_f) = match affine_target {
+                            AffineTarget::Pre => (transform.a, transform.b, transform.c, transform.d, transform.e, transform.f),
+                            AffineTarget::Post => (transform.post_a, transform.post_b, transform.post_c, transform.post_d, transform.post_e, transform.post_f),
+                        };
 
-                        // Translate arrow keys layout (matching View panel)
+                        // Apophysis displays b, c, f with opposite sign
+                        let mut display_b = -val_b;
+                        let mut display_c = -val_c;
+                        let mut display_f = -val_f;
+
                         ui.horizontal(|ui| {
-                            ui.add_space(30.0);
-                            if ui.button("  ^  ").on_hover_text(t!("triangle_editor.tooltip_translate_up")).clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
-                                o_new[1] += 0.1;
-                                x_new[1] += 0.1;
-                                y_new[1] += 0.1;
-                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("history.action.translate_up|name={}", transform_name)) {
+                            let a_resp = ui.add(egui::DragValue::new(&mut val_a).speed(0.01).prefix("a: "))
+                                .on_hover_text(t!("triangle_editor.tooltip_affine_a"));
+                            if a_resp.changed() {
+                                if let Ok(update) = config_manager.update_param(make_coeff_path(AffineParam::A), val_a.into()) {
                                     max_update = max_update.max(update);
                                 }
                             }
+                            dragging |= a_resp.dragged();
+                            drag_stopped |= a_resp.drag_stopped();
+
+                            let b_resp = ui.add(egui::DragValue::new(&mut display_b).speed(0.01).prefix("b: "))
+                                .on_hover_text(t!("triangle_editor.tooltip_affine_b"));
+                            if b_resp.changed() {
+                                val_b = -display_b;
+                                if let Ok(update) = config_manager.update_param(make_coeff_path(AffineParam::B), val_b.into()) {
+                                    max_update = max_update.max(update);
+                                }
+                            }
+                            dragging |= b_resp.dragged();
+                            drag_stopped |= b_resp.drag_stopped();
+
+                            let e_resp = ui.add(egui::DragValue::new(&mut val_e).speed(0.01).prefix("e: "))
+                                .on_hover_text(t!("triangle_editor.tooltip_affine_e"));
+                            if e_resp.changed() {
+                                if let Ok(update) = config_manager.update_param(make_coeff_path(AffineParam::E), val_e.into()) {
+                                    max_update = max_update.max(update);
+                                }
+                            }
+                            dragging |= e_resp.dragged();
+                            drag_stopped |= e_resp.drag_stopped();
                         });
                         ui.horizontal(|ui| {
-                            if ui.button("  <  ").on_hover_text(t!("triangle_editor.tooltip_translate_left")).clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
-                                o_new[0] -= 0.1;
-                                x_new[0] -= 0.1;
-                                y_new[0] -= 0.1;
-                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("history.action.translate_left|name={}", transform_name)) {
+                            let c_resp = ui.add(egui::DragValue::new(&mut display_c).speed(0.01).prefix("c: "))
+                                .on_hover_text(t!("triangle_editor.tooltip_affine_c"));
+                            if c_resp.changed() {
+                                val_c = -display_c;
+                                if let Ok(update) = config_manager.update_param(make_coeff_path(AffineParam::C), val_c.into()) {
                                     max_update = max_update.max(update);
                                 }
                             }
-                            if ui.button("  v  ").on_hover_text(t!("triangle_editor.tooltip_translate_down")).clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
-                                o_new[1] -= 0.1;
-                                x_new[1] -= 0.1;
-                                y_new[1] -= 0.1;
-                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("history.action.translate_down|name={}", transform_name)) {
+                            dragging |= c_resp.dragged();
+                            drag_stopped |= c_resp.drag_stopped();
+
+                            let d_resp = ui.add(egui::DragValue::new(&mut val_d).speed(0.01).prefix("d: "))
+                                .on_hover_text(t!("triangle_editor.tooltip_affine_d"));
+                            if d_resp.changed() {
+                                if let Ok(update) = config_manager.update_param(make_coeff_path(AffineParam::D), val_d.into()) {
                                     max_update = max_update.max(update);
                                 }
                             }
-                            if ui.button("  >  ").on_hover_text(t!("triangle_editor.tooltip_translate_right")).clicked() {
-                                let (mut o_new, mut x_new, mut y_new) = get_triangle!(transform);
-                                o_new[0] += 0.1;
-                                x_new[0] += 0.1;
-                                y_new[0] += 0.1;
-                                if let Ok(update) = apply_triangle_change(transform, o_new, x_new, y_new,
-                                    &format!("history.action.translate_right|name={}", transform_name)) {
+                            dragging |= d_resp.dragged();
+                            drag_stopped |= d_resp.drag_stopped();
+
+                            let f_resp = ui.add(egui::DragValue::new(&mut display_f).speed(0.01).prefix("f: "))
+                                .on_hover_text(t!("triangle_editor.tooltip_affine_f"));
+                            if f_resp.changed() {
+                                val_f = -display_f;
+                                if let Ok(update) = config_manager.update_param(make_coeff_path(AffineParam::F), val_f.into()) {
                                     max_update = max_update.max(update);
                                 }
                             }
+                            dragging |= f_resp.dragged();
+                            drag_stopped |= f_resp.drag_stopped();
                         });
-
-                        ui.add_space(5.0);
-
-                        // Rotate buttons
-                        ui.horizontal(|ui| {
-                            if ui.button(format!("↻ {}", t!("triangle_editor.rotate_cw")))
-                                .on_hover_text(t!("triangle_editor.tooltip_rotate_cw"))
-                                .clicked()
-                            {
-                                let angle = -15.0_f32.to_radians();
-                                let cos_a = angle.cos();
-                                let sin_a = angle.sin();
-                                let (o_curr, x_curr, y_curr) = get_triangle!(transform);
-
-                                let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
-                                let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
-
-                                let x_rot = [x_vec[0] * cos_a - x_vec[1] * sin_a, x_vec[0] * sin_a + x_vec[1] * cos_a];
-                                let y_rot = [y_vec[0] * cos_a - y_vec[1] * sin_a, y_vec[0] * sin_a + y_vec[1] * cos_a];
-
-                                let x_new = [o_curr[0] + x_rot[0], o_curr[1] + x_rot[1]];
-                                let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
-
-                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("history.action.rotate_cw|name={}", transform_name)) {
-                                    max_update = max_update.max(update);
-                                }
-                            }
-                            if ui.button(format!("↺ {}", t!("triangle_editor.rotate_ccw")))
-                                .on_hover_text(t!("triangle_editor.tooltip_rotate_ccw"))
-                                .clicked()
-                            {
-                                let angle = 15.0_f32.to_radians();
-                                let cos_a = angle.cos();
-                                let sin_a = angle.sin();
-                                let (o_curr, x_curr, y_curr) = get_triangle!(transform);
-
-                                let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
-                                let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
-
-                                let x_rot = [x_vec[0] * cos_a - x_vec[1] * sin_a, x_vec[0] * sin_a + x_vec[1] * cos_a];
-                                let y_rot = [y_vec[0] * cos_a - y_vec[1] * sin_a, y_vec[0] * sin_a + y_vec[1] * cos_a];
-
-                                let x_new = [o_curr[0] + x_rot[0], o_curr[1] + x_rot[1]];
-                                let y_new = [o_curr[0] + y_rot[0], o_curr[1] + y_rot[1]];
-
-                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("history.action.rotate_ccw|name={}", transform_name)) {
-                                    max_update = max_update.max(update);
-                                }
-                            }
-                        });
-
-                        // Scale buttons
-                        ui.horizontal(|ui| {
-                            if ui.button(format!("🔺 {}", t!("triangle_editor.scale_up")))
-                                .on_hover_text(t!("triangle_editor.tooltip_scale_up"))
-                                .clicked()
-                            {
-                                let (o_curr, x_curr, y_curr) = get_triangle!(transform);
-                                let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
-                                let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
-
-                                let x_new = [o_curr[0] + x_vec[0] * 1.1, o_curr[1] + x_vec[1] * 1.1];
-                                let y_new = [o_curr[0] + y_vec[0] * 1.1, o_curr[1] + y_vec[1] * 1.1];
-
-                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("history.action.scale_up|name={}", transform_name)) {
-                                    max_update = max_update.max(update);
-                                }
-                            }
-                            if ui.button(format!("🔻 {}", t!("triangle_editor.scale_down")))
-                                .on_hover_text(t!("triangle_editor.tooltip_scale_down"))
-                                .clicked()
-                            {
-                                let (o_curr, x_curr, y_curr) = get_triangle!(transform);
-                                let x_vec = [x_curr[0] - o_curr[0], x_curr[1] - o_curr[1]];
-                                let y_vec = [y_curr[0] - o_curr[0], y_curr[1] - o_curr[1]];
-
-                                let x_new = [o_curr[0] + x_vec[0] * 0.9, o_curr[1] + x_vec[1] * 0.9];
-                                let y_new = [o_curr[0] + y_vec[0] * 0.9, o_curr[1] + y_vec[1] * 0.9];
-
-                                if let Ok(update) = apply_triangle_change(transform, o_curr, x_new, y_new,
-                                    &format!("history.action.scale_down|name={}", transform_name)) {
-                                    max_update = max_update.max(update);
-                                }
-                            }
-                        });
-                    });
-                });
-
-                if coords_changed {
-                    // Convert triangle coords to affine parameters
-                    let mut temp_transform = transform.clone();
-                    match affine_target {
-                        AffineTarget::Pre => temp_transform.from_triangle_apophysis(o, x, y),
-                        AffineTarget::Post => temp_transform.post_from_triangle_apophysis(o, x, y),
-                    }
-
-                    // Batch update all affine parameters via ConfigManager
-                    let changes = make_affine_changes(&temp_transform);
-
-                    // Use lazy=true while dragging
-                    if let Ok(update) = config_manager.update_batch(
-                        changes,
-                        format!("history.action.triangle_edit_coords|name={}", transform_name)
-                    ) {
-                        max_update = max_update.max(update);
                     }
                 }
 
                 ui.separator();
 
-                // Label changes based on target
-                ui.label(match affine_target {
-                    AffineTarget::Pre => t!("triangle_editor.affine_coefficients"),
-                    AffineTarget::Post => t!("triangle_editor.post_affine_coefficients"),
-                });
-
-                // Track drag state for preview mode
-                let mut dragging = false;
-                let mut drag_stopped = false;
-
-                // Helper to construct the right ConfigPath based on affine target
-                let make_coeff_path = |param: AffineParam| -> ConfigPath {
-                    match (selected_transform, affine_target) {
-                        (Some(index), AffineTarget::Pre) => ConfigPath::TransformAffine { index, param },
-                        (Some(index), AffineTarget::Post) => ConfigPath::TransformPostAffine { index, param },
-                        (None, AffineTarget::Pre) => ConfigPath::FinalTransformAffine { param },
-                        (None, AffineTarget::Post) => ConfigPath::FinalTransformPostAffine { param },
-                    }
-                };
-
-                // Get current values based on affine target
-                let (mut val_a, mut val_b, mut val_c, mut val_d, mut val_e, mut val_f) = match affine_target {
-                    AffineTarget::Pre => (transform.a, transform.b, transform.c, transform.d, transform.e, transform.f),
-                    AffineTarget::Post => (transform.post_a, transform.post_b, transform.post_c, transform.post_d, transform.post_e, transform.post_f),
-                };
-
-                // Display variables with Apophysis-compatible signs
-                // Apophysis displays b, c, f with opposite sign
-                let mut display_b = -val_b;
-                let mut display_c = -val_c;
-                let mut display_f = -val_f;
-
-                ui.horizontal(|ui| {
-                    let a_resp = ui.add(egui::DragValue::new(&mut val_a).speed(0.01).prefix("a: "))
-                        .on_hover_text(t!("triangle_editor.tooltip_affine_a"));
-                    if a_resp.changed() {
-                        if let Ok(update) = config_manager.update_param(
-                            make_coeff_path(AffineParam::A),
-                            val_a.into()
-                        ) {
-                            max_update = max_update.max(update);
-                        }
-                    }
-                    dragging |= a_resp.dragged();
-                    drag_stopped |= a_resp.drag_stopped();
-
-                    let b_resp = ui.add(egui::DragValue::new(&mut display_b).speed(0.01).prefix("b: "))
-                        .on_hover_text(t!("triangle_editor.tooltip_affine_b"));
-                    if b_resp.changed() {
-                        // Negate back to internal representation
-                        val_b = -display_b;
-                        if let Ok(update) = config_manager.update_param(
-                            make_coeff_path(AffineParam::B),
-                            val_b.into()
-                        ) {
-                            max_update = max_update.max(update);
-                        }
-                    }
-                    dragging |= b_resp.dragged();
-                    drag_stopped |= b_resp.drag_stopped();
-
-                    let e_resp = ui.add(egui::DragValue::new(&mut val_e).speed(0.01).prefix("e: "))
-                        .on_hover_text(t!("triangle_editor.tooltip_affine_e"));
-                    if e_resp.changed() {
-                        if let Ok(update) = config_manager.update_param(
-                            make_coeff_path(AffineParam::E),
-                            val_e.into()
-                        ) {
-                            max_update = max_update.max(update);
-                        }
-                    }
-                    dragging |= e_resp.dragged();
-                    drag_stopped |= e_resp.drag_stopped();
-                });
-                ui.horizontal(|ui| {
-                    let c_resp = ui.add(egui::DragValue::new(&mut display_c).speed(0.01).prefix("c: "))
-                        .on_hover_text(t!("triangle_editor.tooltip_affine_c"));
-                    if c_resp.changed() {
-                        // Negate back to internal representation
-                        val_c = -display_c;
-                        if let Ok(update) = config_manager.update_param(
-                            make_coeff_path(AffineParam::C),
-                            val_c.into()
-                        ) {
-                            max_update = max_update.max(update);
-                        }
-                    }
-                    dragging |= c_resp.dragged();
-                    drag_stopped |= c_resp.drag_stopped();
-
-                    let d_resp = ui.add(egui::DragValue::new(&mut val_d).speed(0.01).prefix("d: "))
-                        .on_hover_text(t!("triangle_editor.tooltip_affine_d"));
-                    if d_resp.changed() {
-                        if let Ok(update) = config_manager.update_param(
-                            make_coeff_path(AffineParam::D),
-                            val_d.into()
-                        ) {
-                            max_update = max_update.max(update);
-                        }
-                    }
-                    dragging |= d_resp.dragged();
-                    drag_stopped |= d_resp.drag_stopped();
-
-                    let f_resp = ui.add(egui::DragValue::new(&mut display_f).speed(0.01).prefix("f: "))
-                        .on_hover_text(t!("triangle_editor.tooltip_affine_f"));
-                    if f_resp.changed() {
-                        // Negate back to internal representation
-                        val_f = -display_f;
-                        if let Ok(update) = config_manager.update_param(
-                            make_coeff_path(AffineParam::F),
-                            val_f.into()
-                        ) {
-                            max_update = max_update.max(update);
-                        }
-                    }
-                    dragging |= f_resp.dragged();
-                    drag_stopped |= f_resp.drag_stopped();
-                });
-
-                ui.separator();
-
-                // Control buttons
+                // Reset to Identity (at the very bottom)
+                if ui.button(t!("triangle_editor.reset_identity").as_ref())
+                    .on_hover_text(t!("triangle_editor.tooltip_reset_identity")).clicked()
                 {
-                    if ui.button(t!("triangle_editor.reset_identity").as_ref())
-                        .on_hover_text(t!("triangle_editor.tooltip_reset_identity"))
-                        .clicked()
-                    {
-                        let mut identity_transform = crate::scene::transforms::Transform::new();
-                        identity_transform.a = 1.0;
-                        identity_transform.d = 1.0;
-                        let changes = make_affine_changes(&identity_transform);
-                        if let Ok(update) = config_manager.update_batch(
-                            changes,
-                            format!("history.action.triangle_reset_identity|name={}", transform_name)
-                        ) {
-                            max_update = max_update.max(update);
-                        }
+                    let mut identity_transform = crate::scene::transforms::Transform::new();
+                    identity_transform.a = 1.0;
+                    identity_transform.d = 1.0;
+                    let changes = make_affine_changes(&identity_transform);
+                    if let Ok(update) = config_manager.update_batch(
+                        changes,
+                        format!("history.action.triangle_reset_identity|name={}", transform_name)
+                    ) {
+                        max_update = max_update.max(update);
                     }
                 }
             }
