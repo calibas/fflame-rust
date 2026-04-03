@@ -54,9 +54,11 @@ pub fn render_undo_history_content(
     let history = config_manager.history();
     let position = config_manager.position();
 
+    let compact = config_manager.system_settings().compact_mode.unwrap_or(false);
+
     // Calculate max height: available space minus room for buttons/stats (min 200px)
     let available_height = ui.available_height();
-    let max_scroll_height = (available_height - 150.0).max(200.0);
+    let max_scroll_height = (available_height - 150.0).max(if compact { 50.0 } else { 200.0 });
 
     // Show unified timeline with #1 (initial state) at top, growing downward
     egui::ScrollArea::vertical()

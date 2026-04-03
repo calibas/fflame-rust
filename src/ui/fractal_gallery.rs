@@ -378,15 +378,13 @@ impl FractalConfigGallery {
                 .collect()
         };
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (original_index, hash, name, config) in &filtered {
-                    let card_response = self.render_grid_card(ui, hash, name);
-                    if card_response.clicked() {
-                        response.selected = Some(config.clone());
-                    }
+        ui.horizontal_wrapped(|ui| {
+            for (original_index, hash, name, config) in &filtered {
+                let card_response = self.render_grid_card(ui, hash, name);
+                if card_response.clicked() {
+                    response.selected = Some(config.clone());
                 }
-            });
+            }
         });
 
         response
@@ -495,52 +493,50 @@ impl FractalConfigGallery {
                 .collect()
         };
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for (original_index, hash, config) in &filtered {
-                let header_id = ui.make_persistent_id(format!("gallery_list_{}", original_index));
+        for (original_index, hash, config) in &filtered {
+            let header_id = ui.make_persistent_id(format!("gallery_list_{}", original_index));
 
-                egui::collapsing_header::CollapsingState::load_with_default_open(
-                    ui.ctx(),
-                    header_id,
-                    false,
-                )
-                .show_header(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        // Load button
-                        if ui.button(">").clicked() {
-                            response.selected = Some(config.clone());
-                        }
-
-                        ui.strong(&config.flame.name);
-                    });
-
-                    // Summary line
-                    let render_mode = match config.flame.render_mode {
-                        crate::scene::transforms::RenderMode::TwoD => t!("fractal_gallery.render_mode_2d"),
-                        crate::scene::transforms::RenderMode::ThreeD => t!("fractal_gallery.render_mode_3d"),
-                    };
-                    ui.label(format!(
-                        "{}, {}, {}",
-                        t!("fractal_gallery.transforms_count", count = config.flame.transforms.len()),
-                        render_mode,
-                        Self::format_variations(config),
-                    ));
-                })
-                .body(|ui| {
-                    // Expanded details
-                    ui.label(t!("fractal_gallery.zoom", value = format!("{:.2}", config.zoom)));
-                    ui.label(t!("fractal_gallery.max_iterations", value = config.max_iterations));
-                    ui.label(t!("fractal_gallery.color_mode", value = format!("{:?}", config.color_mode)));
-
-                    // Small thumbnail if available
-                    if let Some(texture) = self.texture_cache.get(hash) {
-                        ui.image((texture.id(), Vec2::new(64.0, 64.0)));
+            egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                header_id,
+                false,
+            )
+            .show_header(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // Load button
+                    if ui.button(">").clicked() {
+                        response.selected = Some(config.clone());
                     }
+
+                    ui.strong(&config.flame.name);
                 });
 
-                ui.separator();
-            }
-        });
+                // Summary line
+                let render_mode = match config.flame.render_mode {
+                    crate::scene::transforms::RenderMode::TwoD => t!("fractal_gallery.render_mode_2d"),
+                    crate::scene::transforms::RenderMode::ThreeD => t!("fractal_gallery.render_mode_3d"),
+                };
+                ui.label(format!(
+                    "{}, {}, {}",
+                    t!("fractal_gallery.transforms_count", count = config.flame.transforms.len()),
+                    render_mode,
+                    Self::format_variations(config),
+                ));
+            })
+            .body(|ui| {
+                // Expanded details
+                ui.label(t!("fractal_gallery.zoom", value = format!("{:.2}", config.zoom)));
+                ui.label(t!("fractal_gallery.max_iterations", value = config.max_iterations));
+                ui.label(t!("fractal_gallery.color_mode", value = format!("{:?}", config.color_mode)));
+
+                // Small thumbnail if available
+                if let Some(texture) = self.texture_cache.get(hash) {
+                    ui.image((texture.id(), Vec2::new(64.0, 64.0)));
+                }
+            });
+
+            ui.separator();
+        }
 
         response
     }

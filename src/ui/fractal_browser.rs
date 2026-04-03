@@ -605,54 +605,52 @@ impl FractalBrowserPanel {
             let is_busy = self.online_loading_flame || self.online_deleting;
             let mut delete_flame: Option<(String, String)> = None;
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                for flame in &flames {
-                    let render_mode = match flame.render_mode {
-                        crate::api::types::ApiRenderMode::TwoD => "2D",
-                        crate::api::types::ApiRenderMode::ThreeD => "3D",
-                    };
+            for flame in &flames {
+                let render_mode = match flame.render_mode {
+                    crate::api::types::ApiRenderMode::TwoD => "2D",
+                    crate::api::types::ApiRenderMode::ThreeD => "3D",
+                };
 
-                    let variations_summary = if flame.variation_names.len() <= 3 {
-                        flame.variation_names.join(", ")
-                    } else {
-                        format!(
-                            "{}, +{}",
-                            flame.variation_names[..2].join(", "),
-                            flame.variation_names.len() - 2
-                        )
-                    };
+                let variations_summary = if flame.variation_names.len() <= 3 {
+                    flame.variation_names.join(", ")
+                } else {
+                    format!(
+                        "{}, +{}",
+                        flame.variation_names[..2].join(", "),
+                        flame.variation_names.len() - 2
+                    )
+                };
 
-                    let label = format!(
-                        "{} — {} | {}T | {}",
-                        flame.name, render_mode, flame.transform_count, variations_summary
+                let label = format!(
+                    "{} — {} | {}T | {}",
+                    flame.name, render_mode, flame.transform_count, variations_summary
+                );
+
+                ui.horizontal(|ui| {
+                    // Load button (main flame row)
+                    let button = ui.add_enabled(
+                        !is_busy,
+                        egui::Button::new(&label).wrap_mode(egui::TextWrapMode::Truncate),
                     );
+                    if button.clicked() {
+                        self.trigger_load_flame(&flame.id);
+                    }
 
-                    ui.horizontal(|ui| {
-                        // Load button (main flame row)
-                        let button = ui.add_enabled(
-                            !is_busy,
-                            egui::Button::new(&label).wrap_mode(egui::TextWrapMode::Truncate),
-                        );
-                        if button.clicked() {
-                            self.trigger_load_flame(&flame.id);
-                        }
-
-                        // Delete button (small, red)
-                        let del_btn = ui.add_enabled(
-                            !is_busy,
-                            egui::Button::new(
-                                egui::RichText::new("X")
-                                    .color(egui::Color32::from_rgb(220, 80, 80))
-                                    .small(),
-                            ),
-                        );
-                        if del_btn.clicked() {
-                            delete_flame = Some((flame.id.clone(), flame.name.clone()));
-                        }
-                        del_btn.on_hover_text(t!("browser.online_delete"));
-                    });
-                }
-            });
+                    // Delete button (small, red)
+                    let del_btn = ui.add_enabled(
+                        !is_busy,
+                        egui::Button::new(
+                            egui::RichText::new("X")
+                                .color(egui::Color32::from_rgb(220, 80, 80))
+                                .small(),
+                        ),
+                    );
+                    if del_btn.clicked() {
+                        delete_flame = Some((flame.id.clone(), flame.name.clone()));
+                    }
+                    del_btn.on_hover_text(t!("browser.online_delete"));
+                });
+            }
 
             // Trigger delete outside the borrow
             if let Some((id, name)) = delete_flame {

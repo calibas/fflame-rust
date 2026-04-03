@@ -68,6 +68,7 @@ menu:
   window_effects: "✨ Effects"
   window_xaos_editor: "🔀 Xaos Editor"
   window_signal: "📊 Signals"
+  window_account: "👤 Account"
 
   # Window Menu - Workspace layouts
   reset_workspace: "🔄 Reset Workspace"
@@ -75,8 +76,10 @@ menu:
   layout_beginner: "Beginner"
   layout_standard: "Standard"
   layout_animation: "Animation"
+  layout_compact: "📱 Mobile View"
   layout_advanced: "Advanced"
   layout_export: "Export"
+  desktop_view: "🖥 Desktop View"
 
   # Help Menu
   help_panel: "❓ Help"
@@ -692,15 +695,16 @@ triangle_editor:
 
   # Quick actions
   quick_actions: "Quick Actions:"
-  rotate_cw: "Rotate CW"
-  rotate_ccw: "Rotate CCW"
-  scale_up: "Scale Up"
-  scale_down: "Scale Down"
+  scale: "Scale"
 
   # Affine target (pre/post toggle)
   affine_target: "Editing:"
   affine_pre: "Affine"
   affine_post: "Post-Affine"
+
+  # Tabs
+  triangle_coords_tab: "Triangle Coords"
+  affine_coeffs_tab: "Affine Coeffs"
 
   # Affine coefficients
   affine_coefficients: "Affine Coefficients:"
@@ -728,10 +732,10 @@ triangle_editor:
   tooltip_affine_pre: "Edit the pre-affine transform (applied before variations)"
   tooltip_affine_post: "Edit the post-affine transform (applied after variations)"
   tooltip_affine_a: "Horizontal scale. 1.0 = no change.\nAffects X component of X-axis vector."
-  tooltip_affine_b: "Horizontal shear. Skews shape horizontally.\nAffects Y component of X-axis vector."
-  tooltip_affine_c: "X translation. Moves transform horizontally.\nOrigin X coordinate."
-  tooltip_affine_d: "Vertical shear. Skews shape vertically.\nAffects X component of Y-axis vector."
-  tooltip_affine_e: "Vertical scale. 1.0 = no change.\nAffects Y component of Y-axis vector."
+  tooltip_affine_c: "Horizontal shear. Skews shape horizontally.\nAffects Y component of X-axis vector."
+  tooltip_affine_b: "Vertical shear. Skews shape vertically.\nAffects X component of Y-axis vector."
+  tooltip_affine_d: "Vertical scale. 1.0 = no change.\nAffects Y component of Y-axis vector."
+  tooltip_affine_e: "X translation. Moves transform horizontally.\nOrigin X coordinate."
   tooltip_affine_f: "Y translation. Moves transform vertically.\nOrigin Y coordinate."
 
 # Palette Editor Panel
@@ -1585,8 +1589,8 @@ errors:
 
 # Auth status (menu bar)
 auth:
-  signed_in: "Signed in"
-  not_signed_in: "Not signed in"
+  signed_in: "👤 Signed in"
+  not_signed_in: "👤 Not signed in"
   sign_out: "Sign Out"
   signed_out_success: "Signed out"
   session_expired: "Session expired — please sign in again"

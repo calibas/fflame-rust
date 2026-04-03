@@ -11,6 +11,7 @@ mod help;
 pub mod login_dialog;
 pub mod save_online_dialog;
 pub mod histogram;
+mod compact_menu;
 mod menu_bar;
 mod menu_context;
 mod palette_editor;
@@ -184,6 +185,19 @@ pub struct EguiLayer {
     // Signal panel state
     pub(crate) signal_panel_state: signal_panel::SignalPanelState,
 
+    // Touch gesture tracking (for multi-touch on web)
+    touch_tracker: panel_viewer::TouchTracker,
+
+    // Compact mode state
+    /// Whether compact (mobile) layout is active
+    compact_mode: bool,
+    /// Last time any input was received (for menu button fade)
+    last_input_time: web_time::Instant,
+
+    /// Tab bar height of the FractalViewport leaf node (from previous frame).
+    /// Used to inflate the fractal texture so it covers the tab bar seamlessly.
+    viewport_tab_bar_height: f32,
+
     // WASM clipboard bridge
     #[cfg(target_arch = "wasm32")]
     web_clipboard: crate::web_clipboard::WebClipboard,
@@ -283,9 +297,18 @@ impl EguiLayer {
             density_histogram: crate::renderer::DensityHistogram::default(),
             xaos_editor_state: xaos_editor::XaosEditorState::default(),
             signal_panel_state: signal_panel::SignalPanelState::new(),
+            touch_tracker: panel_viewer::TouchTracker::default(),
+            compact_mode: false,
+            last_input_time: web_time::Instant::now(),
+            viewport_tab_bar_height: 0.0,
             #[cfg(target_arch = "wasm32")]
             web_clipboard: crate::web_clipboard::WebClipboard::install(),
         }
+    }
+
+    /// Enable or disable compact (mobile) mode
+    pub fn set_compact_mode(&mut self, enabled: bool) {
+        self.compact_mode = enabled;
     }
 
     /// Mutable access to login dialog state (for auto-login on startup)
@@ -502,7 +525,43 @@ impl EguiLayer {
         api_flame_is_public: &Option<bool>,
         api_animation_id: &Option<String>,
     ) -> UiResponse {
+        // Sync compact mode from workspace (handles layout switches from menus)
+        let is_compact = workspace.is_compact();
+        if is_compact != self.compact_mode {
+            self.set_compact_mode(is_compact);
+            // Persist the change to system settings
+            config_manager.system_settings_mut().compact_mode = Some(is_compact);
+            let _ = config_manager.system_settings().save();
+        }
+
+        // Wider, always-visible scrollbars in compact mode (touch-friendly).
+        // Applied every frame since egui_dock may reset styles.
+        self.ctx.style_mut(|style| {
+            if self.compact_mode {
+                style.spacing.scroll = egui::style::ScrollStyle {
+                    bar_width: 7.0,
+                    floating_width: 7.0,
+                    floating_allocated_width:7.0,
+                    bar_inner_margin: 2.0,
+                    bar_outer_margin: 2.0,
+                    // foreground_color: true,
+                    ..egui::style::ScrollStyle::floating()
+                };
+            } else {
+                style.spacing.scroll = egui::style::ScrollStyle::floating();
+            }
+        });
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let raw_input = self.state.take_egui_input(window);
+
+        #[cfg(target_arch = "wasm32")]
         let mut raw_input = self.state.take_egui_input(window);
+
+        // Track input activity for compact menu fade
+        if self.compact_mode && !raw_input.events.is_empty() {
+            self.last_input_time = web_time::Instant::now();
+        }
 
         // Inject clipboard paste events from the browser (WASM only)
         #[cfg(target_arch = "wasm32")]
@@ -666,14 +725,24 @@ impl EguiLayer {
             // Compute auth state before struct init (avoids borrow conflict)
             let is_signed_in = config_manager.system_settings().is_signed_in();
 
-            // Normal mode: render menu bar and dock panels
-            menu_bar::render_menu_bar(
-                ctx,
-                workspace,
-                &mut menu_actions,
-                &menu_state,
-                &mut self.save_online_dialog_state,
-            );
+            // Normal mode: render menu bar (desktop) or floating button (compact)
+            if self.compact_mode {
+                compact_menu::render_compact_menu(
+                    ctx,
+                    workspace,
+                    &mut menu_actions,
+                    &menu_state,
+                    &mut self.save_online_dialog_state,
+                );
+            } else {
+                menu_bar::render_menu_bar(
+                    ctx,
+                    workspace,
+                    &mut menu_actions,
+                    &menu_state,
+                    &mut self.save_online_dialog_state,
+                );
+            }
 
             // All windows are now dockable panels (see Windows menu)
             // Fullscreen docking system with Fractal Viewport as a panel
@@ -733,6 +802,7 @@ impl EguiLayer {
                         // Fractal texture for display
                         fractal_texture_id,
                         fractal_viewport_size: &mut fractal_viewport_size,
+                        viewport_tab_bar_height: self.viewport_tab_bar_height,
 
                         // Config dialog state
                         config_json_buffer: &mut self.config_json_buffer,
@@ -827,8 +897,99 @@ impl EguiLayer {
                         api_animation_id,
                         is_signed_in,
                         api_animation_save_action: &mut api_animation_save_action,
+                        compact_mode: self.compact_mode,
                     },
+                    touch_tracker: &mut self.touch_tracker,
                 });
+
+            // Hide the FractalViewport's tab bar seamlessly.
+            // The GPU renders the fractal texture taller (body + tab bar height). The body
+            // shows the bottom portion via UV offset. Here we draw the top portion over the
+            // tab bar and block input so the hidden tab buttons can't be clicked.
+            if let Some((_surface, node_index, _tab)) = workspace.dock_state.find_tab(&workspace::PanelType::FractalViewport) {
+                if let Some(leaf) = workspace.dock_state.main_surface()[node_index].get_leaf() {
+                    let tab_bar_h = leaf.viewport.min.y - leaf.rect.min.y;
+                    // Store for next frame so render_fractal_viewport can inflate texture size
+                    self.viewport_tab_bar_height = tab_bar_h;
+
+                    if tab_bar_h > 0.0 {
+                        let tab_bar_rect = egui::Rect::from_min_max(
+                            leaf.rect.min,
+                            egui::pos2(leaf.rect.max.x, leaf.viewport.min.y),
+                        );
+                        let bg = config_manager.active_config().background_color;
+                        let color = egui::Color32::from_rgb(
+                            (bg[0] * 255.0) as u8,
+                            (bg[1] * 255.0) as u8,
+                            (bg[2] * 255.0) as u8,
+                        );
+                        let texture_id = fractal_texture_id;
+                        let full_height = leaf.rect.height();
+                        // Draw fractal texture over the tab bar and block clicks on
+                        // hidden tab buttons. Order::Middle keeps this below floating windows.
+                        egui::Area::new(egui::Id::new("viewport_tab_cover"))
+                            .fixed_pos(tab_bar_rect.min)
+                            .order(egui::Order::Middle)
+                            .interactable(true)
+                            .show(ctx, |ui| {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    tab_bar_rect.size(),
+                                    egui::Sense::click_and_drag(),
+                                );
+                                if let Some(tid) = texture_id {
+                                    // Draw the top slice of the inflated texture (matches the
+                                    // UV offset used in render_fractal_viewport for the body)
+                                    let uv_bottom = tab_bar_h / full_height;
+                                    let uv = egui::Rect::from_min_max(
+                                        egui::pos2(0.0, 0.0),
+                                        egui::pos2(1.0, uv_bottom),
+                                    );
+                                    ui.painter().image(tid, rect, uv, egui::Color32::WHITE);
+                                } else {
+                                    ui.painter().rect_filled(rect, 0.0, color);
+                                }
+                            });
+                    }
+                }
+
+                // Eject any tabs that were docked into the viewport's leaf via drag-and-drop.
+                // egui_dock has no per-leaf docking restriction, so we undo it after the fact.
+                if let Some(leaf) = workspace.dock_state.main_surface()[node_index].get_leaf() {
+                    let extra_tabs: Vec<egui_dock::TabIndex> = leaf.tabs()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, tab)| !matches!(tab, workspace::PanelType::FractalViewport))
+                        .map(|(i, _)| egui_dock::TabIndex(i))
+                        .collect();
+                    if !extra_tabs.is_empty() {
+                        // Find a non-viewport leaf to receive ejected tabs
+                        let target = workspace.dock_state.main_surface()
+                            .iter()
+                            .enumerate()
+                            .find(|(i, node)| egui_dock::NodeIndex(*i) != node_index && node.is_leaf())
+                            .map(|(i, _)| egui_dock::NodeIndex(i));
+
+                        let mut removed = Vec::new();
+                        for tab_index in extra_tabs.into_iter().rev() {
+                            if let Some(tab) = workspace.dock_state.main_surface_mut().remove_tab(
+                                (node_index, tab_index)
+                            ) {
+                                removed.push(tab);
+                            }
+                        }
+                        if let Some(target_idx) = target {
+                            for tab in removed {
+                                let count = workspace.dock_state.main_surface()[target_idx]
+                                    .get_leaf()
+                                    .map(|l| l.tabs().len())
+                                    .unwrap_or(0);
+                                workspace.dock_state.main_surface_mut()[target_idx]
+                                    .insert_tab(egui_dock::TabIndex(count), tab);
+                            }
+                        }
+                    }
+                }
+            }
 
             // Show palette editor dialogs (fixed mode warning, overwrite/delete confirmations)
             palette_editor::render_palette_dialogs(

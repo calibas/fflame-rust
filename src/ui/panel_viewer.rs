@@ -4,6 +4,138 @@ use egui_dock::{egui, TabViewer};
 use rust_i18n::t;
 use super::workspace::PanelType;
 
+/// Result of processing touch events each frame.
+pub enum TouchGesture {
+    /// Single finger drag (translation delta)
+    Pan(egui::Vec2),
+    /// Two-finger pinch (zoom_delta, translation_delta, midpoint)
+    Pinch { zoom_delta: f32, translation: egui::Vec2, midpoint: egui::Pos2 },
+}
+
+/// Tracks active touch points for manual gesture detection.
+/// Needed because egui's built-in `multi_touch()` fails on web when winit
+/// assigns different `TouchDeviceId` per finger, and egui-winit's touch→mouse
+/// emulation breaks after multi-touch ends without proper End events.
+#[derive(Default)]
+pub struct TouchTracker {
+    /// Active touches: (id, current_position)
+    active: std::collections::HashMap<u64, egui::Pos2>,
+    /// Previous frame's distance between fingers (for zoom delta)
+    prev_distance: Option<f32>,
+    /// Previous frame's midpoint (for two-finger translation)
+    prev_midpoint: Option<egui::Pos2>,
+    /// Previous frame's single-finger position (for one-finger pan)
+    prev_single_pos: Option<egui::Pos2>,
+}
+
+impl TouchTracker {
+    /// Process touch events and return the detected gesture, if any.
+    pub fn update(&mut self, events: &[egui::Event]) -> Option<TouchGesture> {
+        if events.is_empty() {
+            return None;
+        }
+
+        // Collect IDs present in this event batch
+        let batch_ids: std::collections::HashSet<u64> = events.iter()
+            .filter_map(|e| if let egui::Event::Touch { id, .. } = e { Some(id.0) } else { None })
+            .collect();
+
+        // If a new finger starts, purge any stale touches not in this batch.
+        // This handles fingers that left the viewport without an End event.
+        let has_start = events.iter().any(|e|
+            matches!(e, egui::Event::Touch { phase: egui::TouchPhase::Start, .. })
+        );
+        if has_start {
+            self.active.retain(|id, _| batch_ids.contains(id));
+            // Reset position tracking so the first frame of a new touch
+            // doesn't compute a delta from a previous finger's position
+            self.prev_single_pos = None;
+            self.prev_midpoint = None;
+            self.prev_distance = None;
+        }
+
+        for event in events {
+            if let egui::Event::Touch { device_id: _, id, phase, pos, .. } = event {
+                let touch_id = id.0;
+                match phase {
+                    egui::TouchPhase::Start => {
+                        self.active.insert(touch_id, *pos);
+                    }
+                    egui::TouchPhase::Move => {
+                        self.active.insert(touch_id, *pos);
+                    }
+                    egui::TouchPhase::End | egui::TouchPhase::Cancel => {
+                        self.active.remove(&touch_id);
+                    }
+                }
+            }
+        }
+
+        match self.active.len() {
+            0 => {
+                self.prev_distance = None;
+                self.prev_midpoint = None;
+                self.prev_single_pos = None;
+                None
+            }
+            1 => {
+                self.prev_distance = None;
+                self.prev_midpoint = None;
+
+                let pos = *self.active.values().next().unwrap();
+                let delta = if let Some(prev) = self.prev_single_pos {
+                    pos - prev
+                } else {
+                    egui::Vec2::ZERO
+                };
+                self.prev_single_pos = Some(pos);
+
+                if delta != egui::Vec2::ZERO {
+                    Some(TouchGesture::Pan(delta))
+                } else {
+                    None
+                }
+            }
+            _ => {
+                self.prev_single_pos = None;
+
+                let points: Vec<egui::Pos2> = self.active.values().copied().collect();
+                let p1 = points[0];
+                let p2 = points[1];
+                let distance = p1.distance(p2);
+                let midpoint = egui::pos2((p1.x + p2.x) * 0.5, (p1.y + p2.y) * 0.5);
+
+                let zoom_delta = if let Some(prev) = self.prev_distance {
+                    if prev > 0.0 { distance / prev } else { 1.0 }
+                } else {
+                    1.0
+                };
+
+                let translation = if let Some(prev_mid) = self.prev_midpoint {
+                    midpoint - prev_mid
+                } else {
+                    egui::Vec2::ZERO
+                };
+
+                self.prev_distance = Some(distance);
+                self.prev_midpoint = Some(midpoint);
+
+                Some(TouchGesture::Pinch { zoom_delta, translation, midpoint })
+            }
+        }
+    }
+
+    /// Returns true if a specific touch ID is being tracked
+    pub fn is_tracking(&self, id: u64) -> bool {
+        self.active.contains_key(&id)
+    }
+
+    /// Returns true if any fingers are currently active
+    pub fn is_touch_active(&self) -> bool {
+        !self.active.is_empty()
+    }
+}
+
 /// Context needed by panels to render
 ///
 /// Holds references to all UI state from EguiLayer that panels might need.
@@ -57,6 +189,8 @@ pub struct PanelContext<'a> {
     // Fractal texture for display
     pub fractal_texture_id: Option<egui::TextureId>,
     pub fractal_viewport_size: &'a mut Option<(u32, u32)>,
+    /// Tab bar height from previous frame, used to inflate fractal texture size
+    pub viewport_tab_bar_height: f32,
 
     // Config dialog state
     pub config_json_buffer: &'a mut String,
@@ -154,11 +288,15 @@ pub struct PanelContext<'a> {
 
     // API animation save action (from animation panel)
     pub api_animation_save_action: &'a mut super::response::ApiAnimationSaveAction,
+
+    // Compact mode (cached from system settings)
+    pub compact_mode: bool,
 }
 
 /// Viewer for rendering each panel type
 pub struct PanelViewer<'a> {
     pub context: PanelContext<'a>,
+    pub touch_tracker: &'a mut TouchTracker,
 }
 
 impl<'a> TabViewer for PanelViewer<'a> {
@@ -168,7 +306,55 @@ impl<'a> TabViewer for PanelViewer<'a> {
         tab.to_string().into()
     }
 
+    fn is_closeable(&self, tab: &Self::Tab) -> bool {
+        !matches!(tab, PanelType::FractalViewport)
+    }
+
+    fn tab_style_override(&self, tab: &Self::Tab, global_style: &egui_dock::TabStyle) -> Option<egui_dock::TabStyle> {
+        if matches!(tab, PanelType::FractalViewport) {
+            let mut style = global_style.clone();
+            // Remove body border and inner margin so fractal fills the entire area
+            style.tab_body.stroke = egui::Stroke::NONE;
+            style.tab_body.inner_margin = egui::Margin::ZERO;
+            Some(style)
+        } else {
+            None
+        }
+    }
+
+    fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
+        if matches!(tab, PanelType::FractalViewport) {
+            [false, false]
+        } else if self.context.compact_mode {
+            // In compact mode, disable egui_dock's vertical ScrollArea.
+            // We wrap panel content in our own ScrollArea with AlwaysVisible
+            // to prevent scrollbar oscillation (egui bug #1165).
+            [true, false]
+        } else {
+            [true, true]
+        }
+    }
+
+    fn clear_background(&self, tab: &Self::Tab) -> bool {
+        !matches!(tab, PanelType::FractalViewport)
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        if self.context.compact_mode && !matches!(tab, PanelType::FractalViewport) {
+            egui::ScrollArea::vertical()
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                .show(ui, |ui| {
+                    self.render_panel(ui, tab);
+                });
+        } else {
+            self.render_panel(ui, tab);
+        }
+    }
+
+}
+
+impl<'a> PanelViewer<'a> {
+    fn render_panel(&mut self, ui: &mut egui::Ui, tab: &mut PanelType) {
         match tab {
             PanelType::FractalViewport => {
                 self.render_fractal_viewport(ui);
@@ -241,9 +427,6 @@ impl<'a> TabViewer for PanelViewer<'a> {
             }
         }
     }
-}
-
-impl<'a> PanelViewer<'a> {
     /// Render Transforms panel (transform list, affine, variations)
     fn render_transforms_panel(&mut self, ui: &mut egui::Ui) {
         let _ = super::transforms::render_transforms_content(
@@ -299,35 +482,33 @@ impl<'a> PanelViewer<'a> {
 
     /// Render Palette Library panel (browse and manage palette packs)
     fn render_palette_library_panel(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            super::palette_library::render_palette_library(
-                ui,
-                self.context.palette_library,
-                self.context.config_manager,
-                self.context.open_palette_editor,
-            );
+        super::palette_library::render_palette_library(
+            ui,
+            self.context.palette_library,
+            self.context.config_manager,
+            self.context.open_palette_editor,
+        );
 
-            let (online_mode, auth_pair) = {
-                let settings = self.context.config_manager.system_settings();
-                let online = settings.online_mode;
-                let auth = if settings.is_signed_in() {
-                    let token = settings.auth_token.clone().unwrap_or_default();
-                    Some((crate::api::API_BASE_URL.to_string(), token))
-                } else {
-                    None
-                };
-                (online, auth)
+        let (online_mode, auth_pair) = {
+            let settings = self.context.config_manager.system_settings();
+            let online = settings.online_mode;
+            let auth = if settings.is_signed_in() {
+                let token = settings.auth_token.clone().unwrap_or_default();
+                Some((crate::api::API_BASE_URL.to_string(), token))
+            } else {
+                None
             };
-            if online_mode {
-                let auth = auth_pair.as_ref().map(|(b, t)| (b.as_str(), t.as_str()));
-                super::palette_library::render_cloud_palettes_section(
-                    ui,
-                    self.context.cloud_palette_state,
-                    self.context.config_manager,
-                    auth,
-                );
-            }
-        });
+            (online, auth)
+        };
+        if online_mode {
+            let auth = auth_pair.as_ref().map(|(b, t)| (b.as_str(), t.as_str()));
+            super::palette_library::render_cloud_palettes_section(
+                ui,
+                self.context.cloud_palette_state,
+                self.context.config_manager,
+                auth,
+            );
+        }
     }
 
     /// Render the View panel (zoom, pan, rotation)
@@ -575,22 +756,64 @@ impl<'a> PanelViewer<'a> {
         if let Some(texture_id) = self.context.fractal_texture_id {
             // Get the actual panel size and report it for texture sizing
             let available_size = ui.available_size();
+            let tab_bar_h = self.context.viewport_tab_bar_height;
+            // Inflate texture height to include the tab bar area so the fractal
+            // covers the entire node seamlessly (the tab bar cover draws the top slice)
+            let total_height = available_size.y + tab_bar_h;
             let width = available_size.x.max(1.0) as u32;
-            let height = available_size.y.max(1.0) as u32;
+            let height = total_height.max(1.0) as u32;
 
-            // Report the size back so texture can be resized to match
+            // Report the inflated size so the GPU renders a taller texture
             *self.context.fractal_viewport_size = Some((width, height));
 
-            // Display the fractal texture with drag and scroll interaction
+            // Display the fractal texture with UV offset to skip the top portion
+            // (which is drawn separately over the tab bar by the cover Area)
+            let uv_top = if total_height > 0.0 { tab_bar_h / total_height } else { 0.0 };
             let image = egui::Image::new(egui::load::SizedTexture::new(texture_id, available_size))
+                .uv(egui::Rect::from_min_max(
+                    egui::pos2(0.0, uv_top),
+                    egui::pos2(1.0, 1.0),
+                ))
                 .fit_to_exact_size(available_size)
                 .maintain_aspect_ratio(false) // Fill entire panel
                 .sense(egui::Sense::click_and_drag()); // Enable drag interaction
 
             let response = ui.add(image);
 
-            // Handle mouse drag for panning
-            if response.dragged_by(egui::PointerButton::Primary) {
+            // Handle pinch-to-zoom on touchscreens (check before drag to avoid conflicts)
+            // Uses custom TouchTracker because egui's multi_touch() doesn't work on web
+            // (winit assigns different TouchDeviceId per finger, so egui never sees 2 fingers)
+            // Gate new touches on response.hovered() which is layer-aware — returns false
+            // when a floating panel is on top of the viewport.
+            let accept_new_touches = response.hovered();
+            let touch_gesture = ui.input(|i| {
+                let touch_events: Vec<egui::Event> = i.events.iter()
+                    .filter(|e| match e {
+                        egui::Event::Touch { phase: egui::TouchPhase::Start, .. } =>
+                            accept_new_touches,
+                        // Accept Move/End/Cancel only for touches we're already tracking
+                        egui::Event::Touch { id, .. } =>
+                            self.touch_tracker.is_tracking(id.0),
+                        _ => false,
+                    })
+                    .cloned()
+                    .collect();
+                self.touch_tracker.update(&touch_events)
+            });
+            let touch_active = self.touch_tracker.is_touch_active();
+
+            match touch_gesture {
+                Some(TouchGesture::Pan(delta)) => {
+                    self.handle_fractal_drag(delta, available_size);
+                }
+                Some(TouchGesture::Pinch { zoom_delta, translation, midpoint }) => {
+                    self.handle_fractal_pinch_zoom(zoom_delta, translation, midpoint, response.rect, available_size);
+                }
+                None => {}
+            }
+
+            // Handle mouse drag for panning (skip during touch to avoid double-handling)
+            if !touch_active && response.dragged_by(egui::PointerButton::Primary) {
                 let drag_delta = response.drag_delta();
                 self.handle_fractal_drag(drag_delta, available_size);
             }
@@ -637,10 +860,11 @@ impl<'a> PanelViewer<'a> {
     fn handle_fractal_drag(&mut self, drag_delta: egui::Vec2, panel_size: egui::Vec2) {
         let config = self.context.config_manager.active_config();
 
-        // Convert screen pixel delta to fractal space
-        // Use width for both axes so drag speed is uniform regardless of aspect ratio
-        // (dividing Y by panel_size.y made vertical panning slow on tall viewports)
-        let scale = 4.0 / (config.zoom * panel_size.x);
+        // Convert screen pixel delta to fractal space.
+        // Use the smaller dimension for both axes so drag speed is consistent
+        // regardless of landscape vs portrait orientation.
+        let ref_size = panel_size.x.min(panel_size.y);
+        let scale = 4.0 / (config.zoom * ref_size);
         let dx = -drag_delta.x * scale;
         let dy = -drag_delta.y * scale;
 
@@ -672,7 +896,7 @@ impl<'a> PanelViewer<'a> {
 
         // Use power-based zoom for smooth scrolling (matches original code)
         let zoom_factor = if scroll_delta.abs() > 0.1 {
-            1.1f32.powf(scroll_delta * 0.05)
+            1.1f32.powf(scroll_delta * 0.03)
         } else {
             1.0
         };
@@ -741,6 +965,64 @@ impl<'a> PanelViewer<'a> {
                 );
             }
         }
+    }
+
+    fn handle_fractal_pinch_zoom(
+        &mut self,
+        zoom_delta: f32,
+        translation: egui::Vec2,
+        pinch_center: egui::Pos2,
+        panel_rect: egui::Rect,
+        panel_size: egui::Vec2,
+    ) {
+        let config = self.context.config_manager.active_config();
+        let new_zoom = (config.zoom * zoom_delta).clamp(0.01, 1000.0);
+
+        // Start with current pan, then apply zoom-toward-center adjustment
+        let mut new_pan_x = config.pan_x;
+        let mut new_pan_y = config.pan_y;
+
+        if zoom_delta != 1.0 {
+            // Zoom toward the midpoint between the two fingers
+            let center_x = panel_rect.center().x;
+            let center_y = panel_rect.center().y;
+            let offset_x = pinch_center.x - center_x;
+            let offset_y = pinch_center.y - center_y;
+
+            let scale = f32::min(panel_size.x, panel_size.y) * 0.25;
+            let cos_r = (-config.rotation).cos();
+            let sin_r = (-config.rotation).sin();
+            let rot_x = offset_x * cos_r - offset_y * sin_r;
+            let rot_y = offset_x * sin_r + offset_y * cos_r;
+
+            let point_x = config.pan_x + rot_x / (scale * config.zoom);
+            let point_y = config.pan_y + rot_y / (scale * config.zoom);
+
+            new_pan_x = point_x - rot_x / (scale * new_zoom);
+            new_pan_y = point_y - rot_y / (scale * new_zoom);
+        }
+
+        // Apply two-finger translation on top of the zoom pan adjustment
+        if translation != egui::Vec2::ZERO {
+            let ref_size = panel_size.x.min(panel_size.y);
+            let drag_scale = 4.0 / (new_zoom * ref_size);
+            let dx = -translation.x * drag_scale;
+            let dy = -translation.y * drag_scale;
+
+            let cos_r = (-config.rotation).cos();
+            let sin_r = (-config.rotation).sin();
+            new_pan_x += dx * cos_r - dy * sin_r;
+            new_pan_y += dx * sin_r + dy * cos_r;
+        }
+
+        // Single batch update: zoom + combined pan = one history entry
+        let _ = self.context.config_manager.update_batch(
+            vec![
+                (crate::config::ConfigPath::Zoom, new_zoom.into()),
+                (crate::config::ConfigPath::Pan, (new_pan_x, new_pan_y).into()),
+            ],
+            "history.action.pinch_zoom".to_string()
+        );
     }
 
     /// Render path overlay showing pixel info, coordinates, path, and color preview
