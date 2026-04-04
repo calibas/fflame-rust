@@ -75,6 +75,7 @@ pub fn render_save_online_dialog(
     ui.horizontal(|ui| {
         ui.label(t!("api.save_dialog_name_label"));
         let response = ui.text_edit_singleline(&mut state.name);
+        super::vkb_sync(ui, &response, &state.name);
 
         // Auto-focus the text field
         if !response.has_focus() {

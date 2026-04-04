@@ -407,6 +407,7 @@ fn render_generators_section(
                     egui::TextEdit::singleline(&mut gen.name)
                         .desired_width(80.0)
                 );
+                super::vkb_sync(ui, &name_response, &gen.name);
                 if name_response.changed() {
                     changed = true;
                 }
