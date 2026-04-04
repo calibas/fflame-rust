@@ -337,11 +337,12 @@ impl FractalConfigGallery {
 
             // Search box
             ui.label(t!("fractal_gallery.search"));
-            ui.add(
+            let r = ui.add(
                 egui::TextEdit::singleline(&mut self.search_query)
                     .desired_width(150.0)
                     .hint_text(t!("fractal_gallery.search_hint")),
             );
+            super::vkb_sync(ui, &r, &self.search_query);
 
             if !self.search_query.is_empty() && ui.button(t!("fractal_gallery.clear_search")).clicked() {
                 self.search_query.clear();

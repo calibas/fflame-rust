@@ -596,7 +596,8 @@ fn render_variations_section(
         let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
         ui.horizontal(|ui| {
             ui.label(t!("variations.search"));
-            ui.text_edit_singleline(&mut search_text);
+            let r = ui.text_edit_singleline(&mut search_text);
+            super::vkb_sync(ui, &r, &search_text);
         });
         ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
 
@@ -1117,7 +1118,8 @@ fn render_final_transform(
                             let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
                             ui.horizontal(|ui| {
                                 ui.label(t!("variations.search"));
-                                ui.text_edit_singleline(&mut search_text);
+                                let r = ui.text_edit_singleline(&mut search_text);
+                                super::vkb_sync(ui, &r, &search_text);
                             });
                             ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
 

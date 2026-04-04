@@ -59,6 +59,7 @@ fn render_palette_editor_core_impl(
         }
 
         let name_response = ui.text_edit_singleline(&mut palette_editor.name_buffer);
+        super::vkb_sync(ui, &name_response, &palette_editor.name_buffer);
 
         // Track editing state
         if name_response.gained_focus() {

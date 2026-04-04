@@ -318,7 +318,8 @@ pub fn render_file_controls(
     // Row 1: Name
     // ui.label(t!("animation_panel.name"));
     if let Some(ref mut animation) = controller.animation {
-        ui.add(egui::TextEdit::singleline(&mut animation.name).desired_width(120.0));
+        let r = ui.add(egui::TextEdit::singleline(&mut animation.name).desired_width(120.0));
+        super::vkb_sync(ui, &r, &animation.name);
     } else {
         let mut empty = String::new();
         ui.add_enabled(false, egui::TextEdit::singleline(&mut empty).desired_width(120.0));
@@ -612,7 +613,9 @@ fn render_export_settings(
         ui.label(t!("animation_panel.output"));
         let path_str = settings.output_path.to_string_lossy().to_string();
         let mut path_display = path_str.clone();
-        if ui.text_edit_singleline(&mut path_display).changed() {
+        let r = ui.text_edit_singleline(&mut path_display);
+        super::vkb_sync(ui, &r, &path_display);
+        if r.changed() {
             settings.output_path = std::path::PathBuf::from(&path_display);
         }
 

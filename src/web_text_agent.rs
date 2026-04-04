@@ -37,6 +37,8 @@ pub struct WebTextAgent {
     is_focused: bool,
     /// Shared with the touchend handler so it only focuses during keyboard input
     wants_keyboard_flag: Rc<std::cell::Cell<bool>>,
+    /// Shared editing text so the touchend handler can set it before focus
+    shared_editing_text: Rc<RefCell<Option<String>>>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -70,7 +72,7 @@ impl WebTextAgent {
         let _ = style.set_property("opacity", "0");
         let _ = style.set_property("border", "none");
         let _ = style.set_property("outline", "none");
-        let _ = style.set_property("background", "transparent");
+        let _ = style.set_property("background-color", "transparent");
         let _ = style.set_property("caret-color", "transparent");
         let _ = style.set_property("color", "transparent");
         // Prevent iOS from scrolling to the input
@@ -86,8 +88,11 @@ impl WebTextAgent {
         // so the hidden input can keep its value and show it in the keyboard preview.
         {
             let events = events.clone();
+            let input_for_log = input.clone();
             let on_input = Closure::<dyn FnMut(web_sys::InputEvent)>::new(
                 move |event: web_sys::InputEvent| {
+                    log::info!("VKB input event: data={:?}, composing={}, value='{}'",
+                        event.data(), event.is_composing(), input_for_log.value());
                     if event.is_composing() {
                         return;
                     }
@@ -163,19 +168,25 @@ impl WebTextAgent {
             handler.forget();
         }
 
-        // Forward keydown events from hidden input to the canvas so winit sees them
-        // (when hidden input has focus, canvas doesn't receive key events)
+        // Forward non-printable keydown events from hidden input to canvas so winit
+        // sees Backspace, Enter, arrows, etc. Printable keys are handled by the
+        // `input` event above — forwarding them would cause double input.
         {
             let canvas_id = "canvas".to_string();
             let handler = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
                 move |event: web_sys::KeyboardEvent| {
+                    let key = event.key();
+                    // Only forward special keys, not printable characters
+                    let is_special = key.len() > 1 || event.ctrl_key() || event.meta_key() || event.alt_key();
+                    if !is_special {
+                        return;
+                    }
                     let document = web_sys::window().unwrap().document().unwrap();
                     if let Some(canvas) = document.get_element_by_id(&canvas_id) {
-                        // Re-dispatch key event to canvas
                         let new_event = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict(
                             event.type_().as_str(),
                             web_sys::KeyboardEventInit::new()
-                                .key(&event.key())
+                                .key(&key)
                                 .code(&event.code())
                                 .ctrl_key(event.ctrl_key())
                                 .shift_key(event.shift_key())
@@ -197,13 +208,20 @@ impl WebTextAgent {
         // virtual keyboard to appear. We share a flag that update_focus() sets
         // when egui wants keyboard input; the touchend handler checks it.
         let wants_keyboard_flag = Rc::new(std::cell::Cell::new(false));
+        let shared_editing_text: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         {
             let input_clone = input.clone();
             let flag = wants_keyboard_flag.clone();
+            let text_ref = shared_editing_text.clone();
             let handler = Closure::<dyn FnMut(web_sys::Event)>::new(
                 move |_: web_sys::Event| {
                     if flag.get() {
+                        if let Some(ref text) = *text_ref.borrow() {
+                            input_clone.set_value(text);
+                            log::info!("VKB touchend: set value='{}' before focus", text);
+                        }
                         let _ = input_clone.focus();
+                        log::info!("VKB touchend: focused, value='{}'", input_clone.value());
                     }
                 },
             );
@@ -220,23 +238,27 @@ impl WebTextAgent {
             events,
             is_focused: false,
             wants_keyboard_flag,
+            shared_editing_text,
         }
     }
 
     /// Update focus state based on whether egui wants keyboard input.
     /// Call after each egui frame.
-    pub fn update_focus(&mut self, wants_keyboard: bool, editing_text: Option<&str>) {
-        // Update the shared flag so the touchend handler knows whether to focus.
-        // The touchend handler runs in a user gesture context (required by iOS
-        // for the virtual keyboard to appear), so the actual .focus() happens there.
+    pub fn update_focus(&mut self, wants_keyboard: bool, editing_text: Option<&str>, numeric: bool) {
+        // Update shared state so the touchend handler can set the value before focus
         self.wants_keyboard_flag.set(wants_keyboard);
+        *self.shared_editing_text.borrow_mut() = editing_text.map(|s| s.to_owned());
 
         if wants_keyboard && !self.is_focused {
-            log::info!("WebTextAgent: wants keyboard (will focus on next touch)");
+            log::info!("WebTextAgent: wants keyboard, editing_text={:?}, value='{}'",
+                editing_text, self.input.value());
             // Sync the hidden input with the text field's current content
             if let Some(text) = editing_text {
                 self.input.set_value(text);
+                log::info!("WebTextAgent: set value to '{}'", text);
             }
+            // Set keyboard type (numeric vs text)
+            let _ = self.input.set_attribute("inputmode", if numeric { "decimal" } else { "text" });
             self.is_focused = true;
         } else if !wants_keyboard && self.is_focused {
             log::info!("WebTextAgent: blurring (keyboard should dismiss)");
@@ -251,6 +273,8 @@ impl WebTextAgent {
                     self.input.set_value(text);
                 }
             }
+            // Update keyboard type if it changed
+            let _ = self.input.set_attribute("inputmode", if numeric { "decimal" } else { "text" });
         }
     }
 

@@ -46,6 +46,25 @@ pub use response::ApiAnimationSaveAction;
 pub use workspace::Workspace;
 pub use xaos_editor::XaosEditorState;
 
+/// Sync a TextEdit's content to the virtual keyboard's hidden input on WASM.
+/// Call after any `ui.text_edit_singleline()` or `ui.add(TextEdit::singleline())`.
+#[allow(unused_variables)]
+pub fn vkb_sync(ui: &egui_dock::egui::Ui, response: &egui_dock::egui::Response, text: &str) {
+    vkb_sync_opts(ui, response, text, false);
+}
+
+/// Like `vkb_sync`, but with a `numeric` flag to request a numeric virtual keyboard.
+#[allow(unused_variables)]
+pub fn vkb_sync_opts(ui: &egui_dock::egui::Ui, response: &egui_dock::egui::Response, text: &str, numeric: bool) {
+    #[cfg(target_arch = "wasm32")]
+    if response.has_focus() {
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(egui_dock::egui::Id::new("vkb_editing_text"), text.to_owned());
+            d.insert_temp(egui_dock::egui::Id::new("vkb_numeric"), numeric);
+        });
+    }
+}
+
 /// Information about a clicked pixel in PathMap mode
 /// Includes pixel coordinates, fractal space coordinates, path data, and a 5x5 color preview
 #[derive(Clone, Debug)]
@@ -1071,7 +1090,12 @@ impl EguiLayer {
         #[cfg(target_arch = "wasm32")]
         {
             let wants_keyboard = self.ctx.wants_keyboard_input();
-            self.web_text_agent.update_focus(wants_keyboard, None);
+            let (editing_text, numeric) = self.ctx.data_mut(|d| {
+                let text = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
+                let numeric = d.get_temp::<bool>(egui_dock::egui::Id::new("vkb_numeric")).unwrap_or(false);
+                (text, numeric)
+            });
+            self.web_text_agent.update_focus(wants_keyboard, editing_text.as_deref(), numeric);
         }
 
         self.state
