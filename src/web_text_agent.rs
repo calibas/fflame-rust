@@ -17,7 +17,6 @@ use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 pub struct WebTextAgent {
     submitted_value: Rc<RefCell<Option<String>>>,
-    is_open: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -47,16 +46,11 @@ impl WebTextAgent {
 
         Self {
             submitted_value,
-            is_open: false,
         }
     }
 
-    /// Dispatch vkb-open to JS. Called from a touchend handler (user gesture context)
-    /// or from the render loop when egui wants keyboard input.
-    pub fn open(&mut self, field_type: &str, value: &str, min: Option<f64>, max: Option<f64>, required: bool) {
-        if self.is_open {
-            return;
-        }
+    /// Dispatch vkb-open to JS.
+    pub fn open(&self, field_type: &str, value: &str, min: Option<f64>, max: Option<f64>, required: bool) {
         let document = web_sys::window().unwrap().document().unwrap();
         let detail = js_sys::Object::new();
         let _ = js_sys::Reflect::set(&detail, &"type".into(), &field_type.into());
@@ -73,20 +67,10 @@ impl WebTextAgent {
         init.detail(&detail);
         let event = web_sys::CustomEvent::new_with_event_init_dict("vkb-open", &init).unwrap();
         let _ = document.dispatch_event(&event);
-        self.is_open = true;
     }
 
     /// Take the submitted value, if any. Called before each egui frame.
-    pub fn take_submitted(&mut self) -> Option<String> {
-        let value = self.submitted_value.borrow_mut().take();
-        if value.is_some() {
-            self.is_open = false;
-        }
-        value
-    }
-
-    /// Whether the VKB overlay is currently shown.
-    pub fn is_open(&self) -> bool {
-        self.is_open
+    pub fn take_submitted(&self) -> Option<String> {
+        self.submitted_value.borrow_mut().take()
     }
 }

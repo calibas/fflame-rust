@@ -223,6 +223,8 @@ pub struct EguiLayer {
     // WASM text input agent (virtual keyboard)
     #[cfg(target_arch = "wasm32")]
     web_text_agent: crate::web_text_agent::WebTextAgent,
+    #[cfg(target_arch = "wasm32")]
+    vkb_defocus_pending: bool,
 }
 
 impl EguiLayer {
@@ -327,6 +329,8 @@ impl EguiLayer {
             web_clipboard: crate::web_clipboard::WebClipboard::install(),
             #[cfg(target_arch = "wasm32")]
             web_text_agent: crate::web_text_agent::WebTextAgent::install(),
+            #[cfg(target_arch = "wasm32")]
+            vkb_defocus_pending: false,
         }
     }
 
@@ -593,10 +597,10 @@ impl EguiLayer {
             raw_input.events.push(egui_dock::egui::Event::Paste(text));
         }
 
-        // Virtual keyboard: if user submitted a value, replace the egui field's text
+        // Virtual keyboard: if user submitted a value, inject it (defocus happens post-frame)
         #[cfg(target_arch = "wasm32")]
         if let Some(text) = self.web_text_agent.take_submitted() {
-            // Select all text in the focused TextEdit (Ctrl+A), then replace with submitted value
+            // Select all + replace with submitted text (TextEdit still has focus)
             raw_input.events.push(egui_dock::egui::Event::Key {
                 key: egui_dock::egui::Key::A,
                 physical_key: None,
@@ -605,8 +609,7 @@ impl EguiLayer {
                 modifiers: egui_dock::egui::Modifiers::COMMAND,
             });
             raw_input.events.push(egui_dock::egui::Event::Text(text));
-            // Trigger repaint so the updated field is visible immediately
-            self.ctx.request_repaint();
+            self.vkb_defocus_pending = true;
         }
 
         // Desktop: poll auto-login result (runs even when Login panel is not visible)
@@ -1099,23 +1102,35 @@ impl EguiLayer {
         }
 
         // Virtual keyboard: open overlay when egui wants keyboard input (WASM + compact mode)
+        // Virtual keyboard: post-frame handling (WASM + compact mode)
         #[cfg(target_arch = "wasm32")]
         if self.compact_mode {
-            let wants_keyboard = self.ctx.wants_keyboard_input();
-            if wants_keyboard && !self.web_text_agent.is_open() {
-                let (editing_text, field_type) = self.ctx.data_mut(|d| {
-                    let text = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
-                    let ftype = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_field_type"))
-                        .unwrap_or_else(|| "text".to_owned());
-                    (text, ftype)
+            // If we just submitted, defocus now (after egui processed the text events)
+            if self.vkb_defocus_pending {
+                self.vkb_defocus_pending = false;
+                self.ctx.memory_mut(|mem| {
+                    if let Some(id) = mem.focused() {
+                        mem.surrender_focus(id);
+                    }
                 });
-                self.web_text_agent.open(
-                    &field_type,
-                    editing_text.as_deref().unwrap_or(""),
-                    None,
-                    None,
-                    false,
-                );
+            } else {
+                // Open overlay when egui wants keyboard input
+                let wants_keyboard = self.ctx.wants_keyboard_input();
+                if wants_keyboard {
+                    let (editing_text, field_type) = self.ctx.data_mut(|d| {
+                        let text = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
+                        let ftype = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_field_type"))
+                            .unwrap_or_else(|| "text".to_owned());
+                        (text, ftype)
+                    });
+                    self.web_text_agent.open(
+                        &field_type,
+                        editing_text.as_deref().unwrap_or(""),
+                        None,
+                        None,
+                        false,
+                    );
+                }
             }
         }
 
