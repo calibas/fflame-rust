@@ -1,11 +1,9 @@
-//! WASM text input agent — bridges browser virtual keyboard to egui.
+//! WASM virtual keyboard bridge.
 //!
-//! Creates a hidden `<input>` element that captures text input, IME composition,
-//! and key events from mobile virtual keyboards. egui's `PlatformOutput::ime`
-//! signals when a TextEdit has focus; we focus/blur the hidden input accordingly
-//! to show/dismiss the virtual keyboard.
-//!
-//! Adapted from eframe's `text_agent.rs` for use without eframe.
+//! Thin Rust↔JS bridge using CustomEvents:
+//! - Dispatches "vkb-open" to JS with field config (type, value, min, max, required)
+//! - Listens for "vkb-submit" from JS with the edited value
+//! - JS handles all DOM/input/styling (js/vkb.js + css/vkb.css)
 
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
@@ -16,300 +14,79 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
-/// Events captured by the text agent, to be drained into egui each frame.
-#[cfg(target_arch = "wasm32")]
-#[derive(Clone, Debug)]
-pub enum TextAgentEvent {
-    /// Regular text input (non-composing)
-    Text(String),
-    /// IME composition started
-    ImeEnabled,
-    /// IME composition preview
-    ImePreedit(String),
-    /// IME composition committed
-    ImeCommit(String),
-}
-
 #[cfg(target_arch = "wasm32")]
 pub struct WebTextAgent {
-    input: web_sys::HtmlInputElement,
-    events: Rc<RefCell<Vec<TextAgentEvent>>>,
-    is_focused: bool,
-    /// Shared with the touchend handler so it only focuses during keyboard input
-    wants_keyboard_flag: Rc<std::cell::Cell<bool>>,
-    /// Shared editing text so the touchend handler can set it before focus
-    shared_editing_text: Rc<RefCell<Option<String>>>,
+    submitted_value: Rc<RefCell<Option<String>>>,
+    is_open: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
 impl WebTextAgent {
-    /// Create and install the hidden text input agent.
-    /// Call once during WASM initialization.
+    /// Install the submit listener. Call once during WASM init.
     pub fn install() -> Self {
-        let document = web_sys::window()
-            .and_then(|w| w.document())
-            .expect("Failed to get document");
+        let submitted_value: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
-        // Create hidden <input> element
-        let input = document
-            .create_element("input")
-            .unwrap()
-            .dyn_into::<web_sys::HtmlInputElement>()
+        // Listen for vkb-submit from JS
+        let submitted = submitted_value.clone();
+        let handler = Closure::<dyn FnMut(web_sys::CustomEvent)>::new(
+            move |event: web_sys::CustomEvent| {
+                if let Some(detail) = event.detail().as_ref().dyn_ref::<js_sys::Object>() {
+                    let value = js_sys::Reflect::get(detail, &"value".into())
+                        .ok()
+                        .and_then(|v| v.as_string())
+                        .unwrap_or_default();
+                    *submitted.borrow_mut() = Some(value);
+                }
+            },
+        );
+        let document = web_sys::window().unwrap().document().unwrap();
+        document
+            .add_event_listener_with_callback("vkb-submit", handler.as_ref().unchecked_ref())
             .unwrap();
-        input.set_type("text");
-        let _ = input.set_attribute("autocapitalize", "off");
-        let _ = input.set_attribute("autocomplete", "off");
-        let _ = input.set_attribute("autocorrect", "off");
-        let _ = input.set_attribute("spellcheck", "false");
-
-        // Style: invisible but focusable (display:none would prevent focus)
-        let style = input.style();
-        let _ = style.set_property("position", "absolute");
-        let _ = style.set_property("top", "0");
-        let _ = style.set_property("left", "0");
-        let _ = style.set_property("width", "1px");
-        let _ = style.set_property("height", "1px");
-        let _ = style.set_property("opacity", "0");
-        let _ = style.set_property("border", "none");
-        let _ = style.set_property("outline", "none");
-        let _ = style.set_property("background-color", "transparent");
-        let _ = style.set_property("caret-color", "transparent");
-        let _ = style.set_property("color", "transparent");
-        // Prevent iOS from scrolling to the input
-        let _ = style.set_property("font-size", "16px"); // prevents iOS zoom on focus
-
-        // Append to body
-        document.body().unwrap().append_child(&input).unwrap();
-
-        let events: Rc<RefCell<Vec<TextAgentEvent>>> = Rc::new(RefCell::new(Vec::new()));
-
-        // input event — regular text input
-        // Use event.data() for the inserted text instead of reading the full value,
-        // so the hidden input can keep its value and show it in the keyboard preview.
-        {
-            let events = events.clone();
-            let input_for_log = input.clone();
-            let on_input = Closure::<dyn FnMut(web_sys::InputEvent)>::new(
-                move |event: web_sys::InputEvent| {
-                    log::info!("VKB input event: data={:?}, composing={}, value='{}'",
-                        event.data(), event.is_composing(), input_for_log.value());
-                    if event.is_composing() {
-                        return;
-                    }
-                    if let Some(data) = event.data() {
-                        if !data.is_empty() {
-                            events.borrow_mut().push(TextAgentEvent::Text(data));
-                        }
-                    }
-                },
-            );
-            input
-                .add_event_listener_with_callback("input", on_input.as_ref().unchecked_ref())
-                .unwrap();
-            on_input.forget();
-        }
-
-        // compositionstart — IME started
-        {
-            let events = events.clone();
-            let input_clone = input.clone();
-            let handler = Closure::<dyn FnMut(web_sys::CompositionEvent)>::new(
-                move |_: web_sys::CompositionEvent| {
-                    input_clone.set_value("");
-                    events.borrow_mut().push(TextAgentEvent::ImeEnabled);
-                },
-            );
-            input
-                .add_event_listener_with_callback(
-                    "compositionstart",
-                    handler.as_ref().unchecked_ref(),
-                )
-                .unwrap();
-            handler.forget();
-        }
-
-        // compositionupdate — IME preview
-        {
-            let events = events.clone();
-            let handler = Closure::<dyn FnMut(web_sys::CompositionEvent)>::new(
-                move |event: web_sys::CompositionEvent| {
-                    if let Some(text) = event.data() {
-                        events.borrow_mut().push(TextAgentEvent::ImePreedit(text));
-                    }
-                },
-            );
-            input
-                .add_event_listener_with_callback(
-                    "compositionupdate",
-                    handler.as_ref().unchecked_ref(),
-                )
-                .unwrap();
-            handler.forget();
-        }
-
-        // compositionend — IME committed
-        {
-            let events = events.clone();
-            let input_clone = input.clone();
-            let handler = Closure::<dyn FnMut(web_sys::CompositionEvent)>::new(
-                move |event: web_sys::CompositionEvent| {
-                    if let Some(text) = event.data() {
-                        input_clone.set_value("");
-                        events.borrow_mut().push(TextAgentEvent::ImeCommit(text));
-                    }
-                },
-            );
-            input
-                .add_event_listener_with_callback(
-                    "compositionend",
-                    handler.as_ref().unchecked_ref(),
-                )
-                .unwrap();
-            handler.forget();
-        }
-
-        // Forward non-printable keydown events from hidden input to canvas so winit
-        // sees Backspace, Enter, arrows, etc. Printable keys are handled by the
-        // `input` event above — forwarding them would cause double input.
-        {
-            let canvas_id = "canvas".to_string();
-            let handler = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
-                move |event: web_sys::KeyboardEvent| {
-                    let key = event.key();
-                    // Only forward special keys, not printable characters
-                    let is_special = key.len() > 1 || event.ctrl_key() || event.meta_key() || event.alt_key();
-                    if !is_special {
-                        return;
-                    }
-                    let document = web_sys::window().unwrap().document().unwrap();
-                    if let Some(canvas) = document.get_element_by_id(&canvas_id) {
-                        let new_event = web_sys::KeyboardEvent::new_with_keyboard_event_init_dict(
-                            event.type_().as_str(),
-                            web_sys::KeyboardEventInit::new()
-                                .key(&key)
-                                .code(&event.code())
-                                .ctrl_key(event.ctrl_key())
-                                .shift_key(event.shift_key())
-                                .alt_key(event.alt_key())
-                                .meta_key(event.meta_key()),
-                        )
-                        .unwrap();
-                        let _ = canvas.dispatch_event(&new_event);
-                    }
-                },
-            );
-            input
-                .add_event_listener_with_callback("keydown", handler.as_ref().unchecked_ref())
-                .unwrap();
-            handler.forget();
-        }
-
-        // iOS Safari requires .focus() inside a user gesture handler for the
-        // virtual keyboard to appear. We share a flag that update_focus() sets
-        // when egui wants keyboard input; the touchend handler checks it.
-        let wants_keyboard_flag = Rc::new(std::cell::Cell::new(false));
-        let shared_editing_text: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-        {
-            let input_clone = input.clone();
-            let flag = wants_keyboard_flag.clone();
-            let text_ref = shared_editing_text.clone();
-            let handler = Closure::<dyn FnMut(web_sys::Event)>::new(
-                move |_: web_sys::Event| {
-                    if flag.get() {
-                        if let Some(ref text) = *text_ref.borrow() {
-                            input_clone.set_value(text);
-                            log::info!("VKB touchend: set value='{}' before focus", text);
-                        }
-                        let _ = input_clone.focus();
-                        log::info!("VKB touchend: focused, value='{}'", input_clone.value());
-                    }
-                },
-            );
-            if let Some(canvas) = document.get_element_by_id("canvas") {
-                canvas
-                    .add_event_listener_with_callback("touchend", handler.as_ref().unchecked_ref())
-                    .unwrap();
-                handler.forget();
-            }
-        }
+        handler.forget();
 
         Self {
-            input,
-            events,
-            is_focused: false,
-            wants_keyboard_flag,
-            shared_editing_text,
+            submitted_value,
+            is_open: false,
         }
     }
 
-    /// Update focus state based on whether egui wants keyboard input.
-    /// Call after each egui frame.
-    pub fn update_focus(&mut self, wants_keyboard: bool, editing_text: Option<&str>, numeric: bool) {
-        // Update shared state so the touchend handler can set the value before focus
-        self.wants_keyboard_flag.set(wants_keyboard);
-        *self.shared_editing_text.borrow_mut() = editing_text.map(|s| s.to_owned());
-
-        if wants_keyboard && !self.is_focused {
-            log::info!("WebTextAgent: wants keyboard, editing_text={:?}, value='{}'",
-                editing_text, self.input.value());
-            // Sync the hidden input with the text field's current content
-            if let Some(text) = editing_text {
-                self.input.set_value(text);
-                log::info!("WebTextAgent: set value to '{}'", text);
-            }
-            // Set keyboard type (numeric vs text)
-            let _ = self.input.set_attribute("inputmode", if numeric { "decimal" } else { "text" });
-            self.is_focused = true;
-        } else if !wants_keyboard && self.is_focused {
-            log::info!("WebTextAgent: blurring (keyboard should dismiss)");
-            let _ = self.input.blur();
-            self.input.set_value("");
-            self.is_focused = false;
-        } else if wants_keyboard {
-            // Keep the hidden input in sync while editing
-            if let Some(text) = editing_text {
-                let current = self.input.value();
-                if current != text {
-                    self.input.set_value(text);
-                }
-            }
-            // Update keyboard type if it changed
-            let _ = self.input.set_attribute("inputmode", if numeric { "decimal" } else { "text" });
+    /// Dispatch vkb-open to JS. Called from a touchend handler (user gesture context)
+    /// or from the render loop when egui wants keyboard input.
+    pub fn open(&mut self, field_type: &str, value: &str, min: Option<f64>, max: Option<f64>, required: bool) {
+        if self.is_open {
+            return;
         }
+        let document = web_sys::window().unwrap().document().unwrap();
+        let detail = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&detail, &"type".into(), &field_type.into());
+        let _ = js_sys::Reflect::set(&detail, &"value".into(), &value.into());
+        if let Some(min) = min {
+            let _ = js_sys::Reflect::set(&detail, &"min".into(), &min.into());
+        }
+        if let Some(max) = max {
+            let _ = js_sys::Reflect::set(&detail, &"max".into(), &max.into());
+        }
+        let _ = js_sys::Reflect::set(&detail, &"required".into(), &required.into());
+
+        let mut init = web_sys::CustomEventInit::new();
+        init.detail(&detail);
+        let event = web_sys::CustomEvent::new_with_event_init_dict("vkb-open", &init).unwrap();
+        let _ = document.dispatch_event(&event);
+        self.is_open = true;
     }
 
-    /// Drain pending events into egui's raw input.
-    /// Call before each egui frame.
-    pub fn drain_events(&self, raw_input: &mut egui::RawInput) {
-        let events: Vec<TextAgentEvent> = self.events.borrow_mut().drain(..).collect();
-        for event in events {
-            match event {
-                TextAgentEvent::Text(text) => {
-                    raw_input.events.push(egui::Event::Text(text));
-                }
-                TextAgentEvent::ImeEnabled => {
-                    raw_input
-                        .events
-                        .push(egui::Event::Ime(egui::ImeEvent::Enabled));
-                }
-                TextAgentEvent::ImePreedit(text) => {
-                    raw_input
-                        .events
-                        .push(egui::Event::Ime(egui::ImeEvent::Preedit(text)));
-                }
-                TextAgentEvent::ImeCommit(text) => {
-                    raw_input
-                        .events
-                        .push(egui::Event::Ime(egui::ImeEvent::Commit(text)));
-                }
-            }
+    /// Take the submitted value, if any. Called before each egui frame.
+    pub fn take_submitted(&mut self) -> Option<String> {
+        let value = self.submitted_value.borrow_mut().take();
+        if value.is_some() {
+            self.is_open = false;
         }
+        value
     }
-}
 
-#[cfg(target_arch = "wasm32")]
-impl Drop for WebTextAgent {
-    fn drop(&mut self) {
-        self.input.remove();
+    /// Whether the VKB overlay is currently shown.
+    pub fn is_open(&self) -> bool {
+        self.is_open
     }
 }

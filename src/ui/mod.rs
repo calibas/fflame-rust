@@ -46,21 +46,21 @@ pub use response::ApiAnimationSaveAction;
 pub use workspace::Workspace;
 pub use xaos_editor::XaosEditorState;
 
-/// Sync a TextEdit's content to the virtual keyboard's hidden input on WASM.
+/// Publish a TextEdit's content for the virtual keyboard overlay (WASM compact mode).
 /// Call after any `ui.text_edit_singleline()` or `ui.add(TextEdit::singleline())`.
 #[allow(unused_variables)]
 pub fn vkb_sync(ui: &egui_dock::egui::Ui, response: &egui_dock::egui::Response, text: &str) {
-    vkb_sync_opts(ui, response, text, false);
+    vkb_sync_opts(ui, response, text, "text");
 }
 
-/// Like `vkb_sync`, but with a `numeric` flag to request a numeric virtual keyboard.
+/// Like `vkb_sync`, but with a field type ("text", "integer", "decimal", "email", "password").
 #[allow(unused_variables)]
-pub fn vkb_sync_opts(ui: &egui_dock::egui::Ui, response: &egui_dock::egui::Response, text: &str, numeric: bool) {
+pub fn vkb_sync_opts(ui: &egui_dock::egui::Ui, response: &egui_dock::egui::Response, text: &str, field_type: &str) {
     #[cfg(target_arch = "wasm32")]
     if response.has_focus() {
         ui.ctx().data_mut(|d| {
             d.insert_temp(egui_dock::egui::Id::new("vkb_editing_text"), text.to_owned());
-            d.insert_temp(egui_dock::egui::Id::new("vkb_numeric"), numeric);
+            d.insert_temp(egui_dock::egui::Id::new("vkb_field_type"), field_type.to_owned());
         });
     }
 }
@@ -593,9 +593,21 @@ impl EguiLayer {
             raw_input.events.push(egui_dock::egui::Event::Paste(text));
         }
 
-        // Inject virtual keyboard text/IME events (WASM only)
+        // Virtual keyboard: if user submitted a value, replace the egui field's text
         #[cfg(target_arch = "wasm32")]
-        self.web_text_agent.drain_events(&mut raw_input);
+        if let Some(text) = self.web_text_agent.take_submitted() {
+            // Select all text in the focused TextEdit (Ctrl+A), then replace with submitted value
+            raw_input.events.push(egui_dock::egui::Event::Key {
+                key: egui_dock::egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui_dock::egui::Modifiers::COMMAND,
+            });
+            raw_input.events.push(egui_dock::egui::Event::Text(text));
+            // Trigger repaint so the updated field is visible immediately
+            self.ctx.request_repaint();
+        }
 
         // Desktop: poll auto-login result (runs even when Login panel is not visible)
         #[cfg(not(target_arch = "wasm32"))]
@@ -1086,16 +1098,25 @@ impl EguiLayer {
             }
         }
 
-        // Update virtual keyboard focus based on egui's keyboard input state (WASM only)
+        // Virtual keyboard: open overlay when egui wants keyboard input (WASM + compact mode)
         #[cfg(target_arch = "wasm32")]
-        {
+        if self.compact_mode {
             let wants_keyboard = self.ctx.wants_keyboard_input();
-            let (editing_text, numeric) = self.ctx.data_mut(|d| {
-                let text = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
-                let numeric = d.get_temp::<bool>(egui_dock::egui::Id::new("vkb_numeric")).unwrap_or(false);
-                (text, numeric)
-            });
-            self.web_text_agent.update_focus(wants_keyboard, editing_text.as_deref(), numeric);
+            if wants_keyboard && !self.web_text_agent.is_open() {
+                let (editing_text, field_type) = self.ctx.data_mut(|d| {
+                    let text = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
+                    let ftype = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_field_type"))
+                        .unwrap_or_else(|| "text".to_owned());
+                    (text, ftype)
+                });
+                self.web_text_agent.open(
+                    &field_type,
+                    editing_text.as_deref().unwrap_or(""),
+                    None,
+                    None,
+                    false,
+                );
+            }
         }
 
         self.state
