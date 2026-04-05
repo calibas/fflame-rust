@@ -244,7 +244,7 @@ pub fn render_path_editor_content(
                         if filter.depth > 0 {
                             ui.label("@");
                             let mut depth_i32 = filter.depth as i32;
-                            if ui.add(egui::DragValue::new(&mut depth_i32).range(1..=32).speed(0.1)).changed() {
+                            if ui.add(super::VkbDragValue::new(&mut depth_i32).range(1..=32).speed(0.1)).changed() {
                                 filter.depth = depth_i32.max(1) as u32;
                                 state.dirty = true;
                             }
@@ -301,7 +301,7 @@ pub fn render_path_editor_content(
         ui.horizontal(|ui| {
             ui.label(t!("path_editor.depth"));
             let mut depth_i32 = state.new_filter.depth as i32;
-            ui.add(egui::DragValue::new(&mut depth_i32).range(1..=32).speed(0.1));
+            ui.add(super::VkbDragValue::new(&mut depth_i32).range(1..=32).speed(0.1));
             state.new_filter.depth = depth_i32.max(1) as u32;
         });
     }

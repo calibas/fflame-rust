@@ -47,9 +47,11 @@ pub fn render_settings_content(
 
         // Max iterations slider (30M to 1T with logarithmic scale)
         let mut log_value = (config.max_iterations as f64).log10();
-        if ui.add(egui::Slider::new(&mut log_value, 7.47713..=12.0)
+        let max_iter_response = ui.add(egui::Slider::new(&mut log_value, 7.47713..=12.0)
             .text(t!("settings.max_iterations"))
-            .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64))))
+            .custom_formatter(|n, _| format!("{}", format_iterations(10f64.powf(n) as u64))));
+        super::vkb_sync_opts(ui, &max_iter_response, &format!("{}", config.max_iterations), "integer");
+        if max_iter_response
             .on_hover_text(t!("settings.tooltip_max_iterations"))
             .changed()
         {
@@ -60,7 +62,7 @@ pub fn render_settings_content(
 
     // Render settings - Iterations per thread
     let mut temp_iterations = config_manager.system_settings().iterations_per_thread;
-    let response = ui.add(egui::Slider::new(&mut temp_iterations, 1..=4096)
+    let response = ui.add(super::VkbSlider::new(&mut temp_iterations, 1..=4096)
         .text(t!("settings.iterations_per_thread")))
         .on_hover_text(t!("settings.tooltip_iterations_per_thread"));
 
@@ -77,7 +79,7 @@ pub fn render_settings_content(
         .show(ui, |ui| {
             // Burn-in iterations
             let mut temp_burn_in = config_manager.system_settings().burn_in;
-            let response = ui.add(egui::Slider::new(&mut temp_burn_in, 0..=4096)
+            let response = ui.add(super::VkbSlider::new(&mut temp_burn_in, 0..=4096)
                 .text(t!("settings.burn_in")))
                 .on_hover_text(t!("settings.tooltip_burn_in"));
 
@@ -90,7 +92,7 @@ pub fn render_settings_content(
 
             // Histogram color scale
             let mut temp_histogram = config.histogram_color_scale;
-            let response = ui.add(egui::Slider::new(&mut temp_histogram, 1.0..=100.0)
+            let response = ui.add(super::VkbSlider::new(&mut temp_histogram, 1.0..=100.0)
                 .logarithmic(true)
                 .text(t!("settings.histogram_color_scale")))
                 .on_hover_text(t!("settings.tooltip_histogram_color_scale"));
@@ -108,7 +110,7 @@ pub fn render_settings_content(
 
             // Per-pixel iteration limit
             let mut temp_limit = config.target_iterations_per_pixel;
-            let response = ui.add(egui::Slider::new(&mut temp_limit, 0..=1_000_000)
+            let response = ui.add(super::VkbSlider::new(&mut temp_limit, 0..=1_000_000)
                 .logarithmic(true)
                 .text(t!("settings.target_iterations_per_pixel")))
                 .on_hover_text(t!("settings.tooltip_target_iterations_per_pixel"));
@@ -152,7 +154,7 @@ pub fn render_settings_content(
     let mut temp_blend = config.blend_factor;
     let response = ui.add_enabled(
         !config.use_dynamic_blend,
-        egui::Slider::new(&mut temp_blend, 0.001..=1.0)
+        super::VkbSlider::new(&mut temp_blend, 0.001..=1.0)
             .logarithmic(true)
             .text(t!("settings.fixed_blend_rate"))
     ).on_hover_text(t!("settings.tooltip_fixed_blend_rate"));
@@ -187,7 +189,7 @@ pub fn render_settings_content(
             ui.horizontal(|ui| {
                 ui.label(t!("settings.target_fps"));
                 let mut target_fps = config_manager.system_settings().target_fps;
-                if ui.add(egui::Slider::new(&mut target_fps, 10.0..=1000.0).suffix(" FPS")).changed() {
+                if ui.add(super::VkbSlider::new(&mut target_fps, 10.0..=1000.0).suffix(" FPS")).changed() {
                     let _ = config_manager.update_system_setting(
                         crate::config::ConfigPath::SystemTargetFps,
                         target_fps.into()

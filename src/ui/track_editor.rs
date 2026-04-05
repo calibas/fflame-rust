@@ -633,7 +633,7 @@ fn render_keyframe_subpanel(
                         for (i, kf) in keyframes.iter_mut().enumerate() {
                             ui.horizontal(|ui| {
                                 // Time
-                                ui.add(egui::DragValue::new(&mut kf.time)
+                                ui.add(super::VkbDragValue::new(&mut kf.time)
                                     .range(0.0..=duration)
                                     .speed(0.01)
                                     .suffix("s")
@@ -641,7 +641,7 @@ fn render_keyframe_subpanel(
 
                                 // Value
                                 let mut value = kf.value.as_f64().unwrap_or(0.0);
-                                if ui.add(egui::DragValue::new(&mut value).speed(0.01).min_decimals(3)).changed() {
+                                if ui.add(super::VkbDragValue::new(&mut value).speed(0.01).min_decimals(3)).changed() {
                                     kf.value = serde_json::json!(value);
                                 }
 
@@ -736,7 +736,7 @@ fn render_keyframe_subpanel(
                 for (i, kf) in state.preview_keyframes.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         // Time
-                        ui.add(egui::DragValue::new(&mut kf.time)
+                        ui.add(super::VkbDragValue::new(&mut kf.time)
                             .range(0.0..=duration)
                             .speed(0.01)
                             .suffix("s")
@@ -744,7 +744,7 @@ fn render_keyframe_subpanel(
 
                         // Value
                         let mut value = kf.value.as_f64().unwrap_or(0.0);
-                        if ui.add(egui::DragValue::new(&mut value).speed(0.01).min_decimals(3)).changed() {
+                        if ui.add(super::VkbDragValue::new(&mut value).speed(0.01).min_decimals(3)).changed() {
                             kf.value = serde_json::json!(value);
                         }
 
@@ -844,17 +844,17 @@ fn render_signal_subpanel(ui: &mut Ui, state: &mut TrackEditorState, signal_name
 
     ui.horizontal(|ui| {
         ui.label(t!("track_editor.signal_min_output"));
-        ui.add(egui::DragValue::new(&mut state.signal_params.min_output).speed(0.01));
+        ui.add(super::VkbDragValue::new(&mut state.signal_params.min_output).speed(0.01));
     });
 
     ui.horizontal(|ui| {
         ui.label(t!("track_editor.signal_max_output"));
-        ui.add(egui::DragValue::new(&mut state.signal_params.max_output).speed(0.01));
+        ui.add(super::VkbDragValue::new(&mut state.signal_params.max_output).speed(0.01));
     });
 
     ui.horizontal(|ui| {
         ui.label(t!("track_editor.signal_smoothing"));
-        ui.add(egui::DragValue::new(&mut state.signal_params.smoothing).speed(0.01).range(0.0..=0.99));
+        ui.add(super::VkbDragValue::new(&mut state.signal_params.smoothing).speed(0.01).range(0.0..=0.99));
     });
 
     ui.separator();
@@ -862,7 +862,7 @@ fn render_signal_subpanel(ui: &mut Ui, state: &mut TrackEditorState, signal_name
     // Timing controls
     ui.horizontal(|ui| {
         ui.label(t!("track_editor.signal_start_time"));
-        ui.add(egui::DragValue::new(&mut state.signal_params.start_time)
+        ui.add(super::VkbDragValue::new(&mut state.signal_params.start_time)
             .speed(0.1)
             .range(0.0..=duration)
             .suffix("s")
@@ -871,7 +871,7 @@ fn render_signal_subpanel(ui: &mut Ui, state: &mut TrackEditorState, signal_name
 
     ui.horizontal(|ui| {
         ui.label(t!("track_editor.signal_end_time"));
-        ui.add(egui::DragValue::new(&mut state.signal_params.end_time)
+        ui.add(super::VkbDragValue::new(&mut state.signal_params.end_time)
             .speed(0.1)
             .range(0.0..=duration)
             .suffix("s")
@@ -884,7 +884,7 @@ fn render_signal_subpanel(ui: &mut Ui, state: &mut TrackEditorState, signal_name
     // Fade controls
     ui.horizontal(|ui| {
         ui.label(t!("track_editor.signal_fade_in"));
-        ui.add(egui::DragValue::new(&mut state.signal_params.fade_in)
+        ui.add(super::VkbDragValue::new(&mut state.signal_params.fade_in)
             .speed(0.1)
             .range(0.0..=30.0)
             .suffix("s")
@@ -894,7 +894,7 @@ fn render_signal_subpanel(ui: &mut Ui, state: &mut TrackEditorState, signal_name
 
     ui.horizontal(|ui| {
         ui.label(t!("track_editor.signal_fade_out"));
-        ui.add(egui::DragValue::new(&mut state.signal_params.fade_out)
+        ui.add(super::VkbDragValue::new(&mut state.signal_params.fade_out)
             .speed(0.1)
             .range(0.0..=30.0)
             .suffix("s")

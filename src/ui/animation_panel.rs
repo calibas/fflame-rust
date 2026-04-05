@@ -261,7 +261,7 @@ fn render_playback_controls(ui: &mut Ui, controller: &mut AnimationController, r
         // Duration input
         ui.label(t!("animation_panel.duration"));
         if let Some(ref mut animation) = controller.animation {
-            ui.add(egui::DragValue::new(&mut animation.duration)
+            ui.add(super::VkbDragValue::new(&mut animation.duration)
                 .range(0.1..=3600.0)
                 .speed(0.1)
                 .suffix("s"));
@@ -462,7 +462,7 @@ pub fn render_timeline_scrubber(ui: &mut Ui, controller: &mut AnimationControlle
     ui.horizontal(|ui| {
         ui.spacing_mut().slider_width = slider_width - 20.0; // Leave some margin
 
-        let slider = egui::Slider::new(&mut time, 0.0..=duration)
+        let slider = super::VkbSlider::new(&mut time, 0.0..=duration)
             .show_value(false)
             .clamping(egui::SliderClamping::Always);
 
@@ -689,7 +689,7 @@ fn render_export_settings(
     // Quality slider
     ui.horizontal(|ui| {
         ui.label(t!("animation_panel.quality"));
-        ui.add(egui::Slider::new(&mut settings.video_quality, 0..=51).text(t!("animation_panel.crf").as_ref()));
+        ui.add(super::VkbSlider::new(&mut settings.video_quality, 0..=51).text(t!("animation_panel.crf").as_ref()));
     });
     ui.small(t!("animation_panel.quality_hint"));
 
@@ -758,9 +758,9 @@ fn render_export_settings(
     // Resolution
     ui.horizontal(|ui| {
         ui.label(t!("animation_panel.resolution"));
-        ui.add(egui::DragValue::new(&mut settings.width).range(100..=7680).suffix("w"));
+        ui.add(super::VkbDragValue::new(&mut settings.width).range(100..=7680).suffix("w"));
         ui.label("×");
-        ui.add(egui::DragValue::new(&mut settings.height).range(100..=4320).suffix("h"));
+        ui.add(super::VkbDragValue::new(&mut settings.height).range(100..=4320).suffix("h"));
     });
 
     // Quick resolution presets
@@ -782,7 +782,7 @@ fn render_export_settings(
     // FPS
     ui.horizontal(|ui| {
         ui.label(t!("animation_panel.frame_rate"));
-        ui.add(egui::DragValue::new(&mut settings.fps).range(1..=120).suffix(" fps"));
+        ui.add(super::VkbDragValue::new(&mut settings.fps).range(1..=120).suffix(" fps"));
 
         if ui.small_button("24").clicked() { settings.fps = 24; }
         if ui.small_button("30").clicked() { settings.fps = 30; }
@@ -792,13 +792,13 @@ fn render_export_settings(
     // Iterations per thread (GPU batching)
     ui.horizontal(|ui| {
         ui.label(t!("animation_panel.iterations_thread"));
-        ui.add(egui::DragValue::new(&mut settings.iterations_per_thread).range(32..=4096));
+        ui.add(super::VkbDragValue::new(&mut settings.iterations_per_thread).range(32..=4096));
     });
 
     // Max iterations (quality)
     ui.horizontal(|ui| {
         ui.label(t!("animation_panel.max_iterations"));
-        ui.add(egui::DragValue::new(&mut settings.max_iterations)
+        let r = ui.add(egui::DragValue::new(&mut settings.max_iterations)
             .range(10_000_000..=1_000_000_000_000_u64)
             .speed(1_000_000.0)
             .custom_formatter(|n, _| {
@@ -839,6 +839,7 @@ fn render_export_settings(
                     s.parse::<f64>().ok()
                 }
             }));
+        super::vkb_sync_opts(ui, &r, &format!("{}", settings.max_iterations), "integer");
     });
 
     // Estimate
@@ -887,28 +888,28 @@ fn render_export_settings(
             if settings.audio_file.is_some() {
                 ui.horizontal(|ui| {
                     ui.label(t!("animation_panel.audio_offset"));
-                    ui.add(egui::DragValue::new(&mut settings.audio_offset)
+                    ui.add(super::VkbDragValue::new(&mut settings.audio_offset)
                         .range(-300.0..=300.0)
                         .speed(0.1)
                         .suffix(" s"));
                 });
                 ui.horizontal(|ui| {
                     ui.label(t!("animation_panel.audio_fade_in"));
-                    ui.add(egui::DragValue::new(&mut settings.audio_fade_in)
+                    ui.add(super::VkbDragValue::new(&mut settings.audio_fade_in)
                         .range(0.0..=30.0)
                         .speed(0.1)
                         .suffix(" s"));
                 });
                 ui.horizontal(|ui| {
                     ui.label(t!("animation_panel.audio_fade_out"));
-                    ui.add(egui::DragValue::new(&mut settings.audio_fade_out)
+                    ui.add(super::VkbDragValue::new(&mut settings.audio_fade_out)
                         .range(0.0..=30.0)
                         .speed(0.1)
                         .suffix(" s"));
                 });
                 ui.horizontal(|ui| {
                     ui.label(t!("animation_panel.audio_bitrate"));
-                    ui.add(egui::DragValue::new(&mut settings.audio_bitrate)
+                    ui.add(super::VkbDragValue::new(&mut settings.audio_bitrate)
                         .range(64..=320)
                         .suffix(" kbps"));
                 });

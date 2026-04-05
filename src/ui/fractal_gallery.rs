@@ -353,7 +353,7 @@ impl FractalConfigGallery {
             // Thumbnail size slider (grid view only)
             if self.view_mode == GalleryViewMode::Grid {
                 ui.label(t!("fractal_gallery.size"));
-                ui.add(egui::Slider::new(&mut self.thumbnail_size, 64.0..=256.0).show_value(false));
+                ui.add(super::VkbSlider::new(&mut self.thumbnail_size, 64.0..=256.0).show_value(false));
             }
         });
     }

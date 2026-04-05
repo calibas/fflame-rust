@@ -428,7 +428,7 @@ fn render_generators_section(
 
                 // Frequency DragValue (Hz)
                 let freq_response = ui.add(
-                    egui::DragValue::new(&mut gen.frequency)
+                    super::VkbDragValue::new(&mut gen.frequency)
                         .range(0.01..=100.0)
                         .speed(0.01)
                         .fixed_decimals(2)
@@ -440,7 +440,7 @@ fn render_generators_section(
 
                 // Phase DragValue (0-1)
                 let phase_response = ui.add(
-                    egui::DragValue::new(&mut gen.phase)
+                    super::VkbDragValue::new(&mut gen.phase)
                         .range(0.0..=1.0)
                         .speed(0.01)
                         .fixed_decimals(2)
@@ -621,7 +621,7 @@ fn render_signal_monitor(
 
                 ui.label("bpm");
                 let response = ui.add(
-                    egui::DragValue::new(&mut edit_bpm)
+                    super::VkbDragValue::new(&mut edit_bpm)
                         .range(30.0..=300.0)
                         .speed(0.1)
                         .fixed_decimals(1)
