@@ -19,6 +19,8 @@
     let active = false;
     // Pending open request from Rust (consumed by next touchend)
     let pendingOpen = null;
+    // Cooldown after submit to prevent Rust from immediately re-opening
+    let submitCooldown = false;
 
     function configureInput(detail) {
         const fieldType = detail.type || 'text';
@@ -56,6 +58,8 @@
     function submit() {
         if (!active) return;
         active = false;
+        submitCooldown = true;
+        setTimeout(function () { submitCooldown = false; }, 200);
 
         const value = input.value;
 
@@ -96,11 +100,14 @@
     });
 
     // Rust dispatches vkb-open: show overlay, configure input, wait for touchend to focus
+    // Ignore if already active (Rust fires this every frame while wants_keyboard is true)
     document.addEventListener('vkb-open', function (e) {
+        if (submitCooldown || active) return;
         pendingOpen = e.detail;
         configureInput(e.detail);
         overlay.style.display = 'block';
         active = true;
+        input.focus();
     });
 
     // Focus the input on next touchend (iOS requires user gesture context for keyboard)
