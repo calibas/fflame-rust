@@ -65,6 +65,65 @@ pub fn vkb_sync_opts(ui: &egui_dock::egui::Ui, response: &egui_dock::egui::Respo
     }
 }
 
+/// Builder for a DragValue with automatic VKB sync.
+/// Usage: `ui.vkb_drag_value(&mut val).speed(0.01).prefix("x: ")`
+pub struct VkbDragValue<'a> {
+    value_str: String,
+    inner: egui_dock::egui::DragValue<'a>,
+}
+
+impl<'a> VkbDragValue<'a> {
+    pub fn new<Num: egui_dock::egui::emath::Numeric>(value: &'a mut Num) -> Self {
+        let value_str = format!("{}", value.to_f64());
+        Self { value_str, inner: egui_dock::egui::DragValue::new(value) }
+    }
+
+    pub fn speed(mut self, speed: impl Into<f64>) -> Self { self.inner = self.inner.speed(speed); self }
+    pub fn range(mut self, range: std::ops::RangeInclusive<impl egui_dock::egui::emath::Numeric>) -> Self { self.inner = self.inner.range(range); self }
+    pub fn prefix(mut self, prefix: impl ToString) -> Self { self.inner = self.inner.prefix(prefix); self }
+    pub fn suffix(mut self, suffix: impl ToString) -> Self { self.inner = self.inner.suffix(suffix); self }
+    pub fn min_decimals(mut self, min_decimals: usize) -> Self { self.inner = self.inner.min_decimals(min_decimals); self }
+    pub fn fixed_decimals(mut self, fixed_decimals: usize) -> Self { self.inner = self.inner.fixed_decimals(fixed_decimals); self }
+}
+
+impl egui_dock::egui::Widget for VkbDragValue<'_> {
+    fn ui(self, ui: &mut egui_dock::egui::Ui) -> egui_dock::egui::Response {
+        let response = self.inner.ui(ui);
+        vkb_sync_opts(ui, &response, &self.value_str, "decimal");
+        response
+    }
+}
+
+/// Builder for a Slider with automatic VKB sync.
+/// Usage: `ui.vkb_slider(&mut val, 0.0..=1.0).text("label").logarithmic(true)`
+pub struct VkbSlider<'a> {
+    value_str: String,
+    inner: egui_dock::egui::Slider<'a>,
+}
+
+impl<'a> VkbSlider<'a> {
+    pub fn new<Num: egui_dock::egui::emath::Numeric>(value: &'a mut Num, range: std::ops::RangeInclusive<Num>) -> Self {
+        let value_str = format!("{}", value.to_f64());
+        Self { value_str, inner: egui_dock::egui::Slider::new(value, range) }
+    }
+
+    pub fn text(mut self, text: impl Into<egui_dock::egui::WidgetText>) -> Self { self.inner = self.inner.text(text); self }
+    pub fn logarithmic(mut self, logarithmic: bool) -> Self { self.inner = self.inner.logarithmic(logarithmic); self }
+    pub fn suffix(mut self, suffix: impl ToString) -> Self { self.inner = self.inner.suffix(suffix); self }
+    pub fn show_value(mut self, show_value: bool) -> Self { self.inner = self.inner.show_value(show_value); self }
+    pub fn step_by(mut self, step: f64) -> Self { self.inner = self.inner.step_by(step); self }
+    pub fn clamping(mut self, clamping: egui_dock::egui::SliderClamping) -> Self { self.inner = self.inner.clamping(clamping); self }
+    pub fn drag_value_speed(mut self, speed: impl Into<f64>) -> Self { self.inner = self.inner.drag_value_speed(speed.into()); self }
+}
+
+impl egui_dock::egui::Widget for VkbSlider<'_> {
+    fn ui(self, ui: &mut egui_dock::egui::Ui) -> egui_dock::egui::Response {
+        let response = self.inner.ui(ui);
+        vkb_sync_opts(ui, &response, &self.value_str, "decimal");
+        response
+    }
+}
+
 /// Information about a clicked pixel in PathMap mode
 /// Includes pixel coordinates, fractal space coordinates, path data, and a 5x5 color preview
 #[derive(Clone, Debug)]

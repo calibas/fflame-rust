@@ -347,7 +347,7 @@ pub fn render_levels_controls(
         ui.horizontal(|ui| {
             ui.label("Black:");
             let range = 0.0..=histogram.max_density.max(100.0);
-            if ui.add(egui::Slider::new(&mut levels.input_black, range).logarithmic(true)).changed() {
+            if ui.add(super::VkbSlider::new(&mut levels.input_black, range).logarithmic(true)).changed() {
                 changed = true;
             }
         });
@@ -356,7 +356,7 @@ pub fn render_levels_controls(
         ui.horizontal(|ui| {
             ui.label("White:");
             let range = 0.0..=histogram.max_density.max(100.0);
-            if ui.add(egui::Slider::new(&mut levels.input_white, range).logarithmic(true)).changed() {
+            if ui.add(super::VkbSlider::new(&mut levels.input_white, range).logarithmic(true)).changed() {
                 changed = true;
             }
         });
@@ -366,7 +366,7 @@ pub fn render_levels_controls(
     ui.horizontal(|ui| {
         ui.label("Gamma:");
         let mut gamma = levels.gamma();
-        if ui.add(egui::Slider::new(&mut gamma, 0.1..=10.0).logarithmic(true)).changed() {
+        if ui.add(super::VkbSlider::new(&mut gamma, 0.1..=10.0).logarithmic(true)).changed() {
             levels.set_gamma(gamma);
             changed = true;
         }
@@ -417,7 +417,7 @@ pub fn render_levels_controls_managed(
         ui.label(t!("levels.low"));
         let range = 0.0..=histogram.max_density.max(100.0);
         let mut temp_low = levels_low;
-        if ui.add(egui::Slider::new(&mut temp_low, range).logarithmic(true)
+        if ui.add(super::VkbSlider::new(&mut temp_low, range).logarithmic(true)
             .clamping(egui::SliderClamping::Never)).changed() {
             if let Ok(update) = config_manager.update_param(ConfigPath::LevelsLow, temp_low.into()) {
                 max_update = max_update.max(update);
@@ -430,7 +430,7 @@ pub fn render_levels_controls_managed(
         ui.label(t!("levels.high"));
         let range = 0.0..=histogram.max_density.max(100.0);
         let mut temp_high = levels_high;
-        if ui.add(egui::Slider::new(&mut temp_high, range).logarithmic(true)
+        if ui.add(super::VkbSlider::new(&mut temp_high, range).logarithmic(true)
             .clamping(egui::SliderClamping::Never)).changed() {
             if let Ok(update) = config_manager.update_param(ConfigPath::LevelsHigh, temp_high.into()) {
                 max_update = max_update.max(update);
@@ -442,7 +442,7 @@ pub fn render_levels_controls_managed(
     ui.horizontal(|ui| {
         ui.label(t!("levels.midtones"));
         let mut temp_gamma = levels_gamma;
-        if ui.add(egui::Slider::new(&mut temp_gamma, 0.001..=10.0).logarithmic(true)).changed() {
+        if ui.add(super::VkbSlider::new(&mut temp_gamma, 0.001..=10.0).logarithmic(true)).changed() {
             if let Ok(update) = config_manager.update_param(ConfigPath::LevelsGamma, temp_gamma.into()) {
                 max_update = max_update.max(update);
             }
