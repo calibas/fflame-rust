@@ -591,6 +591,12 @@ impl EguiLayer {
             self.last_input_time = web_time::Instant::now();
         }
 
+        // Clear stale VKB editing text from previous frame (WASM only)
+        #[cfg(target_arch = "wasm32")]
+        self.ctx.data_mut(|d| {
+            d.remove_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
+        });
+
         // Inject clipboard paste events from the browser (WASM only)
         #[cfg(target_arch = "wasm32")]
         if let Some(text) = self.web_clipboard.take_paste() {
@@ -1117,12 +1123,19 @@ impl EguiLayer {
                 // Open overlay when egui wants keyboard input
                 let wants_keyboard = self.ctx.wants_keyboard_input();
                 if wants_keyboard {
-                    let (editing_text, field_type) = self.ctx.data_mut(|d| {
+                    let (mut editing_text, field_type) = self.ctx.data_mut(|d| {
                         let text = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
                         let ftype = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_field_type"))
                             .unwrap_or_else(|| "text".to_owned());
                         (text, ftype)
                     });
+                    // Fallback: if no vkb_sync set the text (e.g. DragValue/Slider),
+                    // it's a numeric field — use "decimal" type with empty value
+                    let field_type = if editing_text.is_none() {
+                        "decimal".to_owned()
+                    } else {
+                        field_type
+                    };
                     self.web_text_agent.open(
                         &field_type,
                         editing_text.as_deref().unwrap_or(""),
