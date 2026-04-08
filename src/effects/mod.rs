@@ -506,6 +506,13 @@ fn register_builtin_effects(registry: &mut EffectRegistry) {
                 min_value: Some(0.0),
                 max_value: Some(1.0),
             },
+            EffectParameter {
+                name: "edge_offset".to_string(),
+                param_type: ParamType::Integer,
+                default_value: 0.0, // 0 = no offset (existing behavior)
+                min_value: Some(0.0),
+                max_value: Some(2000.0),
+            },
         ],
     });
 

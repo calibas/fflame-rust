@@ -8,6 +8,9 @@
 //   params[3] = intensity (0-1): Blend with original
 //   params[4] = blend_mode (0-12): See blend_modes.wgsl for options
 //   params[5] = square_mode (0-1): 0 = Screen ratio (stretched), 1 = Square (1:1 perfect symmetry)
+//   params[6] = edge_offset (0-2000): Shift sampled region toward center by N pixels
+//                                     to avoid sampling offscreen edges. Direction is
+//                                     determined by the source angle (rotation).
 
 struct EffectParams {
     params: array<vec4<f32>, 4>,
@@ -87,6 +90,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let intensity = get_param(3u);
     let blend_mode = i32(get_param(4u));
     let square_mode = get_param(5u) > 0.5;
+    let edge_offset = get_param(6u);
 
     // Calculate aspect ratio for square mode correction
     let aspect = f32(effect_params.width) / f32(effect_params.height);
@@ -94,7 +98,16 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let original = textureSample(input_texture, input_sampler, input.uv);
 
     let kaleido_uv = kaleidoscope_uv(input.uv, segments, rotation, zoom, aspect, square_mode);
-    let clamped_uv = clamp(kaleido_uv, vec2<f32>(0.001), vec2<f32>(0.999));
+
+    // Edge offset: shift sampled UV toward image center to avoid offscreen sampling.
+    // Direction points from the source slice (at angle `rotation`) toward the center,
+    // which is the negative of the rotation's unit vector.
+    let dir = -vec2<f32>(cos(rotation), sin(rotation));
+    let pixel_to_uv = vec2<f32>(1.0 / f32(effect_params.width), 1.0 / f32(effect_params.height));
+    let offset_shift = dir * edge_offset * pixel_to_uv;
+    let shifted_uv = kaleido_uv + offset_shift;
+
+    let clamped_uv = clamp(shifted_uv, vec2<f32>(0.001), vec2<f32>(0.999));
     let kaleido = textureSample(input_texture, input_sampler, clamped_uv);
 
     // Apply blend mode between original and kaleidoscope
