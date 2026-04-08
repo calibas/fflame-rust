@@ -56,30 +56,68 @@ pub fn vkb_sync(ui: &egui_dock::egui::Ui, response: &egui_dock::egui::Response, 
 /// Like `vkb_sync`, but with a field type ("text", "integer", "decimal", "email", "password").
 #[allow(unused_variables)]
 pub fn vkb_sync_opts(ui: &egui_dock::egui::Ui, response: &egui_dock::egui::Response, text: &str, field_type: &str) {
+    vkb_sync_full(ui, response, text, field_type, None, None);
+}
+
+/// Full VKB sync with min/max range hints for numeric fields.
+#[allow(unused_variables)]
+pub fn vkb_sync_full(
+    ui: &egui_dock::egui::Ui,
+    response: &egui_dock::egui::Response,
+    text: &str,
+    field_type: &str,
+    min: Option<f64>,
+    max: Option<f64>,
+) {
     #[cfg(target_arch = "wasm32")]
     if response.has_focus() {
         ui.ctx().data_mut(|d| {
             d.insert_temp(egui_dock::egui::Id::new("vkb_editing_text"), text.to_owned());
             d.insert_temp(egui_dock::egui::Id::new("vkb_field_type"), field_type.to_owned());
+            if let Some(min) = min {
+                d.insert_temp(egui_dock::egui::Id::new("vkb_min"), min);
+            } else {
+                d.remove_temp::<f64>(egui_dock::egui::Id::new("vkb_min"));
+            }
+            if let Some(max) = max {
+                d.insert_temp(egui_dock::egui::Id::new("vkb_max"), max);
+            } else {
+                d.remove_temp::<f64>(egui_dock::egui::Id::new("vkb_max"));
+            }
         });
     }
 }
 
 /// Builder for a DragValue with automatic VKB sync.
-/// Usage: `ui.vkb_drag_value(&mut val).speed(0.01).prefix("x: ")`
+/// Usage: `ui.add(VkbDragValue::new(&mut val).speed(0.01).range(0..=100))`
 pub struct VkbDragValue<'a> {
     value_str: String,
+    is_integer: bool,
+    min: Option<f64>,
+    max: Option<f64>,
     inner: egui_dock::egui::DragValue<'a>,
 }
 
 impl<'a> VkbDragValue<'a> {
     pub fn new<Num: egui_dock::egui::emath::Numeric>(value: &'a mut Num) -> Self {
         let value_str = format!("{}", value.to_f64());
-        Self { value_str, inner: egui_dock::egui::DragValue::new(value) }
+        let is_integer = Num::INTEGRAL;
+        Self {
+            value_str,
+            is_integer,
+            min: None,
+            max: None,
+            inner: egui_dock::egui::DragValue::new(value),
+        }
     }
 
     pub fn speed(mut self, speed: impl Into<f64>) -> Self { self.inner = self.inner.speed(speed); self }
-    pub fn range(mut self, range: std::ops::RangeInclusive<impl egui_dock::egui::emath::Numeric>) -> Self { self.inner = self.inner.range(range); self }
+    pub fn range<Num: egui_dock::egui::emath::Numeric>(mut self, range: std::ops::RangeInclusive<Num>) -> Self {
+        self.min = Some(range.start().to_f64());
+        self.max = Some(range.end().to_f64());
+        self.inner = self.inner.range(range);
+        self
+    }
     pub fn prefix(mut self, prefix: impl ToString) -> Self { self.inner = self.inner.prefix(prefix); self }
     pub fn suffix(mut self, suffix: impl ToString) -> Self { self.inner = self.inner.suffix(suffix); self }
     pub fn min_decimals(mut self, min_decimals: usize) -> Self { self.inner = self.inner.min_decimals(min_decimals); self }
@@ -89,22 +127,35 @@ impl<'a> VkbDragValue<'a> {
 impl egui_dock::egui::Widget for VkbDragValue<'_> {
     fn ui(self, ui: &mut egui_dock::egui::Ui) -> egui_dock::egui::Response {
         let response = self.inner.ui(ui);
-        vkb_sync_opts(ui, &response, &self.value_str, "decimal");
+        let field_type = if self.is_integer { "integer" } else { "decimal" };
+        vkb_sync_full(ui, &response, &self.value_str, field_type, self.min, self.max);
         response
     }
 }
 
 /// Builder for a Slider with automatic VKB sync.
-/// Usage: `ui.vkb_slider(&mut val, 0.0..=1.0).text("label").logarithmic(true)`
+/// Usage: `ui.add(VkbSlider::new(&mut val, 0.0..=1.0).text("label").logarithmic(true))`
 pub struct VkbSlider<'a> {
     value_str: String,
+    is_integer: bool,
+    min: f64,
+    max: f64,
     inner: egui_dock::egui::Slider<'a>,
 }
 
 impl<'a> VkbSlider<'a> {
     pub fn new<Num: egui_dock::egui::emath::Numeric>(value: &'a mut Num, range: std::ops::RangeInclusive<Num>) -> Self {
         let value_str = format!("{}", value.to_f64());
-        Self { value_str, inner: egui_dock::egui::Slider::new(value, range) }
+        let is_integer = Num::INTEGRAL;
+        let min = range.start().to_f64();
+        let max = range.end().to_f64();
+        Self {
+            value_str,
+            is_integer,
+            min,
+            max,
+            inner: egui_dock::egui::Slider::new(value, range),
+        }
     }
 
     pub fn text(mut self, text: impl Into<egui_dock::egui::WidgetText>) -> Self { self.inner = self.inner.text(text); self }
@@ -119,7 +170,8 @@ impl<'a> VkbSlider<'a> {
 impl egui_dock::egui::Widget for VkbSlider<'_> {
     fn ui(self, ui: &mut egui_dock::egui::Ui) -> egui_dock::egui::Response {
         let response = self.inner.ui(ui);
-        vkb_sync_opts(ui, &response, &self.value_str, "decimal");
+        let field_type = if self.is_integer { "integer" } else { "decimal" };
+        vkb_sync_full(ui, &response, &self.value_str, field_type, Some(self.min), Some(self.max));
         response
     }
 }
@@ -677,6 +729,12 @@ impl EguiLayer {
             self.vkb_defocus_pending = true;
         }
 
+        // Virtual keyboard: if user cancelled, just defocus the field (no value change)
+        #[cfg(target_arch = "wasm32")]
+        if self.web_text_agent.take_cancelled() {
+            self.vkb_defocus_pending = true;
+        }
+
         // Desktop: poll auto-login result (runs even when Login panel is not visible)
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -1182,14 +1240,16 @@ impl EguiLayer {
                 // Open overlay when egui wants keyboard input
                 let wants_keyboard = self.ctx.wants_keyboard_input();
                 if wants_keyboard {
-                    let (mut editing_text, field_type) = self.ctx.data_mut(|d| {
+                    let (editing_text, field_type, min, max) = self.ctx.data_mut(|d| {
                         let text = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
                         let ftype = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_field_type"))
                             .unwrap_or_else(|| "text".to_owned());
-                        (text, ftype)
+                        let min = d.get_temp::<f64>(egui_dock::egui::Id::new("vkb_min"));
+                        let max = d.get_temp::<f64>(egui_dock::egui::Id::new("vkb_max"));
+                        (text, ftype, min, max)
                     });
-                    // Fallback: if no vkb_sync set the text (e.g. DragValue/Slider),
-                    // it's a numeric field — use "decimal" type with empty value
+                    // Fallback: if no vkb_sync set the text (e.g. custom widget),
+                    // assume numeric field with decimal type
                     let field_type = if editing_text.is_none() {
                         "decimal".to_owned()
                     } else {
@@ -1198,8 +1258,8 @@ impl EguiLayer {
                     self.web_text_agent.open(
                         &field_type,
                         editing_text.as_deref().unwrap_or(""),
-                        None,
-                        None,
+                        min,
+                        max,
                         false,
                     );
                 }
