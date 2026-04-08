@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=overlays-content">
     <title>FAR - Online Version</title>
     <link rel="stylesheet" href="css/vkb.css">
     <style>
@@ -34,11 +34,13 @@
         }
 
         html, body {
-            width: 100%;
-            height: 100%;
             margin: 0;
             padding: 0;
             overflow: hidden;
+            /* Anchor to all four edges of the visible viewport.
+               Avoids iOS quirks with vh/svh and the home indicator. */
+            position: fixed;
+            inset: 0;
         }
 
         #canvas-container {
