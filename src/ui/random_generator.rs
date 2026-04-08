@@ -102,7 +102,7 @@ impl RandomGeneratorPanel {
             // Batch options
             ui.horizontal(|ui| {
                 ui.label(t!("random_generator.batch_count"));
-                ui.add(egui::DragValue::new(&mut self.settings.batch_count)
+                ui.add(super::VkbDragValue::new(&mut self.settings.batch_count)
                     .range(1..=100)
                     .speed(1));
             });
@@ -115,7 +115,7 @@ impl RandomGeneratorPanel {
                     self.settings.seed = if use_seed { Some(12345) } else { None };
                 }
                 if let Some(ref mut seed) = self.settings.seed {
-                    ui.add(egui::DragValue::new(seed).speed(100));
+                    ui.add(super::VkbDragValue::new(seed).speed(100));
                     if ui.button("🎲").on_hover_text(t!("random_generator.randomize_seed")).clicked() {
                         *seed = rand::random();
                     }
@@ -129,11 +129,11 @@ impl RandomGeneratorPanel {
     fn render_transforms_section(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(t!("random_generator.count"));
-            ui.add(egui::DragValue::new(&mut self.settings.transform_count_min)
+            ui.add(super::VkbDragValue::new(&mut self.settings.transform_count_min)
                 .range(1..=10)
                 .speed(0.1));
             ui.label(t!("random_generator.to"));
-            ui.add(egui::DragValue::new(&mut self.settings.transform_count_max)
+            ui.add(super::VkbDragValue::new(&mut self.settings.transform_count_max)
                 .range(1..=10)
                 .speed(0.1));
         });
@@ -152,11 +152,11 @@ impl RandomGeneratorPanel {
     fn render_variations_section(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(t!("random_generator.per_transform"));
-            ui.add(egui::DragValue::new(&mut self.settings.variations_per_transform_min)
+            ui.add(super::VkbDragValue::new(&mut self.settings.variations_per_transform_min)
                 .range(1..=10)
                 .speed(0.1));
             ui.label(t!("random_generator.to"));
-            ui.add(egui::DragValue::new(&mut self.settings.variations_per_transform_max)
+            ui.add(super::VkbDragValue::new(&mut self.settings.variations_per_transform_max)
                 .range(1..=10)
                 .speed(0.1));
         });
@@ -168,12 +168,12 @@ impl RandomGeneratorPanel {
 
         ui.horizontal(|ui| {
             ui.label(t!("random_generator.weight_range"));
-            ui.add(egui::DragValue::new(&mut self.settings.variation_weight_min)
+            ui.add(super::VkbDragValue::new(&mut self.settings.variation_weight_min)
                 .range(0.0..=2.0)
                 .speed(0.01)
                 .fixed_decimals(2));
             ui.label(t!("random_generator.to"));
-            ui.add(egui::DragValue::new(&mut self.settings.variation_weight_max)
+            ui.add(super::VkbDragValue::new(&mut self.settings.variation_weight_max)
                 .range(0.0..=2.0)
                 .speed(0.01)
                 .fixed_decimals(2));
@@ -245,12 +245,12 @@ impl RandomGeneratorPanel {
     fn render_affine_section(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(t!("random_generator.scale"));
-            ui.add(egui::DragValue::new(&mut self.settings.scale_min)
+            ui.add(super::VkbDragValue::new(&mut self.settings.scale_min)
                 .range(0.1..=3.0)
                 .speed(0.01)
                 .fixed_decimals(2));
             ui.label(t!("random_generator.to"));
-            ui.add(egui::DragValue::new(&mut self.settings.scale_max)
+            ui.add(super::VkbDragValue::new(&mut self.settings.scale_max)
                 .range(0.1..=3.0)
                 .speed(0.01)
                 .fixed_decimals(2));
@@ -258,12 +258,12 @@ impl RandomGeneratorPanel {
 
         ui.horizontal(|ui| {
             ui.label(t!("random_generator.shear"));
-            ui.add(egui::DragValue::new(&mut self.settings.shear_min)
+            ui.add(super::VkbDragValue::new(&mut self.settings.shear_min)
                 .range(-2.0..=2.0)
                 .speed(0.01)
                 .fixed_decimals(2));
             ui.label(t!("random_generator.to"));
-            ui.add(egui::DragValue::new(&mut self.settings.shear_max)
+            ui.add(super::VkbDragValue::new(&mut self.settings.shear_max)
                 .range(-2.0..=2.0)
                 .speed(0.01)
                 .fixed_decimals(2));
@@ -271,12 +271,12 @@ impl RandomGeneratorPanel {
 
         ui.horizontal(|ui| {
             ui.label(t!("random_generator.translate"));
-            ui.add(egui::DragValue::new(&mut self.settings.translate_min)
+            ui.add(super::VkbDragValue::new(&mut self.settings.translate_min)
                 .range(-3.0..=3.0)
                 .speed(0.01)
                 .fixed_decimals(2));
             ui.label(t!("random_generator.to"));
-            ui.add(egui::DragValue::new(&mut self.settings.translate_max)
+            ui.add(super::VkbDragValue::new(&mut self.settings.translate_max)
                 .range(-3.0..=3.0)
                 .speed(0.01)
                 .fixed_decimals(2));
@@ -291,12 +291,12 @@ impl RandomGeneratorPanel {
     fn render_color_weight_section(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(t!("random_generator.transform_weight"));
-            ui.add(egui::DragValue::new(&mut self.settings.weight_min)
+            ui.add(super::VkbDragValue::new(&mut self.settings.weight_min)
                 .range(0.1..=3.0)
                 .speed(0.01)
                 .fixed_decimals(2));
             ui.label(t!("random_generator.to"));
-            ui.add(egui::DragValue::new(&mut self.settings.weight_max)
+            ui.add(super::VkbDragValue::new(&mut self.settings.weight_max)
                 .range(0.1..=3.0)
                 .speed(0.01)
                 .fixed_decimals(2));
@@ -356,7 +356,7 @@ impl RandomGeneratorPanel {
         if matches!(self.settings.symmetry, SymmetryType::Rotational(_) | SymmetryType::Dihedral(_)) {
             ui.horizontal(|ui| {
                 ui.label(t!("random_generator.symmetry_order"));
-                if ui.add(egui::DragValue::new(&mut self.symmetry_order)
+                if ui.add(super::VkbDragValue::new(&mut self.symmetry_order)
                     .range(2..=12)
                     .speed(0.1))
                     .changed()
@@ -390,12 +390,12 @@ impl RandomGeneratorPanel {
 
             ui.horizontal(|ui| {
                 ui.label(t!("random_generator.perspective"));
-                ui.add(egui::DragValue::new(&mut self.settings.perspective_min)
+                ui.add(super::VkbDragValue::new(&mut self.settings.perspective_min)
                     .range(0.0..=10.0)
                     .speed(0.1)
                     .fixed_decimals(1));
                 ui.label(t!("random_generator.to"));
-                ui.add(egui::DragValue::new(&mut self.settings.perspective_max)
+                ui.add(super::VkbDragValue::new(&mut self.settings.perspective_max)
                     .range(0.0..=10.0)
                     .speed(0.1)
                     .fixed_decimals(1));

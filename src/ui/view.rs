@@ -45,6 +45,7 @@ pub fn render_view_content(
                 .speed(0.001 / config.zoom)
                 .custom_formatter(|v, _| format!("{:.7}", v))
         ).on_hover_text(t!("view.tooltip_pan"));
+        super::vkb_sync_opts(ui, &response_x, &format!("{}", pan_x), "decimal");
         if response_x.changed() {
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
@@ -59,6 +60,7 @@ pub fn render_view_content(
                 .speed(0.001 / config.zoom)
                 .custom_formatter(|v, _| format!("{:.7}", v))
         ).on_hover_text(t!("view.tooltip_pan"));
+        super::vkb_sync_opts(ui, &response_y, &format!("{}", pan_y), "decimal");
         if response_y.changed() {
             let _ = config_manager.update_param(
                 ConfigPath::Pan,
@@ -128,7 +130,7 @@ pub fn render_view_content(
 
     let mut degrees = config.rotation.to_degrees();
     let response = ui.add(
-        egui::Slider::new(&mut degrees, -180.0..=180.0)
+        super::VkbSlider::new(&mut degrees, -180.0..=180.0)
             .text(t!("view.rotation").as_ref())
             .suffix("°")
     ).on_hover_text(t!("view.tooltip_rotation"));
@@ -174,7 +176,7 @@ pub fn render_view_content(
     if matches!(config.flame.render_mode, crate::scene::transforms::RenderMode::ThreeD) {
         let mut perspective = config.flame.perspective_strength;
         let response = ui.add(
-            egui::Slider::new(&mut perspective, 0.0..=10.0)
+            super::VkbSlider::new(&mut perspective, 0.0..=10.0)
                 .text(t!("view.perspective").as_ref())
                 .step_by(0.1)
         ).on_hover_text(t!("view.tooltip_perspective"));
@@ -198,7 +200,7 @@ pub fn render_view_content(
 
         let mut degrees_x = config.camera_rotation_x.to_degrees();
         let response = ui.add(
-            egui::Slider::new(&mut degrees_x, -180.0..=180.0)
+            super::VkbSlider::new(&mut degrees_x, -180.0..=180.0)
                 .text(t!("view.camera_pitch").as_ref())
                 .suffix("°")
         ).on_hover_text(t!("view.tooltip_camera_pitch"));
@@ -212,7 +214,7 @@ pub fn render_view_content(
 
         let mut degrees_y = config.camera_rotation_y.to_degrees();
         let response = ui.add(
-            egui::Slider::new(&mut degrees_y, -180.0..=180.0)
+            super::VkbSlider::new(&mut degrees_y, -180.0..=180.0)
                 .text(t!("view.camera_yaw").as_ref())
                 .suffix("°")
         ).on_hover_text(t!("view.tooltip_camera_yaw"));
@@ -239,7 +241,7 @@ pub fn render_view_content(
 
                 let mut dof_focus = config.dof_focus_distance;
                 let response = ui.add(
-                    egui::Slider::new(&mut dof_focus, -5.0..=5.0)
+                    super::VkbSlider::new(&mut dof_focus, -5.0..=5.0)
                         .text(t!("view.dof_focus_distance").as_ref())
                 ).on_hover_text(t!("view.tooltip_dof_focus_distance"));
                 if response.changed() {
@@ -251,7 +253,7 @@ pub fn render_view_content(
 
                 let mut dof_blur = config.dof_blur_strength;
                 let response = ui.add(
-                    egui::Slider::new(&mut dof_blur, 0.0..=1.0)
+                    super::VkbSlider::new(&mut dof_blur, 0.0..=1.0)
                         .text(t!("view.dof_blur_strength").as_ref())
                         .step_by(0.001)
                 ).on_hover_text(t!("view.tooltip_dof_blur_strength"));
@@ -268,7 +270,7 @@ pub fn render_view_content(
 
                 let mut fog_strength = config.fog_strength;
                 let response = ui.add(
-                    egui::Slider::new(&mut fog_strength, 0.0..=5.0)
+                    super::VkbSlider::new(&mut fog_strength, 0.0..=5.0)
                         .text(t!("view.fog_strength").as_ref())
                 ).on_hover_text(t!("view.tooltip_fog_strength"));
                 if response.changed() {
@@ -280,7 +282,7 @@ pub fn render_view_content(
 
                 let mut fog_start = config.fog_start;
                 let response = ui.add(
-                    egui::Slider::new(&mut fog_start, -5.0..=5.0)
+                    super::VkbSlider::new(&mut fog_start, -5.0..=5.0)
                         .text(t!("view.fog_start").as_ref())
                 ).on_hover_text(t!("view.tooltip_fog_start"));
                 if response.changed() {

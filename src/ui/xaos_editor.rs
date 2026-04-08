@@ -245,6 +245,7 @@ pub fn render_xaos_editor_content(
                                                 }
                                             })
                                     );
+                                    super::vkb_sync_opts(ui, &response, &format!("{}", weight), "decimal");
 
                                     // Show tooltip with transition info
                                     let tooltip = if state.view_to_mode {

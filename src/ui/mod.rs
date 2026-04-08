@@ -46,6 +46,136 @@ pub use response::ApiAnimationSaveAction;
 pub use workspace::Workspace;
 pub use xaos_editor::XaosEditorState;
 
+/// Publish a TextEdit's content for the virtual keyboard overlay (WASM compact mode).
+/// Call after any `ui.text_edit_singleline()` or `ui.add(TextEdit::singleline())`.
+#[allow(unused_variables)]
+pub fn vkb_sync(ui: &egui_dock::egui::Ui, response: &egui_dock::egui::Response, text: &str) {
+    vkb_sync_opts(ui, response, text, "text");
+}
+
+/// Like `vkb_sync`, but with a field type ("text", "integer", "decimal", "email", "password").
+#[allow(unused_variables)]
+pub fn vkb_sync_opts(ui: &egui_dock::egui::Ui, response: &egui_dock::egui::Response, text: &str, field_type: &str) {
+    vkb_sync_full(ui, response, text, field_type, None, None);
+}
+
+/// Full VKB sync with min/max range hints for numeric fields.
+#[allow(unused_variables)]
+pub fn vkb_sync_full(
+    ui: &egui_dock::egui::Ui,
+    response: &egui_dock::egui::Response,
+    text: &str,
+    field_type: &str,
+    min: Option<f64>,
+    max: Option<f64>,
+) {
+    #[cfg(target_arch = "wasm32")]
+    if response.has_focus() {
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(egui_dock::egui::Id::new("vkb_editing_text"), text.to_owned());
+            d.insert_temp(egui_dock::egui::Id::new("vkb_field_type"), field_type.to_owned());
+            if let Some(min) = min {
+                d.insert_temp(egui_dock::egui::Id::new("vkb_min"), min);
+            } else {
+                d.remove_temp::<f64>(egui_dock::egui::Id::new("vkb_min"));
+            }
+            if let Some(max) = max {
+                d.insert_temp(egui_dock::egui::Id::new("vkb_max"), max);
+            } else {
+                d.remove_temp::<f64>(egui_dock::egui::Id::new("vkb_max"));
+            }
+        });
+    }
+}
+
+/// Builder for a DragValue with automatic VKB sync.
+/// Usage: `ui.add(VkbDragValue::new(&mut val).speed(0.01).range(0..=100))`
+pub struct VkbDragValue<'a> {
+    value_str: String,
+    is_integer: bool,
+    min: Option<f64>,
+    max: Option<f64>,
+    inner: egui_dock::egui::DragValue<'a>,
+}
+
+impl<'a> VkbDragValue<'a> {
+    pub fn new<Num: egui_dock::egui::emath::Numeric>(value: &'a mut Num) -> Self {
+        let value_str = format!("{}", value.to_f64());
+        let is_integer = Num::INTEGRAL;
+        Self {
+            value_str,
+            is_integer,
+            min: None,
+            max: None,
+            inner: egui_dock::egui::DragValue::new(value),
+        }
+    }
+
+    pub fn speed(mut self, speed: impl Into<f64>) -> Self { self.inner = self.inner.speed(speed); self }
+    pub fn range<Num: egui_dock::egui::emath::Numeric>(mut self, range: std::ops::RangeInclusive<Num>) -> Self {
+        self.min = Some(range.start().to_f64());
+        self.max = Some(range.end().to_f64());
+        self.inner = self.inner.range(range);
+        self
+    }
+    pub fn prefix(mut self, prefix: impl ToString) -> Self { self.inner = self.inner.prefix(prefix); self }
+    pub fn suffix(mut self, suffix: impl ToString) -> Self { self.inner = self.inner.suffix(suffix); self }
+    pub fn min_decimals(mut self, min_decimals: usize) -> Self { self.inner = self.inner.min_decimals(min_decimals); self }
+    pub fn fixed_decimals(mut self, fixed_decimals: usize) -> Self { self.inner = self.inner.fixed_decimals(fixed_decimals); self }
+}
+
+impl egui_dock::egui::Widget for VkbDragValue<'_> {
+    fn ui(self, ui: &mut egui_dock::egui::Ui) -> egui_dock::egui::Response {
+        let response = self.inner.ui(ui);
+        let field_type = if self.is_integer { "integer" } else { "decimal" };
+        vkb_sync_full(ui, &response, &self.value_str, field_type, self.min, self.max);
+        response
+    }
+}
+
+/// Builder for a Slider with automatic VKB sync.
+/// Usage: `ui.add(VkbSlider::new(&mut val, 0.0..=1.0).text("label").logarithmic(true))`
+pub struct VkbSlider<'a> {
+    value_str: String,
+    is_integer: bool,
+    min: f64,
+    max: f64,
+    inner: egui_dock::egui::Slider<'a>,
+}
+
+impl<'a> VkbSlider<'a> {
+    pub fn new<Num: egui_dock::egui::emath::Numeric>(value: &'a mut Num, range: std::ops::RangeInclusive<Num>) -> Self {
+        let value_str = format!("{}", value.to_f64());
+        let is_integer = Num::INTEGRAL;
+        let min = range.start().to_f64();
+        let max = range.end().to_f64();
+        Self {
+            value_str,
+            is_integer,
+            min,
+            max,
+            inner: egui_dock::egui::Slider::new(value, range),
+        }
+    }
+
+    pub fn text(mut self, text: impl Into<egui_dock::egui::WidgetText>) -> Self { self.inner = self.inner.text(text); self }
+    pub fn logarithmic(mut self, logarithmic: bool) -> Self { self.inner = self.inner.logarithmic(logarithmic); self }
+    pub fn suffix(mut self, suffix: impl ToString) -> Self { self.inner = self.inner.suffix(suffix); self }
+    pub fn show_value(mut self, show_value: bool) -> Self { self.inner = self.inner.show_value(show_value); self }
+    pub fn step_by(mut self, step: f64) -> Self { self.inner = self.inner.step_by(step); self }
+    pub fn clamping(mut self, clamping: egui_dock::egui::SliderClamping) -> Self { self.inner = self.inner.clamping(clamping); self }
+    pub fn drag_value_speed(mut self, speed: impl Into<f64>) -> Self { self.inner = self.inner.drag_value_speed(speed.into()); self }
+}
+
+impl egui_dock::egui::Widget for VkbSlider<'_> {
+    fn ui(self, ui: &mut egui_dock::egui::Ui) -> egui_dock::egui::Response {
+        let response = self.inner.ui(ui);
+        let field_type = if self.is_integer { "integer" } else { "decimal" };
+        vkb_sync_full(ui, &response, &self.value_str, field_type, Some(self.min), Some(self.max));
+        response
+    }
+}
+
 /// Information about a clicked pixel in PathMap mode
 /// Includes pixel coordinates, fractal space coordinates, path data, and a 5x5 color preview
 #[derive(Clone, Debug)]
@@ -201,6 +331,11 @@ pub struct EguiLayer {
     // WASM clipboard bridge
     #[cfg(target_arch = "wasm32")]
     web_clipboard: crate::web_clipboard::WebClipboard,
+    // WASM text input agent (virtual keyboard)
+    #[cfg(target_arch = "wasm32")]
+    web_text_agent: crate::web_text_agent::WebTextAgent,
+    #[cfg(target_arch = "wasm32")]
+    vkb_defocus_pending: bool,
 }
 
 impl EguiLayer {
@@ -303,6 +438,10 @@ impl EguiLayer {
             viewport_tab_bar_height: 0.0,
             #[cfg(target_arch = "wasm32")]
             web_clipboard: crate::web_clipboard::WebClipboard::install(),
+            #[cfg(target_arch = "wasm32")]
+            web_text_agent: crate::web_text_agent::WebTextAgent::install(),
+            #[cfg(target_arch = "wasm32")]
+            vkb_defocus_pending: false,
         }
     }
 
@@ -563,10 +702,37 @@ impl EguiLayer {
             self.last_input_time = web_time::Instant::now();
         }
 
+        // Clear stale VKB editing text from previous frame (WASM only)
+        #[cfg(target_arch = "wasm32")]
+        self.ctx.data_mut(|d| {
+            d.remove_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
+        });
+
         // Inject clipboard paste events from the browser (WASM only)
         #[cfg(target_arch = "wasm32")]
         if let Some(text) = self.web_clipboard.take_paste() {
             raw_input.events.push(egui_dock::egui::Event::Paste(text));
+        }
+
+        // Virtual keyboard: if user submitted a value, inject it (defocus happens post-frame)
+        #[cfg(target_arch = "wasm32")]
+        if let Some(text) = self.web_text_agent.take_submitted() {
+            // Select all + replace with submitted text (TextEdit still has focus)
+            raw_input.events.push(egui_dock::egui::Event::Key {
+                key: egui_dock::egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui_dock::egui::Modifiers::COMMAND,
+            });
+            raw_input.events.push(egui_dock::egui::Event::Text(text));
+            self.vkb_defocus_pending = true;
+        }
+
+        // Virtual keyboard: if user cancelled, just defocus the field (no value change)
+        #[cfg(target_arch = "wasm32")]
+        if self.web_text_agent.take_cancelled() {
+            self.vkb_defocus_pending = true;
         }
 
         // Desktop: poll auto-login result (runs even when Login panel is not visible)
@@ -1055,6 +1221,48 @@ impl EguiLayer {
         for cmd in &full_output.platform_output.commands {
             if let egui_dock::egui::OutputCommand::CopyText(text) = cmd {
                 crate::web_clipboard::WebClipboard::copy_text(text);
+            }
+        }
+
+        // Virtual keyboard: open overlay when egui wants keyboard input (WASM + compact mode)
+        // Virtual keyboard: post-frame handling (WASM + compact mode)
+        #[cfg(target_arch = "wasm32")]
+        if self.compact_mode {
+            // If we just submitted, defocus now (after egui processed the text events)
+            if self.vkb_defocus_pending {
+                self.vkb_defocus_pending = false;
+                self.ctx.memory_mut(|mem| {
+                    if let Some(id) = mem.focused() {
+                        mem.surrender_focus(id);
+                    }
+                });
+            } else {
+                // Open overlay when egui wants keyboard input
+                let wants_keyboard = self.ctx.wants_keyboard_input();
+                if wants_keyboard {
+                    let (editing_text, field_type, min, max) = self.ctx.data_mut(|d| {
+                        let text = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_editing_text"));
+                        let ftype = d.get_temp::<String>(egui_dock::egui::Id::new("vkb_field_type"))
+                            .unwrap_or_else(|| "text".to_owned());
+                        let min = d.get_temp::<f64>(egui_dock::egui::Id::new("vkb_min"));
+                        let max = d.get_temp::<f64>(egui_dock::egui::Id::new("vkb_max"));
+                        (text, ftype, min, max)
+                    });
+                    // Fallback: if no vkb_sync set the text (e.g. custom widget),
+                    // assume numeric field with decimal type
+                    let field_type = if editing_text.is_none() {
+                        "decimal".to_owned()
+                    } else {
+                        field_type
+                    };
+                    self.web_text_agent.open(
+                        &field_type,
+                        editing_text.as_deref().unwrap_or(""),
+                        min,
+                        max,
+                        false,
+                    );
+                }
             }
         }
 

@@ -104,7 +104,7 @@ pub fn render_effects_panel(
                                 let current_value = effect.get_param(&param_def.name);
                                 let mut value = current_value;
 
-                                let slider = egui::Slider::new(
+                                let slider = super::VkbSlider::new(
                                     &mut value,
                                     param_def.min_value.unwrap_or(0.0)
                                         ..=param_def.max_value.unwrap_or(1.0),
@@ -289,7 +289,7 @@ pub fn render_effects_panel(
                                     let current_value = effect.get_param(&param_def.name);
                                     let mut value = current_value;
 
-                                    let slider = egui::Slider::new(
+                                    let slider = super::VkbSlider::new(
                                         &mut value,
                                         param_def.min_value.unwrap_or(0.0)
                                             ..=param_def.max_value.unwrap_or(1.0),
