@@ -1443,6 +1443,7 @@ effects:
       intensity: "Intensity"
       blend_mode: "Blend Mode"
       square_mode: "Square Mode"
+      edge_offset: "Edge Offset"
 
   plasma:
     name: "Plasma"
