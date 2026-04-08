@@ -235,6 +235,7 @@ pub fn render_path_editor_content(
                                 .desired_width(100.0)
                                 .hint_text("0,1,2")
                         );
+                        super::vkb_sync(ui, &pattern_response, &filter.pattern_text);
                         if pattern_response.changed() {
                             state.dirty = true;
                         }
@@ -243,7 +244,7 @@ pub fn render_path_editor_content(
                         if filter.depth > 0 {
                             ui.label("@");
                             let mut depth_i32 = filter.depth as i32;
-                            if ui.add(egui::DragValue::new(&mut depth_i32).range(1..=32).speed(0.1)).changed() {
+                            if ui.add(super::VkbDragValue::new(&mut depth_i32).range(1..=32).speed(0.1)).changed() {
                                 filter.depth = depth_i32.max(1) as u32;
                                 state.dirty = true;
                             }
@@ -288,18 +289,19 @@ pub fn render_path_editor_content(
 
     ui.horizontal(|ui| {
         ui.label(t!("path_editor.pattern"));
-        ui.add(
+        let r = ui.add(
             egui::TextEdit::singleline(&mut state.new_filter.pattern_text)
                 .desired_width(150.0)
                 .hint_text(t!("path_editor.pattern_hint").as_ref())
         );
+        super::vkb_sync(ui, &r, &state.new_filter.pattern_text);
     });
 
     if state.new_filter.depth > 0 {
         ui.horizontal(|ui| {
             ui.label(t!("path_editor.depth"));
             let mut depth_i32 = state.new_filter.depth as i32;
-            ui.add(egui::DragValue::new(&mut depth_i32).range(1..=32).speed(0.1));
+            ui.add(super::VkbDragValue::new(&mut depth_i32).range(1..=32).speed(0.1));
             state.new_filter.depth = depth_i32.max(1) as u32;
         });
     }

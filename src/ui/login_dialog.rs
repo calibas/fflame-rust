@@ -231,12 +231,13 @@ fn render_sign_in_form(
         // Email field
         ui.horizontal(|ui| {
             ui.label(t!("login.email"));
-            ui.add(
+            let r = ui.add(
                 egui::TextEdit::singleline(&mut state.email)
                     .desired_width(200.0)
                     .hint_text("user@example.com")
                     .interactive(!state.loading),
             );
+            super::vkb_sync(ui, &r, &state.email);
         });
 
         ui.add_space(4.0);
@@ -250,6 +251,7 @@ fn render_sign_in_form(
                     .password(true)
                     .interactive(!state.loading),
             );
+            super::vkb_sync(ui, &pw_response, &state.password);
 
             // Submit on Enter in password field
             if pw_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -312,23 +314,25 @@ fn render_register_form(
         // Display name field
         ui.horizontal(|ui| {
             ui.label(t!("login.display_name"));
-            ui.add(
+            let r = ui.add(
                 egui::TextEdit::singleline(&mut state.reg_display_name)
                     .desired_width(200.0)
                     .hint_text("User")
                     .interactive(!state.reg_loading),
             );
+            super::vkb_sync(ui, &r, &state.reg_display_name);
         });
 
         // Email field
         ui.horizontal(|ui| {
             ui.label(t!("login.email"));
-            ui.add(
+            let r = ui.add(
                 egui::TextEdit::singleline(&mut state.reg_email)
                     .desired_width(200.0)
                     .hint_text("user@example.com")
                     .interactive(!state.reg_loading),
             );
+            super::vkb_sync(ui, &r, &state.reg_email);
         });
 
         ui.add_space(4.0);
@@ -336,12 +340,13 @@ fn render_register_form(
         // Password field
         ui.horizontal(|ui| {
             ui.label(t!("login.password"));
-            ui.add(
+            let r = ui.add(
                 egui::TextEdit::singleline(&mut state.reg_password)
                     .desired_width(200.0)
                     .password(true)
                     .interactive(!state.reg_loading),
             );
+            super::vkb_sync(ui, &r, &state.reg_password);
         });
 
         ui.add_space(4.0);
@@ -355,6 +360,7 @@ fn render_register_form(
                     .password(true)
                     .interactive(!state.reg_loading),
             );
+            super::vkb_sync(ui, &confirm_response, &state.reg_confirm);
 
             // Submit on Enter
             if confirm_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {

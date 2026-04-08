@@ -30,7 +30,7 @@ fn render_weight_control(
     let mut max_update = UpdateType::None;
 
     let mut temp_weight = transform.weight;
-    let response = ui.add(egui::Slider::new(&mut temp_weight, 0.0..=1024.0)
+    let response = ui.add(super::VkbSlider::new(&mut temp_weight, 0.0..=1024.0)
         .logarithmic(true)
         .text(t!("transform.weight")))
       .on_hover_text(t!("tooltips.transform_weight"));
@@ -63,7 +63,7 @@ fn render_color_controls(
         // Palette position slider (0.0 to 1.0)
         let mut temp_color = transform.color;
         let response_color = ui.add(
-            egui::Slider::new(&mut temp_color, 0.0..=1.0)
+            super::VkbSlider::new(&mut temp_color, 0.0..=1.0)
                 .text(t!("transform.color"))
                 
         ).on_hover_text(t!("tooltips.transform_color"));
@@ -109,7 +109,7 @@ fn render_affine_controls(
     ui.horizontal(|ui| {
         ui.label(t!("transform.affine_a")).on_hover_text(t!("tooltips.affine_a"));
         let mut temp_a = transform.a;
-        let response_a = ui.add(egui::DragValue::new(&mut temp_a).speed(0.01)).on_hover_text(t!("tooltips.affine_a"));
+        let response_a = ui.add(super::VkbDragValue::new(&mut temp_a).speed(0.01)).on_hover_text(t!("tooltips.affine_a"));
         if response_a.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::A },
@@ -125,7 +125,7 @@ fn render_affine_controls(
 
         ui.label(t!("transform.affine_b")).on_hover_text(t!("tooltips.affine_b"));
         let mut temp_b = transform.b;
-        let response_b = ui.add(egui::DragValue::new(&mut temp_b).speed(0.01)).on_hover_text(t!("tooltips.affine_b"));
+        let response_b = ui.add(super::VkbDragValue::new(&mut temp_b).speed(0.01)).on_hover_text(t!("tooltips.affine_b"));
         if response_b.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::B },
@@ -144,7 +144,7 @@ fn render_affine_controls(
     ui.horizontal(|ui| {
         ui.label(t!("transform.affine_c")).on_hover_text(t!("tooltips.affine_c"));
         let mut temp_c = transform.c;
-        let response_c = ui.add(egui::DragValue::new(&mut temp_c).speed(0.01)).on_hover_text(t!("tooltips.affine_c"));
+        let response_c = ui.add(super::VkbDragValue::new(&mut temp_c).speed(0.01)).on_hover_text(t!("tooltips.affine_c"));
         if response_c.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::C },
@@ -160,7 +160,7 @@ fn render_affine_controls(
 
         ui.label(t!("transform.affine_d")).on_hover_text(t!("tooltips.affine_d"));
         let mut temp_d = transform.d;
-        let response_d = ui.add(egui::DragValue::new(&mut temp_d).speed(0.01)).on_hover_text(t!("tooltips.affine_d"));
+        let response_d = ui.add(super::VkbDragValue::new(&mut temp_d).speed(0.01)).on_hover_text(t!("tooltips.affine_d"));
         if response_d.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::D },
@@ -179,7 +179,7 @@ fn render_affine_controls(
     ui.horizontal(|ui| {
         ui.label(t!("transform.affine_e")).on_hover_text(t!("tooltips.affine_e"));
         let mut temp_e = transform.e;
-        let response_e = ui.add(egui::DragValue::new(&mut temp_e).speed(0.01)).on_hover_text(t!("tooltips.affine_e"));
+        let response_e = ui.add(super::VkbDragValue::new(&mut temp_e).speed(0.01)).on_hover_text(t!("tooltips.affine_e"));
         if response_e.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::E },
@@ -195,7 +195,7 @@ fn render_affine_controls(
 
         ui.label(t!("transform.affine_f")).on_hover_text(t!("tooltips.affine_f"));
         let mut temp_f = transform.f;
-        let response_f = ui.add(egui::DragValue::new(&mut temp_f).speed(0.01)).on_hover_text(t!("tooltips.affine_f"));
+        let response_f = ui.add(super::VkbDragValue::new(&mut temp_f).speed(0.01)).on_hover_text(t!("tooltips.affine_f"));
         if response_f.changed() {
             if let Ok(update_type) = config_manager.update_param(
                 ConfigPath::TransformAffine { index, param: AffineParam::F },
@@ -215,7 +215,7 @@ fn render_affine_controls(
         ui.horizontal(|ui| {
             ui.label(t!("transform.affine_g")).on_hover_text(t!("tooltips.affine_g"));
             let mut temp_g = transform.g;
-            let response_g = ui.add(egui::DragValue::new(&mut temp_g).speed(0.01)).on_hover_text(t!("tooltips.affine_g"));
+            let response_g = ui.add(super::VkbDragValue::new(&mut temp_g).speed(0.01)).on_hover_text(t!("tooltips.affine_g"));
             if response_g.changed() {
                 if let Ok(update_type) = config_manager.update_param(
                     ConfigPath::TransformAffine { index, param: AffineParam::G },
@@ -267,7 +267,7 @@ fn render_post_affine_controls(
         ui.horizontal(|ui| {
             ui.label(t!("transform.affine_a")).on_hover_text(t!("tooltips.affine_a"));
             let mut temp_a = transform.post_a;
-            let response_a = ui.add(egui::DragValue::new(&mut temp_a).speed(0.01)).on_hover_text(t!("tooltips.affine_a"));
+            let response_a = ui.add(super::VkbDragValue::new(&mut temp_a).speed(0.01)).on_hover_text(t!("tooltips.affine_a"));
             if response_a.changed() {
                 if let Ok(update_type) = config_manager.update_param(
                     ConfigPath::TransformPostAffine { index, param: AffineParam::A },
@@ -283,7 +283,7 @@ fn render_post_affine_controls(
 
             ui.label(t!("transform.affine_b")).on_hover_text(t!("tooltips.affine_b"));
             let mut temp_b = transform.post_b;
-            let response_b = ui.add(egui::DragValue::new(&mut temp_b).speed(0.01)).on_hover_text(t!("tooltips.affine_b"));
+            let response_b = ui.add(super::VkbDragValue::new(&mut temp_b).speed(0.01)).on_hover_text(t!("tooltips.affine_b"));
             if response_b.changed() {
                 if let Ok(update_type) = config_manager.update_param(
                     ConfigPath::TransformPostAffine { index, param: AffineParam::B },
@@ -302,7 +302,7 @@ fn render_post_affine_controls(
         ui.horizontal(|ui| {
             ui.label(t!("transform.affine_c")).on_hover_text(t!("tooltips.affine_c"));
             let mut temp_c = transform.post_c;
-            let response_c = ui.add(egui::DragValue::new(&mut temp_c).speed(0.01)).on_hover_text(t!("tooltips.affine_c"));
+            let response_c = ui.add(super::VkbDragValue::new(&mut temp_c).speed(0.01)).on_hover_text(t!("tooltips.affine_c"));
             if response_c.changed() {
                 if let Ok(update_type) = config_manager.update_param(
                     ConfigPath::TransformPostAffine { index, param: AffineParam::C },
@@ -318,7 +318,7 @@ fn render_post_affine_controls(
 
             ui.label(t!("transform.affine_d")).on_hover_text(t!("tooltips.affine_d"));
             let mut temp_d = transform.post_d;
-            let response_d = ui.add(egui::DragValue::new(&mut temp_d).speed(0.01)).on_hover_text(t!("tooltips.affine_d"));
+            let response_d = ui.add(super::VkbDragValue::new(&mut temp_d).speed(0.01)).on_hover_text(t!("tooltips.affine_d"));
             if response_d.changed() {
                 if let Ok(update_type) = config_manager.update_param(
                     ConfigPath::TransformPostAffine { index, param: AffineParam::D },
@@ -337,7 +337,7 @@ fn render_post_affine_controls(
         ui.horizontal(|ui| {
             ui.label(t!("transform.affine_e")).on_hover_text(t!("tooltips.affine_e"));
             let mut temp_e = transform.post_e;
-            let response_e = ui.add(egui::DragValue::new(&mut temp_e).speed(0.01)).on_hover_text(t!("tooltips.affine_e"));
+            let response_e = ui.add(super::VkbDragValue::new(&mut temp_e).speed(0.01)).on_hover_text(t!("tooltips.affine_e"));
             if response_e.changed() {
                 if let Ok(update_type) = config_manager.update_param(
                     ConfigPath::TransformPostAffine { index, param: AffineParam::E },
@@ -353,7 +353,7 @@ fn render_post_affine_controls(
 
             ui.label(t!("transform.affine_f")).on_hover_text(t!("tooltips.affine_f"));
             let mut temp_f = transform.post_f;
-            let response_f = ui.add(egui::DragValue::new(&mut temp_f).speed(0.01)).on_hover_text(t!("tooltips.affine_f"));
+            let response_f = ui.add(super::VkbDragValue::new(&mut temp_f).speed(0.01)).on_hover_text(t!("tooltips.affine_f"));
             if response_f.changed() {
                 if let Ok(update_type) = config_manager.update_param(
                     ConfigPath::TransformPostAffine { index, param: AffineParam::F },
@@ -373,7 +373,7 @@ fn render_post_affine_controls(
             ui.horizontal(|ui| {
                 ui.label(t!("transform.affine_g")).on_hover_text(t!("tooltips.affine_g"));
                 let mut temp_g = transform.post_g;
-                let response_g = ui.add(egui::DragValue::new(&mut temp_g).speed(0.01)).on_hover_text(t!("tooltips.affine_g"));
+                let response_g = ui.add(super::VkbDragValue::new(&mut temp_g).speed(0.01)).on_hover_text(t!("tooltips.affine_g"));
                 if response_g.changed() {
                     if let Ok(update_type) = config_manager.update_param(
                         ConfigPath::TransformPostAffine { index, param: AffineParam::G },
@@ -430,7 +430,7 @@ fn render_advanced_settings(
 
     // Color Speed (Symmetry)
     let mut temp_speed = transform.color_speed;
-    let response_speed = ui.add(egui::Slider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")))
+    let response_speed = ui.add(super::VkbSlider::new(&mut temp_speed, -1.0..=1.0).text(t!("transform.color_speed")))
         .on_hover_text(t!("tooltips.color_speed"));
     if response_speed.changed() {
         if let Ok(update_type) = config_manager.update_param(
@@ -447,7 +447,7 @@ fn render_advanced_settings(
 
     // Opacity slider
     let mut temp_opacity = transform.opacity;
-    let response_opacity = ui.add(egui::Slider::new(&mut temp_opacity, 0.0..=1.0).text(t!("transform.opacity")))
+    let response_opacity = ui.add(super::VkbSlider::new(&mut temp_opacity, 0.0..=1.0).text(t!("transform.opacity")))
         .on_hover_text(t!("tooltips.opacity"));
     if response_opacity.changed() {
         if let Ok(update_type) = config_manager.update_param(
@@ -486,7 +486,7 @@ fn render_enabled_variation(
         // Weight slider
         let mut value = current_weight;
         let response = ui.add(
-            egui::Slider::new(&mut value, -5.0..=5.0)
+            super::VkbSlider::new(&mut value, -5.0..=5.0)
                 .text(display_name)
                 .drag_value_speed(0.1)
                 .clamping(egui::SliderClamping::Never)
@@ -596,7 +596,8 @@ fn render_variations_section(
         let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
         ui.horizontal(|ui| {
             ui.label(t!("variations.search"));
-            ui.text_edit_singleline(&mut search_text);
+            let r = ui.text_edit_singleline(&mut search_text);
+            super::vkb_sync(ui, &r, &search_text);
         });
         ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
 
@@ -931,7 +932,7 @@ fn render_final_transform(
                                 ui.horizontal(|ui| {
                                     ui.label($label).on_hover_text($tooltip);
                                     let mut temp = final_xform.$field;
-                                    let response = ui.add(egui::DragValue::new(&mut temp).speed(0.01)).on_hover_text($tooltip);
+                                    let response = ui.add(super::VkbDragValue::new(&mut temp).speed(0.01)).on_hover_text($tooltip);
                                     if response.changed() {
                                         if let Ok(update_type) = config_manager.update_param(
                                             ConfigPath::FinalTransformAffine { param: AffineParam::$param },
@@ -984,7 +985,7 @@ fn render_final_transform(
                                     ui.horizontal(|ui| {
                                         ui.label($label).on_hover_text($tooltip);
                                         let mut temp = final_xform.$field;
-                                        let response = ui.add(egui::DragValue::new(&mut temp).speed(0.01)).on_hover_text($tooltip);
+                                        let response = ui.add(super::VkbDragValue::new(&mut temp).speed(0.01)).on_hover_text($tooltip);
                                         if response.changed() {
                                             if let Ok(update_type) = config_manager.update_param(
                                                 ConfigPath::FinalTransformPostAffine { param: AffineParam::$param },
@@ -1046,7 +1047,7 @@ fn render_final_transform(
                                 ui.horizontal(|ui| {
                                     let mut value = *weight;
                                     let response = ui.add(
-                                        egui::Slider::new(&mut value, -5.0..=5.0)
+                                        super::VkbSlider::new(&mut value, -5.0..=5.0)
                                             .text(display_name)
                                             .drag_value_speed(0.1)
                                             .clamping(egui::SliderClamping::Never)
@@ -1117,7 +1118,8 @@ fn render_final_transform(
                             let mut search_text = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
                             ui.horizontal(|ui| {
                                 ui.label(t!("variations.search"));
-                                ui.text_edit_singleline(&mut search_text);
+                                let r = ui.text_edit_singleline(&mut search_text);
+                                super::vkb_sync(ui, &r, &search_text);
                             });
                             ui.data_mut(|d| d.insert_temp(search_id, search_text.clone()));
 

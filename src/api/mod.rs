@@ -16,8 +16,8 @@ use crate::config::FractalConfig;
 use crate::resources::{FetchError, FetchResult, LoadState};
 
 /// Hard-coded API base URL. Change this for release builds.
-// pub const API_BASE_URL: &str = "https://fractalsforall.com";
-pub const API_BASE_URL: &str = "http://localhost:3000";
+pub const API_BASE_URL: &str = "https://fractalsforall.com";
+// pub const API_BASE_URL: &str = "http://localhost:3000";
 
 use auth::AuthState;
 use client::build_url;

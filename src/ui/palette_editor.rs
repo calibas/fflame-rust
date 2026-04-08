@@ -59,6 +59,7 @@ fn render_palette_editor_core_impl(
         }
 
         let name_response = ui.text_edit_singleline(&mut palette_editor.name_buffer);
+        super::vkb_sync(ui, &name_response, &palette_editor.name_buffer);
 
         // Track editing state
         if name_response.gained_focus() {
@@ -165,7 +166,7 @@ fn render_palette_editor_core_impl(
                             let mut pos_int = (stop.position * 255.0) as i32;
                             let slider_response = ui.add_enabled(
                                 !palette.locked,
-                                egui::Slider::new(&mut pos_int, 0..=255).text(t!("palette_editor.position"))
+                                super::VkbSlider::new(&mut pos_int, 0..=255).text(t!("palette_editor.position"))
                             ).on_hover_text(t!("palette_editor.tooltip_position"));
                             if slider_response.changed() {
                                 stop.position = pos_int as f32 / 255.0;

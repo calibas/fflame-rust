@@ -89,7 +89,7 @@ fn render_float_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut
     let min = param.min_value.unwrap_or(-10.0);
     let max = param.max_value.unwrap_or(10.0);
     let response = ui.add(
-        egui::Slider::new(value, min..=max)
+        super::VkbSlider::new(value, min..=max)
             .text(&param.display_name)
             .step_by(0.01),
     );
@@ -102,7 +102,7 @@ fn render_integer_param(ui: &mut egui::Ui, param: &VariationParameter, value: &m
     let min = param.min_value.unwrap_or(1.0) as i32;
     let max = param.max_value.unwrap_or(10.0) as i32;
     let mut int_val = *value as i32;
-    let response = ui.add(egui::Slider::new(&mut int_val, min..=max).text(&param.display_name));
+    let response = ui.add(super::VkbSlider::new(&mut int_val, min..=max).text(&param.display_name));
     *value = int_val as f32;
     (response.changed(), response.drag_stopped())
 }
@@ -116,7 +116,7 @@ fn render_unlimited_integer_param(ui: &mut egui::Ui, param: &VariationParameter,
     let mut int_val = *value as i32;
 
     let response = ui.add(
-        egui::Slider::new(&mut int_val, min..=max)
+        super::VkbSlider::new(&mut int_val, min..=max)
             .text(&param.display_name)
             .clamping(egui::SliderClamping::Never)  // Allow typing values outside slider range
     );
@@ -136,7 +136,7 @@ fn render_unlimited_integer_param(ui: &mut egui::Ui, param: &VariationParameter,
 fn render_angle_param(ui: &mut egui::Ui, param: &VariationParameter, value: &mut f32) -> (bool, bool) {
     let min = param.min_value.unwrap_or(0.0);
     let max = param.max_value.unwrap_or(360.0);
-    let response = ui.add(egui::Slider::new(value, min..=max).text(&param.display_name).suffix("°"));
+    let response = ui.add(super::VkbSlider::new(value, min..=max).text(&param.display_name).suffix("°"));
     (response.changed(), response.drag_stopped())
 }
 
@@ -148,7 +148,7 @@ fn render_unlimited_float_param(ui: &mut egui::Ui, param: &VariationParameter, v
     let max = param.max_value.unwrap_or(10.0);
 
     let response = ui.add(
-        egui::Slider::new(value, min..=max)
+        super::VkbSlider::new(value, min..=max)
             .text(&param.display_name)
             .clamping(egui::SliderClamping::Never)  // Allow typing values outside slider range
     );

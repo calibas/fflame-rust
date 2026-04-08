@@ -989,24 +989,24 @@ fn render_triangle_editor_core(
 
                         ui.horizontal(|ui| {
                             ui.label(t!("triangle_editor.point_x")).on_hover_text(t!("triangle_editor.tooltip_point_x"));
-                            let x0_resp = ui.add(egui::DragValue::new(&mut x[0]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_x"))));
-                            let x1_resp = ui.add(egui::DragValue::new(&mut x[1]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_y"))));
+                            let x0_resp = ui.add(super::VkbDragValue::new(&mut x[0]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_x"))));
+                            let x1_resp = ui.add(super::VkbDragValue::new(&mut x[1]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_y"))));
                             coords_changed |= x0_resp.changed() || x1_resp.changed();
                             dragging |= x0_resp.dragged() || x1_resp.dragged();
                             drag_stopped |= x0_resp.drag_stopped() || x1_resp.drag_stopped();
                         });
                         ui.horizontal(|ui| {
                             ui.label(t!("triangle_editor.point_y")).on_hover_text(t!("triangle_editor.tooltip_point_y"));
-                            let y0_resp = ui.add(egui::DragValue::new(&mut y[0]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_x"))));
-                            let y1_resp = ui.add(egui::DragValue::new(&mut y[1]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_y"))));
+                            let y0_resp = ui.add(super::VkbDragValue::new(&mut y[0]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_x"))));
+                            let y1_resp = ui.add(super::VkbDragValue::new(&mut y[1]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_y"))));
                             coords_changed |= y0_resp.changed() || y1_resp.changed();
                             dragging |= y0_resp.dragged() || y1_resp.dragged();
                             drag_stopped |= y0_resp.drag_stopped() || y1_resp.drag_stopped();
                         });
                         ui.horizontal(|ui| {
                             ui.label(t!("triangle_editor.point_o")).on_hover_text(t!("triangle_editor.tooltip_point_o"));
-                            let o0_resp = ui.add(egui::DragValue::new(&mut o[0]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_x"))));
-                            let o1_resp = ui.add(egui::DragValue::new(&mut o[1]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_y"))));
+                            let o0_resp = ui.add(super::VkbDragValue::new(&mut o[0]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_x"))));
+                            let o1_resp = ui.add(super::VkbDragValue::new(&mut o[1]).speed(0.01).prefix(format!("{} ", t!("triangle_editor.coord_y"))));
                             coords_changed |= o0_resp.changed() || o1_resp.changed();
                             dragging |= o0_resp.dragged() || o1_resp.dragged();
                             drag_stopped |= o0_resp.drag_stopped() || o1_resp.drag_stopped();
@@ -1051,7 +1051,7 @@ fn render_triangle_editor_core(
                         let mut display_f = -val_f;
 
                         ui.horizontal(|ui| {
-                            let a_resp = ui.add(egui::DragValue::new(&mut val_a).speed(0.01).prefix("a: "))
+                            let a_resp = ui.add(super::VkbDragValue::new(&mut val_a).speed(0.01).prefix("a: "))
                                 .on_hover_text(t!("triangle_editor.tooltip_affine_a"));
                             if a_resp.changed() {
                                 if let Ok(update) = config_manager.update_param(make_coeff_path(AffineParam::A), val_a.into()) {
@@ -1061,7 +1061,7 @@ fn render_triangle_editor_core(
                             dragging |= a_resp.dragged();
                             drag_stopped |= a_resp.drag_stopped();
 
-                            let b_resp = ui.add(egui::DragValue::new(&mut display_b).speed(0.01).prefix("b: "))
+                            let b_resp = ui.add(super::VkbDragValue::new(&mut display_b).speed(0.01).prefix("b: "))
                                 .on_hover_text(t!("triangle_editor.tooltip_affine_b"));
                             if b_resp.changed() {
                                 val_b = -display_b;
@@ -1072,7 +1072,7 @@ fn render_triangle_editor_core(
                             dragging |= b_resp.dragged();
                             drag_stopped |= b_resp.drag_stopped();
 
-                            let e_resp = ui.add(egui::DragValue::new(&mut val_e).speed(0.01).prefix("e: "))
+                            let e_resp = ui.add(super::VkbDragValue::new(&mut val_e).speed(0.01).prefix("e: "))
                                 .on_hover_text(t!("triangle_editor.tooltip_affine_e"));
                             if e_resp.changed() {
                                 if let Ok(update) = config_manager.update_param(make_coeff_path(AffineParam::E), val_e.into()) {
@@ -1083,7 +1083,7 @@ fn render_triangle_editor_core(
                             drag_stopped |= e_resp.drag_stopped();
                         });
                         ui.horizontal(|ui| {
-                            let c_resp = ui.add(egui::DragValue::new(&mut display_c).speed(0.01).prefix("c: "))
+                            let c_resp = ui.add(super::VkbDragValue::new(&mut display_c).speed(0.01).prefix("c: "))
                                 .on_hover_text(t!("triangle_editor.tooltip_affine_c"));
                             if c_resp.changed() {
                                 val_c = -display_c;
@@ -1094,7 +1094,7 @@ fn render_triangle_editor_core(
                             dragging |= c_resp.dragged();
                             drag_stopped |= c_resp.drag_stopped();
 
-                            let d_resp = ui.add(egui::DragValue::new(&mut val_d).speed(0.01).prefix("d: "))
+                            let d_resp = ui.add(super::VkbDragValue::new(&mut val_d).speed(0.01).prefix("d: "))
                                 .on_hover_text(t!("triangle_editor.tooltip_affine_d"));
                             if d_resp.changed() {
                                 if let Ok(update) = config_manager.update_param(make_coeff_path(AffineParam::D), val_d.into()) {
@@ -1104,7 +1104,7 @@ fn render_triangle_editor_core(
                             dragging |= d_resp.dragged();
                             drag_stopped |= d_resp.drag_stopped();
 
-                            let f_resp = ui.add(egui::DragValue::new(&mut display_f).speed(0.01).prefix("f: "))
+                            let f_resp = ui.add(super::VkbDragValue::new(&mut display_f).speed(0.01).prefix("f: "))
                                 .on_hover_text(t!("triangle_editor.tooltip_affine_f"));
                             if f_resp.changed() {
                                 val_f = -display_f;
