@@ -9,11 +9,19 @@
     background: rgba(0, 0, 0, 0.7);
 }
 
-#vkb-overlay input {
+#vkb-overlay .vkb-bar {
     position: absolute;
     top: env(safe-area-inset-top, 0px);
-    left: 0;
-    width: 90%;
+    left: 5%;
+    right: 5%;
+    margin-top: 30px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+#vkb-overlay input {
+    flex: 1;
     height: 36px;
     background: #2a2a2a;
     color: #fff;
@@ -24,6 +32,25 @@
     font-size: 16px;
     font-family: inherit;
     box-sizing: border-box;
-    margin: 30px 5%;
     border-radius: 10px;
+}
+
+#vkb-overlay button {
+    height: 36px;
+    min-width: 60px;
+    padding: 0 12px;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-family: inherit;
+    cursor: pointer;
+    color: #fff;
+}
+
+#vkb-overlay button.vkb-submit {
+    background: #4a7;
+}
+
+#vkb-overlay button.vkb-cancel {
+    background: #555;
 }
