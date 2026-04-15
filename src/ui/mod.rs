@@ -283,10 +283,11 @@ pub struct EguiLayer {
     // Fractal browser panel state
     fractal_browser_panel: Option<fractal_browser::FractalBrowserPanel>,
 
-    // API: flame ID loaded from Online tab (passed through to UiResponse)
+    // API: flame metadata loaded from Online tab (passed through to UiResponse)
     loaded_api_flame_id: Option<String>,
-    // API: visibility of flame loaded from Online tab
     loaded_api_flame_is_public: Option<bool>,
+    loaded_api_flame_user_id: Option<String>,
+    loaded_api_flame_animation_count: u32,
 
     // API: notification toast
     api_notification: Option<ApiNotification>,
@@ -423,6 +424,8 @@ impl EguiLayer {
             fractal_browser_panel: None,
             loaded_api_flame_id: None,
             loaded_api_flame_is_public: None,
+            loaded_api_flame_user_id: None,
+            loaded_api_flame_animation_count: 0,
             api_notification: None,
             save_online_dialog_state: save_online_dialog::SaveOnlineDialogState::default(),
             api_browser_notification: None,
@@ -660,9 +663,7 @@ impl EguiLayer {
         audio_capture: &mut crate::audio::AudioCapture,
         signal_manager: &mut crate::signal::SignalManager,
         signal_names: &[String],
-        api_flame_id: &Option<String>,
-        api_flame_is_public: &Option<bool>,
-        api_animation_id: &Option<String>,
+        api_state: &crate::app::ApiContentState,
     ) -> UiResponse {
         // Sync compact mode from workspace (handles layout switches from menus)
         let is_compact = workspace.is_compact();
@@ -809,6 +810,7 @@ impl EguiLayer {
 
         // Animation API save action
         let mut api_animation_save_action = response::ApiAnimationSaveAction::None;
+        let mut open_save_online_dialog = false;
 
         // Path filters
         let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
@@ -831,10 +833,14 @@ impl EguiLayer {
             is_paused: *paused,
             render_mode_2d: config_manager.active_config().flame.render_mode == crate::scene::transforms::RenderMode::TwoD,
             online_mode: config_manager.system_settings().online_mode,
-            has_api_flame_id: api_flame_id.is_some(),
-            api_flame_id: api_flame_id.clone(),
-            api_flame_is_public: *api_flame_is_public,
+            has_api_flame_id: api_state.flame_id.is_some(),
+            api_flame_id: api_state.flame_id.clone(),
+            api_flame_is_public: api_state.flame_is_public,
             has_animation_tracks,
+            api_animation_id: api_state.animation_id.clone(),
+            animation_count: api_state.animation_count,
+            flame_owned: true, // Currently only browse own flames; check user_id when public browsing is added
+            animation_owned: true,
             flame_name: config_manager.config().flame.name.clone(),
             auth_email: read_auth_email(config_manager),
             api_connectivity: self.api_connectivity,
@@ -985,6 +991,8 @@ impl EguiLayer {
                         // API flame ID loaded from Online tab
                         loaded_api_flame_id: &mut self.loaded_api_flame_id,
                         loaded_api_flame_is_public: &mut self.loaded_api_flame_is_public,
+                        loaded_api_flame_user_id: &mut self.loaded_api_flame_user_id,
+                        loaded_api_flame_animation_count: &mut self.loaded_api_flame_animation_count,
 
                         // API notification from browser panel
                         api_notification: &mut self.api_browser_notification,
@@ -1059,10 +1067,11 @@ impl EguiLayer {
                         save_signal_file: &mut save_signal_file,
 
                         // API animation state
-                        api_flame_id,
-                        api_animation_id,
+                        api_flame_id: &api_state.flame_id,
+                        api_animation_id: &api_state.animation_id,
                         is_signed_in,
                         api_animation_save_action: &mut api_animation_save_action,
+                        open_save_online_dialog: &mut open_save_online_dialog,
                         compact_mode: self.compact_mode,
                     },
                     touch_tracker: &mut self.touch_tracker,
@@ -1197,8 +1206,28 @@ impl EguiLayer {
             self.render_api_notification(&ctx);
         }
 
-        // Poll save dialog action from the docked panel
-        let api_save_dialog_action = self.save_online_dialog_state.take_action();
+        // Open Save Online dialog from animation panel (if requested)
+        if open_save_online_dialog {
+            self.save_online_dialog_state.open(
+                &config_manager.config().flame.name,
+                api_state.flame_id.clone(),
+                api_state.animation_id.clone(),
+                api_state.flame_is_public,
+                has_animation_tracks,
+                api_state.animation_count,
+                true, // flame_owned — currently only browse own flames
+                true, // animation_owned
+            );
+            if self.compact_mode {
+                workspace.open_compact_panel(workspace::PanelType::SaveOnlineDialog, &self.ctx);
+            } else {
+                workspace.open_floating_panel(workspace::PanelType::SaveOnlineDialog, &self.ctx);
+            }
+        }
+
+        // Poll save dialog actions from the docked panel
+        let api_save_dialog_action = self.save_online_dialog_state.take_flame_action();
+        let api_animation_dialog_action = self.save_online_dialog_state.take_animation_action();
 
         // Close save dialog panel if requested (Cancel or after Save)
         if self.save_online_dialog_state.close_requested {
@@ -1371,6 +1400,11 @@ impl EguiLayer {
             response::ApiSaveAction::None
         };
 
+        // Merge animation action from dialog (overrides panel action if set)
+        if let Some(action) = api_animation_dialog_action {
+            api_animation_save_action = action;
+        }
+
         // Handle sign out action (from menu bar or account panel)
         if menu_actions.file.sign_out || sign_out_requested {
             // Clear auth from SystemSettings
@@ -1445,9 +1479,12 @@ impl EguiLayer {
         // Take selected preset config (reset to None after returning)
         let selected_preset_config = self.selected_preset_config.take();
 
-        // Take API flame ID and visibility (reset to None after returning)
+        // Take API flame metadata (reset after returning)
         let loaded_api_flame_id = self.loaded_api_flame_id.take();
         let loaded_api_flame_is_public = self.loaded_api_flame_is_public.take();
+        let loaded_api_flame_user_id = self.loaded_api_flame_user_id.take();
+        let loaded_api_flame_animation_count = self.loaded_api_flame_animation_count;
+        self.loaded_api_flame_animation_count = 0;
 
         // Take generated flame from random generator panel
         let generated_flame = self.generated_flame.take();
@@ -1497,6 +1534,8 @@ impl EguiLayer {
             api_animation_save_action,
             loaded_api_flame_id,
             loaded_api_flame_is_public,
+            loaded_api_flame_user_id,
+            loaded_api_flame_animation_count,
         }
     }
 

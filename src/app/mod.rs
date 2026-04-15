@@ -262,6 +262,50 @@ use winit::{event::*, event_loop::{EventLoop, ControlFlow, ActiveEventLoop}, win
 use egui_wgpu::wgpu::SurfaceError;
 use std::sync::{Arc, Mutex};
 
+/// Tracks which flame/animation is currently loaded from the API.
+/// Session-only state (not persisted). Cleared on new flame, load file, etc.
+pub struct ApiContentState {
+    pub flame_id: Option<String>,
+    pub flame_is_public: Option<bool>,
+    pub flame_user_id: Option<String>,
+    pub animation_id: Option<String>,
+    pub animation_count: u32,
+}
+
+impl Default for ApiContentState {
+    fn default() -> Self {
+        Self {
+            flame_id: None,
+            flame_is_public: None,
+            flame_user_id: None,
+            animation_id: None,
+            animation_count: 0,
+        }
+    }
+}
+
+impl ApiContentState {
+    /// Clear all API content state (new flame, load from disk, etc.)
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Clear only animation state (new animation, etc.)
+    pub fn clear_animation(&mut self) {
+        self.animation_id = None;
+    }
+
+    /// Check if the current user owns the flame.
+    /// Compares flame's user_id against the provided current user ID.
+    pub fn flame_owned_by(&self, current_user_id: Option<&str>) -> bool {
+        match (&self.flame_user_id, current_user_id) {
+            (Some(flame_uid), Some(current_uid)) => flame_uid == current_uid,
+            // If either is unknown, assume owned (e.g., just saved, no user_id returned)
+            _ => true,
+        }
+    }
+}
+
 use crate::gpu::device::GpuContext;
 use crate::ui::EguiLayer;
 use crate::ui::animation_panel::ExportProgress;
@@ -374,21 +418,15 @@ pub struct App {
     pub(super) audio_capture: crate::audio::AudioCapture,
     pub(super) signal_manager: crate::signal::SignalManager,
 
-    // API integration — flame
-    pub(super) api_flame_id: Option<String>,
-    /// Whether the currently-loaded API flame is public (None = unknown)
-    pub(super) api_flame_is_public: Option<bool>,
-    /// Visibility intent for the in-flight save — applied to api_flame_is_public on success
+    // API content state — tracks which flame/animation is loaded from the API
+    pub(super) api_state: ApiContentState,
+    // API save in-flight state
     pub(super) api_pending_visibility: Option<bool>,
     pub(super) api_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
     pub(super) api_save_in_progress: bool,
-
-    // API integration — animation
-    pub(super) api_animation_id: Option<String>,
     pub(super) api_animation_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
     pub(super) api_animation_save_in_progress: bool,
-    /// If Some, save animation after flame save completes (from Save Online dialog checkbox).
-    /// The inner Option carries the visibility to apply.
+    /// If Some, save animation after flame save completes (legacy deferred save).
     pub(super) pending_animation_save: Option<Option<crate::api::types::ApiVisibility>>,
 
     // URL deep-link loading (WASM: ?flame=uuid or ?animation=uuid)
@@ -504,12 +542,10 @@ impl App {
             audio_player: crate::audio::AudioPlayer::new(),
             audio_capture: crate::audio::AudioCapture::new(),
             signal_manager: crate::signal::SignalManager::new(),
-            api_flame_id: None,
-            api_flame_is_public: None,
+            api_state: ApiContentState::default(),
             api_pending_visibility: None,
             api_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_save_in_progress: false,
-            api_animation_id: None,
             api_animation_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_animation_save_in_progress: false,
             pending_animation_save: None,
@@ -1001,9 +1037,7 @@ impl App {
             &mut self.audio_capture,
             &mut self.signal_manager,
             &signal_names,
-            &self.api_flame_id,
-            &self.api_flame_is_public,
-            &self.api_animation_id,
+            &self.api_state,
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);

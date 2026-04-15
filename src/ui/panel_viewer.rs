@@ -208,6 +208,10 @@ pub struct PanelContext<'a> {
     pub loaded_api_flame_id: &'a mut Option<String>,
     // Visibility of flame loaded from Online tab
     pub loaded_api_flame_is_public: &'a mut Option<bool>,
+    // Owner user ID of flame loaded from Online tab
+    pub loaded_api_flame_user_id: &'a mut Option<String>,
+    // Animation count of flame loaded from Online tab
+    pub loaded_api_flame_animation_count: &'a mut u32,
 
     // API notification from browser panel (e.g., delete result)
     pub api_notification: &'a mut Option<(String, bool)>,
@@ -288,6 +292,9 @@ pub struct PanelContext<'a> {
 
     // API animation save action (from animation panel)
     pub api_animation_save_action: &'a mut super::response::ApiAnimationSaveAction,
+
+    // Open Save Online dialog (from animation panel)
+    pub open_save_online_dialog: &'a mut bool,
 
     // Compact mode (cached from system settings)
     pub compact_mode: bool,
@@ -600,12 +607,9 @@ impl<'a> PanelViewer<'a> {
             Some(&api_context),
         );
 
-        // Handle animation API save/update responses
-        if response.api_save_animation {
-            *self.context.api_animation_save_action = super::response::ApiAnimationSaveAction::SaveNew;
-        }
-        if response.api_update_animation {
-            *self.context.api_animation_save_action = super::response::ApiAnimationSaveAction::Update;
+        // Open Save Online dialog from animation panel
+        if response.open_save_online_dialog {
+            *self.context.open_save_online_dialog = true;
         }
 
         // Handle file control responses (must be after render_file_controls)
@@ -1391,6 +1395,8 @@ impl<'a> PanelViewer<'a> {
                 // Pass API flame ID and visibility through (for Online tab loads)
                 *self.context.loaded_api_flame_id = response.api_flame_id;
                 *self.context.loaded_api_flame_is_public = response.api_flame_is_public;
+                *self.context.loaded_api_flame_user_id = response.api_flame_user_id;
+                *self.context.loaded_api_flame_animation_count = response.api_flame_animation_count;
             }
 
             // Pass API notifications through (e.g., delete result)

@@ -42,6 +42,10 @@ pub struct GalleryResponse {
     pub api_flame_id: Option<String>,
     /// Whether the loaded flame is public (None = unknown)
     pub api_flame_is_public: Option<bool>,
+    /// User ID of the flame's owner (for ownership check)
+    pub api_flame_user_id: Option<String>,
+    /// Number of animations linked to this flame
+    pub api_flame_animation_count: u32,
     /// API notification message (message, is_error) — e.g. delete result
     pub api_notification: Option<(String, bool)>,
     /// Session expired (401 detected) — triggers sign-out flow

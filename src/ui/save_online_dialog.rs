@@ -1,26 +1,34 @@
-//! Save Online dialog — docked panel for naming a flame before saving to the API
+//! Save Online dialog — unified panel for saving flame and animation to the API
 
 use egui;
 use rust_i18n::t;
-use super::response::ApiSaveAction;
+use super::response::{ApiSaveAction, ApiAnimationSaveAction};
 
 /// State for the Save Online dialog panel
 pub struct SaveOnlineDialogState {
     /// Flame name to save
     pub name: String,
-    /// API flame ID if this flame already exists online (enables Update mode)
+    /// API flame ID if this flame already exists online
     pub api_flame_id: Option<String>,
+    /// API animation ID if this animation already exists online
+    pub api_animation_id: Option<String>,
     /// Upload a thumbnail after saving
     pub upload_thumbnail: bool,
     /// Make the flame publicly visible
     pub make_public: bool,
-    /// Also save the current animation alongside the flame
-    pub save_animation: bool,
-    /// Whether animation tracks exist (controls default for save_animation)
+    /// Whether animation tracks exist (controls animation section)
     pub has_animation_tracks: bool,
-    /// Action produced by the dialog (polled after render)
-    pub action: Option<ApiSaveAction>,
-    /// Whether the dialog should be closed (Cancel or after Save)
+    /// Number of animations linked to this flame (from API)
+    pub animation_count: u32,
+    /// Whether the current user owns the flame (disables Update if false)
+    pub flame_owned: bool,
+    /// Whether the current user owns the animation (disables Update if false)
+    pub animation_owned: bool,
+    /// Flame action produced by the dialog
+    pub flame_action: Option<ApiSaveAction>,
+    /// Animation action produced by the dialog
+    pub animation_action: Option<ApiAnimationSaveAction>,
+    /// Whether the dialog should be closed
     pub close_requested: bool,
 }
 
@@ -29,11 +37,15 @@ impl Default for SaveOnlineDialogState {
         Self {
             name: String::new(),
             api_flame_id: None,
+            api_animation_id: None,
             upload_thumbnail: true,
             make_public: false,
-            save_animation: false,
             has_animation_tracks: false,
-            action: None,
+            animation_count: 0,
+            flame_owned: true,
+            animation_owned: true,
+            flame_action: None,
+            animation_action: None,
             close_requested: false,
         }
     }
@@ -41,25 +53,49 @@ impl Default for SaveOnlineDialogState {
 
 impl SaveOnlineDialogState {
     /// Pre-fill the dialog before opening
-    pub fn open(&mut self, name: &str, api_flame_id: Option<String>, is_public: Option<bool>, has_animation_tracks: bool) {
+    pub fn open(
+        &mut self,
+        name: &str,
+        api_flame_id: Option<String>,
+        api_animation_id: Option<String>,
+        is_public: Option<bool>,
+        has_animation_tracks: bool,
+        animation_count: u32,
+        flame_owned: bool,
+        animation_owned: bool,
+    ) {
         self.name = name.to_string();
         self.api_flame_id = api_flame_id;
+        self.api_animation_id = api_animation_id;
         self.upload_thumbnail = true;
         self.make_public = is_public.unwrap_or(false);
-        self.save_animation = has_animation_tracks;
         self.has_animation_tracks = has_animation_tracks;
-        self.action = None;
+        self.animation_count = animation_count;
+        self.flame_owned = flame_owned;
+        self.animation_owned = animation_owned;
+        self.flame_action = None;
+        self.animation_action = None;
         self.close_requested = false;
     }
 
-    /// Take the pending action (if any)
-    pub fn take_action(&mut self) -> Option<ApiSaveAction> {
-        self.action.take()
+    /// Take the pending flame action (if any)
+    pub fn take_flame_action(&mut self) -> Option<ApiSaveAction> {
+        self.flame_action.take()
     }
 
-    /// Whether this is an update to an existing flame
-    pub fn is_update(&self) -> bool {
+    /// Take the pending animation action (if any)
+    pub fn take_animation_action(&mut self) -> Option<ApiAnimationSaveAction> {
+        self.animation_action.take()
+    }
+
+    /// Whether the flame exists online
+    pub fn has_flame(&self) -> bool {
         self.api_flame_id.is_some()
+    }
+
+    /// Whether the animation exists online
+    pub fn has_animation(&self) -> bool {
+        self.api_animation_id.is_some()
     }
 }
 
@@ -68,107 +104,124 @@ pub fn render_save_online_dialog(
     ui: &mut egui::Ui,
     state: &mut SaveOnlineDialogState,
 ) {
-    let is_update = state.is_update();
+    let has_flame = state.has_flame();
+    let has_animation = state.has_animation();
 
     ui.add_space(8.0);
 
+    // Name field
     ui.horizontal(|ui| {
         ui.label(t!("api.save_dialog_name_label"));
         let response = ui.text_edit_singleline(&mut state.name);
         super::vkb_sync(ui, &response, &state.name);
+    });
 
-        // Auto-focus the text field
-        if !response.has_focus() {
-            response.request_focus();
-        }
+    ui.add_space(4.0);
 
-        // Enter key submits (primary action: update or save new)
-        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            let name = state.name.trim().to_string();
-            if !name.is_empty() {
-                state.action = Some(make_primary_action(state, &name));
+    // Options
+    ui.checkbox(&mut state.upload_thumbnail, t!("api.save_dialog_thumbnail"));
+    ui.checkbox(&mut state.make_public, t!("api.save_dialog_public"));
+
+    ui.add_space(8.0);
+
+    // ── Flame section ──
+    ui.separator();
+    ui.label(egui::RichText::new(t!("api.save_dialog_flame_section")).strong());
+    ui.add_space(4.0);
+
+    // Warning if animations depend on this flame
+    if has_flame && state.animation_count > 0 {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(
+                    t!("api.save_dialog_animation_warning", count = state.animation_count)
+                )
+                .color(egui::Color32::from_rgb(255, 200, 80))
+                .small()
+            );
+        });
+        ui.add_space(2.0);
+    }
+
+    ui.horizontal(|ui| {
+        let name = state.name.trim().to_string();
+        let name_valid = !name.is_empty();
+
+        if has_flame {
+            // Save as Copy
+            if ui.add_enabled(name_valid, egui::Button::new(t!("api.save_dialog_save_as_copy"))).clicked() {
+                state.flame_action = Some(ApiSaveAction::SaveNew {
+                    name: name.clone(),
+                    upload_thumbnail: state.upload_thumbnail,
+                    make_public: state.make_public,
+                });
+                state.close_requested = true;
+            }
+            // Update (only if owned)
+            if ui.add_enabled(name_valid && state.flame_owned, egui::Button::new(t!("api.save_dialog_update"))).clicked() {
+                state.flame_action = Some(ApiSaveAction::Update {
+                    name,
+                    upload_thumbnail: state.upload_thumbnail,
+                    make_public: state.make_public,
+                });
+                state.close_requested = true;
+            }
+        } else {
+            // Save (new flame)
+            if ui.add_enabled(name_valid, egui::Button::new(t!("api.save_dialog_save"))).clicked() {
+                state.flame_action = Some(ApiSaveAction::SaveNew {
+                    name,
+                    upload_thumbnail: state.upload_thumbnail,
+                    make_public: state.make_public,
+                });
                 state.close_requested = true;
             }
         }
     });
 
+    ui.add_space(8.0);
+
+    // ── Animation section ──
+    ui.separator();
+    ui.label(egui::RichText::new(t!("api.save_dialog_animation_section")).strong());
     ui.add_space(4.0);
 
-    // Options checkboxes
-    ui.checkbox(&mut state.upload_thumbnail, t!("api.save_dialog_thumbnail"));
+    // Animation buttons: only active if flame is saved AND has tracks
+    let can_save_animation = has_flame && state.has_animation_tracks;
 
-    ui.checkbox(&mut state.make_public, t!("api.save_dialog_public"));
+    ui.horizontal(|ui| {
+        if has_animation {
+            // Save as Copy
+            if ui.add_enabled(can_save_animation, egui::Button::new(t!("api.save_dialog_save_as_copy"))).clicked() {
+                state.animation_action = Some(ApiAnimationSaveAction::SaveNew);
+                state.close_requested = true;
+            }
+            // Update (only if owned)
+            if ui.add_enabled(state.animation_owned, egui::Button::new(t!("api.save_dialog_update"))).clicked() {
+                state.animation_action = Some(ApiAnimationSaveAction::Update);
+                state.close_requested = true;
+            }
+        } else {
+            // Save (new animation)
+            if ui.add_enabled(can_save_animation, egui::Button::new(t!("api.save_dialog_save"))).clicked() {
+                state.animation_action = Some(ApiAnimationSaveAction::SaveNew);
+                state.close_requested = true;
+            }
+        }
+    });
 
-    if state.has_animation_tracks {
-        ui.checkbox(&mut state.save_animation, t!("api.save_dialog_animation"));
+    if !has_flame && state.has_animation_tracks {
+        ui.label(
+            egui::RichText::new(t!("api.save_dialog_save_flame_first"))
+                .small()
+                .color(egui::Color32::GRAY)
+        );
     }
 
     ui.add_space(8.0);
 
-    ui.horizontal(|ui| {
-        if is_update {
-            // Update button (primary)
-            if ui.button(t!("api.save_dialog_update")).clicked() {
-                let name = state.name.trim().to_string();
-                if !name.is_empty() {
-                    state.action = Some(ApiSaveAction::Update {
-                        name,
-                        upload_thumbnail: state.upload_thumbnail,
-                        make_public: state.make_public,
-                        save_animation: state.save_animation,
-                    });
-                    state.close_requested = true;
-                }
-            }
-            // Save As Copy button
-            if ui.button(t!("api.save_dialog_save_as_copy")).clicked() {
-                let name = state.name.trim().to_string();
-                if !name.is_empty() {
-                    state.action = Some(ApiSaveAction::SaveNew {
-                        name,
-                        upload_thumbnail: state.upload_thumbnail,
-                        make_public: state.make_public,
-                        save_animation: state.save_animation,
-                    });
-                    state.close_requested = true;
-                }
-            }
-        } else {
-            // Save button (new flame)
-            if ui.button(t!("api.save_dialog_save")).clicked() {
-                let name = state.name.trim().to_string();
-                if !name.is_empty() {
-                    state.action = Some(ApiSaveAction::SaveNew {
-                        name,
-                        upload_thumbnail: state.upload_thumbnail,
-                        make_public: state.make_public,
-                        save_animation: state.save_animation,
-                    });
-                    state.close_requested = true;
-                }
-            }
-        }
-        if ui.button(t!("api.save_dialog_cancel")).clicked() {
-            state.close_requested = true;
-        }
-    });
-}
-
-/// Build the primary action (used for Enter key submission)
-fn make_primary_action(state: &SaveOnlineDialogState, name: &str) -> ApiSaveAction {
-    if state.is_update() {
-        ApiSaveAction::Update {
-            name: name.to_string(),
-            upload_thumbnail: state.upload_thumbnail,
-            make_public: state.make_public,
-            save_animation: state.save_animation,
-        }
-    } else {
-        ApiSaveAction::SaveNew {
-            name: name.to_string(),
-            upload_thumbnail: state.upload_thumbnail,
-            make_public: state.make_public,
-            save_animation: state.save_animation,
-        }
+    // Cancel
+    if ui.button(t!("api.save_dialog_cancel")).clicked() {
+        state.close_requested = true;
     }
 }

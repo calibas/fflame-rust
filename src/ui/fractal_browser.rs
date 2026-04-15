@@ -66,7 +66,7 @@ pub struct FractalBrowserPanel {
     /// Whether we're loading a specific flame's full config
     online_loading_flame: bool,
     /// Shared slot for receiving async flame config result (config, flame_id, is_public)
-    online_flame_result: Arc<Mutex<Option<Result<(FractalConfig, String, Option<bool>), String>>>>,
+    online_flame_result: Arc<Mutex<Option<Result<OnlineFlameResult, String>>>>,
     /// Whether a delete is in progress
     online_deleting: bool,
     /// Shared slot for receiving async delete result (flame_name on success)
@@ -466,10 +466,12 @@ impl FractalBrowserPanel {
                 if let Some(result) = slot.take() {
                     self.online_loading_flame = false;
                     match result {
-                        Ok((config, flame_id, is_public)) => {
-                            response.selected = Some(config);
-                            response.api_flame_id = Some(flame_id);
-                            response.api_flame_is_public = is_public;
+                        Ok(flame_result) => {
+                            response.selected = Some(flame_result.config);
+                            response.api_flame_id = Some(flame_result.flame_id);
+                            response.api_flame_is_public = flame_result.is_public;
+                            response.api_flame_user_id = Some(flame_result.user_id);
+                            response.api_flame_animation_count = flame_result.animation_count;
                         }
                         Err(e) => {
                             if is_auth_error(&e) {
@@ -884,13 +886,28 @@ async fn search_online_flames(
 
 /// Fetch a single flame's full config from the API (cross-platform async helper)
 /// Returns (FractalConfig, flame_id, is_public) on success.
-async fn fetch_online_flame(base_url: &str, token: &str, flame_id: &str) -> Result<(crate::config::FractalConfig, String, Option<bool>), String> {
+/// Result of fetching a flame from the API
+struct OnlineFlameResult {
+    config: crate::config::FractalConfig,
+    flame_id: String,
+    is_public: Option<bool>,
+    user_id: String,
+    animation_count: u32,
+}
+
+async fn fetch_online_flame(base_url: &str, token: &str, flame_id: &str) -> Result<OnlineFlameResult, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    let (config, is_public) = api.load_flame_with_visibility(flame_id)
+    let result = api.load_flame_with_visibility(flame_id)
         .await
         .map_err(|e| e.to_string())?;
-    Ok((config, flame_id.to_string(), is_public))
+    Ok(OnlineFlameResult {
+        config: result.config,
+        flame_id: flame_id.to_string(),
+        is_public: result.is_public,
+        user_id: result.user_id,
+        animation_count: result.animation_count,
+    })
 }
 
 /// Delete a flame from the API (cross-platform async helper)

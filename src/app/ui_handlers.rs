@@ -200,8 +200,7 @@ impl App {
             }
 
             // Clear API flame ID — this is a new local flame
-            self.api_flame_id = None;
-            self.api_flame_is_public = None;
+            self.api_state.clear();
         }
     }
 
@@ -226,6 +225,8 @@ impl App {
             if let Err(e) = self.load_config_with_undo(new_config, "history.action.random_flame".to_string()) {
                 eprintln!("Failed to load random flame: {}", e);
             }
+
+            self.api_state.clear();
         }
     }
 
@@ -740,10 +741,11 @@ impl App {
             } else {
                 log::info!("Preset loaded successfully");
 
-                // Track API flame ID if loaded from Online tab, clear otherwise
-                self.api_flame_id = ui_response.loaded_api_flame_id.clone();
-                // Visibility unknown until save; loaded flames carry it via FlameResponse.visibility
-                self.api_flame_is_public = ui_response.loaded_api_flame_is_public;
+                // Track API flame metadata if loaded from Online tab
+                self.api_state.flame_id = ui_response.loaded_api_flame_id.clone();
+                self.api_state.flame_is_public = ui_response.loaded_api_flame_is_public;
+                self.api_state.flame_user_id = ui_response.loaded_api_flame_user_id.clone();
+                self.api_state.animation_count = ui_response.loaded_api_flame_animation_count;
             }
         }
     }
@@ -1113,8 +1115,8 @@ impl App {
                 match save_result {
                     Ok(flame_id) => {
                         log::info!("Flame saved/updated online: {}", flame_id);
-                        self.api_flame_id = Some(flame_id.clone());
-                        self.api_flame_is_public = self.api_pending_visibility.take();
+                        self.api_state.flame_id = Some(flame_id.clone());
+                        self.api_state.flame_is_public = self.api_pending_visibility.take();
                         let name = self.config_manager.active_config().flame.name.clone();
                         self.egui_layer.show_api_notification(
                             &rust_i18n::t!("api.save_success", name = name),
@@ -1170,7 +1172,7 @@ impl App {
             };
 
             match action {
-                ApiSaveAction::SaveNew { name, upload_thumbnail, make_public, save_animation } => {
+                ApiSaveAction::SaveNew { name, upload_thumbnail, make_public } => {
                     let name = name.clone();
                     let upload_thumbnail = *upload_thumbnail;
                     let make_public = *make_public;
@@ -1182,13 +1184,6 @@ impl App {
                     };
 
                     self.api_pending_visibility = Some(make_public);
-
-                    // Track that we need to save animation after flame save completes
-                    self.pending_animation_save = if *save_animation {
-                        Some(visibility)
-                    } else {
-                        None
-                    };
 
                     #[cfg(target_arch = "wasm32")]
                     {
@@ -1226,7 +1221,7 @@ impl App {
                         });
                     }
                 }
-                ApiSaveAction::Update { name, upload_thumbnail, make_public, save_animation } => {
+                ApiSaveAction::Update { name, upload_thumbnail, make_public } => {
                     let name = name.clone();
                     let upload_thumbnail = *upload_thumbnail;
                     let make_public = *make_public;
@@ -1239,14 +1234,7 @@ impl App {
 
                     self.api_pending_visibility = Some(make_public);
 
-                    // Track that we need to save animation after flame save completes
-                    self.pending_animation_save = if *save_animation {
-                        Some(visibility)
-                    } else {
-                        None
-                    };
-
-                    if let Some(flame_id) = self.api_flame_id.clone() {
+                    if let Some(flame_id) = self.api_state.flame_id.clone() {
                         #[cfg(target_arch = "wasm32")]
                         {
                             let device = self.gpu.device.clone();
@@ -1301,7 +1289,7 @@ impl App {
                     match save_result {
                         Ok(animation_id) => {
                             log::info!("Animation saved/updated online: {}", animation_id);
-                            self.api_animation_id = Some(animation_id);
+                            self.api_state.animation_id = Some(animation_id);
                             let name = self.animation_controller.animation
                                 .as_ref()
                                 .map(|a| a.name.clone())
@@ -1329,14 +1317,14 @@ impl App {
         if should_act {
             match action {
                 ApiAnimationSaveAction::SaveNew => {
-                    if let Some(flame_id) = self.api_flame_id.clone() {
+                    if let Some(flame_id) = self.api_state.flame_id.clone() {
                         self.trigger_animation_save(&flame_id, None);
                     } else {
                         log::error!("Animation save requested but no api_flame_id");
                     }
                 }
                 ApiAnimationSaveAction::Update => {
-                    if let Some(animation_id) = self.api_animation_id.clone() {
+                    if let Some(animation_id) = self.api_state.animation_id.clone() {
                         self.trigger_animation_update(&animation_id);
                     } else {
                         log::error!("Animation update requested but no api_animation_id");
@@ -1491,8 +1479,8 @@ impl App {
                     );
                     return;
                 }
-                self.api_flame_id = Some(flame_id);
-                self.api_flame_is_public = is_public;
+                self.api_state.flame_id = Some(flame_id);
+                self.api_state.flame_is_public = is_public;
                 self.egui_layer.show_api_notification(
                     &rust_i18n::t!("api.url_load_flame_success", name = name),
                     false,
@@ -1518,9 +1506,9 @@ impl App {
                     generators, &mut self.signal_manager, duration,
                 );
 
-                self.api_animation_id = Some(animation_id);
+                self.api_state.animation_id = Some(animation_id);
                 if let Some(fid) = flame_id {
-                    self.api_flame_id = Some(fid);
+                    self.api_state.flame_id = Some(fid);
                 }
                 self.egui_layer.show_api_notification(
                     &rust_i18n::t!("api.url_load_animation_success", name = anim_name),

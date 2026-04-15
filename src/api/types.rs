@@ -428,6 +428,8 @@ pub struct FlameResponse {
     pub variation_names: Vec<String>,
     pub has_3d: bool,
     #[serde(default)]
+    pub animation_count: u32,
+    #[serde(default)]
     pub visibility: Option<ApiVisibility>,
     pub created_at: String,
     pub updated_at: String,
