@@ -140,6 +140,8 @@ pub struct AnimationPanelResponse {
     pub trigger_animation_load: bool,
     /// Open the Save Online dialog (for saving flame + animation)
     pub open_save_online_dialog: bool,
+    /// Animation ID to load from the API (clicked from the animations list)
+    pub load_api_animation_id: Option<String>,
 }
 
 /// Render animation panel content
@@ -298,6 +300,8 @@ pub struct AnimationApiContext<'a> {
     pub api_flame_id: &'a Option<String>,
     /// Current animation's API ID (None if animation not saved online)
     pub api_animation_id: &'a Option<String>,
+    /// List of animations linked to the current flame (from FlameResponse)
+    pub flame_animations: &'a [crate::api::types::AnimationSummary],
     /// Whether the user is signed in
     pub is_signed_in: bool,
 }
@@ -382,6 +386,28 @@ pub fn render_file_controls(
                     response.open_save_online_dialog = true;
                 }
             });
+        }
+    }
+
+    // List of animations attached to the current online flame
+    if let Some(ctx) = api_context {
+        if ctx.is_signed_in && ctx.api_flame_id.is_some() {
+            ui.add_space(8.0);
+            ui.separator();
+            ui.label(egui::RichText::new(t!("api.animations_on_server")).strong());
+            ui.add_space(2.0);
+            if ctx.flame_animations.is_empty() {
+                ui.label(egui::RichText::new(t!("api.no_animations")).color(egui::Color32::GRAY).small());
+            } else {
+                for anim in ctx.flame_animations {
+                    ui.horizontal(|ui| {
+                        ui.label(&anim.name);
+                        if ui.button(t!("api.load")).clicked() {
+                            response.load_api_animation_id = Some(anim.id.clone());
+                        }
+                    });
+                }
+            }
         }
     }
 }

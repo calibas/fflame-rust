@@ -94,6 +94,10 @@ pub struct UiResponse {
     pub loaded_api_flame_user_id: Option<String>,
     // API: Number of animations linked to the loaded flame
     pub loaded_api_flame_animation_count: u32,
+    // API: List of animations linked to the loaded flame
+    pub loaded_api_flame_animations: Vec<crate::api::types::AnimationSummary>,
+    // API: Animation ID to load (from the animations list in the panel)
+    pub load_api_animation_id: Option<String>,
 }
 
 /// API save action type (flame only — animation is separate)
@@ -172,6 +176,8 @@ impl Default for UiResponse {
             loaded_api_flame_is_public: None,
             loaded_api_flame_user_id: None,
             loaded_api_flame_animation_count: 0,
+            loaded_api_flame_animations: Vec::new(),
+            load_api_animation_id: None,
         }
     }
 }

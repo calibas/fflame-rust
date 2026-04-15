@@ -288,6 +288,7 @@ pub struct EguiLayer {
     loaded_api_flame_is_public: Option<bool>,
     loaded_api_flame_user_id: Option<String>,
     loaded_api_flame_animation_count: u32,
+    loaded_api_flame_animations: Vec<crate::api::types::AnimationSummary>,
 
     // API: notification toast
     api_notification: Option<ApiNotification>,
@@ -426,6 +427,7 @@ impl EguiLayer {
             loaded_api_flame_is_public: None,
             loaded_api_flame_user_id: None,
             loaded_api_flame_animation_count: 0,
+            loaded_api_flame_animations: Vec::new(),
             api_notification: None,
             save_online_dialog_state: save_online_dialog::SaveOnlineDialogState::default(),
             api_browser_notification: None,
@@ -811,6 +813,7 @@ impl EguiLayer {
         // Animation API save action
         let mut api_animation_save_action = response::ApiAnimationSaveAction::None;
         let mut open_save_online_dialog = false;
+        let mut load_api_animation_id: Option<String> = None;
 
         // Path filters
         let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
@@ -1001,6 +1004,7 @@ impl EguiLayer {
                         loaded_api_flame_is_public: &mut self.loaded_api_flame_is_public,
                         loaded_api_flame_user_id: &mut self.loaded_api_flame_user_id,
                         loaded_api_flame_animation_count: &mut self.loaded_api_flame_animation_count,
+                        loaded_api_flame_animations: &mut self.loaded_api_flame_animations,
 
                         // API notification from browser panel
                         api_notification: &mut self.api_browser_notification,
@@ -1077,9 +1081,11 @@ impl EguiLayer {
                         // API animation state
                         api_flame_id: &api_state.flame_id,
                         api_animation_id: &api_state.animation_id,
+                        flame_animations: &api_state.flame_animations,
                         is_signed_in,
                         api_animation_save_action: &mut api_animation_save_action,
                         open_save_online_dialog: &mut open_save_online_dialog,
+                        load_api_animation_id: &mut load_api_animation_id,
                         compact_mode: self.compact_mode,
                     },
                     touch_tracker: &mut self.touch_tracker,
@@ -1493,6 +1499,7 @@ impl EguiLayer {
         let loaded_api_flame_user_id = self.loaded_api_flame_user_id.take();
         let loaded_api_flame_animation_count = self.loaded_api_flame_animation_count;
         self.loaded_api_flame_animation_count = 0;
+        let loaded_api_flame_animations = std::mem::take(&mut self.loaded_api_flame_animations);
 
         // Take generated flame from random generator panel
         let generated_flame = self.generated_flame.take();
@@ -1544,6 +1551,8 @@ impl EguiLayer {
             loaded_api_flame_is_public,
             loaded_api_flame_user_id,
             loaded_api_flame_animation_count,
+            loaded_api_flame_animations,
+            load_api_animation_id,
         }
     }
 

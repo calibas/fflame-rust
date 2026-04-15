@@ -472,6 +472,7 @@ impl FractalBrowserPanel {
                             response.api_flame_is_public = flame_result.is_public;
                             response.api_flame_user_id = Some(flame_result.user_id);
                             response.api_flame_animation_count = flame_result.animation_count;
+                            response.api_flame_animations = flame_result.animations;
                         }
                         Err(e) => {
                             if is_auth_error(&e) {
@@ -893,6 +894,7 @@ struct OnlineFlameResult {
     is_public: Option<bool>,
     user_id: String,
     animation_count: u32,
+    animations: Vec<crate::api::types::AnimationSummary>,
 }
 
 async fn fetch_online_flame(base_url: &str, token: &str, flame_id: &str) -> Result<OnlineFlameResult, String> {
@@ -907,6 +909,7 @@ async fn fetch_online_flame(base_url: &str, token: &str, flame_id: &str) -> Resu
         is_public: result.is_public,
         user_id: result.user_id,
         animation_count: result.animation_count,
+        animations: result.animations,
     })
 }
 

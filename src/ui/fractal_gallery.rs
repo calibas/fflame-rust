@@ -46,6 +46,8 @@ pub struct GalleryResponse {
     pub api_flame_user_id: Option<String>,
     /// Number of animations linked to this flame
     pub api_flame_animation_count: u32,
+    /// List of animations linked to this flame
+    pub api_flame_animations: Vec<crate::api::types::AnimationSummary>,
     /// API notification message (message, is_error) — e.g. delete result
     pub api_notification: Option<(String, bool)>,
     /// Session expired (401 detected) — triggers sign-out flow
