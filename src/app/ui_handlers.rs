@@ -1316,16 +1316,26 @@ impl App {
         let should_act = !matches!(action, ApiAnimationSaveAction::None) && !self.api_animation_save_in_progress;
         if should_act {
             match action {
-                ApiAnimationSaveAction::SaveNew => {
+                ApiAnimationSaveAction::SaveNew { make_public } => {
+                    let visibility = if *make_public {
+                        Some(crate::api::types::ApiVisibility::Public)
+                    } else {
+                        Some(crate::api::types::ApiVisibility::Private)
+                    };
                     if let Some(flame_id) = self.api_state.flame_id.clone() {
-                        self.trigger_animation_save(&flame_id, None);
+                        self.trigger_animation_save(&flame_id, visibility);
                     } else {
                         log::error!("Animation save requested but no api_flame_id");
                     }
                 }
-                ApiAnimationSaveAction::Update => {
+                ApiAnimationSaveAction::Update { make_public } => {
+                    let visibility = if *make_public {
+                        Some(crate::api::types::ApiVisibility::Public)
+                    } else {
+                        Some(crate::api::types::ApiVisibility::Private)
+                    };
                     if let Some(animation_id) = self.api_state.animation_id.clone() {
-                        self.trigger_animation_update(&animation_id);
+                        self.trigger_animation_update(&animation_id, visibility);
                     } else {
                         log::error!("Animation update requested but no api_animation_id");
                     }
@@ -1387,11 +1397,12 @@ impl App {
     }
 
     /// Trigger updating an existing animation on the API.
-    fn trigger_animation_update(&mut self, animation_id: &str) {
+    fn trigger_animation_update(&mut self, animation_id: &str, visibility: Option<crate::api::types::ApiVisibility>) {
         let animation = match self.animation_controller.animation.as_ref() {
             Some(a) => a.clone(),
             None => return,
         };
+        let flame_id = self.api_state.flame_id.clone();
 
         let settings = self.config_manager.system_settings();
         let base_url = crate::api::API_BASE_URL.to_string();
@@ -1420,7 +1431,7 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         {
             wasm_bindgen_futures::spawn_local(async move {
-                let result = update_animation_online(&base_url, &token, animation, &animation_id, &name).await;
+                let result = update_animation_online(&base_url, &token, animation, &animation_id, &name, flame_id, visibility).await;
                 if let Ok(mut slot) = result_slot.lock() {
                     *slot = Some(result);
                 }
@@ -1429,7 +1440,7 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         {
             std::thread::spawn(move || {
-                let result = pollster::block_on(update_animation_online(&base_url, &token, animation, &animation_id, &name));
+                let result = pollster::block_on(update_animation_online(&base_url, &token, animation, &animation_id, &name, flame_id, visibility));
                 if let Ok(mut slot) = result_slot.lock() {
                     *slot = Some(result);
                 }
@@ -1614,10 +1625,12 @@ async fn update_animation_online(
     animation: crate::animation::Animation,
     animation_id: &str,
     name: &str,
+    flame_id: Option<String>,
+    visibility: Option<crate::api::types::ApiVisibility>,
 ) -> Result<String, String> {
     let mut api = crate::api::ApiState::new(base_url);
     api.set_token(token);
-    api.update_animation(animation_id, &animation, Some(name))
+    api.update_animation(animation_id, &animation, Some(name), flame_id.as_deref(), visibility)
         .await
         .map(|resp| resp.id)
         .map_err(|e| e.to_string())

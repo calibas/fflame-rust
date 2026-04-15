@@ -190,21 +190,22 @@ pub fn render_save_online_dialog(
     let can_save_animation = has_flame && state.has_animation_tracks;
 
     ui.horizontal(|ui| {
+        let make_public = state.make_public;
         if has_animation {
             // Save as Copy
             if ui.add_enabled(can_save_animation, egui::Button::new(t!("api.save_dialog_save_as_copy"))).clicked() {
-                state.animation_action = Some(ApiAnimationSaveAction::SaveNew);
+                state.animation_action = Some(ApiAnimationSaveAction::SaveNew { make_public });
                 state.close_requested = true;
             }
             // Update (only if owned)
             if ui.add_enabled(state.animation_owned, egui::Button::new(t!("api.save_dialog_update"))).clicked() {
-                state.animation_action = Some(ApiAnimationSaveAction::Update);
+                state.animation_action = Some(ApiAnimationSaveAction::Update { make_public });
                 state.close_requested = true;
             }
         } else {
             // Save (new animation)
             if ui.add_enabled(can_save_animation, egui::Button::new(t!("api.save_dialog_save"))).clicked() {
-                state.animation_action = Some(ApiAnimationSaveAction::SaveNew);
+                state.animation_action = Some(ApiAnimationSaveAction::SaveNew { make_public });
                 state.close_requested = true;
             }
         }
