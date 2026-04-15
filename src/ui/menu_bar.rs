@@ -51,7 +51,16 @@ pub fn render_menu_bar(
                         } else {
                             None
                         };
-                        save_online_dialog_state.open(&menu_state.flame_name, api_flame_id, menu_state.api_flame_is_public, menu_state.has_animation_tracks);
+                        save_online_dialog_state.open(
+                            &menu_state.flame_name,
+                            api_flame_id,
+                            menu_state.api_animation_id.clone(),
+                            menu_state.api_flame_is_public,
+                            menu_state.has_animation_tracks,
+                            menu_state.animation_count,
+                            menu_state.flame_owned,
+                            menu_state.animation_owned,
+                        );
                         workspace.open_floating_panel(super::workspace::PanelType::SaveOnlineDialog, ctx);
                     }
                 }

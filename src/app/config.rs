@@ -6,6 +6,10 @@ impl App {
     /// Load config via ConfigManager and sync app state
     /// Creates snapshot-based undo entry and triggers GPU update
     pub fn load_config_with_undo(&mut self, config: FractalConfig, description: String) -> Result<(), String> {
+        // Clear API content state — loading new content means any previous
+        // API association is gone. API-load paths re-set these after this call.
+        self.api_state.clear();
+
         // Log effects being loaded (diagnostic for API-loaded configs)
         let color_count = config.color_effects.iter().filter(|e| e.enabled).count();
         let density_count = config.density_effects.iter().filter(|e| e.enabled).count();

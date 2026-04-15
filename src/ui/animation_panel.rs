@@ -138,10 +138,8 @@ pub struct AnimationPanelResponse {
     /// Trigger animation load file picker (WASM only - handled in app render loop)
     #[cfg(target_arch = "wasm32")]
     pub trigger_animation_load: bool,
-    /// Save animation online (new)
-    pub api_save_animation: bool,
-    /// Update existing animation online
-    pub api_update_animation: bool,
+    /// Open the Save Online dialog (for saving flame + animation)
+    pub open_save_online_dialog: bool,
 }
 
 /// Render animation panel content
@@ -376,24 +374,12 @@ pub fn render_file_controls(
         }
     });
 
-    // Row 4: Online Save/Update buttons (only shown when signed in with a flame saved)
+    // Row 4: Save Online button (opens the Save Online dialog)
     if let Some(ctx) = api_context {
         if ctx.is_signed_in {
             ui.horizontal(|ui| {
-                // Save Online — requires flame to be saved first and animation to have tracks
-                let can_save = has_tracks && ctx.api_flame_id.is_some();
-                if ui.add_enabled(can_save, egui::Button::new(t!("api.animation_save_online")))
-                    .clicked()
-                {
-                    response.api_save_animation = true;
-                }
-
-                // Update Online — only when animation was previously saved
-                let can_update = ctx.api_animation_id.is_some();
-                if ui.add_enabled(can_update, egui::Button::new(t!("api.animation_update_online")))
-                    .clicked()
-                {
-                    response.api_update_animation = true;
+                if ui.button(t!("api.animation_save_online")).clicked() {
+                    response.open_save_online_dialog = true;
                 }
             });
         }

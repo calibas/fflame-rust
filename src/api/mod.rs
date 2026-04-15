@@ -15,6 +15,14 @@ pub mod types;
 use crate::config::FractalConfig;
 use crate::resources::{FetchError, FetchResult, LoadState};
 
+/// Result of loading a flame from the API, including metadata for ownership tracking.
+pub struct FlameLoadResult {
+    pub config: FractalConfig,
+    pub is_public: Option<bool>,
+    pub user_id: String,
+    pub animation_count: u32,
+}
+
 /// Hard-coded API base URL. Change this for release builds.
 pub const API_BASE_URL: &str = "https://fractalsforall.com";
 // pub const API_BASE_URL: &str = "http://localhost:3000";
@@ -302,12 +310,12 @@ impl ApiState {
 
     /// Load a flame from the API and convert to FractalConfig.
     pub async fn load_flame(&self, flame_id: &str) -> FetchResult<FractalConfig> {
-        let (config, _visibility) = self.load_flame_with_visibility(flame_id).await?;
-        Ok(config)
+        let result = self.load_flame_with_visibility(flame_id).await?;
+        Ok(result.config)
     }
 
     /// Load a flame and also return its visibility (true = public).
-    pub async fn load_flame_with_visibility(&self, flame_id: &str) -> FetchResult<(FractalConfig, Option<bool>)> {
+    pub async fn load_flame_with_visibility(&self, flame_id: &str) -> FetchResult<FlameLoadResult> {
         let token = self.require_token()?;
         let url = build_url(API_BASE_URL, &format!("/api/flames/{}", flame_id));
         let resp: FlameResponse = client::api_get(&url, &token).await?;
@@ -323,8 +331,10 @@ impl ApiState {
         };
 
         let is_public = resp.visibility.as_ref().map(|v| matches!(v, ApiVisibility::Public));
+        let user_id = resp.user_id.clone();
+        let animation_count = resp.animation_count;
         let config = sync::flame_response_to_config(&resp, palette_resp.as_ref());
-        Ok((config, is_public))
+        Ok(FlameLoadResult { config, is_public, user_id, animation_count })
     }
 
     /// Delete a flame from the API.

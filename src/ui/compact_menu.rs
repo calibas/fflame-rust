@@ -131,7 +131,16 @@ fn render_compact_menu_items(
                 } else {
                     None
                 };
-                save_online_dialog_state.open(&menu_state.flame_name, api_flame_id, menu_state.api_flame_is_public, menu_state.has_animation_tracks);
+                save_online_dialog_state.open(
+                    &menu_state.flame_name,
+                    api_flame_id,
+                    menu_state.api_animation_id.clone(),
+                    menu_state.api_flame_is_public,
+                    menu_state.has_animation_tracks,
+                    menu_state.animation_count,
+                    menu_state.flame_owned,
+                    menu_state.animation_owned,
+                );
                 workspace.open_compact_panel(PanelType::SaveOnlineDialog, ctx);
                 ui.close();
             }
