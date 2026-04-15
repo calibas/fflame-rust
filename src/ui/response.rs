@@ -113,15 +113,15 @@ pub enum ApiSaveAction {
     },
 }
 
-/// API animation save action type (from Animation Panel buttons)
+/// API animation save action type
 #[derive(Debug, Clone, Default)]
 pub enum ApiAnimationSaveAction {
     #[default]
     None,
     /// Save as new animation linked to current flame
-    SaveNew,
+    SaveNew { make_public: bool },
     /// Update existing animation
-    Update,
+    Update { make_public: bool },
 }
 
 impl Default for UiResponse {

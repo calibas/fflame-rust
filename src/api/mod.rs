@@ -444,9 +444,11 @@ impl ApiState {
         animation_id: &str,
         animation: &crate::animation::Animation,
         name: Option<&str>,
+        flame_id: Option<&str>,
+        visibility: Option<ApiVisibility>,
     ) -> FetchResult<AnimationResponse> {
         let token = self.require_token()?;
-        let req = sync::animation_to_create_request(animation, name, None, None);
+        let req = sync::animation_to_create_request(animation, name, flame_id, visibility);
         let url = build_url(API_BASE_URL, &format!("/api/animations/{}", animation_id));
         client::api_put(&url, &req, &token).await
     }
