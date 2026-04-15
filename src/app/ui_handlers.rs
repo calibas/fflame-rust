@@ -1658,9 +1658,9 @@ async fn load_from_url(
 
         Ok(super::UrlLoadedData::Animation(animation, animation_id, effective_flame_id))
     } else if let Some(flame_id) = flame_id {
-        let (config, is_public) = api.load_flame_with_visibility(&flame_id).await
+        let result = api.load_flame_with_visibility(&flame_id).await
             .map_err(|e| format!("Failed to load flame: {}", e))?;
-        Ok(super::UrlLoadedData::Flame(config, flame_id, is_public))
+        Ok(super::UrlLoadedData::Flame(result.config, flame_id, result.is_public))
     } else {
         Err("No flame or animation ID provided".to_string())
     }

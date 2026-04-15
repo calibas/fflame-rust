@@ -6,6 +6,13 @@ impl App {
     /// Load config via ConfigManager and sync app state
     /// Creates snapshot-based undo entry and triggers GPU update
     pub fn load_config_with_undo(&mut self, config: FractalConfig, description: String) -> Result<(), String> {
+        // Snapshot the current api_state as the "after" of the previous snapshot
+        // (captures any changes since the last load, e.g. saving online)
+        self.update_current_api_state_snapshot();
+
+        // Capture api_state BEFORE clearing — this is the "before" of the new snapshot
+        let before_api_state = self.api_state.clone();
+
         // Clear API content state — loading new content means any previous
         // API association is gone. API-load paths re-set these after this call.
         self.api_state.clear();
@@ -30,6 +37,15 @@ impl App {
         self.config_manager
             .load_config(config, description)
             .map_err(|e| format!("{}", e))?;
+
+        // Record api_state snapshot at the new history position.
+        // "after" is the current (cleared) api_state; if the caller loads from API,
+        // they'll update it and we'll capture the final value next time we leave.
+        let snapshot_idx = self.config_manager.position().saturating_sub(1);
+        // Drop any stale entries beyond this position (redo history was cleared)
+        self.api_state_history.retain(|&k, _| k < snapshot_idx);
+        self.api_state_history.insert(snapshot_idx, (before_api_state, self.api_state.clone()));
+        self.current_api_snapshot_idx = Some(snapshot_idx);
 
         // Sync all app state from ConfigManager (triggers GPU update)
         let active_config = self.config_manager.active_config().clone();
@@ -71,19 +87,63 @@ impl App {
 
     /// Undo to previous state
     pub fn undo(&mut self) {
+        // Before navigating, capture any api_state changes into the current snapshot
+        self.update_current_api_state_snapshot();
+
+        let pos_before = self.config_manager.position();
         if let Ok(_update_type) = self.config_manager.undo() {
             // Sync App working copy and GPU state from ConfigManager
             let config = self.config_manager.config();
             self.import_config(config.clone());
+            self.restore_api_state_for_undo(pos_before);
         }
     }
 
     /// Redo to next state
     pub fn redo(&mut self) {
+        self.update_current_api_state_snapshot();
+
+        let pos_before = self.config_manager.position();
         if let Ok(_update_type) = self.config_manager.redo() {
-            // Sync App working copy and GPU state from ConfigManager
             let config = self.config_manager.config();
             self.import_config(config.clone());
+            self.restore_api_state_for_redo(pos_before);
+        }
+    }
+
+    /// Update the current snapshot's "after" api_state with the current value.
+    /// Called before any navigation so changes (e.g. saving online) are preserved.
+    pub(super) fn update_current_api_state_snapshot(&mut self) {
+        if let Some(idx) = self.current_api_snapshot_idx {
+            if let Some((_, after)) = self.api_state_history.get_mut(&idx) {
+                *after = self.api_state.clone();
+            }
+        }
+    }
+
+    /// After undo: if we crossed a FullConfig snapshot, restore the "before" api_state.
+    fn restore_api_state_for_undo(&mut self, pos_before: usize) {
+        // Undo moves position back by 1. If position `pos_before - 1` has a snapshot,
+        // we were at a FullConfig snapshot and just crossed it backwards → restore before.
+        let crossed_idx = pos_before.saturating_sub(1);
+        if let Some((before, _)) = self.api_state_history.get(&crossed_idx) {
+            self.api_state = before.clone();
+            // We've moved past this snapshot; find the previous snapshot we're now "in"
+            self.current_api_snapshot_idx = self.api_state_history.keys()
+                .filter(|&&k| k < crossed_idx)
+                .max()
+                .copied();
+        }
+    }
+
+    /// After redo: if we crossed a FullConfig snapshot forward, restore the "after" api_state.
+    fn restore_api_state_for_redo(&mut self, pos_before: usize) {
+        // Redo moves position forward by 1. If position `pos_before` has a snapshot,
+        // we just crossed it forward → restore after.
+        let crossed_idx = pos_before;
+        if let Some((_, after)) = self.api_state_history.get(&crossed_idx) {
+            self.api_state = after.clone();
+            self.current_api_snapshot_idx = Some(crossed_idx);
         }
     }
 

@@ -264,6 +264,7 @@ use std::sync::{Arc, Mutex};
 
 /// Tracks which flame/animation is currently loaded from the API.
 /// Session-only state (not persisted). Cleared on new flame, load file, etc.
+#[derive(Clone)]
 pub struct ApiContentState {
     pub flame_id: Option<String>,
     pub flame_is_public: Option<bool>,
@@ -420,6 +421,13 @@ pub struct App {
 
     // API content state — tracks which flame/animation is loaded from the API
     pub(super) api_state: ApiContentState,
+    /// Parallel to config history: for each FullConfig snapshot, stores
+    /// (before_api_state, after_api_state). Keyed by the history index of
+    /// the snapshot. Delta-level undo/redo doesn't touch api_state.
+    pub(super) api_state_history: std::collections::HashMap<usize, (ApiContentState, ApiContentState)>,
+    /// Which snapshot we're currently "in" — updates on undo/redo across snapshots.
+    /// Used to keep the current snapshot's "after" up to date with any api_state changes.
+    pub(super) current_api_snapshot_idx: Option<usize>,
     // API save in-flight state
     pub(super) api_pending_visibility: Option<bool>,
     pub(super) api_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
@@ -543,6 +551,8 @@ impl App {
             audio_capture: crate::audio::AudioCapture::new(),
             signal_manager: crate::signal::SignalManager::new(),
             api_state: ApiContentState::default(),
+            api_state_history: std::collections::HashMap::new(),
+            current_api_snapshot_idx: None,
             api_pending_visibility: None,
             api_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_save_in_progress: false,
