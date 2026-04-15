@@ -271,6 +271,8 @@ pub struct ApiContentState {
     pub flame_user_id: Option<String>,
     pub animation_id: Option<String>,
     pub animation_count: u32,
+    /// List of animations linked to this flame (from FlameResponse.animations)
+    pub flame_animations: Vec<crate::api::types::AnimationSummary>,
 }
 
 impl Default for ApiContentState {
@@ -281,6 +283,7 @@ impl Default for ApiContentState {
             flame_user_id: None,
             animation_id: None,
             animation_count: 0,
+            flame_animations: Vec::new(),
         }
     }
 }

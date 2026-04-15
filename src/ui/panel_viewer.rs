@@ -212,6 +212,8 @@ pub struct PanelContext<'a> {
     pub loaded_api_flame_user_id: &'a mut Option<String>,
     // Animation count of flame loaded from Online tab
     pub loaded_api_flame_animation_count: &'a mut u32,
+    // List of animations linked to the loaded flame
+    pub loaded_api_flame_animations: &'a mut Vec<crate::api::types::AnimationSummary>,
 
     // API notification from browser panel (e.g., delete result)
     pub api_notification: &'a mut Option<(String, bool)>,
@@ -288,6 +290,7 @@ pub struct PanelContext<'a> {
     // API animation state (for Save/Update Online buttons in animation panel)
     pub api_flame_id: &'a Option<String>,
     pub api_animation_id: &'a Option<String>,
+    pub flame_animations: &'a [crate::api::types::AnimationSummary],
     pub is_signed_in: bool,
 
     // API animation save action (from animation panel)
@@ -295,6 +298,7 @@ pub struct PanelContext<'a> {
 
     // Open Save Online dialog (from animation panel)
     pub open_save_online_dialog: &'a mut bool,
+    pub load_api_animation_id: &'a mut Option<String>,
 
     // Compact mode (cached from system settings)
     pub compact_mode: bool,
@@ -598,6 +602,7 @@ impl<'a> PanelViewer<'a> {
         let api_context = super::animation_panel::AnimationApiContext {
             api_flame_id: self.context.api_flame_id,
             api_animation_id: self.context.api_animation_id,
+            flame_animations: self.context.flame_animations,
             is_signed_in: self.context.is_signed_in,
         };
         super::animation_panel::render_file_controls(
@@ -610,6 +615,11 @@ impl<'a> PanelViewer<'a> {
         // Open Save Online dialog from animation panel
         if response.open_save_online_dialog {
             *self.context.open_save_online_dialog = true;
+        }
+
+        // Load an animation from the API (clicked in the animations list)
+        if let Some(animation_id) = response.load_api_animation_id {
+            *self.context.load_api_animation_id = Some(animation_id);
         }
 
         // Handle file control responses (must be after render_file_controls)
@@ -1397,6 +1407,7 @@ impl<'a> PanelViewer<'a> {
                 *self.context.loaded_api_flame_is_public = response.api_flame_is_public;
                 *self.context.loaded_api_flame_user_id = response.api_flame_user_id;
                 *self.context.loaded_api_flame_animation_count = response.api_flame_animation_count;
+                *self.context.loaded_api_flame_animations = response.api_flame_animations;
             }
 
             // Pass API notifications through (e.g., delete result)

@@ -21,6 +21,7 @@ pub struct FlameLoadResult {
     pub is_public: Option<bool>,
     pub user_id: String,
     pub animation_count: u32,
+    pub animations: Vec<types::AnimationSummary>,
 }
 
 /// Hard-coded API base URL. Change this for release builds.
@@ -333,8 +334,9 @@ impl ApiState {
         let is_public = resp.visibility.as_ref().map(|v| matches!(v, ApiVisibility::Public));
         let user_id = resp.user_id.clone();
         let animation_count = resp.animation_count;
+        let animations = resp.animations.clone();
         let config = sync::flame_response_to_config(&resp, palette_resp.as_ref());
-        Ok(FlameLoadResult { config, is_public, user_id, animation_count })
+        Ok(FlameLoadResult { config, is_public, user_id, animation_count, animations })
     }
 
     /// Delete a flame from the API.

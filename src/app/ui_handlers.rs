@@ -35,6 +35,7 @@ impl App {
         self.handle_path_filters(ui_response);
         self.handle_save_online(ui_response);
         self.handle_save_animation_online(ui_response);
+        self.handle_load_api_animation(ui_response);
         self.handle_url_load();
     }
 
@@ -746,6 +747,7 @@ impl App {
                 self.api_state.flame_is_public = ui_response.loaded_api_flame_is_public;
                 self.api_state.flame_user_id = ui_response.loaded_api_flame_user_id.clone();
                 self.api_state.animation_count = ui_response.loaded_api_flame_animation_count;
+                self.api_state.flame_animations = ui_response.loaded_api_flame_animations.clone();
             }
         }
     }
@@ -1448,17 +1450,24 @@ impl App {
         }
     }
 
-    /// Trigger loading a flame or animation from URL deep-link params (WASM only).
-    #[cfg(target_arch = "wasm32")]
+    /// Trigger loading a flame or animation by ID (cross-platform).
+    /// Reuses the URL deep-link loading mechanism for the result plumbing.
     pub(super) fn trigger_url_load(&mut self, flame_id: Option<String>, animation_id: Option<String>) {
-        use super::UrlLoadedData;
-
         let base_url = crate::api::API_BASE_URL.to_string();
         let result_slot = self.url_load_result.clone();
         self.url_load_in_progress = true;
 
+        #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(async move {
             let result = load_from_url(&base_url, flame_id, animation_id).await;
+            if let Ok(mut slot) = result_slot.lock() {
+                *slot = Some(result);
+            }
+        });
+
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || {
+            let result = pollster::block_on(load_from_url(&base_url, flame_id, animation_id));
             if let Ok(mut slot) = result_slot.lock() {
                 *slot = Some(result);
             }
@@ -1466,6 +1475,21 @@ impl App {
     }
 
     /// Poll for completed URL deep-link load and apply the result.
+    /// Handle request to load an animation from the API (triggered from the
+    /// animations list at the bottom of the Animation panel).
+    fn handle_load_api_animation(&mut self, ui_response: &UiResponse) {
+        if let Some(ref animation_id) = ui_response.load_api_animation_id {
+            if self.url_load_in_progress {
+                log::warn!("Animation load requested but URL load already in progress");
+                return;
+            }
+            log::info!("Loading animation from API: {}", animation_id);
+            // Reuse the URL load mechanism — passing None for flame_id means
+            // the animation's base_config will provide the flame
+            self.trigger_url_load(None, Some(animation_id.clone()));
+        }
+    }
+
     fn handle_url_load(&mut self) {
         use super::UrlLoadedData;
 
@@ -1501,6 +1525,20 @@ impl App {
                 let anim_name = animation.name.clone();
                 log::info!("URL load: animation '{}' ({})", anim_name, animation_id);
 
+                // Preserve flame animation metadata if the flame_id is unchanged.
+                // load_config_with_undo clears api_state, but the animations list
+                // belongs to the flame which may be the same as before.
+                let preserved_animations = if flame_id.as_deref() == self.api_state.flame_id.as_deref() {
+                    Some((
+                        self.api_state.flame_animations.clone(),
+                        self.api_state.animation_count,
+                        self.api_state.flame_is_public,
+                        self.api_state.flame_user_id.clone(),
+                    ))
+                } else {
+                    None
+                };
+
                 // Load the flame config from the animation's base_config (populated from embedded flame)
                 if let Some(config) = animation.base_config.clone() {
                     let flame_name = config.flame.name.clone();
@@ -1520,6 +1558,13 @@ impl App {
                 self.api_state.animation_id = Some(animation_id);
                 if let Some(fid) = flame_id {
                     self.api_state.flame_id = Some(fid);
+                }
+                // Restore flame metadata if we're still on the same flame
+                if let Some((animations, count, is_public, user_id)) = preserved_animations {
+                    self.api_state.flame_animations = animations;
+                    self.api_state.animation_count = count;
+                    self.api_state.flame_is_public = is_public;
+                    self.api_state.flame_user_id = user_id;
                 }
                 self.egui_layer.show_api_notification(
                     &rust_i18n::t!("api.url_load_animation_success", name = anim_name),
@@ -1638,7 +1683,6 @@ async fn update_animation_online(
 
 /// Load a flame and/or animation from the API by URL params (async helper).
 /// Prioritizes `animation_id` over `flame_id` if both are present.
-#[cfg(target_arch = "wasm32")]
 async fn load_from_url(
     base_url: &str,
     flame_id: Option<String>,

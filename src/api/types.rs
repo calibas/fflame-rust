@@ -430,9 +430,18 @@ pub struct FlameResponse {
     #[serde(default)]
     pub animation_count: u32,
     #[serde(default)]
+    pub animations: Vec<AnimationSummary>,
+    #[serde(default)]
     pub visibility: Option<ApiVisibility>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// Summary info for an animation attached to a flame.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AnimationSummary {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
