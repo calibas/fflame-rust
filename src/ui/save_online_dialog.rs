@@ -129,6 +129,14 @@ pub fn render_save_online_dialog(
     ui.label(egui::RichText::new(t!("api.save_dialog_flame_section")).strong());
     ui.add_space(4.0);
 
+    // Show flame ID if set
+    if let Some(ref id) = state.api_flame_id {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(t!("api.save_dialog_id_label")).size(10.0).color(egui::Color32::GRAY));
+            ui.label(egui::RichText::new(id).size(10.0).monospace());
+        });
+    }
+
     // Warning if animations depend on this flame
     if has_flame && state.animation_count > 0 {
         ui.horizontal(|ui| {
@@ -148,23 +156,21 @@ pub fn render_save_online_dialog(
         let name_valid = !name.is_empty();
 
         if has_flame {
-            // Save as Copy
-            if ui.add_enabled(name_valid, egui::Button::new(t!("api.save_dialog_save_as_copy"))).clicked() {
-                state.flame_action = Some(ApiSaveAction::SaveNew {
+            // Update (only if owned)
+            if ui.add_enabled(name_valid && state.flame_owned, egui::Button::new(t!("api.save_dialog_update"))).clicked() {
+                state.flame_action = Some(ApiSaveAction::Update {
                     name: name.clone(),
                     upload_thumbnail: state.upload_thumbnail,
                     make_public: state.make_public,
                 });
-                state.close_requested = true;
             }
-            // Update (only if owned)
-            if ui.add_enabled(name_valid && state.flame_owned, egui::Button::new(t!("api.save_dialog_update"))).clicked() {
-                state.flame_action = Some(ApiSaveAction::Update {
+            // Save as Copy
+            if ui.add_enabled(name_valid, egui::Button::new(t!("api.save_dialog_save_as_copy"))).clicked() {
+                state.flame_action = Some(ApiSaveAction::SaveNew {
                     name,
                     upload_thumbnail: state.upload_thumbnail,
                     make_public: state.make_public,
                 });
-                state.close_requested = true;
             }
         } else {
             // Save (new flame)
@@ -174,7 +180,6 @@ pub fn render_save_online_dialog(
                     upload_thumbnail: state.upload_thumbnail,
                     make_public: state.make_public,
                 });
-                state.close_requested = true;
             }
         }
     });
@@ -186,27 +191,32 @@ pub fn render_save_online_dialog(
     ui.label(egui::RichText::new(t!("api.save_dialog_animation_section")).strong());
     ui.add_space(4.0);
 
+    // Show animation ID if set
+    if let Some(ref id) = state.api_animation_id {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(t!("api.save_dialog_id_label")).size(10.0).color(egui::Color32::GRAY));
+            ui.label(egui::RichText::new(id).size(10.0).monospace());
+        });
+    }
+
     // Animation buttons: only active if flame is saved AND has tracks
     let can_save_animation = has_flame && state.has_animation_tracks;
 
     ui.horizontal(|ui| {
         let make_public = state.make_public;
         if has_animation {
-            // Save as Copy
-            if ui.add_enabled(can_save_animation, egui::Button::new(t!("api.save_dialog_save_as_copy"))).clicked() {
-                state.animation_action = Some(ApiAnimationSaveAction::SaveNew { make_public });
-                state.close_requested = true;
-            }
             // Update (only if owned)
             if ui.add_enabled(state.animation_owned, egui::Button::new(t!("api.save_dialog_update"))).clicked() {
                 state.animation_action = Some(ApiAnimationSaveAction::Update { make_public });
-                state.close_requested = true;
+            }
+            // Save as Copy
+            if ui.add_enabled(can_save_animation, egui::Button::new(t!("api.save_dialog_save_as_copy"))).clicked() {
+                state.animation_action = Some(ApiAnimationSaveAction::SaveNew { make_public });
             }
         } else {
             // Save (new animation)
             if ui.add_enabled(can_save_animation, egui::Button::new(t!("api.save_dialog_save"))).clicked() {
                 state.animation_action = Some(ApiAnimationSaveAction::SaveNew { make_public });
-                state.close_requested = true;
             }
         }
     });
@@ -220,9 +230,13 @@ pub fn render_save_online_dialog(
     }
 
     ui.add_space(8.0);
+    ui.separator();
+    ui.add_space(4.0);
 
-    // Cancel
-    if ui.button(t!("api.save_dialog_cancel")).clicked() {
-        state.close_requested = true;
-    }
+    // Cancel (right-aligned)
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if ui.button(t!("api.save_dialog_cancel")).clicked() {
+            state.close_requested = true;
+        }
+    });
 }

@@ -877,6 +877,7 @@ api:
   save_dialog_animation_section: "Animation"
   save_dialog_animation_warning: "⚠ Currently used in %{count} animation(s). Save as a Copy to not alter existing animations."
   save_dialog_save_flame_first: "Save the flame first to enable animation saving"
+  save_dialog_id_label: "ID:"
   save_success: "Saved online: %{name}"
   update_success: "Updated online: %{name}"
   save_error: "Failed to save: %{error}"

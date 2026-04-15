@@ -827,6 +827,14 @@ impl EguiLayer {
         let has_animation_tracks = animation_controller.animation
             .as_ref()
             .map_or(false, |a| !a.tracks.is_empty());
+
+        // Keep the Save Online dialog state in sync with ApiContentState so that
+        // successful saves immediately update the displayed IDs and button states
+        // without requiring the dialog to be closed and reopened.
+        self.save_online_dialog_state.api_flame_id = api_state.flame_id.clone();
+        self.save_online_dialog_state.api_animation_id = api_state.animation_id.clone();
+        self.save_online_dialog_state.animation_count = api_state.animation_count;
+        self.save_online_dialog_state.has_animation_tracks = has_animation_tracks;
         let menu_state = MenuState {
             can_undo,
             can_redo,

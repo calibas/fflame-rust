@@ -142,7 +142,7 @@ impl Workspace {
             PanelType::XaosEditor => egui::vec2(500.0, 450.0),
             PanelType::Signal => egui::vec2(350.0, 450.0),
             PanelType::LoginDialog => egui::vec2(380.0, 320.0),
-            PanelType::SaveOnlineDialog => egui::vec2(400.0, 170.0),
+            PanelType::SaveOnlineDialog => egui::vec2(400.0, 370.0),
         }
     }
 
