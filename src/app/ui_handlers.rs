@@ -1503,7 +1503,7 @@ impl App {
         self.url_load_in_progress = false;
 
         match result {
-            Ok(UrlLoadedData::Flame(config, flame_id, is_public)) => {
+            Ok(UrlLoadedData::Flame { config, flame_id, is_public, user_id, animation_count, animations }) => {
                 let name = config.flame.name.clone();
                 log::info!("URL load: flame '{}' ({})", name, flame_id);
                 if let Err(e) = self.load_config_with_undo(config, format!("Load flame from URL: {}", name)) {
@@ -1516,28 +1516,17 @@ impl App {
                 }
                 self.api_state.flame_id = Some(flame_id);
                 self.api_state.flame_is_public = is_public;
+                self.api_state.flame_user_id = Some(user_id);
+                self.api_state.animation_count = animation_count;
+                self.api_state.flame_animations = animations;
                 self.egui_layer.show_api_notification(
                     &rust_i18n::t!("api.url_load_flame_success", name = name),
                     false,
                 );
             }
-            Ok(UrlLoadedData::Animation(animation, animation_id, flame_id)) => {
+            Ok(UrlLoadedData::Animation { animation, animation_id, flame_id, flame_meta }) => {
                 let anim_name = animation.name.clone();
                 log::info!("URL load: animation '{}' ({})", anim_name, animation_id);
-
-                // Preserve flame animation metadata if the flame_id is unchanged.
-                // load_config_with_undo clears api_state, but the animations list
-                // belongs to the flame which may be the same as before.
-                let preserved_animations = if flame_id.as_deref() == self.api_state.flame_id.as_deref() {
-                    Some((
-                        self.api_state.flame_animations.clone(),
-                        self.api_state.animation_count,
-                        self.api_state.flame_is_public,
-                        self.api_state.flame_user_id.clone(),
-                    ))
-                } else {
-                    None
-                };
 
                 // Load the flame config from the animation's base_config (populated from embedded flame)
                 if let Some(config) = animation.base_config.clone() {
@@ -1559,12 +1548,12 @@ impl App {
                 if let Some(fid) = flame_id {
                     self.api_state.flame_id = Some(fid);
                 }
-                // Restore flame metadata if we're still on the same flame
-                if let Some((animations, count, is_public, user_id)) = preserved_animations {
-                    self.api_state.flame_animations = animations;
-                    self.api_state.animation_count = count;
-                    self.api_state.flame_is_public = is_public;
-                    self.api_state.flame_user_id = user_id;
+                // Populate flame metadata from the separately-fetched FlameResponse
+                if let Some(meta) = flame_meta {
+                    self.api_state.flame_is_public = meta.is_public;
+                    self.api_state.flame_user_id = Some(meta.user_id);
+                    self.api_state.animation_count = meta.animation_count;
+                    self.api_state.flame_animations = meta.animations;
                 }
                 self.egui_layer.show_api_notification(
                     &rust_i18n::t!("api.url_load_animation_success", name = anim_name),
@@ -1694,17 +1683,36 @@ async fn load_from_url(
 
     if let Some(animation_id) = animation_id {
         // Load animation with embedded flame config (single request)
-        let (animation, flame_config, resp_flame_id) = api.load_animation_full(&animation_id).await
+        let (animation, _flame_config, resp_flame_id) = api.load_animation_full(&animation_id).await
             .map_err(|e| format!("Failed to load animation: {}", e))?;
 
         // Use flame_id from URL param, or fall back to the one from the animation response
         let effective_flame_id = flame_id.or(resp_flame_id);
 
-        Ok(super::UrlLoadedData::Animation(animation, animation_id, effective_flame_id))
+        // Fetch full flame metadata (animations list, owner, etc.) if we have a flame_id
+        let flame_meta = if let Some(ref fid) = effective_flame_id {
+            api.load_flame_with_visibility(fid).await.ok()
+        } else {
+            None
+        };
+
+        Ok(super::UrlLoadedData::Animation {
+            animation,
+            animation_id,
+            flame_id: effective_flame_id,
+            flame_meta,
+        })
     } else if let Some(flame_id) = flame_id {
         let result = api.load_flame_with_visibility(&flame_id).await
             .map_err(|e| format!("Failed to load flame: {}", e))?;
-        Ok(super::UrlLoadedData::Flame(result.config, flame_id, result.is_public))
+        Ok(super::UrlLoadedData::Flame {
+            config: result.config,
+            flame_id,
+            is_public: result.is_public,
+            user_id: result.user_id,
+            animation_count: result.animation_count,
+            animations: result.animations,
+        })
     } else {
         Err("No flame or animation ID provided".to_string())
     }

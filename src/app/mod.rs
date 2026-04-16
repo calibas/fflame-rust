@@ -324,10 +324,23 @@ use crate::animation::AnimationController;
 
 /// Data loaded from a URL deep-link (?flame=uuid or ?animation=uuid)
 pub(super) enum UrlLoadedData {
-    /// A flame config loaded from the API, with its server ID and visibility
-    Flame(crate::config::FractalConfig, String, Option<bool>),
-    /// An animation loaded from the API (flame config is in animation.base_config)
-    Animation(crate::animation::Animation, String /* animation_id */, Option<String> /* flame_id */),
+    /// A flame loaded from the API, with full metadata
+    Flame {
+        config: crate::config::FractalConfig,
+        flame_id: String,
+        is_public: Option<bool>,
+        user_id: String,
+        animation_count: u32,
+        animations: Vec<crate::api::types::AnimationSummary>,
+    },
+    /// An animation loaded from the API, with optional flame metadata
+    Animation {
+        animation: crate::animation::Animation,
+        animation_id: String,
+        flame_id: Option<String>,
+        /// Full flame metadata (fetched separately if flame_id is present)
+        flame_meta: Option<crate::api::FlameLoadResult>,
+    },
 }
 
 pub struct App {
