@@ -456,6 +456,7 @@ pub struct App {
     // URL deep-link loading (WASM: ?flame=uuid or ?animation=uuid)
     pub(super) url_load_result: std::sync::Arc<std::sync::Mutex<Option<Result<UrlLoadedData, String>>>>,
     pub(super) url_load_in_progress: bool,
+    pub(super) url_load_started: Option<web_time::Instant>,
 
     // API connectivity tracking
     pub(super) health_check_result: std::sync::Arc<std::sync::Mutex<Option<crate::api::HealthCheckOutcome>>>,
@@ -577,6 +578,7 @@ impl App {
             pending_animation_save: None,
             url_load_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             url_load_in_progress: false,
+            url_load_started: None,
             health_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             health_check_in_progress: false,
             api_connectivity: crate::api::ApiConnectivity::Unknown,
@@ -646,8 +648,10 @@ impl App {
         }
 
         // WASM: trigger deep-link load from URL params (?flame=uuid or ?animation=uuid)
+        // Pause rendering so the default flame doesn't render before the URL-loaded one arrives.
         #[cfg(target_arch = "wasm32")]
         if url_flame_id.is_some() || url_animation_id.is_some() {
+            app.paused = true;
             app.trigger_url_load(url_flame_id, url_animation_id);
         }
 
