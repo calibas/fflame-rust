@@ -1456,6 +1456,7 @@ impl App {
         let base_url = crate::api::API_BASE_URL.to_string();
         let result_slot = self.url_load_result.clone();
         self.url_load_in_progress = true;
+        self.url_load_started = Some(web_time::Instant::now());
 
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(async move {
@@ -1497,10 +1498,27 @@ impl App {
             return;
         }
 
+        // Timeout: if the load has been in progress for over 30 seconds, give up
+        if let Some(started) = self.url_load_started {
+            if started.elapsed() > std::time::Duration::from_secs(30) {
+                log::error!("URL load timed out after 30 seconds");
+                self.url_load_in_progress = false;
+                self.url_load_started = None;
+                self.paused = false;
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("api.url_load_error", error = "Request timed out"),
+                    true,
+                );
+                return;
+            }
+        }
+
         let loaded = self.url_load_result.lock().ok().and_then(|mut r| r.take());
         let Some(result) = loaded else { return };
 
         self.url_load_in_progress = false;
+        self.url_load_started = None;
+        self.paused = false;
 
         match result {
             Ok(UrlLoadedData::Flame { config, flame_id, is_public, user_id, animation_count, animations }) => {
