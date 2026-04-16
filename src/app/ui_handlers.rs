@@ -737,6 +737,15 @@ impl App {
     /// Handle preset selection from Preset Library panel
     fn handle_preset_selection(&mut self, ui_response: &UiResponse) {
         if let Some(ref config) = ui_response.selected_preset_config {
+            // Show loading notification for API-loaded flames
+            if ui_response.loaded_api_flame_id.is_some() {
+                let name = config.flame.name.clone();
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("api.loading_flame", name = name),
+                    false,
+                );
+            }
+
             if let Err(e) = self.load_config_with_undo(config.clone(), "history.action.load_preset".to_string()) {
                 log::error!("Failed to load preset: {}", e);
             } else {
@@ -748,6 +757,15 @@ impl App {
                 self.api_state.flame_user_id = ui_response.loaded_api_flame_user_id.clone();
                 self.api_state.animation_count = ui_response.loaded_api_flame_animation_count;
                 self.api_state.flame_animations = ui_response.loaded_api_flame_animations.clone();
+
+                // Show success notification for API-loaded flames
+                if ui_response.loaded_api_flame_id.is_some() {
+                    let name = config.flame.name.clone();
+                    self.egui_layer.show_api_notification(
+                        &rust_i18n::t!("api.load_flame_success", name = name),
+                        false,
+                    );
+                }
             }
         }
     }
@@ -1453,6 +1471,19 @@ impl App {
     /// Trigger loading a flame or animation by ID (cross-platform).
     /// Reuses the URL deep-link loading mechanism for the result plumbing.
     pub(super) fn trigger_url_load(&mut self, flame_id: Option<String>, animation_id: Option<String>) {
+        // Show "loading" notification
+        if animation_id.is_some() {
+            self.egui_layer.show_api_notification(
+                &rust_i18n::t!("api.loading_animation"),
+                false,
+            );
+        } else if flame_id.is_some() {
+            self.egui_layer.show_api_notification(
+                &rust_i18n::t!("api.loading_flame_generic"),
+                false,
+            );
+        }
+
         let base_url = crate::api::API_BASE_URL.to_string();
         let result_slot = self.url_load_result.clone();
         self.url_load_in_progress = true;
