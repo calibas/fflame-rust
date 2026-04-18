@@ -131,6 +131,34 @@ impl VariationInfo {
         self.parameters.iter().find(|p| p.name == param_name)
     }
 
+    /// Create from an API VariationDownload response
+    pub fn from_download(dl: &crate::api::types::VariationDownload) -> Self {
+        let parameters = dl.parameters.iter().map(|p| VariationParameter {
+            name: p.name.clone(),
+            display_name: p.display_name.clone(),
+            param_type: api_param_type_to_runtime(&p.param_type),
+            default_value: p.default_value,
+            min_value: p.min_value,
+            max_value: p.max_value,
+        }).collect();
+
+        let wgsl_function = format!("variation_{}", dl.name);
+
+        Self {
+            name: dl.name.clone(),
+            display_name: dl.display_name.clone(),
+            category: VariationCategory::from_api_str(&dl.category),
+            phase: api_phase_to_runtime(&dl.phase),
+            wgsl_function,
+            needs_rng: dl.needs_rng,
+            is_core: false,
+            wgsl_source: Some(dl.shader_2d.clone()),
+            wgsl_source_3d: dl.shader_3d.clone(),
+            parameters,
+            version: dl.version,
+        }
+    }
+
     /// Create from a static VariationDef
     pub fn from_def(def: &VariationDef) -> Self {
         Self {
@@ -168,6 +196,45 @@ pub enum VariationCategory {
 
     /// Plugin variations
     Plugin,
+}
+
+/// Convert API param type to runtime ParamType
+fn api_param_type_to_runtime(api: &crate::api::types::ApiParamType) -> ParamType {
+    use crate::api::types::ApiParamType;
+    match api {
+        ApiParamType::Float => ParamType::Float,
+        ApiParamType::UnlimitedFloat => ParamType::UnlimitedFloat,
+        ApiParamType::Integer => ParamType::Integer,
+        ApiParamType::UnlimitedInteger => ParamType::UnlimitedInteger,
+        ApiParamType::Boolean => ParamType::Boolean,
+        ApiParamType::Angle => ParamType::Angle,
+        ApiParamType::Enum { choices } => ParamType::Enum { choices: choices.clone() },
+    }
+}
+
+/// Convert API phase to runtime VariationPhase
+fn api_phase_to_runtime(api: &crate::api::types::ApiVariationPhase) -> VariationPhase {
+    use crate::api::types::ApiVariationPhase;
+    match api {
+        ApiVariationPhase::Pre => VariationPhase::Pre,
+        ApiVariationPhase::Normal => VariationPhase::Normal,
+        ApiVariationPhase::Post => VariationPhase::Post,
+    }
+}
+
+impl VariationCategory {
+    /// Parse from API string (matches API's snake_case).
+    /// Unknown values map to Plugin as a safe default.
+    pub fn from_api_str(s: &str) -> Self {
+        match s {
+            "basic_2d" | "basic2d" => Self::Basic2D,
+            "advanced_2d" | "advanced2d" => Self::Advanced2D,
+            "depth_3d" | "depth3d" | "3d" => Self::Depth3D,
+            "rotation_3d" | "rotation3d" => Self::Rotation3D,
+            "full_3d" | "full3d" => Self::Full3D,
+            _ => Self::Plugin,
+        }
+    }
 }
 
 /// Registry of all available variations
@@ -217,6 +284,47 @@ impl VariationRegistry {
         let info = VariationInfo::from_def(def);
         self.ordered_names.push(info.name.clone());
         self.variations.insert(info.name.clone(), info);
+    }
+
+    /// Register or replace an API-loaded variation.
+    /// If a variation with the same name already exists, it's replaced
+    /// (e.g., when a newer version is fetched). Built-in variations
+    /// can't be replaced — the call is rejected with a logged warning.
+    pub fn register_from_api(&mut self, dl: &crate::api::types::VariationDownload) {
+        if let Some(existing) = self.variations.get(&dl.name) {
+            if existing.is_core {
+                log::warn!(
+                    "Cannot register API variation '{}' — name conflicts with built-in",
+                    dl.name
+                );
+                return;
+            }
+        }
+        let info = VariationInfo::from_download(dl);
+        if !self.ordered_names.contains(&info.name) {
+            self.ordered_names.push(info.name.clone());
+        }
+        log::info!("Registered API variation '{}' v{}", info.name, info.version);
+        self.variations.insert(info.name.clone(), info);
+    }
+
+    /// Remove all API-loaded (non-core) variations.
+    /// Built-in variations are preserved. Used by the "Clear Variation Cache" action.
+    pub fn clear_api(&mut self) {
+        let removed: Vec<String> = self.variations.iter()
+            .filter(|(_, info)| !info.is_core)
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in &removed {
+            self.variations.remove(name);
+        }
+        self.ordered_names.retain(|name| self.variations.contains_key(name));
+        log::info!("Cleared {} API-loaded variations from registry", removed.len());
+    }
+
+    /// Check if a variation is registered (built-in or API).
+    pub fn has(&self, name: &str) -> bool {
+        self.variations.contains_key(name)
     }
 
     /// Get variation info by name
