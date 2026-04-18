@@ -185,7 +185,7 @@ impl HighResExporter {
         );
 
         // Create transform buffer with solo mode handling
-        let transforms = GpuTransform::from_flame(&config.flame, global_registry());
+        let transforms = GpuTransform::from_flame(&config.flame, &global_registry());
 
         let transform_buffer = device.create_buffer_init(&util::BufferInitDescriptor {
             label: Some("Export Transform Buffer"),
@@ -224,12 +224,12 @@ impl HighResExporter {
             .flame
             .transforms
             .iter()
-            .map(|xform| GpuVariationParams::from_transform(xform, global_registry()))
+            .map(|xform| GpuVariationParams::from_transform(xform, &global_registry()))
             .collect();
 
         // Append final transform variation params if present
         if let Some(ref final_xform) = config.flame.final_transform {
-            variation_params.push(GpuVariationParams::from_transform(final_xform, global_registry()));
+            variation_params.push(GpuVariationParams::from_transform(final_xform, &global_registry()));
         }
 
         let max_transforms = 32;

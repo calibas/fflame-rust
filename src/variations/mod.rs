@@ -374,10 +374,36 @@ impl Default for VariationRegistry {
     }
 }
 
-/// Global variation registry singleton
-/// This ensures the registry is initialized only once and shared across all code paths
-pub fn global_registry() -> &'static VariationRegistry {
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+fn registry_lock() -> &'static RwLock<VariationRegistry> {
     use once_cell::sync::Lazy;
-    static REGISTRY: Lazy<VariationRegistry> = Lazy::new(|| VariationRegistry::new());
+    static REGISTRY: Lazy<RwLock<VariationRegistry>> = Lazy::new(|| RwLock::new(VariationRegistry::new()));
     &REGISTRY
+}
+
+/// Get a read guard to the global variation registry singleton.
+/// Initialized once, shared across all code paths.
+pub fn global_registry() -> RwLockReadGuard<'static, VariationRegistry> {
+    registry_lock().read().expect("variation registry RwLock poisoned")
+}
+
+/// Get a write guard to the global variation registry. Use sparingly —
+/// only for adding/removing API-loaded variations at runtime.
+pub fn global_registry_mut() -> RwLockWriteGuard<'static, VariationRegistry> {
+    registry_lock().write().expect("variation registry RwLock poisoned")
+}
+
+/// Load all cached API variations from disk/storage and register them.
+/// Call once at app startup, after the global registry is initialized.
+/// Errors for individual variations are logged but don't fail the load.
+pub fn load_cached_api_variations() {
+    let cached = crate::storage::variation_cache::load_all();
+    if cached.is_empty() {
+        return;
+    }
+    let mut registry = global_registry_mut();
+    for download in cached {
+        registry.register_from_api(&download);
+    }
 }
