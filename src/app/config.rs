@@ -1,21 +1,29 @@
 use crate::app::render_mode::TransitionResult;
-use crate::app::App;
+use crate::app::{App, ApiContentState};
 use crate::config::FractalConfig;
 
 impl App {
-    /// Load config via ConfigManager and sync app state
-    /// Creates snapshot-based undo entry and triggers GPU update
-    pub fn load_config_with_undo(&mut self, config: FractalConfig, description: String) -> Result<(), String> {
+    /// Load config via ConfigManager and sync app state.
+    /// Creates snapshot-based undo entry and triggers GPU update.
+    ///
+    /// Local loads (file, preset, random, new): pass `None` to clear API state.
+    /// API loads (browser, URL deep-link): pass `Some(api_state)` with the
+    /// flame_id, animations, ownership, etc. from the API response.
+    pub fn load_config_with_undo(
+        &mut self,
+        config: FractalConfig,
+        description: String,
+        api_metadata: Option<ApiContentState>,
+    ) -> Result<(), String> {
         // Snapshot the current api_state as the "after" of the previous snapshot
         // (captures any changes since the last load, e.g. saving online)
         self.update_current_api_state_snapshot();
 
-        // Capture api_state BEFORE clearing — this is the "before" of the new snapshot
+        // Capture api_state BEFORE replacing — this is the "before" of the new snapshot
         let before_api_state = self.api_state.clone();
 
-        // Clear API content state — loading new content means any previous
-        // API association is gone. API-load paths re-set these after this call.
-        self.api_state.clear();
+        // Replace api_state: API loads set their metadata, local loads clear it.
+        self.api_state = api_metadata.unwrap_or_default();
 
         // Log effects being loaded (diagnostic for API-loaded configs)
         let color_count = config.color_effects.iter().filter(|e| e.enabled).count();
@@ -39,10 +47,7 @@ impl App {
             .map_err(|e| format!("{}", e))?;
 
         // Record api_state snapshot at the new history position.
-        // "after" is the current (cleared) api_state; if the caller loads from API,
-        // they'll update it and we'll capture the final value next time we leave.
         let snapshot_idx = self.config_manager.position().saturating_sub(1);
-        // Drop any stale entries beyond this position (redo history was cleared)
         self.api_state_history.retain(|&k, _| k < snapshot_idx);
         self.api_state_history.insert(snapshot_idx, (before_api_state, self.api_state.clone()));
         self.current_api_snapshot_idx = Some(snapshot_idx);

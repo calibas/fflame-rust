@@ -273,6 +273,10 @@ pub struct ApiContentState {
     pub animation_count: u32,
     /// List of animations linked to this flame (from FlameResponse.animations)
     pub flame_animations: Vec<crate::api::types::AnimationSummary>,
+    /// Palette ID if loaded from the API
+    pub palette_id: Option<String>,
+    /// Palette owner's user_id (for ownership checks)
+    pub palette_user_id: Option<String>,
 }
 
 impl Default for ApiContentState {
@@ -284,6 +288,8 @@ impl Default for ApiContentState {
             animation_id: None,
             animation_count: 0,
             flame_animations: Vec::new(),
+            palette_id: None,
+            palette_user_id: None,
         }
     }
 }

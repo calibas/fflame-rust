@@ -83,7 +83,7 @@ impl App {
         if let Some(ref json) = ui_response.config_import_requested {
             match FractalConfig::from_json(json) {
                 Ok(config) => {
-                    if let Err(e) = self.load_config_with_undo(config, "history.action.import_config".to_string()) {
+                    if let Err(e) = self.load_config_with_undo(config, "history.action.import_config".to_string(), None) {
                         eprintln!("Failed to import config: {}", e);
                     }
                 }
@@ -196,12 +196,10 @@ impl App {
             let new_config = crate::resources::create_default_preset();
 
             // Load the default config with undo support
-            if let Err(e) = self.load_config_with_undo(new_config, "history.action.new_flame".to_string()) {
+            // (passing None clears api_state — this is a new local flame)
+            if let Err(e) = self.load_config_with_undo(new_config, "history.action.new_flame".to_string(), None) {
                 eprintln!("Failed to create new flame: {}", e);
             }
-
-            // Clear API flame ID — this is a new local flame
-            self.api_state.clear();
         }
     }
 
@@ -223,11 +221,10 @@ impl App {
             }
 
             // Load the random config with undo support
-            if let Err(e) = self.load_config_with_undo(new_config, "history.action.random_flame".to_string()) {
+            // (passing None clears api_state — this is a new local flame)
+            if let Err(e) = self.load_config_with_undo(new_config, "history.action.random_flame".to_string(), None) {
                 eprintln!("Failed to load random flame: {}", e);
             }
-
-            self.api_state.clear();
         }
     }
 
@@ -247,7 +244,7 @@ impl App {
             }
 
             // Load the generated config with undo support
-            if let Err(e) = self.load_config_with_undo(new_config, "history.action.random_flame".to_string()) {
+            if let Err(e) = self.load_config_with_undo(new_config, "history.action.random_flame".to_string(), None) {
                 eprintln!("Failed to load generated flame: {}", e);
             }
         }
@@ -474,7 +471,7 @@ impl App {
                             } else if configs.len() == 1 {
                                 // Single config: load directly
                                 let config = configs.into_iter().next().unwrap();
-                                if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string()) {
+                                if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string(), None) {
                                     eprintln!("Failed to load config: {}", e);
                                 } else {
                                     println!("Config loaded from: {}", path.display());
@@ -492,7 +489,7 @@ impl App {
 
                                 // Load the first config
                                 let first_config = configs.into_iter().next().unwrap();
-                                if let Err(e) = self.load_config_with_undo(first_config, "history.action.load_config".to_string()) {
+                                if let Err(e) = self.load_config_with_undo(first_config, "history.action.load_config".to_string(), None) {
                                     eprintln!("Failed to load config: {}", e);
                                 }
 
@@ -534,7 +531,7 @@ impl App {
                                     } else if configs.len() == 1 {
                                         // Single flame: import directly
                                         let config = configs.into_iter().next().unwrap();
-                                        if let Err(e) = self.load_config_with_undo(config, "history.action.import_apophysis".to_string()) {
+                                        if let Err(e) = self.load_config_with_undo(config, "history.action.import_apophysis".to_string(), None) {
                                             eprintln!("Failed to import flame: {}", e);
                                         } else {
                                             println!("Imported Apophysis flame from: {}", path.display());
@@ -552,7 +549,7 @@ impl App {
 
                                         // Load the first config
                                         let first_config = configs.into_iter().next().unwrap();
-                                        if let Err(e) = self.load_config_with_undo(first_config, "history.action.import_apophysis".to_string()) {
+                                        if let Err(e) = self.load_config_with_undo(first_config, "history.action.import_apophysis".to_string(), None) {
                                             eprintln!("Failed to import flame: {}", e);
                                         }
 
@@ -746,17 +743,22 @@ impl App {
                 );
             }
 
-            if let Err(e) = self.load_config_with_undo(config.clone(), "history.action.load_preset".to_string()) {
+            let api_metadata = ui_response.loaded_api_flame_id.as_ref().map(|flame_id| {
+                crate::app::ApiContentState {
+                    flame_id: Some(flame_id.clone()),
+                    flame_is_public: ui_response.loaded_api_flame_is_public,
+                    flame_user_id: ui_response.loaded_api_flame_user_id.clone(),
+                    animation_count: ui_response.loaded_api_flame_animation_count,
+                    flame_animations: ui_response.loaded_api_flame_animations.clone(),
+                    animation_id: None,
+                    palette_id: None,
+                    palette_user_id: None,
+                }
+            });
+            if let Err(e) = self.load_config_with_undo(config.clone(), "history.action.load_preset".to_string(), api_metadata) {
                 log::error!("Failed to load preset: {}", e);
             } else {
                 log::info!("Preset loaded successfully");
-
-                // Track API flame metadata if loaded from Online tab
-                self.api_state.flame_id = ui_response.loaded_api_flame_id.clone();
-                self.api_state.flame_is_public = ui_response.loaded_api_flame_is_public;
-                self.api_state.flame_user_id = ui_response.loaded_api_flame_user_id.clone();
-                self.api_state.animation_count = ui_response.loaded_api_flame_animation_count;
-                self.api_state.flame_animations = ui_response.loaded_api_flame_animations.clone();
 
                 // Show success notification for API-loaded flames
                 if ui_response.loaded_api_flame_id.is_some() {
@@ -781,7 +783,7 @@ impl App {
             }) {
                 match serde_json::from_str::<FractalConfig>(&json) {
                     Ok(config) => {
-                        if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string()) {
+                        if let Err(e) = self.load_config_with_undo(config, "history.action.load_config".to_string(), None) {
                             log::error!("Failed to load config: {}", e);
                         } else {
                             log::info!("Config loaded successfully");
@@ -800,7 +802,7 @@ impl App {
                 match crate::apophysis_xml::parse_flame_xml(&xml) {
                     Ok(configs) => {
                         if let Some(config) = configs.into_iter().next() {
-                            if let Err(e) = self.load_config_with_undo(config, "history.action.import_apophysis".to_string()) {
+                            if let Err(e) = self.load_config_with_undo(config, "history.action.import_apophysis".to_string(), None) {
                                 log::error!("Failed to import Apophysis flame: {}", e);
                             } else {
                                 log::info!("Apophysis flame imported successfully");
@@ -825,7 +827,7 @@ impl App {
                         if let Some(ref config) = animation.base_config {
                             log::info!("Animation '{}' has embedded config, loading it", animation.name);
                             let description = format!("history.action.load_animation_config|name={}", animation.name);
-                            if let Err(e) = self.load_config_with_undo(config.clone(), description) {
+                            if let Err(e) = self.load_config_with_undo(config.clone(), description, None) {
                                 log::error!("Failed to load animation's embedded config: {}", e);
                             }
                         }
@@ -1572,7 +1574,17 @@ impl App {
             Ok(UrlLoadedData::Flame { config, flame_id, is_public, user_id, animation_count, animations }) => {
                 let name = config.flame.name.clone();
                 log::info!("URL load: flame '{}' ({})", name, flame_id);
-                if let Err(e) = self.load_config_with_undo(config, format!("Load flame from URL: {}", name)) {
+                let api_metadata = Some(crate::app::ApiContentState {
+                    flame_id: Some(flame_id.clone()),
+                    flame_is_public: is_public,
+                    flame_user_id: Some(user_id),
+                    animation_id: None,
+                    animation_count,
+                    flame_animations: animations,
+                    palette_id: None,
+                    palette_user_id: None,
+                });
+                if let Err(e) = self.load_config_with_undo(config, format!("Load flame from URL: {}", name), api_metadata) {
                     log::error!("Failed to load flame from URL: {}", e);
                     self.egui_layer.show_api_notification(
                         &rust_i18n::t!("api.url_load_error", error = e),
@@ -1580,11 +1592,6 @@ impl App {
                     );
                     return;
                 }
-                self.api_state.flame_id = Some(flame_id);
-                self.api_state.flame_is_public = is_public;
-                self.api_state.flame_user_id = Some(user_id);
-                self.api_state.animation_count = animation_count;
-                self.api_state.flame_animations = animations;
                 self.egui_layer.show_api_notification(
                     &rust_i18n::t!("api.url_load_flame_success", name = name),
                     false,
@@ -1597,7 +1604,17 @@ impl App {
                 // Load the flame config from the animation's base_config (populated from embedded flame)
                 if let Some(config) = animation.base_config.clone() {
                     let flame_name = config.flame.name.clone();
-                    if let Err(e) = self.load_config_with_undo(config, format!("Load flame for animation: {}", flame_name)) {
+                    let api_metadata = flame_meta.as_ref().map(|meta| crate::app::ApiContentState {
+                        flame_id: flame_id.clone(),
+                        flame_is_public: meta.is_public,
+                        flame_user_id: Some(meta.user_id.clone()),
+                        animation_id: Some(animation_id.clone()),
+                        animation_count: meta.animation_count,
+                        flame_animations: meta.animations.clone(),
+                        palette_id: None,
+                        palette_user_id: None,
+                    });
+                    if let Err(e) = self.load_config_with_undo(config, format!("Load flame for animation: {}", flame_name), api_metadata) {
                         log::error!("Failed to load flame for animation: {}", e);
                     }
                 }
@@ -1610,17 +1627,6 @@ impl App {
                     generators, &mut self.signal_manager, duration,
                 );
 
-                self.api_state.animation_id = Some(animation_id);
-                if let Some(fid) = flame_id {
-                    self.api_state.flame_id = Some(fid);
-                }
-                // Populate flame metadata from the separately-fetched FlameResponse
-                if let Some(meta) = flame_meta {
-                    self.api_state.flame_is_public = meta.is_public;
-                    self.api_state.flame_user_id = Some(meta.user_id);
-                    self.api_state.animation_count = meta.animation_count;
-                    self.api_state.flame_animations = meta.animations;
-                }
                 self.egui_layer.show_api_notification(
                     &rust_i18n::t!("api.url_load_animation_success", name = anim_name),
                     false,
