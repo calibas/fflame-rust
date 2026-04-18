@@ -111,6 +111,10 @@ pub struct VariationInfo {
 
     /// Parameters for this variation
     pub parameters: Vec<VariationParameter>,
+
+    /// Version number. Built-in variations use 0; API-loaded variations
+    /// use the server's version. Used for cache invalidation.
+    pub version: u32,
 }
 
 impl VariationInfo {
@@ -140,6 +144,7 @@ impl VariationInfo {
             wgsl_source: Some(def.wgsl_2d.to_string()),
             wgsl_source_3d: def.wgsl_3d.map(|s| s.to_string()),
             parameters: def.parameters_to_runtime(),
+            version: 0,
         }
     }
 }

@@ -653,3 +653,74 @@ pub struct AnimationListItem {
     pub created_at: String,
     pub updated_at: String,
 }
+
+// ============================================================================
+// Variations
+// ============================================================================
+
+/// Phase of a variation as serialized by the API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ApiVariationPhase {
+    Pre,
+    Normal,
+    Post,
+}
+
+/// Parameter type as serialized by the API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiParamType {
+    Float,
+    UnlimitedFloat,
+    Integer,
+    UnlimitedInteger,
+    Boolean,
+    Angle,
+    Enum { choices: Vec<String> },
+}
+
+/// Single parameter of an API variation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiVariationParameter {
+    pub name: String,
+    pub display_name: String,
+    pub param_type: ApiParamType,
+    pub default_value: f32,
+    #[serde(default)]
+    pub min_value: Option<f32>,
+    #[serde(default)]
+    pub max_value: Option<f32>,
+}
+
+/// Full variation definition fetched from the API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariationDownload {
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub category: String,
+    pub version: u32,
+    pub phase: ApiVariationPhase,
+    #[serde(default)]
+    pub needs_rng: bool,
+    #[serde(default)]
+    pub parameters: Vec<ApiVariationParameter>,
+    pub shader_2d: String,
+    #[serde(default)]
+    pub shader_3d: Option<String>,
+}
+
+/// Summary of a variation in a list response (no shader code).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariationListItem {
+    pub id: String,
+    pub name: String,
+    pub display_name: String,
+    pub category: String,
+    pub version: u32,
+    #[serde(default)]
+    pub description: Option<String>,
+}
