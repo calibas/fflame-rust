@@ -3,6 +3,7 @@
 
 use crate::app::App;
 use crate::api::types::VariationDownload;
+use crate::ui::UiResponse;
 
 const VARIATION_FETCH_TIMEOUT_SECS: u64 = 30;
 
@@ -116,6 +117,29 @@ impl App {
             if !failed.is_empty() {
                 self.egui_layer.show_api_notification(
                     &rust_i18n::t!("api.variation_fetch_failed", names = failed.join(", ")),
+                    true,
+                );
+            }
+        }
+    }
+
+    /// Handle the user clicking "Clear Variation Cache" in the Variations panel.
+    pub(super) fn handle_clear_variation_cache(&mut self, ui_response: &UiResponse) {
+        if !ui_response.clear_variation_cache_requested {
+            return;
+        }
+        match crate::storage::variation_cache::clear_all() {
+            Ok(count) => {
+                crate::variations::global_registry_mut().clear_api();
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("api.variation_cache_cleared", count = count),
+                    false,
+                );
+            }
+            Err(e) => {
+                log::error!("Failed to clear variation cache: {}", e);
+                self.egui_layer.show_api_notification(
+                    &rust_i18n::t!("api.variation_cache_clear_failed", error = e),
                     true,
                 );
             }

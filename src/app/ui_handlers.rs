@@ -38,6 +38,7 @@ impl App {
         self.handle_load_api_animation(ui_response);
         self.handle_url_load();
         self.handle_variation_fetches();
+        self.handle_clear_variation_cache(ui_response);
     }
 
     /// Handle config export, save, and import operations
