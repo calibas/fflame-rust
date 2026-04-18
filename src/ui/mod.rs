@@ -666,6 +666,7 @@ impl EguiLayer {
         signal_manager: &mut crate::signal::SignalManager,
         signal_names: &[String],
         api_state: &crate::app::ApiContentState,
+        current_user_id: Option<&str>,
     ) -> UiResponse {
         // Sync compact mode from workspace (handles layout switches from menus)
         let is_compact = workspace.is_compact();
@@ -838,6 +839,8 @@ impl EguiLayer {
         self.save_online_dialog_state.api_animation_id = api_state.animation_id.clone();
         self.save_online_dialog_state.animation_count = api_state.animation_count;
         self.save_online_dialog_state.has_animation_tracks = has_animation_tracks;
+        self.save_online_dialog_state.flame_owned = api_state.flame_owned_by(current_user_id);
+        self.save_online_dialog_state.animation_owned = api_state.flame_owned_by(current_user_id);
         let menu_state = MenuState {
             can_undo,
             can_redo,
@@ -850,8 +853,8 @@ impl EguiLayer {
             has_animation_tracks,
             api_animation_id: api_state.animation_id.clone(),
             animation_count: api_state.animation_count,
-            flame_owned: true, // Currently only browse own flames; check user_id when public browsing is added
-            animation_owned: true,
+            flame_owned: api_state.flame_owned_by(current_user_id),
+            animation_owned: api_state.flame_owned_by(current_user_id),
             flame_name: config_manager.config().flame.name.clone(),
             auth_email: read_auth_email(config_manager),
             api_connectivity: self.api_connectivity,
@@ -1229,8 +1232,8 @@ impl EguiLayer {
                 api_state.flame_is_public,
                 has_animation_tracks,
                 api_state.animation_count,
-                true, // flame_owned — currently only browse own flames
-                true, // animation_owned
+                api_state.flame_owned_by(current_user_id),
+                api_state.flame_owned_by(current_user_id),
             );
             if self.compact_mode {
                 workspace.open_compact_panel(workspace::PanelType::SaveOnlineDialog, &self.ctx);

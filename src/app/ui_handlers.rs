@@ -976,9 +976,11 @@ impl App {
         let prev = self.api_connectivity;
 
         match outcome {
-            HealthCheckOutcome::Authenticated(email) => {
+            HealthCheckOutcome::Authenticated { email, user_id } => {
                 self.api_connectivity = ApiConnectivity::Online;
                 log::debug!("Health check OK: authenticated (email: {:?})", email);
+
+                self.current_user_id = Some(user_id);
 
                 // On WASM, store email from cookie-based session (no token needed)
                 #[cfg(target_arch = "wasm32")]
@@ -991,6 +993,8 @@ impl App {
             HealthCheckOutcome::TokenExpired => {
                 self.api_connectivity = ApiConnectivity::Online;
                 log::info!("Health check: token expired, clearing auth");
+
+                self.current_user_id = None;
 
                 // Clear auth from SystemSettings
                 {
@@ -1135,8 +1139,19 @@ impl App {
                 match save_result {
                     Ok(flame_id) => {
                         log::info!("Flame saved/updated online: {}", flame_id);
+                        let was_new = self.api_pending_is_new;
+                        self.api_pending_is_new = false;
                         self.api_state.flame_id = Some(flame_id.clone());
                         self.api_state.flame_is_public = self.api_pending_visibility.take();
+                        // The flame is now owned by the current user
+                        self.api_state.flame_user_id = self.current_user_id.clone();
+                        // SaveNew creates a fresh flame with no animations attached;
+                        // Update preserves the existing animations list
+                        if was_new {
+                            self.api_state.animation_count = 0;
+                            self.api_state.flame_animations.clear();
+                            self.api_state.animation_id = None;
+                        }
                         let name = self.config_manager.active_config().flame.name.clone();
                         self.egui_layer.show_api_notification(
                             &rust_i18n::t!("api.save_success", name = name),
@@ -1204,6 +1219,7 @@ impl App {
                     };
 
                     self.api_pending_visibility = Some(make_public);
+                    self.api_pending_is_new = true;
 
                     #[cfg(target_arch = "wasm32")]
                     {
@@ -1253,6 +1269,7 @@ impl App {
                     };
 
                     self.api_pending_visibility = Some(make_public);
+                    self.api_pending_is_new = false;
 
                     if let Some(flame_id) = self.api_state.flame_id.clone() {
                         #[cfg(target_arch = "wasm32")]

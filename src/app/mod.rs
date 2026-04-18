@@ -437,6 +437,9 @@ pub struct App {
 
     // API content state — tracks which flame/animation is loaded from the API
     pub(super) api_state: ApiContentState,
+    /// Current authenticated user's ID (from /api/users/me). None when signed out.
+    /// Used for ownership checks when deciding whether to allow Update vs Save as Copy.
+    pub(super) current_user_id: Option<String>,
     /// Parallel to config history: for each FullConfig snapshot, stores
     /// (before_api_state, after_api_state). Keyed by the history index of
     /// the snapshot. Delta-level undo/redo doesn't touch api_state.
@@ -446,6 +449,9 @@ pub struct App {
     pub(super) current_api_snapshot_idx: Option<usize>,
     // API save in-flight state
     pub(super) api_pending_visibility: Option<bool>,
+    /// True if the in-flight save is a SaveNew (creates a new flame ID).
+    /// Used to clear flame_animations / animation_id on completion.
+    pub(super) api_pending_is_new: bool,
     pub(super) api_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
     pub(super) api_save_in_progress: bool,
     pub(super) api_animation_save_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
@@ -568,9 +574,11 @@ impl App {
             audio_capture: crate::audio::AudioCapture::new(),
             signal_manager: crate::signal::SignalManager::new(),
             api_state: ApiContentState::default(),
+            current_user_id: None,
             api_state_history: std::collections::HashMap::new(),
             current_api_snapshot_idx: None,
             api_pending_visibility: None,
+            api_pending_is_new: false,
             api_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             api_save_in_progress: false,
             api_animation_save_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -1068,6 +1076,7 @@ impl App {
             &mut self.signal_manager,
             &signal_names,
             &self.api_state,
+            self.current_user_id.as_deref(),
         );
 
         self.metrics.record_ui_time(t_ui_start.elapsed().as_secs_f64() * 1000.0);

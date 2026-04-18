@@ -199,17 +199,19 @@ pub fn render_save_online_dialog(
         });
     }
 
-    // Animation buttons: only active if flame is saved AND has tracks
-    let can_save_animation = has_flame && state.has_animation_tracks;
+    // Animation save requires: flame is saved AND user owns it AND has tracks.
+    // The API only allows saving animations to flames you own.
+    let can_save_animation = has_flame && state.flame_owned && state.has_animation_tracks;
 
     ui.horizontal(|ui| {
         let make_public = state.make_public;
         if has_animation {
-            // Update (only if owned)
-            if ui.add_enabled(state.animation_owned, egui::Button::new(t!("api.save_dialog_update"))).clicked() {
+            // Update (only if user owns the animation AND the flame)
+            let can_update = state.animation_owned && state.flame_owned;
+            if ui.add_enabled(can_update, egui::Button::new(t!("api.save_dialog_update"))).clicked() {
                 state.animation_action = Some(ApiAnimationSaveAction::Update { make_public });
             }
-            // Save as Copy
+            // Save as Copy (also requires owning the flame)
             if ui.add_enabled(can_save_animation, egui::Button::new(t!("api.save_dialog_save_as_copy"))).clicked() {
                 state.animation_action = Some(ApiAnimationSaveAction::SaveNew { make_public });
             }
@@ -221,11 +223,18 @@ pub fn render_save_online_dialog(
         }
     });
 
+    // Hint messages explaining why animation buttons are disabled
     if !has_flame && state.has_animation_tracks {
         ui.label(
             egui::RichText::new(t!("api.save_dialog_save_flame_first"))
                 .small()
                 .color(egui::Color32::GRAY)
+        );
+    } else if has_flame && !state.flame_owned && state.has_animation_tracks {
+        ui.label(
+            egui::RichText::new(t!("api.save_dialog_save_copy_first"))
+                .small()
+                .color(egui::Color32::from_rgb(255, 200, 80))
         );
     }
 

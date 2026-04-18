@@ -46,8 +46,8 @@ pub enum ApiConnectivity {
 /// Result of a health check call to GET /api/users/me.
 #[derive(Debug, Clone)]
 pub enum HealthCheckOutcome {
-    /// 200 — token/cookie valid, user authenticated (carries email if available)
-    Authenticated(Option<String>),
+    /// 200 — token/cookie valid, user authenticated (carries email and user id)
+    Authenticated { email: Option<String>, user_id: String },
     /// 401 — token expired or cookie invalid
     TokenExpired,
     /// Other HTTP error (5xx, etc.) — server reachable but unhappy
@@ -64,12 +64,11 @@ pub enum HealthCheckOutcome {
 pub async fn check_api_health(base_url: &str, token: &str) -> HealthCheckOutcome {
     let url = build_url(base_url, "/api/users/me");
     match client::api_get::<ApiUser>(&url, token).await {
-        Ok(user) => HealthCheckOutcome::Authenticated(user.email),
+        Ok(user) => HealthCheckOutcome::Authenticated { email: user.email, user_id: user.id },
         Err(FetchError::Unauthorized) => {
-            // Retry once — stale connections after sleep can produce spurious 401s
             log::info!("Health check got 401, retrying once...");
             match client::api_get::<ApiUser>(&url, token).await {
-                Ok(user) => HealthCheckOutcome::Authenticated(user.email),
+                Ok(user) => HealthCheckOutcome::Authenticated { email: user.email, user_id: user.id },
                 Err(FetchError::Unauthorized) => HealthCheckOutcome::TokenExpired,
                 Err(FetchError::Network(msg)) => HealthCheckOutcome::NetworkError(msg),
                 Err(other) => HealthCheckOutcome::ServerError(other.to_string()),
