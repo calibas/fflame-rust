@@ -394,6 +394,34 @@ pub fn global_registry_mut() -> RwLockWriteGuard<'static, VariationRegistry> {
     registry_lock().write().expect("variation registry RwLock poisoned")
 }
 
+/// Scan a flame's transforms for variation names not registered.
+/// Returns the deduplicated list of missing names (empty if all are present).
+pub fn missing_variations_in(flame: &crate::scene::transforms::Flame) -> Vec<String> {
+    let registry = global_registry();
+    let mut missing = std::collections::HashSet::new();
+    for xform in &flame.transforms {
+        for name in xform.variations.keys() {
+            if xform.variations.get(name).copied().unwrap_or(0.0) == 0.0 {
+                continue; // weight 0 — not actually used
+            }
+            if !registry.has(name) {
+                missing.insert(name.clone());
+            }
+        }
+    }
+    if let Some(ref final_xform) = flame.final_transform {
+        for name in final_xform.variations.keys() {
+            if final_xform.variations.get(name).copied().unwrap_or(0.0) == 0.0 {
+                continue;
+            }
+            if !registry.has(name) {
+                missing.insert(name.clone());
+            }
+        }
+    }
+    missing.into_iter().collect()
+}
+
 /// Load all cached API variations from disk/storage and register them.
 /// Call once at app startup, after the global registry is initialized.
 /// Errors for individual variations are logged but don't fail the load.

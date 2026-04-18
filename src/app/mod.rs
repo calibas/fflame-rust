@@ -5,6 +5,7 @@ mod config;
 mod ui_handlers;
 mod gpu_updates;
 mod animation_update;
+mod variation_fetch;
 pub mod export;
 pub mod render_mode;
 
@@ -470,6 +471,17 @@ pub struct App {
     pub(super) url_load_in_progress: bool,
     pub(super) url_load_started: Option<web_time::Instant>,
 
+    // Variation fetching: when loading a flame that references unknown
+    // variations, fetch them from the API in parallel and pause rendering
+    // until done (or timeout).
+    pub(super) variation_fetch_results: std::sync::Arc<std::sync::Mutex<
+        Vec<(String, Result<crate::api::types::VariationDownload, String>)>
+    >>,
+    pub(super) variation_fetch_in_progress: bool,
+    pub(super) variation_fetch_started: Option<web_time::Instant>,
+    /// Number of in-flight fetches; when this drops to 0, processing is complete
+    pub(super) variation_fetch_pending_count: usize,
+
     // API connectivity tracking
     pub(super) health_check_result: std::sync::Arc<std::sync::Mutex<Option<crate::api::HealthCheckOutcome>>>,
     pub(super) health_check_in_progress: bool,
@@ -596,6 +608,11 @@ impl App {
             url_load_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             url_load_in_progress: false,
             url_load_started: None,
+
+            variation_fetch_results: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            variation_fetch_in_progress: false,
+            variation_fetch_started: None,
+            variation_fetch_pending_count: 0,
             health_check_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
             health_check_in_progress: false,
             api_connectivity: crate::api::ApiConnectivity::Unknown,

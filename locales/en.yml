@@ -894,6 +894,8 @@ api:
   loading_flame: "Loading flame: %{name}..."
   loading_flame_generic: "Loading flame..."
   loading_animation: "Loading animation..."
+  loading_variations: "Loading variations: %{names}..."
+  variation_fetch_failed: "Couldn't load variations: %{names}. Fractal may render incorrectly."
   load_flame_success: "Loaded flame: %{name}"
   url_load_flame_success: "Loaded flame '%{name}' from URL"
   url_load_animation_success: "Loaded animation '%{name}' from URL"
