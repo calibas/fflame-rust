@@ -37,6 +37,7 @@ impl App {
         self.handle_save_animation_online(ui_response);
         self.handle_load_api_animation(ui_response);
         self.handle_url_load();
+        self.handle_variation_fetches();
     }
 
     /// Handle config export, save, and import operations
