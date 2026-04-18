@@ -486,6 +486,9 @@ impl App {
         let gpu = GpuContext::new(window.clone()).await.expect("GPU init failed");
         let egui_layer = EguiLayer::new(&window, &gpu.device, gpu.config.format);
 
+        // Load any API variations cached from previous sessions into the global registry
+        crate::variations::load_cached_api_variations();
+
         // Use global preset library singleton
         let preset_library = global_preset_library();
         // Clone from global palette library singleton (App needs mutable copy)

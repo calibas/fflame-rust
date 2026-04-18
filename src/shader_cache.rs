@@ -119,7 +119,7 @@ impl ShaderCache {
             let registry = crate::variations::global_registry();
             ShaderConstants::with_inlined_transforms(
                 &config.flame,
-                registry,
+                &registry,
                 config.color_mode as u32,
             )
         } else {

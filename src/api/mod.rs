@@ -529,4 +529,18 @@ impl ApiState {
             .map(|t| t.to_string())
             .ok_or(FetchError::Unauthorized)
     }
+
+    /// Fetch the full definition of a variation by name.
+    /// Variations are public — no authentication required.
+    pub async fn fetch_variation(&self, name: &str) -> FetchResult<types::VariationDownload> {
+        let url = build_url(API_BASE_URL, &format!("/api/variations/{}", name));
+        // Use empty token — variations are publicly readable
+        client::api_get::<types::VariationDownload>(&url, "").await
+    }
+
+    /// List all available variations on the server (summary form, no shader code).
+    pub async fn list_variations(&self) -> FetchResult<Vec<types::VariationListItem>> {
+        let url = build_url(API_BASE_URL, "/api/variations");
+        client::api_get::<Vec<types::VariationListItem>>(&url, "").await
+    }
 }

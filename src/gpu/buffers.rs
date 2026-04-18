@@ -481,7 +481,7 @@ impl FlameBuffers {
 
         // Upload initial transforms with solo mode handling
         let registry = crate::variations::global_registry();
-        let gpu_transforms = GpuTransform::from_flame(flame, registry);
+        let gpu_transforms = GpuTransform::from_flame(flame, &registry);
         queue.write_buffer(&transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
 
         // Create variation parameters storage buffer sized for MAX_TRANSFORMS
@@ -497,11 +497,11 @@ impl FlameBuffers {
         let mut gpu_params: Vec<GpuVariationParams> = flame
             .transforms
             .iter()
-            .map(|xform| GpuVariationParams::from_transform(xform, registry))
+            .map(|xform| GpuVariationParams::from_transform(xform, &registry))
             .collect();
         // Append final transform params if present (same as update_variation_params)
         if let Some(ref final_xform) = flame.final_transform {
-            gpu_params.push(GpuVariationParams::from_transform(final_xform, registry));
+            gpu_params.push(GpuVariationParams::from_transform(final_xform, &registry));
         }
         queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&gpu_params));
 
@@ -985,7 +985,7 @@ impl FlameBuffers {
 
         // Create transforms with solo mode handling
         let registry = crate::variations::global_registry();
-        let mut gpu_transforms = GpuTransform::from_flame(flame, registry);
+        let mut gpu_transforms = GpuTransform::from_flame(flame, &registry);
 
         // Pad with zeroed transforms to fill the buffer
         // This ensures old transforms don't remain in GPU memory when switching to fewer transforms
@@ -1009,12 +1009,12 @@ impl FlameBuffers {
         let mut gpu_params: Vec<GpuVariationParams> = flame
             .transforms
             .iter()
-            .map(|xform| GpuVariationParams::from_transform(xform, registry))
+            .map(|xform| GpuVariationParams::from_transform(xform, &registry))
             .collect();
 
         // Append final transform parameters if present
         if let Some(final_xform) = &flame.final_transform {
-            gpu_params.push(GpuVariationParams::from_transform(final_xform, registry));
+            gpu_params.push(GpuVariationParams::from_transform(final_xform, &registry));
         }
 
         // Pad with zeroed params to fill the buffer
