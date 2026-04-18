@@ -299,6 +299,7 @@ pub struct PanelContext<'a> {
     // Open Save Online dialog (from animation panel)
     pub open_save_online_dialog: &'a mut bool,
     pub load_api_animation_id: &'a mut Option<String>,
+    pub clear_variation_cache_requested: &'a mut bool,
 
     // Compact mode (cached from system settings)
     pub compact_mode: bool,
@@ -435,6 +436,12 @@ impl<'a> PanelViewer<'a> {
             }
             PanelType::SaveOnlineDialog => {
                 self.render_save_online_dialog(ui);
+            }
+            PanelType::Variations => {
+                let response = super::variations::render_variations_panel(ui);
+                if response.clear_cache_requested {
+                    *self.context.clear_variation_cache_requested = true;
+                }
             }
         }
     }
