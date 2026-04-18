@@ -877,6 +877,7 @@ api:
   save_dialog_animation_section: "Animation"
   save_dialog_animation_warning: "⚠ Currently used in %{count} animation(s). Save as a Copy to not alter existing animations."
   save_dialog_save_flame_first: "Save the flame first to enable animation saving"
+  save_dialog_save_copy_first: "⚠ You don't own this flame. Save a copy first to attach animations."
   save_dialog_id_label: "ID:"
   animations_on_server: "Animations on server"
   no_animations: "No animations"
