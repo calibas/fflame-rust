@@ -1062,6 +1062,7 @@ impl App {
 
         self.health_check_in_progress = true;
         let result_slot = self.health_check_result.clone();
+        let window = self.window.clone();
 
         #[cfg(target_arch = "wasm32")]
         {
@@ -1070,6 +1071,7 @@ impl App {
                 if let Ok(mut slot) = result_slot.lock() {
                     *slot = Some(outcome);
                 }
+                window.request_redraw();
             });
         }
 
@@ -1082,6 +1084,7 @@ impl App {
                 if let Ok(mut slot) = result_slot.lock() {
                     *slot = Some(outcome);
                 }
+                window.request_redraw();
             });
         }
     }
@@ -1225,6 +1228,8 @@ impl App {
                     self.api_pending_visibility = Some(make_public);
                     self.api_pending_is_new = true;
 
+                    let window = self.window.clone();
+
                     #[cfg(target_arch = "wasm32")]
                     {
                         // On WASM, render thumbnail inside spawn_local (same thread,
@@ -1242,6 +1247,7 @@ impl App {
                             if let Ok(mut slot) = result_slot.lock() {
                                 *slot = Some(save_result);
                             }
+                            window.request_redraw();
                         });
                     }
                     #[cfg(not(target_arch = "wasm32"))]
@@ -1258,6 +1264,7 @@ impl App {
                             if let Ok(mut slot) = result_slot.lock() {
                                 *slot = Some(result);
                             }
+                            window.request_redraw();
                         });
                     }
                 }
@@ -1276,6 +1283,8 @@ impl App {
                     self.api_pending_is_new = false;
 
                     if let Some(flame_id) = self.api_state.flame_id.clone() {
+                        let window = self.window.clone();
+
                         #[cfg(target_arch = "wasm32")]
                         {
                             let device = self.gpu.device.clone();
@@ -1291,6 +1300,7 @@ impl App {
                                 if let Ok(mut slot) = result_slot.lock() {
                                     *slot = Some(save_result);
                                 }
+                                window.request_redraw();
                             });
                         }
                         #[cfg(not(target_arch = "wasm32"))]
@@ -1306,6 +1316,7 @@ impl App {
                                 if let Ok(mut slot) = result_slot.lock() {
                                     *slot = Some(result);
                                 }
+                                window.request_redraw();
                             });
                         }
                     } else {
@@ -1407,6 +1418,7 @@ impl App {
         };
 
         let result_slot = self.api_animation_save_result.clone();
+        let window = self.window.clone();
         self.api_animation_save_in_progress = true;
 
         // Clear stale result
@@ -1424,6 +1436,7 @@ impl App {
                 if let Ok(mut slot) = result_slot.lock() {
                     *slot = Some(result);
                 }
+                window.request_redraw();
             });
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -1433,6 +1446,7 @@ impl App {
                 if let Ok(mut slot) = result_slot.lock() {
                     *slot = Some(result);
                 }
+                window.request_redraw();
             });
         }
     }
@@ -1459,6 +1473,7 @@ impl App {
         };
 
         let result_slot = self.api_animation_save_result.clone();
+        let window = self.window.clone();
         self.api_animation_save_in_progress = true;
 
         // Clear stale result
@@ -1476,6 +1491,7 @@ impl App {
                 if let Ok(mut slot) = result_slot.lock() {
                     *slot = Some(result);
                 }
+                window.request_redraw();
             });
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -1485,6 +1501,7 @@ impl App {
                 if let Ok(mut slot) = result_slot.lock() {
                     *slot = Some(result);
                 }
+                window.request_redraw();
             });
         }
     }
@@ -1507,6 +1524,7 @@ impl App {
 
         let base_url = crate::api::API_BASE_URL.to_string();
         let result_slot = self.url_load_result.clone();
+        let window = self.window.clone();
         self.url_load_in_progress = true;
         self.url_load_started = Some(web_time::Instant::now());
 
@@ -1516,6 +1534,8 @@ impl App {
             if let Ok(mut slot) = result_slot.lock() {
                 *slot = Some(result);
             }
+            // Wake the event loop so handle_url_load runs immediately
+            window.request_redraw();
         });
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -1524,6 +1544,7 @@ impl App {
             if let Ok(mut slot) = result_slot.lock() {
                 *slot = Some(result);
             }
+            window.request_redraw();
         });
     }
 
@@ -1602,6 +1623,17 @@ impl App {
             Ok(UrlLoadedData::Animation { animation, animation_id, flame_id, flame_meta }) => {
                 let anim_name = animation.name.clone();
                 log::info!("URL load: animation '{}' ({})", anim_name, animation_id);
+
+                // Switch to the animation-focused workspace so the user lands on a layout
+                // with the Animation panel visible. In compact mode, just open the panel
+                // since compact is single-panel.
+                let compact = self.config_manager.system_settings().compact_mode.unwrap_or(false);
+                if compact {
+                    let ctx = &self.egui_layer.ctx;
+                    self.workspace.open_compact_panel(crate::ui::workspace::PanelType::Animation, ctx);
+                } else if !matches!(self.workspace.current_layout, crate::ui::workspace::WorkspaceLayout::Animation) {
+                    self.workspace.apply_layout(crate::ui::workspace::WorkspaceLayout::Animation);
+                }
 
                 // Load the flame config from the animation's base_config (populated from embedded flame)
                 if let Some(config) = animation.base_config.clone() {
