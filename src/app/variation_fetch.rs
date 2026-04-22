@@ -33,6 +33,7 @@ impl App {
             let url_name = name.clone();
             let slot = result_slot.clone();
             let base = base_url.clone();
+            let window = self.window.clone();
 
             #[cfg(target_arch = "wasm32")]
             wasm_bindgen_futures::spawn_local(async move {
@@ -42,6 +43,7 @@ impl App {
                 if let Ok(mut s) = slot.lock() {
                     s.push((url_name, result));
                 }
+                window.request_redraw();
             });
 
             #[cfg(not(target_arch = "wasm32"))]
@@ -52,6 +54,7 @@ impl App {
                 if let Ok(mut s) = slot.lock() {
                     s.push((url_name, result));
                 }
+                window.request_redraw();
             });
         }
     }
