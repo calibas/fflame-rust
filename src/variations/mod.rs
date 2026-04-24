@@ -245,6 +245,11 @@ pub struct VariationRegistry {
 
     /// Ordered list of variation names (for consistent ID assignment)
     ordered_names: Vec<String>,
+
+    /// Bumped whenever a variation is added, replaced, or removed at runtime.
+    /// Used by the shader cache to detect when a rebuild is needed even if
+    /// the flame's referenced variation names haven't changed.
+    version: u64,
 }
 
 impl VariationRegistry {
@@ -256,6 +261,7 @@ impl VariationRegistry {
         let mut registry = Self {
             variations: HashMap::new(),
             ordered_names: Vec::new(),
+            version: 0,
         };
 
         log::info!("=== VARIATION REGISTRY INITIALIZATION ===");
@@ -306,6 +312,7 @@ impl VariationRegistry {
         }
         log::info!("Registered API variation '{}' v{}", info.name, info.version);
         self.variations.insert(info.name.clone(), info);
+        self.version = self.version.wrapping_add(1);
     }
 
     /// Remove all API-loaded (non-core) variations.
@@ -320,6 +327,15 @@ impl VariationRegistry {
         }
         self.ordered_names.retain(|name| self.variations.contains_key(name));
         log::info!("Cleared {} API-loaded variations from registry", removed.len());
+        if !removed.is_empty() {
+            self.version = self.version.wrapping_add(1);
+        }
+    }
+
+    /// Get the registry's version counter. Bumped on any runtime add/remove.
+    /// Used by the shader cache to detect when a rebuild is needed.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     /// Check if a variation is registered (built-in or API).

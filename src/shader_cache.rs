@@ -29,6 +29,12 @@ pub struct ShaderCache {
     /// Current render mode (determines which shader is actually built)
     current_render_mode: RenderMode,
 
+    /// Last seen variation registry version. Bumped when variations are added
+    /// or removed at runtime (e.g., via the API). Forces a shader rebuild even
+    /// when the flame's variation key set is unchanged — needed because a flame
+    /// can reference a variation by name before it has been fetched.
+    last_registry_version: u64,
+
     /// Compiled shader source (for debugging/inspection)
     pub shader_source_2d: String,
     pub shader_source_3d: String,
@@ -95,12 +101,15 @@ impl ShaderCache {
             (shader_source.clone(), shader_source, compute_pipeline.clone(), compute_pipeline)
         };
 
+        let last_registry_version = crate::variations::global_registry().version();
+
         Self {
             active_variations,
             path_features_enabled,
             xaos_enabled,
             constants,
             current_render_mode: render_mode,
+            last_registry_version,
             shader_source_2d,
             shader_source_3d,
             compute_pipeline_2d,
@@ -187,7 +196,13 @@ impl ShaderCache {
         // Check if render mode changed
         let mode_changed = render_mode != self.current_render_mode;
 
-        if !variations_changed && !path_features_changed && !xaos_changed && !constants_changed && !mode_changed {
+        // Check if the variation registry itself changed (e.g., a new API
+        // variation was fetched). The flame's variation key set won't change
+        // in that case, but the WGSL we need to compile does.
+        let current_registry_version = crate::variations::global_registry().version();
+        let registry_changed = current_registry_version != self.last_registry_version;
+
+        if !variations_changed && !path_features_changed && !xaos_changed && !constants_changed && !mode_changed && !registry_changed {
             return false; // No rebuild needed
         }
 
@@ -227,6 +242,12 @@ impl ShaderCache {
                 self.current_render_mode, render_mode
             );
         }
+        if registry_changed {
+            log::info!(
+                "Recompiling shaders: variation registry version changed from {} to {}",
+                self.last_registry_version, current_registry_version
+            );
+        }
 
         // Only rebuild the shader for the current render mode
         let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
@@ -261,6 +282,7 @@ impl ShaderCache {
         self.xaos_enabled = xaos_enabled;
         self.constants = constants;
         self.current_render_mode = render_mode;
+        self.last_registry_version = current_registry_version;
 
         true // Rebuilt
     }
