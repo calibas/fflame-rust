@@ -427,7 +427,7 @@ fn parse_xform_element(
                         // Try to parse as variation parameter (e.g., "julian_power", "blob_high")
                         // Try progressively longer prefixes to find matching variation
                         // This handles cases like "pre_blur_param" correctly
-                        if let Some((var_name, param_name)) = find_variation_and_param(key, registry) {
+                        if let Some((var_name, param_name)) = find_variation_and_param(key, &registry) {
                             pending_params.push((var_name, param_name, parsed_value));
                         }
                     }
@@ -512,7 +512,7 @@ fn parse_finalxform_element(
                         }
                     } else if key.contains('_') {
                         // Try to parse as variation parameter
-                        if let Some((var_name, param_name)) = find_variation_and_param(key, registry) {
+                        if let Some((var_name, param_name)) = find_variation_and_param(key, &registry) {
                             pending_params.push((var_name, param_name, parsed_value));
                         }
                     }

@@ -275,6 +275,12 @@ pub fn render_menu_bar(
                     workspace.open_floating_panel(super::workspace::PanelType::Effects, ctx);
                 }
 
+                // Variations panel
+                let variations_open = workspace.panel_exists(super::workspace::PanelType::Variations);
+                if ui.selectable_label(variations_open, t!("menu.window_variations").as_ref()).clicked() {
+                    workspace.open_floating_panel(super::workspace::PanelType::Variations, ctx);
+                }
+
                 // Xaos Editor panel
                 let xaos_editor_open = workspace.panel_exists(super::workspace::PanelType::XaosEditor);
                 if ui.selectable_label(xaos_editor_open, t!("menu.window_xaos_editor").as_ref()).clicked() {

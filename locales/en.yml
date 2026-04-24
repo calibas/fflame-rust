@@ -66,6 +66,7 @@ menu:
   window_path_editor: "🧪 Path Editor (Experimental)"
   window_random_generator: "🎲 Random Generator"
   window_effects: "✨ Effects"
+  window_variations: "🌀 Variations"
   window_xaos_editor: "🔀 Xaos Editor"
   window_signal: "📊 Signals"
   window_account: "👤 Account"
@@ -139,6 +140,19 @@ panels:
   tone_mapping: "Tone Mapping"
   xaos_editor: "Xaos Editor"
   signal: "Signals"
+  variations: "Variations"
+
+variations_panel:
+  total: "%{count} total"
+  category_basic_2d: "Basic 2D"
+  category_advanced_2d: "Advanced 2D"
+  category_depth_3d: "3D Depth"
+  category_rotation_3d: "3D Rotation"
+  category_full_3d: "3D Full"
+  category_plugin: "Plugin / API"
+  source_built_in: "built-in"
+  source_api: "API"
+  clear_cache_btn: "Clear Variation Cache (%{count})"
 
 # Random Generator Panel
 random_generator:
@@ -894,6 +908,10 @@ api:
   loading_flame: "Loading flame: %{name}..."
   loading_flame_generic: "Loading flame..."
   loading_animation: "Loading animation..."
+  loading_variations: "Loading variations: %{names}..."
+  variation_fetch_failed: "Couldn't load variations: %{names}. Fractal may render incorrectly."
+  variation_cache_cleared: "Cleared %{count} cached variations"
+  variation_cache_clear_failed: "Failed to clear variation cache: %{error}"
   load_flame_success: "Loaded flame: %{name}"
   url_load_flame_success: "Loaded flame '%{name}' from URL"
   url_load_animation_success: "Loaded animation '%{name}' from URL"

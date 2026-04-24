@@ -1534,3 +1534,86 @@ fn variation_auger(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> 
 }
 "#),
 };
+
+/// CPow — complex power variation (JWildfire port)
+///
+/// Reference: github.com/mwegner/chaotica-apophysis-plugins-from-jwildfire/blob/master/output/cpow.cpp
+///
+/// Math:
+///   a = atan2(y, x)
+///   lnr = 0.5 * ln(x² + y²)
+///   va = 2π / power, vc = r / power, vd = i / power
+///   ang = vc*a + vd*lnr + va * floor(power * rand())
+///   m = exp(vc*lnr - vd*a)
+///   out = m * (cos(ang), sin(ang))
+pub static CPOW: VariationDef = VariationDef {
+    name: "cpow",
+    display_name: "CPow",
+    category: VariationCategory::Advanced2D,
+    phase: VariationPhase::Normal,
+    needs_rng: true,
+    parameters: &[
+        VariationParamDef {
+            name: "r",
+            display_name: "R",
+            param_type: ParamType::UnlimitedFloat,
+            default_value: 1.0,
+            min_value: Some(-10.0),
+            max_value: Some(10.0),
+        },
+        VariationParamDef {
+            name: "i",
+            display_name: "I",
+            param_type: ParamType::UnlimitedFloat,
+            default_value: 0.1,
+            min_value: Some(-10.0),
+            max_value: Some(10.0),
+        },
+        VariationParamDef {
+            name: "power",
+            display_name: "Power",
+            param_type: ParamType::UnlimitedFloat,
+            default_value: 1.5,
+            min_value: Some(-10.0),
+            max_value: Some(10.0),
+        },
+    ],
+    wgsl_2d: r#"
+fn variation_cpow(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
+    let r_param = get_param(xform_id, variation_id, 0u);
+    let i_param = get_param(xform_id, variation_id, 1u);
+    let power = get_param(xform_id, variation_id, 2u);
+
+    let a = atan2(p.y, p.x);
+    let lnr = 0.5 * log(dot(p, p) + 1e-20);
+
+    let va = 6.28318530718 / power;
+    let vc = r_param / power;
+    let vd = i_param / power;
+
+    let ang = vc * a + vd * lnr + va * floor(power * rng_nextf(rng));
+    let m = exp(vc * lnr - vd * a);
+
+    return vec2<f32>(m * cos(ang), m * sin(ang));
+}
+"#,
+    wgsl_3d: Some(r#"
+fn variation_cpow(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
+    let r_param = get_param(xform_id, variation_id, 0u);
+    let i_param = get_param(xform_id, variation_id, 1u);
+    let power = get_param(xform_id, variation_id, 2u);
+
+    let a = atan2(p.y, p.x);
+    let lnr = 0.5 * log(dot(p.xy, p.xy) + 1e-20);
+
+    let va = 6.28318530718 / power;
+    let vc = r_param / power;
+    let vd = i_param / power;
+
+    let ang = vc * a + vd * lnr + va * floor(power * rng_nextf(rng));
+    let m = exp(vc * lnr - vd * a);
+
+    return vec3<f32>(m * cos(ang), m * sin(ang), p.z);
+}
+"#),
+};

@@ -98,6 +98,8 @@ pub struct UiResponse {
     pub loaded_api_flame_animations: Vec<crate::api::types::AnimationSummary>,
     // API: Animation ID to load (from the animations list in the panel)
     pub load_api_animation_id: Option<String>,
+    // Variations panel: clear all API-loaded variations from cache+registry
+    pub clear_variation_cache_requested: bool,
 }
 
 /// API save action type (flame only — animation is separate)
@@ -178,6 +180,7 @@ impl Default for UiResponse {
             loaded_api_flame_animation_count: 0,
             loaded_api_flame_animations: Vec::new(),
             load_api_animation_id: None,
+            clear_variation_cache_requested: false,
         }
     }
 }
