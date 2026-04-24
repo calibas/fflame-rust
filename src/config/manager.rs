@@ -2133,9 +2133,15 @@ impl ConfigManager {
         let after = self.current.flame.transforms[index].clone();
 
         // Check if transform actually changed (avoid no-op snapshots)
-        let changed = before.a != after.a || before.b != after.b || before.c != after.c
+        let pre_changed = before.a != after.a || before.b != after.b || before.c != after.c
             || before.d != after.d || before.e != after.e || before.f != after.f
             || before.g != after.g;
+        let post_changed = before.post_a != after.post_a || before.post_b != after.post_b
+            || before.post_c != after.post_c || before.post_d != after.post_d
+            || before.post_e != after.post_e || before.post_f != after.post_f
+            || before.post_g != after.post_g
+            || before.post_affine_enabled != after.post_affine_enabled;
+        let changed = pre_changed || post_changed;
 
         if !changed {
             log::debug!("Modify session commit: no changes detected, skipping snapshot");

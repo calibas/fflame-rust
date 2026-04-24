@@ -26,6 +26,7 @@ mod target_selector;
 mod tone_mapping;
 pub mod track_editor;
 mod transforms;
+mod variations;
 mod triangle_editor;
 mod undo_history;
 mod variation_params;
@@ -815,6 +816,7 @@ impl EguiLayer {
         let mut api_animation_save_action = response::ApiAnimationSaveAction::None;
         let mut open_save_online_dialog = false;
         let mut load_api_animation_id: Option<String> = None;
+        let mut clear_variation_cache_requested = false;
 
         // Path filters
         let mut path_filters_changed: Option<Vec<crate::gpu::buffers::GpuPathFilter>> = None;
@@ -1089,6 +1091,7 @@ impl EguiLayer {
                         api_animation_save_action: &mut api_animation_save_action,
                         open_save_online_dialog: &mut open_save_online_dialog,
                         load_api_animation_id: &mut load_api_animation_id,
+                        clear_variation_cache_requested: &mut clear_variation_cache_requested,
                         compact_mode: self.compact_mode,
                     },
                     touch_tracker: &mut self.touch_tracker,
@@ -1556,6 +1559,7 @@ impl EguiLayer {
             loaded_api_flame_animation_count,
             loaded_api_flame_animations,
             load_api_animation_id,
+            clear_variation_cache_requested,
         }
     }
 

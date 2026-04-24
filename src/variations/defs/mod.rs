@@ -124,4 +124,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &POST_FALLOFF2,
     &POST_CURL,
     &POST_CURL3D,
+    // Later additions
+    &CPOW,
 ];

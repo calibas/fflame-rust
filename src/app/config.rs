@@ -61,6 +61,15 @@ impl App {
         // making the image very dim and effects invisible until accumulation builds up.
         self.use_overwrite_next_frame = true;
 
+        // Check for unknown variations and fetch them from the API.
+        // This pauses rendering until fetches complete (or fail/timeout).
+        let missing = crate::variations::missing_variations_in(
+            &self.config_manager.active_config().flame
+        );
+        if !missing.is_empty() {
+            self.trigger_variation_fetches(missing);
+        }
+
         Ok(())
     }
 

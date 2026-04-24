@@ -443,9 +443,17 @@ pub fn render_track_editor_panel(
     let highlight_frame = egui::Frame::window(&ctx.style())
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 149, 237))); // Cornflower blue
 
+    // Default position: keep clear of the compact mode menu button
+    // (top-right hamburger area, ~80px tall including safe-area padding).
+    let default_pos = {
+        let screen = ctx.screen_rect();
+        egui::pos2(screen.center().x - 175.0, screen.min.y + 150.0)
+    };
+
     egui::Window::new(title)
         .open(&mut open)
         .resizable(true)
+        .default_pos(default_pos)
         .default_width(350.0)
         .default_height(450.0)
         .frame(highlight_frame)

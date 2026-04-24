@@ -111,6 +111,10 @@ pub struct VariationInfo {
 
     /// Parameters for this variation
     pub parameters: Vec<VariationParameter>,
+
+    /// Version number. Built-in variations use 0; API-loaded variations
+    /// use the server's version. Used for cache invalidation.
+    pub version: u32,
 }
 
 impl VariationInfo {
@@ -127,6 +131,34 @@ impl VariationInfo {
         self.parameters.iter().find(|p| p.name == param_name)
     }
 
+    /// Create from an API VariationDownload response
+    pub fn from_download(dl: &crate::api::types::VariationDownload) -> Self {
+        let parameters = dl.parameters.iter().map(|p| VariationParameter {
+            name: p.name.clone(),
+            display_name: p.display_name.clone(),
+            param_type: api_param_type_to_runtime(&p.param_type),
+            default_value: p.default_value,
+            min_value: p.min_value,
+            max_value: p.max_value,
+        }).collect();
+
+        let wgsl_function = format!("variation_{}", dl.name);
+
+        Self {
+            name: dl.name.clone(),
+            display_name: dl.display_name.clone(),
+            category: VariationCategory::from_api_str(&dl.category),
+            phase: api_phase_to_runtime(&dl.phase),
+            wgsl_function,
+            needs_rng: dl.needs_rng,
+            is_core: false,
+            wgsl_source: Some(dl.shader_2d.clone()),
+            wgsl_source_3d: dl.shader_3d.clone(),
+            parameters,
+            version: dl.version,
+        }
+    }
+
     /// Create from a static VariationDef
     pub fn from_def(def: &VariationDef) -> Self {
         Self {
@@ -140,6 +172,7 @@ impl VariationInfo {
             wgsl_source: Some(def.wgsl_2d.to_string()),
             wgsl_source_3d: def.wgsl_3d.map(|s| s.to_string()),
             parameters: def.parameters_to_runtime(),
+            version: 0,
         }
     }
 }
@@ -165,6 +198,45 @@ pub enum VariationCategory {
     Plugin,
 }
 
+/// Convert API param type to runtime ParamType
+fn api_param_type_to_runtime(api: &crate::api::types::ApiParamType) -> ParamType {
+    use crate::api::types::ApiParamType;
+    match api {
+        ApiParamType::Float => ParamType::Float,
+        ApiParamType::UnlimitedFloat => ParamType::UnlimitedFloat,
+        ApiParamType::Integer => ParamType::Integer,
+        ApiParamType::UnlimitedInteger => ParamType::UnlimitedInteger,
+        ApiParamType::Boolean => ParamType::Boolean,
+        ApiParamType::Angle => ParamType::Angle,
+        ApiParamType::Enum { choices } => ParamType::Enum { choices: choices.clone() },
+    }
+}
+
+/// Convert API phase to runtime VariationPhase
+fn api_phase_to_runtime(api: &crate::api::types::ApiVariationPhase) -> VariationPhase {
+    use crate::api::types::ApiVariationPhase;
+    match api {
+        ApiVariationPhase::Pre => VariationPhase::Pre,
+        ApiVariationPhase::Normal => VariationPhase::Normal,
+        ApiVariationPhase::Post => VariationPhase::Post,
+    }
+}
+
+impl VariationCategory {
+    /// Parse from API string (matches API's snake_case).
+    /// Unknown values map to Plugin as a safe default.
+    pub fn from_api_str(s: &str) -> Self {
+        match s {
+            "basic_2d" | "basic2d" => Self::Basic2D,
+            "advanced_2d" | "advanced2d" => Self::Advanced2D,
+            "depth_3d" | "depth3d" | "3d" => Self::Depth3D,
+            "rotation_3d" | "rotation3d" => Self::Rotation3D,
+            "full_3d" | "full3d" => Self::Full3D,
+            _ => Self::Plugin,
+        }
+    }
+}
+
 /// Registry of all available variations
 #[derive(Clone, Debug)]
 pub struct VariationRegistry {
@@ -173,6 +245,11 @@ pub struct VariationRegistry {
 
     /// Ordered list of variation names (for consistent ID assignment)
     ordered_names: Vec<String>,
+
+    /// Bumped whenever a variation is added, replaced, or removed at runtime.
+    /// Used by the shader cache to detect when a rebuild is needed even if
+    /// the flame's referenced variation names haven't changed.
+    version: u64,
 }
 
 impl VariationRegistry {
@@ -184,6 +261,7 @@ impl VariationRegistry {
         let mut registry = Self {
             variations: HashMap::new(),
             ordered_names: Vec::new(),
+            version: 0,
         };
 
         log::info!("=== VARIATION REGISTRY INITIALIZATION ===");
@@ -212,6 +290,57 @@ impl VariationRegistry {
         let info = VariationInfo::from_def(def);
         self.ordered_names.push(info.name.clone());
         self.variations.insert(info.name.clone(), info);
+    }
+
+    /// Register or replace an API-loaded variation.
+    /// If a variation with the same name already exists, it's replaced
+    /// (e.g., when a newer version is fetched). Built-in variations
+    /// can't be replaced — the call is rejected with a logged warning.
+    pub fn register_from_api(&mut self, dl: &crate::api::types::VariationDownload) {
+        if let Some(existing) = self.variations.get(&dl.name) {
+            if existing.is_core {
+                log::warn!(
+                    "Cannot register API variation '{}' — name conflicts with built-in",
+                    dl.name
+                );
+                return;
+            }
+        }
+        let info = VariationInfo::from_download(dl);
+        if !self.ordered_names.contains(&info.name) {
+            self.ordered_names.push(info.name.clone());
+        }
+        log::info!("Registered API variation '{}' v{}", info.name, info.version);
+        self.variations.insert(info.name.clone(), info);
+        self.version = self.version.wrapping_add(1);
+    }
+
+    /// Remove all API-loaded (non-core) variations.
+    /// Built-in variations are preserved. Used by the "Clear Variation Cache" action.
+    pub fn clear_api(&mut self) {
+        let removed: Vec<String> = self.variations.iter()
+            .filter(|(_, info)| !info.is_core)
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in &removed {
+            self.variations.remove(name);
+        }
+        self.ordered_names.retain(|name| self.variations.contains_key(name));
+        log::info!("Cleared {} API-loaded variations from registry", removed.len());
+        if !removed.is_empty() {
+            self.version = self.version.wrapping_add(1);
+        }
+    }
+
+    /// Get the registry's version counter. Bumped on any runtime add/remove.
+    /// Used by the shader cache to detect when a rebuild is needed.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// Check if a variation is registered (built-in or API).
+    pub fn has(&self, name: &str) -> bool {
+        self.variations.contains_key(name)
     }
 
     /// Get variation info by name
@@ -261,10 +390,64 @@ impl Default for VariationRegistry {
     }
 }
 
-/// Global variation registry singleton
-/// This ensures the registry is initialized only once and shared across all code paths
-pub fn global_registry() -> &'static VariationRegistry {
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+fn registry_lock() -> &'static RwLock<VariationRegistry> {
     use once_cell::sync::Lazy;
-    static REGISTRY: Lazy<VariationRegistry> = Lazy::new(|| VariationRegistry::new());
+    static REGISTRY: Lazy<RwLock<VariationRegistry>> = Lazy::new(|| RwLock::new(VariationRegistry::new()));
     &REGISTRY
+}
+
+/// Get a read guard to the global variation registry singleton.
+/// Initialized once, shared across all code paths.
+pub fn global_registry() -> RwLockReadGuard<'static, VariationRegistry> {
+    registry_lock().read().expect("variation registry RwLock poisoned")
+}
+
+/// Get a write guard to the global variation registry. Use sparingly —
+/// only for adding/removing API-loaded variations at runtime.
+pub fn global_registry_mut() -> RwLockWriteGuard<'static, VariationRegistry> {
+    registry_lock().write().expect("variation registry RwLock poisoned")
+}
+
+/// Scan a flame's transforms for variation names not registered.
+/// Returns the deduplicated list of missing names (empty if all are present).
+pub fn missing_variations_in(flame: &crate::scene::transforms::Flame) -> Vec<String> {
+    let registry = global_registry();
+    let mut missing = std::collections::HashSet::new();
+    for xform in &flame.transforms {
+        for name in xform.variations.keys() {
+            if xform.variations.get(name).copied().unwrap_or(0.0) == 0.0 {
+                continue; // weight 0 — not actually used
+            }
+            if !registry.has(name) {
+                missing.insert(name.clone());
+            }
+        }
+    }
+    if let Some(ref final_xform) = flame.final_transform {
+        for name in final_xform.variations.keys() {
+            if final_xform.variations.get(name).copied().unwrap_or(0.0) == 0.0 {
+                continue;
+            }
+            if !registry.has(name) {
+                missing.insert(name.clone());
+            }
+        }
+    }
+    missing.into_iter().collect()
+}
+
+/// Load all cached API variations from disk/storage and register them.
+/// Call once at app startup, after the global registry is initialized.
+/// Errors for individual variations are logged but don't fail the load.
+pub fn load_cached_api_variations() {
+    let cached = crate::storage::variation_cache::load_all();
+    if cached.is_empty() {
+        return;
+    }
+    let mut registry = global_registry_mut();
+    for download in cached {
+        registry.register_from_api(&download);
+    }
 }
