@@ -152,9 +152,10 @@ impl Workspace {
 
     /// Apply a predefined layout
     pub fn apply_layout(&mut self, layout: WorkspaceLayout) {
+        let help_was_open = self.panel_exists(PanelType::Help);
         self.dock_state = match layout {
             WorkspaceLayout::Standard => Self::create_standard_layout(),
-            WorkspaceLayout::Animation => Self::create_animation_layout(),
+            WorkspaceLayout::Animation => Self::create_animation_layout(help_was_open),
             WorkspaceLayout::Compact => Self::create_compact_layout(),
         };
         self.current_layout = layout;
@@ -369,7 +370,7 @@ impl Workspace {
     }
 
     /// Create Animation layout: Standard layout with Animation panel at bottom center
-    fn create_animation_layout() -> DockState<PanelType> {
+    fn create_animation_layout(preserve_help: bool) -> DockState<PanelType> {
         // Start with FractalViewport in the center
         let mut state = DockState::new(vec![PanelType::FractalViewport]);
 
@@ -393,6 +394,13 @@ impl Workspace {
             0.75, // Right panel starts at 75% (takes remaining 25%)
             vec![PanelType::Colors, PanelType::View, PanelType::TriangleEditor, PanelType::Rendering, PanelType::History],
         );
+
+        // Re-add Help as a floating window if it was open before the layout switch.
+        // Position/size are not preserved (egui_dock doesn't expose the live rect),
+        // but egui's own window memory will restore them on the next frame.
+        if preserve_help {
+            state.add_window(vec![PanelType::Help]);
+        }
 
         state
     }
