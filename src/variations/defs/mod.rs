@@ -18,6 +18,7 @@ mod quaternion;
 mod sqrt_hyperbolic;
 mod trig_bs;
 mod exp_log;
+mod shapes;
 
 pub use basic::*;
 pub use advanced::*;
@@ -34,6 +35,7 @@ pub use quaternion::*;
 pub use sqrt_hyperbolic::*;
 pub use trig_bs::*;
 pub use exp_log::*;
+pub use shapes::*;
 
 use super::definition::VariationDef;
 
@@ -199,4 +201,17 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &LOG_DB,
     &LOG_TILE2,
     &TILE_LOG,
+    // Misc trig + standalone shapes (batch 7, 2026-04-26)
+    &TANCOS,
+    &TANGENT,
+    &TANGENT3D,
+    &SECANT2,
+    &COSINE,
+    &PETAL,
+    &CARDIOID,
+    &HELIX,
+    &HELICOID,
+    &PARABOLA,
+    &PIE,
+    &PIE3D,
 ];
