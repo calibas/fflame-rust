@@ -19,6 +19,7 @@ mod sqrt_hyperbolic;
 mod trig_bs;
 mod exp_log;
 mod shapes;
+mod shapes2;
 
 pub use basic::*;
 pub use advanced::*;
@@ -36,6 +37,7 @@ pub use sqrt_hyperbolic::*;
 pub use trig_bs::*;
 pub use exp_log::*;
 pub use shapes::*;
+pub use shapes2::*;
 
 use super::definition::VariationDef;
 
@@ -214,4 +216,17 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &PARABOLA,
     &PIE,
     &PIE3D,
+    // Standalone shapes continued (batch 8, 2026-04-26)
+    &BUTTERFLY,
+    &BUTTERFLY3D,
+    &ENNEPERS,
+    &PYRAMID,
+    &RAYS2,
+    &RAYS3,
+    &SPIRALWING,
+    &WHITNEY_UMBRELLA,
+    &CHRYSANTHEMUM,
+    &CELL,
+    &ENNEPERS2,
+    &FLOWER,
 ];
