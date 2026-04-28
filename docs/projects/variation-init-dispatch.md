@@ -271,6 +271,38 @@ Skipped from this work (deferred):
     path runs the same init dispatch then bakes user params; a separate
     bit-diff smoke test would confirm parity. Not blocking the merge.
 
+### Affine-access addendum (2026-04-29)
+
+While reviewing the bulk-port watchlists, the affine-access blocker
+(currently just `popcorn` and the buggy `waves`) was small enough to
+land in the same branch. Approach: add a `needs_affine: bool` flag on
+`VariationDef`. When true, the generated WGSL function signature
+includes `xform_id: u32` even for variations without parameters, so
+the body can read `transforms[xform_id].a/b/c/d/e/f` directly. Old
+variations stay untouched (default false).
+
+Commits:
+  - `975a10b` — add `needs_affine` field, bulk-insert `false` into all
+    177 existing variation literals
+  - `42e86d7` — wire through `VariationInfo` (registry) and
+    `VariationDownload` (API JSON, with `serde(default)`); update
+    `shader_builder_v2.rs` call-site emission for normal-phase and
+    pre-phase. Post-phase emission left alone for now (no current
+    variation needs it; the post-phase param-string structure is more
+    complex).
+  - `dd410f9` — migrate `waves` to read affine; port `popcorn` off the
+    watchlist into a new `affine_ports.rs` file.
+
+`waves` migration changed half the rendered pixels in the regression
+config — this is the bug-fix behavior, not a regression. Pre-migration
+`waves` ignored the flame's actual configuration entirely (hardcoded
+`b/c/e/f = 0.5` in the WGSL); post-migration it follows Scott Draves's
+original semantics.
+
+`popcorn` is the only variation currently using affine access besides
+the migrated `waves`. The rest of the affine-access watchlist (which
+previously had only `popcorn` on it) is now empty.
+
 ## Decisions (resolved 2026-04-27)
 
 Five questions came up during plan review. Resolutions:

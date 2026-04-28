@@ -737,19 +737,24 @@ other weights, see decisions above). `rays`, `rays1`, `flux`, `loonie_3d`
 were skipped from their respective batches — revisit when we make the
 design call on internal-weight handling.
 
-### Affine-coefficient access watchlist
+### Affine-coefficient access watchlist — RESOLVED 2026-04-29
 
 These variations read fields of the XForm's affine matrix directly
 (`pXForm.getXYCoeff20()` / `XFORM_COEFF_20` etc.) rather than only the
-transformed point. Our shader populates the affine in a separate pass and
-variation functions don't currently see those coefficients. To port these
-we'd need to thread the per-transform affine into the variation function
-signature — non-trivial since it changes the calling convention shared
-across all variations.
+transformed point.
 
-| name | bucket | LOC | params | 3d | notes |
+**Status:** unblocked by the `needs_affine: bool` flag on `VariationDef`,
+which threads `xform_id` into the function signature for opted-in
+variations so the body can read `transforms[xform_id].a/b/c/d/e/f`.
+See `variation-init-dispatch.md` § Affine-access addendum.
+
+| name | bucket | LOC | params | 3d | status |
 |---|---|---:|---:|:---:|---|
-| `popcorn` | `pure` | 126 | 0 | no | reads `XFORM_COEFF_20` and `_21` (i.e. `c`/`f` translation parts of the affine) |
+| `popcorn` | `pure` | 126 | 0 | no | ported on the variation-init-dispatch branch (commit `dd410f9`) |
+
+In the same change, the existing `waves` (a "made up" placeholder that
+hardcoded `b/c/e/f = 0.5`) was migrated to its actual Scott Draves
+formula reading the affine.
 
 ### Porter-omitted params / init-precomputed-fields watchlist
 
