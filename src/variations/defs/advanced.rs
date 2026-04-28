@@ -294,6 +294,18 @@ fn variation_bent(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+// waves: Scott Draves's classic waves variation, using affine matrix fields.
+//   x' = x + b · sin(y / (c² + ε))
+//   y' = y + e · sin(x / (f² + ε))
+// In the standard Apophysis affine notation, b/c/e/f are read directly from
+// the transform's affine matrix:
+//   our `xform.b`  (= XFORM_COEFF_10) → X amplitude
+//   our `xform.e`  (= XFORM_COEFF_20, X translation) → X wavelength (squared)
+//   our `xform.d`  (= XFORM_COEFF_11) → Y amplitude
+//   our `xform.f`  (= XFORM_COEFF_21, Y translation) → Y wavelength (squared)
+//
+// First variation to use `needs_affine: true` — the body reads from the
+// `transforms` storage buffer via xform_id.
 pub static WAVES: VariationDef = VariationDef {
     name: "waves",
     display_name: "Waves",
@@ -301,30 +313,24 @@ pub static WAVES: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_affine: true,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
-fn variation_waves(p: vec2<f32>) -> vec2<f32> {
-    let b = 0.5;
-    let c = 0.5;
-    let e = 0.5;
-    let f = 0.5;
+fn variation_waves(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
+    let xf = transforms[xform_id];
     return vec2<f32>(
-        p.x + b * sin(p.y / (c * c + 1e-6)),
-        p.y + e * sin(p.x / (f * f + 1e-6))
+        p.x + xf.b * sin(p.y / (xf.e * xf.e + 1e-6)),
+        p.y + xf.d * sin(p.x / (xf.f * xf.f + 1e-6))
     );
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_waves(p: vec3<f32>) -> vec3<f32> {
-    let b = 0.5;
-    let c = 0.5;
-    let e = 0.5;
-    let f = 0.5;
+fn variation_waves(p: vec3<f32>, xform_id: u32) -> vec3<f32> {
+    let xf = transforms[xform_id];
     return vec3<f32>(
-        p.x + b * sin(p.y / (c * c + 1e-6)),
-        p.y + e * sin(p.x / (f * f + 1e-6)),
+        p.x + xf.b * sin(p.y / (xf.e * xf.e + 1e-6)),
+        p.y + xf.d * sin(p.x / (xf.f * xf.f + 1e-6)),
         p.z
     );
 }
