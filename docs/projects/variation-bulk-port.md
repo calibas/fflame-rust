@@ -103,12 +103,14 @@ both the shader emitter and the buffer populator, sharing
 | 6 | `exp_log.rs` | exp + log_apo + log_db + log_tile2 + tile_log | 5 | First **param + RNG** combo. `log_db` upstream has `atan2(x,y)` (swapped) — preserved. |
 | 7 | `shapes.rs` | Misc trig + standalone shapes | 12 | First batch with `Float` and `Angle` ParamTypes. `secant2` uses internal weight — see watchlist. |
 | 8 | `shapes2.rs` | Standalone shapes continued | 12 | `ennepers` upstream uses `=` not `+=` — fixed (see decisions). |
-| **Total new** | | | **79** | |
-| Registry size | | | **163** | (84 base + 79 ported) |
+| 9 | `numbered.rs` | Numbered/3D variants of existing | 12 | First ports with init-step precompute inlined (juliaq/julia3dq/juliac). |
+| **Total new** | | | **91** | |
+| Registry size | | | **175** | (84 base + 91 ported) |
 
 Branch: `variation-bulk-port-batch1`. Commits in order:
 `a7ecc30`, `8698337`, `0ef937e` (refactor), `dd1239c`, `ae80fbc`, `3fc37a8`,
-`d11533a`, `a7664e8`, `28e571a`, `46b8c7e`.
+`d11533a`, `a7664e8`, `28e571a`, `46b8c7e`, `d132ce3` (doc update),
+`a61cc70`.
 
 ### Notable decisions during porting
 
@@ -157,6 +159,11 @@ Patterns the auto-classifier didn't flag but porting surfaced:
 - **Init-time precomputed fields not always flagged** — `target` reads
   `VAR(_t_size_2)` which doesn't appear in `APO_VARIABLES`. `yin_yang`
   reads `cosa/sina/cosb/sinb` similarly. Both need Java-source recovery.
+- **Affine-coefficient dependency not flagged** — `popcorn` uses
+  `XFORM_COEFF_20` / `XFORM_COEFF_21` (the affine `c` and `f` coefficients,
+  i.e. translation parts). Variations in our system only see the
+  post-affine point; the affine matrix isn't exposed to variation
+  functions. New watchlist below.
 
 ## Open questions
 
@@ -704,6 +711,7 @@ Options per case:
 | `idisc` | `pure` | 141 | 0 | no | VVAR used internally; 2 porter-omitted params (recover from Java) |
 | `loonie2` | `param` | 253 | 3 | no | VVAR used internally |
 | `loonie3` | `pure` | 145 | 0 | no | VVAR used internally |
+| `loonie_3d` | `pure` | 80 | 0 | yes | added during porting (batch 9 skip): uses precomputed `sqrvvar = VVAR²` in comparison and sqrt arg |
 | `loq` | `param` | 148 | 1 | yes | VVAR used internally |
 | `npolar` | `param_rng` | 193 | 2 | no | VVAR used internally |
 | `popcorn2_3d` | `param` | 115 | 4 | yes | VVAR used internally |
@@ -721,9 +729,23 @@ Options per case:
 | `waffle` | `param_rng` | 219 | 4 | no | VVAR used internally |
 
 **During the port:** `secant2` was shipped at weight=1 fidelity (deviates at
-other weights, see decisions above). `rays`, `rays1`, `flux` were skipped
-from their respective batches — revisit when we make the design call on
-internal-weight handling.
+other weights, see decisions above). `rays`, `rays1`, `flux`, `loonie_3d`
+were skipped from their respective batches — revisit when we make the
+design call on internal-weight handling.
+
+### Affine-coefficient access watchlist
+
+These variations read fields of the XForm's affine matrix directly
+(`pXForm.getXYCoeff20()` / `XFORM_COEFF_20` etc.) rather than only the
+transformed point. Our shader populates the affine in a separate pass and
+variation functions don't currently see those coefficients. To port these
+we'd need to thread the per-transform affine into the variation function
+signature — non-trivial since it changes the calling convention shared
+across all variations.
+
+| name | bucket | LOC | params | 3d | notes |
+|---|---|---:|---:|:---:|---|
+| `popcorn` | `pure` | 126 | 0 | no | reads `XFORM_COEFF_20` and `_21` (i.e. `c`/`f` translation parts of the affine) |
 
 ### Porter-omitted params / init-precomputed-fields watchlist
 
