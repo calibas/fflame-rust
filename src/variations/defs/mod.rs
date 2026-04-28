@@ -20,6 +20,7 @@ mod trig_bs;
 mod exp_log;
 mod shapes;
 mod shapes2;
+mod numbered;
 
 pub use basic::*;
 pub use advanced::*;
@@ -38,6 +39,7 @@ pub use trig_bs::*;
 pub use exp_log::*;
 pub use shapes::*;
 pub use shapes2::*;
+pub use numbered::*;
 
 use super::definition::VariationDef;
 
@@ -229,4 +231,17 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CELL,
     &ENNEPERS2,
     &FLOWER,
+    // Numbered/3D variants of existing variations (batch 9, 2026-04-27)
+    &SPHERICAL3D,
+    &SINUSOIDAL3D,
+    &SQUARE,
+    &SQUARE3D,
+    &DISC3D,
+    &BUBBLE2,
+    &POPCORN2,
+    &SPLITS3D,
+    &WAVES2_3D,
+    &JULIAQ,
+    &JULIA3DQ,
+    &JULIAC,
 ];
