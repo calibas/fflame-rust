@@ -61,6 +61,8 @@ pub static CPOW2: VariationDef = VariationDef {
         VariationParamDef { name: "range", display_name: "Range", param_type: ParamType::Integer,
                             default_value: 1.0, min_value: Some(1.0), max_value: Some(64.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_cpow2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let pi = 3.14159265358979;
@@ -159,6 +161,8 @@ pub static CPOW3: VariationDef = VariationDef {
         VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_cpow3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
@@ -248,6 +252,8 @@ pub static DISC2: VariationDef = VariationDef {
         VariationParamDef { name: "twist", display_name: "Twist", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_disc2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pi = 3.14159265358979;

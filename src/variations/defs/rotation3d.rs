@@ -15,6 +15,8 @@ pub static PRE_ROTATE_X: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_pre_rotate_x(p: vec2<f32>) -> vec2<f32> {
@@ -43,6 +45,8 @@ pub static PRE_ROTATE_Y: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_pre_rotate_y(p: vec2<f32>) -> vec2<f32> {
@@ -71,6 +75,8 @@ pub static POST_ROTATE_X: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_post_rotate_x(p: vec2<f32>) -> vec2<f32> {
@@ -99,6 +105,8 @@ pub static POST_ROTATE_Y: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 // 2D stub - not used in 2D mode
 fn variation_post_rotate_y(p: vec2<f32>) -> vec2<f32> {

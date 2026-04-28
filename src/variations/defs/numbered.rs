@@ -31,6 +31,8 @@ pub static SPHERICAL3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_spherical3d(p: vec2<f32>) -> vec2<f32> {
     let t = max(p.x * p.x + p.y * p.y, 1e-30);
@@ -58,6 +60,8 @@ pub static SINUSOIDAL3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_sinusoidal3d(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(sin(p.x), sin(p.y));
@@ -81,6 +85,8 @@ pub static SQUARE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_square(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5);
@@ -103,6 +109,8 @@ pub static SQUARE3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_square3d(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     return vec2<f32>(rng_nextf(rng) - 0.5, rng_nextf(rng) - 0.5);
@@ -129,6 +137,8 @@ pub static DISC3D: VariationDef = VariationDef {
         VariationParamDef { name: "pi", display_name: "Pi", param_type: ParamType::UnlimitedFloat,
                             default_value: 3.14159265358979, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_disc3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let pi_p = get_param(xform_id, variation_id, 0u);
@@ -169,6 +179,8 @@ pub static BUBBLE2: VariationDef = VariationDef {
         VariationParamDef { name: "z", display_name: "Z", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_bubble2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
@@ -211,6 +223,8 @@ pub static POPCORN2: VariationDef = VariationDef {
         VariationParamDef { name: "c", display_name: "C", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.5, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_popcorn2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
@@ -247,6 +261,8 @@ pub static SPLITS3D: VariationDef = VariationDef {
         VariationParamDef { name: "z", display_name: "Z", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.2, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_splits3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x_p = get_param(xform_id, variation_id, 0u);
@@ -288,6 +304,8 @@ pub static WAVES2_3D: VariationDef = VariationDef {
         VariationParamDef { name: "scale", display_name: "Scale", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_waves2_3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let freq = get_param(xform_id, variation_id, 0u);
@@ -330,6 +348,8 @@ pub static JULIAQ: VariationDef = VariationDef {
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::Integer,
                             default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_juliaq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = max(get_param(xform_id, variation_id, 0u), 1.0);
@@ -381,6 +401,8 @@ pub static JULIA3DQ: VariationDef = VariationDef {
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::Integer,
                             default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_julia3dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = max(get_param(xform_id, variation_id, 0u), 1.0);
@@ -442,6 +464,8 @@ pub static JULIAC: VariationDef = VariationDef {
         VariationParamDef { name: "dist", display_name: "Dist", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_juliac(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;

@@ -14,6 +14,8 @@ pub static ZBLUR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_zblur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     // ZBlur only affects Z (3D mode), pass through in 2D
@@ -37,6 +39,8 @@ pub static BLUR3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_blur3d(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis: 3D Gaussian spherical blur
@@ -69,6 +73,8 @@ pub static PRE_BLUR: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: true,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_pre_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis: Pre-phase Gaussian blur applied before variations

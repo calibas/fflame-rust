@@ -26,6 +26,8 @@ pub static ACOTH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_acoth(p: vec2<f32>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -64,6 +66,8 @@ pub static ACOSH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_acosh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -115,6 +119,8 @@ pub static ACOSECH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_acosech(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -176,6 +182,8 @@ pub static ARCSECH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_arcsech(p: vec2<f32>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -245,6 +253,8 @@ pub static ARCSECH2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_arcsech2(p: vec2<f32>) -> vec2<f32> {
     let scale = 2.0 * 0.6366197723675814;
@@ -321,6 +331,8 @@ pub static ARCSINH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_arcsinh(p: vec2<f32>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -369,6 +381,8 @@ pub static ARCTANH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_arctanh(p: vec2<f32>) -> vec2<f32> {
     let one_over_pi = 0.3183098861837907;
