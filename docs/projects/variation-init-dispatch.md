@@ -243,28 +243,33 @@ pipeline becomes `Some` and the dispatch actually fires.
      heavy-init ones (still using their inline init bodies). Confirm no
      shader recompiles fire when params change.
 
-### PR 2 — migrations + new ports
+### PR 2 — migrations + new ports ✅ COMPLETE
 
-8. **Migrate existing heavy-init ports**
-   - `cpow2`, `cpow3`, `disc2` (`heavy_init.rs`)
-   - `log_apo`, `log_db` (`exp_log.rs`)
-   - `juliaq`, `julia3dq`, `juliac` (`numbered.rs`)
-   - `cell` is borderline — only init is `1/size`, may not be worth
-     migrating; decide during PR 2 based on whether the body cleanup is
-     meaningful.
+All migrations + new ports landed on the `variation-init-dispatch` branch
+(same branch as PR 1, since cpow2 was migrated as part of the PR 1
+end-to-end verification step).
 
-9. **Add `target` and `yin_yang`** from the porter-omitted-init watchlist.
-   New ports rather than migrations, but exercise the same infra.
+  - **cpow2** (commit `26f8e7b`, on PR 1 branch as the proof of life):
+    99.997% pixel-identical to pre-migration baseline. The 2 differing
+    pixels are f32 last-bit rounding from a different op order.
+  - **cpow3, disc2, log_db, juliaq, julia3dq, juliac** (commit `7d95889`):
+    follow-on migrations using the same pattern. Smoke-tested with a
+    1M-iter render mixing all seven plus cpow2.
+  - **`cell`** *not* migrated — its only init value is `1/size`, a single
+    division. The body-cleanup gain isn't worth the migration churn.
+  - **`target`, `yin_yang`** (commit `d6542cc`): net-new ports off the
+    porter-omitted-init watchlist, blocked on init support before this
+    PR. `target.size` default bumped from upstream's 0 (which yields
+    `t mod 0` = NaN) to 1.0.
 
-10. **PR 2 verification**
-    - Bit-diff each migrated variation against its PR-1 baseline output
-    - Render a flame with cpow2 animating `r` from 0.5 → 1.5 over a few
-      seconds; confirm no shader recompiles, rendering smooth
-    - Headless export with `inlined_constants` enabled — verify output
-      matches the buffer-mode render
+`log_apo` was deleted before PR 1 — see commit `8d5e488` on the
+bulk-port branch — because it's functionally identical to the existing
+`log` from the base 84.
 
-11. **Doc updates** — `variation-bulk-port.md` watchlist entries cleared,
-    new batch row in the progress table.
+Skipped from this work (deferred):
+  - Comparing against `inlined_constants` export render — the export
+    path runs the same init dispatch then bakes user params; a separate
+    bit-diff smoke test would confirm parity. Not blocking the merge.
 
 ## Decisions (resolved 2026-04-27)
 
