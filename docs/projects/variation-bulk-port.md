@@ -100,13 +100,13 @@ both the shader emitter and the buffer populator, sharing
 | 3 | `quaternion.rs` | zephyrtronium quaternion (sinq, cosq, …) | 12 | All 3D-aware. 2D form is the natural collapse at `z=0`. |
 | 4 | `sqrt_hyperbolic.rs` | sqrt-prefixed inverse hyperbolic | 6 | All RNG (classifier missed); `sqrt_asech` is upstream-bugged → calls AcosH not AsecH. Preserved. |
 | 5 | `trig_bs.rs` | Brad Stefanov parameterized trig (sin2_bs …) | 13 | First **param** batch — validates the param flow. `sech2_bs` uses the *correct* sech denom (cos+cosh), unlike `trig.rs:sech`. |
-| 6 | `exp_log.rs` | exp + log_apo + log_db + log_tile2 + tile_log | 5 | First **param + RNG** combo. `log_db` upstream has `atan2(x,y)` (swapped) — preserved. |
+| 6 | `exp_log.rs` | exp + log_db + log_tile2 + tile_log | 4 | First **param + RNG** combo. `log_db` upstream has `atan2(x,y)` (swapped) — preserved. (Originally included `log_apo`; dropped before merge — functionally identical to existing `log` from the base 84.) |
 | 7 | `shapes.rs` | Misc trig + standalone shapes | 12 | First batch with `Float` and `Angle` ParamTypes. `secant2` uses internal weight — see watchlist. |
 | 8 | `shapes2.rs` | Standalone shapes continued | 12 | `ennepers` upstream uses `=` not `+=` — fixed (see decisions). |
 | 9 | `numbered.rs` | Numbered/3D variants of existing | 12 | First ports with init-step precompute inlined (juliaq/julia3dq/juliac). |
 | 10 | `heavy_init.rs` | cpow2, cpow3, disc2 (heavy init) | 3 | Larger init-step precomputes inlined into the per-iteration body. |
-| **Total new** | | | **94** | |
-| Registry size | | | **178** | (84 base + 94 ported) |
+| **Total new** | | | **93** | |
+| Registry size | | | **177** | (84 base + 93 ported) |
 
 Branch: `variation-bulk-port-batch1`. Commits in order:
 `a7ecc30`, `8698337`, `0ef937e` (refactor), `dd1239c`, `ae80fbc`, `3fc37a8`,

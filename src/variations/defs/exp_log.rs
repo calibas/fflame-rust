@@ -2,12 +2,14 @@
 //!
 //! Includes:
 //!   - `exp` — complex exponential
-//!   - `log_apo` — Apophysis-style complex log with configurable base
 //!   - `log_db` — DarkBeam's randomly-shifted complex log
 //!   - `log_tile2` — Zy0rg's 3D log-tiled spreader
 //!   - `tile_log` — Zy0rg's 1D log-tiled spreader (X axis only)
 //!
-//! `log` itself is already in the registry from the original 84.
+//! `log` itself is already in the registry from the original 84 with the
+//! Apophysis-style formula (`log(x²+y²) · 0.5/log(base)`). Upstream's
+//! `log_apo` is functionally identical — the `log_apo` port was dropped
+//! before merge to avoid a redundant entry.
 
 use crate::variations::{
     definition::{VariationDef, VariationParamDef},
@@ -35,43 +37,6 @@ fn variation_exp(p: vec2<f32>) -> vec2<f32> {
 fn variation_exp(p: vec3<f32>) -> vec3<f32> {
     let e = exp(p.x);
     return vec3<f32>(e * cos(p.y), e * sin(p.y), p.z);
-}
-"#),
-};
-
-// =============================================================================
-// log_apo: Apophysis-style complex log
-//   x' = log(x² + y²) · 0.5 / log(base)
-//   y' = atan2(y, x)
-//
-//   The 0.5/log(base) factor converts the natural log of |z|² to log_base(|z|).
-//   Upstream precomputes _denom = 0.5/log(base) in init() — we recompute per
-//   iteration since we have no init hook.
-// =============================================================================
-pub static LOG_APO: VariationDef = VariationDef {
-    name: "log_apo",
-    display_name: "Log (Apophysis)",
-    category: VariationCategory::Advanced2D,
-    phase: VariationPhase::Normal,
-    needs_rng: false,
-    parameters: &[
-        VariationParamDef { name: "base", display_name: "Base", param_type: ParamType::UnlimitedFloat,
-                            default_value: 2.71828182845905, min_value: Some(1e-6), max_value: Some(100.0) },
-    ],
-    wgsl_2d: r#"
-fn variation_log_apo(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
-    let base = get_param(xform_id, variation_id, 0u);
-    let denom = 0.5 / log(max(base, 1e-20));
-    let r2 = max(p.x * p.x + p.y * p.y, 1e-40);
-    return vec2<f32>(log(r2) * denom, atan2(p.y, p.x));
-}
-"#,
-    wgsl_3d: Some(r#"
-fn variation_log_apo(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
-    let base = get_param(xform_id, variation_id, 0u);
-    let denom = 0.5 / log(max(base, 1e-20));
-    let r2 = max(p.x * p.x + p.y * p.y, 1e-40);
-    return vec3<f32>(log(r2) * denom, atan2(p.y, p.x), p.z);
 }
 "#),
 };
