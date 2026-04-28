@@ -21,6 +21,7 @@ mod exp_log;
 mod shapes;
 mod shapes2;
 mod numbered;
+mod heavy_init;
 
 pub use basic::*;
 pub use advanced::*;
@@ -40,6 +41,7 @@ pub use exp_log::*;
 pub use shapes::*;
 pub use shapes2::*;
 pub use numbered::*;
+pub use heavy_init::*;
 
 use super::definition::VariationDef;
 
@@ -244,4 +246,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &JULIAQ,
     &JULIA3DQ,
     &JULIAC,
+    // Heavy-init variants (batch 10, 2026-04-27)
+    &CPOW2,
+    &CPOW3,
+    &DISC2,
 ];
