@@ -14,6 +14,7 @@ mod post_phase;
 mod extended;
 mod hyperbolic;
 mod trig;
+mod quaternion;
 
 pub use basic::*;
 pub use advanced::*;
@@ -26,6 +27,7 @@ pub use post_phase::*;
 pub use extended::*;
 pub use hyperbolic::*;
 pub use trig::*;
+pub use quaternion::*;
 
 use super::definition::VariationDef;
 
@@ -151,4 +153,17 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &COTH,
     &SECH,
     &CSCH,
+    // Quaternion-style trig/hyperbolic (batch 3, 2026-04-26)
+    &SINQ,
+    &COSQ,
+    &TANQ,
+    &COTQ,
+    &SECQ,
+    &CSCQ,
+    &SINHQ,
+    &COSHQ,
+    &TANHQ,
+    &COTHQ,
+    &SECHQ,
+    &CSCHQ,
 ];
