@@ -3,6 +3,54 @@ use serde::{Deserialize, Serialize, Deserializer, Serializer};
 use serde::de::{self, Visitor, MapAccess};
 use crate::variations::VariationRegistry;
 
+/// Maximum number of variations that can be active in a single flame.
+/// This is the cap on the GPU-side `xform.variations` array and the
+/// `variation_params` array layout (100 variations × 12 params = 1200 floats).
+/// The variation registry itself is unbounded — this only limits the
+/// per-flame active set.
+pub const MAX_VARIATIONS_PER_FLAME: usize = 100;
+
+/// Compute a per-flame local index map for the given active variation set.
+///
+/// Active variation names are sorted by their order in the registry (which is
+/// append-only, so this is stable across runs and across registry growth) and
+/// assigned sequential local indices `0..N`. If the active set exceeds
+/// `MAX_VARIATIONS_PER_FLAME`, a warning is logged and the overflow is dropped.
+///
+/// Both the shader builder and the GPU buffer populator must use the same
+/// mapping to keep buffer slots and shader code in agreement.
+pub fn compute_local_index_map<I, S>(
+    active_names: I,
+    registry: &VariationRegistry,
+) -> HashMap<String, u32>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let active_set: std::collections::HashSet<String> =
+        active_names.into_iter().map(|s| s.as_ref().to_string()).collect();
+    let mut active_in_order: Vec<String> = registry
+        .names()
+        .iter()
+        .filter(|name| active_set.contains(*name))
+        .cloned()
+        .collect();
+    if active_in_order.len() > MAX_VARIATIONS_PER_FLAME {
+        log::warn!(
+            "Flame has {} active variations; truncating to {}. Dropped: {:?}",
+            active_in_order.len(),
+            MAX_VARIATIONS_PER_FLAME,
+            &active_in_order[MAX_VARIATIONS_PER_FLAME..],
+        );
+        active_in_order.truncate(MAX_VARIATIONS_PER_FLAME);
+    }
+    active_in_order
+        .into_iter()
+        .enumerate()
+        .map(|(local, name)| (name, local as u32))
+        .collect()
+}
+
 /// IFS Transform with named variations (V2)
 ///
 /// This struct is used for both regular transforms AND the final transform.
@@ -442,25 +490,21 @@ impl Transform {
         }
     }
 
-    /// COMPATIBILITY: Convert to fixed 100-element array for GPU
-    pub fn to_fixed_array(&self, registry: &VariationRegistry) -> [f32; 100] {
-        let mut array = [0.0; 100];
-        for (i, name) in registry.names().iter().enumerate().take(100) {
-            array[i] = self.get_variation(name);
-        }
-        array
-    }
-
-    /// COMPATIBILITY: Set from fixed array
-    pub fn from_fixed_array(&mut self, array: [f32; 100], registry: &VariationRegistry) {
-        self.variations.clear();
-        for (i, &weight) in array.iter().enumerate() {
-            if weight.abs() > 1e-6 {
-                if let Some(name) = registry.names().get(i) {
-                    self.set_variation(name, weight);
+    /// Convert this transform's variation weights into the GPU's fixed-size
+    /// `[f32; 100]` slot array, using the supplied per-flame local index map.
+    /// Variations not present in `local_map` (either not active anywhere in the
+    /// flame, or dropped past the cap) contribute zero.
+    pub fn to_fixed_array(&self, local_map: &HashMap<String, u32>) -> [f32; MAX_VARIATIONS_PER_FLAME] {
+        let mut array = [0.0; MAX_VARIATIONS_PER_FLAME];
+        for (name, weight) in &self.variations {
+            if let Some(&local_idx) = local_map.get(name) {
+                let slot = local_idx as usize;
+                if slot < MAX_VARIATIONS_PER_FLAME {
+                    array[slot] = *weight;
                 }
             }
         }
+        array
     }
 }
 
@@ -961,21 +1005,15 @@ impl Flame {
         false
     }
 
-    /// Get runtime ID mapping for active variations
-    /// Uses registry order to ensure deterministic ID assignment
+    /// Get runtime ID mapping for active variations.
+    /// Delegates to `compute_local_index_map` for stable registry-order assignment
+    /// and the per-flame cap.
     pub fn get_id_mapping(&self) -> HashMap<String, u32> {
-        let active_set: std::collections::HashSet<String> =
-            self.extract_active_variations().keys().cloned().collect();
-
-        // Use global registry order for deterministic ID assignment
         let registry = crate::variations::global_registry();
-        let active: Vec<String> = registry.names()
-            .iter()
-            .filter(|name| active_set.contains(*name))
-            .cloned()
-            .collect();
-
-        registry.assign_ids(&active)
+        compute_local_index_map(
+            self.extract_active_variations().into_keys(),
+            &registry,
+        )
     }
 
     /// Calculate cumulative weights for transform selection
