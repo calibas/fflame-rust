@@ -15,6 +15,7 @@ mod extended;
 mod hyperbolic;
 mod trig;
 mod quaternion;
+mod sqrt_hyperbolic;
 
 pub use basic::*;
 pub use advanced::*;
@@ -28,6 +29,7 @@ pub use extended::*;
 pub use hyperbolic::*;
 pub use trig::*;
 pub use quaternion::*;
+pub use sqrt_hyperbolic::*;
 
 use super::definition::VariationDef;
 
@@ -166,4 +168,11 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &COTHQ,
     &SECHQ,
     &CSCHQ,
+    // Square-root prefixed inverse hyperbolic (batch 4, 2026-04-26)
+    &SQRT_ACOTH,
+    &SQRT_ACOSH,
+    &SQRT_ACOSECH,
+    &SQRT_ASECH,
+    &SQRT_ASINH,
+    &SQRT_ATANH,
 ];
