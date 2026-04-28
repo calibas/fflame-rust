@@ -28,6 +28,7 @@ pub static SQRT_ACOTH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -78,6 +79,7 @@ pub static SQRT_ACOSH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -139,6 +141,7 @@ pub static SQRT_ACOSECH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -207,6 +210,7 @@ pub static SQRT_ASECH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -264,6 +268,7 @@ pub static SQRT_ASINH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -321,6 +326,7 @@ pub static SQRT_ATANH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

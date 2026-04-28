@@ -14,6 +14,7 @@ pub static HEMISPHERE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

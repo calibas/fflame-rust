@@ -37,6 +37,7 @@ pub static TANCOS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -67,6 +68,7 @@ pub static TANGENT: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -95,6 +97,7 @@ pub static TANGENT3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -129,6 +132,7 @@ pub static SECANT2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -163,6 +167,7 @@ pub static COSINE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -193,6 +198,7 @@ pub static PETAL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -238,6 +244,7 @@ pub static CARDIOID: VariationDef = VariationDef {
         VariationParamDef { name: "a", display_name: "A", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -274,6 +281,7 @@ pub static HELIX: VariationDef = VariationDef {
         VariationParamDef { name: "width", display_name: "Width", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -308,6 +316,7 @@ pub static HELICOID: VariationDef = VariationDef {
         VariationParamDef { name: "frequency", display_name: "Frequency", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -347,6 +356,7 @@ pub static PARABOLA: VariationDef = VariationDef {
         VariationParamDef { name: "height", display_name: "Height", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -392,6 +402,7 @@ pub static PIE: VariationDef = VariationDef {
         VariationParamDef { name: "thickness", display_name: "Thickness", param_type: ParamType::Float,
                             default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0) },
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -437,6 +448,7 @@ pub static PIE3D: VariationDef = VariationDef {
         VariationParamDef { name: "thickness", display_name: "Thickness", param_type: ParamType::Float,
                             default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0) },
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

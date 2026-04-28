@@ -15,6 +15,7 @@ pub static PRE_ZSCALE: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -39,6 +40,7 @@ pub static PRE_ZTRANSLATE: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -63,6 +65,7 @@ pub static PRE_SPHERICAL: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -88,6 +91,7 @@ pub static PRE_SINUSOIDAL: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -111,6 +115,7 @@ pub static PRE_DISC: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -146,6 +151,7 @@ pub static PRE_BWRAPS: VariationDef = VariationDef {
         param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0),
         param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0),
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -281,6 +287,7 @@ pub static PRE_CROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0),
         param!("zero", "Zero", bool, false),
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -391,6 +398,7 @@ pub static PRE_FALLOFF2: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

@@ -14,6 +14,7 @@ pub static ZBLUR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -39,6 +40,7 @@ pub static BLUR3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -73,6 +75,7 @@ pub static PRE_BLUR: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
