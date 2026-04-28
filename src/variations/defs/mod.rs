@@ -22,6 +22,7 @@ mod shapes;
 mod shapes2;
 mod numbered;
 mod heavy_init;
+mod init_ports;
 
 pub use basic::*;
 pub use advanced::*;
@@ -42,6 +43,7 @@ pub use shapes::*;
 pub use shapes2::*;
 pub use numbered::*;
 pub use heavy_init::*;
+pub use init_ports::*;
 
 use super::definition::VariationDef;
 
@@ -249,4 +251,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CPOW2,
     &CPOW3,
     &DISC2,
+    // Init-dispatch ports (batch 11, 2026-04-28) — variations on the
+    // porter-omitted-init watchlist, enabled by the new wgsl_init system
+    &TARGET,
+    &YIN_YANG,
 ];
