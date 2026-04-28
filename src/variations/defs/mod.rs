@@ -12,6 +12,7 @@ mod blur;
 mod pre_phase;
 mod post_phase;
 mod extended;
+mod hyperbolic;
 
 pub use basic::*;
 pub use advanced::*;
@@ -22,6 +23,7 @@ pub use blur::*;
 pub use pre_phase::*;
 pub use post_phase::*;
 pub use extended::*;
+pub use hyperbolic::*;
 
 use super::definition::VariationDef;
 
@@ -126,4 +128,12 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &POST_CURL3D,
     // Later additions
     &CPOW,
+    // Inverse hyperbolic / arc complex (batch 1, 2026-04-26)
+    &ACOTH,
+    &ACOSH,
+    &ACOSECH,
+    &ARCSECH,
+    &ARCSECH2,
+    &ARCSINH,
+    &ARCTANH,
 ];
