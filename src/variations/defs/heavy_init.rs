@@ -61,25 +61,47 @@ pub static CPOW2: VariationDef = VariationDef {
         VariationParamDef { name: "range", display_name: "Range", param_type: ParamType::Integer,
                             default_value: 1.0, min_value: Some(1.0), max_value: Some(64.0) },
     ],
-    init_param_count: 0,
-    wgsl_init: None,
+    // 7 derived values stored in slots 4..11 of this variation's slot range:
+    //   4: ang        (2π / divisor)
+    //   5: c          (r · cos(π/2 · a) / divisor)
+    //   6: d          (r · sin(π/2 · a) / divisor)
+    //   7: half_c     (c / 2)
+    //   8: half_d     (d / 2)
+    //   9: inv_range  (0.5 / range)
+    //   10: full_range (2π · range)
+    init_param_count: 7,
+    wgsl_init: Some(r#"
+fn init_cpow2(user: array<f32, 4>) -> array<f32, 7> {
+    let r_p = user[0];
+    let a_p = user[1];
+    let divisor = user[2];
+    let range_p = max(user[3], 1.0);
+    let safe_div = select(divisor, 1e-30, divisor == 0.0);
+    let c = r_p * cos(1.5707963267948966 * a_p) / safe_div;
+    let d = r_p * sin(1.5707963267948966 * a_p) / safe_div;
+    var out: array<f32, 7>;
+    out[0] = 6.28318530717959 / safe_div;        // ang
+    out[1] = c;                                   // c
+    out[2] = d;                                   // d
+    out[3] = c * 0.5;                             // half_c
+    out[4] = d * 0.5;                             // half_d
+    out[5] = 0.5 / range_p;                       // inv_range
+    out[6] = 6.28318530717959 * range_p;          // full_range
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_cpow2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    let pi = 3.14159265358979;
     let two_pi = 6.28318530717959;
-    let r_p = get_param(xform_id, variation_id, 0u);
-    let a_p = get_param(xform_id, variation_id, 1u);
     let divisor = get_param(xform_id, variation_id, 2u);
     let range_p = max(get_param(xform_id, variation_id, 3u), 1.0);
-
-    let safe_div = select(divisor, 1e-30, divisor == 0.0);
-    let ang = two_pi / safe_div;
-    let c_init = r_p * cos(pi * 0.5 * a_p) / safe_div;
-    let d_init = r_p * sin(pi * 0.5 * a_p) / safe_div;
-    let half_c = c_init * 0.5;
-    let half_d = d_init * 0.5;
-    let inv_range = 0.5 / range_p;
-    let full_range = two_pi * range_p;
+    let ang = get_param(xform_id, variation_id, 4u);
+    let c = get_param(xform_id, variation_id, 5u);
+    let d = get_param(xform_id, variation_id, 6u);
+    let half_c = get_param(xform_id, variation_id, 7u);
+    let half_d = get_param(xform_id, variation_id, 8u);
+    let inv_range = get_param(xform_id, variation_id, 9u);
+    let full_range = get_param(xform_id, variation_id, 10u);
 
     var a = atan2(p.x, p.y);
     var n = i32(rng_next(rng) % u32(range_p));
@@ -89,28 +111,23 @@ fn variation_cpow2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
         a = a - full_range;
     }
     let lnr2 = log(max(p.x * p.x + p.y * p.y, 1e-30));
-    let r_out = exp(half_c * lnr2 - d_init * a);
-    let th = c_init * a + half_d * lnr2 + ang * floor(divisor * rng_nextf(rng));
+    let r_out = exp(half_c * lnr2 - d * a);
+    let th = c * a + half_d * lnr2 + ang * floor(divisor * rng_nextf(rng));
     return vec2<f32>(r_out * cos(th), r_out * sin(th));
 }
 "#,
     wgsl_3d: Some(r#"
 fn variation_cpow2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
-    let pi = 3.14159265358979;
     let two_pi = 6.28318530717959;
-    let r_p = get_param(xform_id, variation_id, 0u);
-    let a_p = get_param(xform_id, variation_id, 1u);
     let divisor = get_param(xform_id, variation_id, 2u);
     let range_p = max(get_param(xform_id, variation_id, 3u), 1.0);
-
-    let safe_div = select(divisor, 1e-30, divisor == 0.0);
-    let ang = two_pi / safe_div;
-    let c_init = r_p * cos(pi * 0.5 * a_p) / safe_div;
-    let d_init = r_p * sin(pi * 0.5 * a_p) / safe_div;
-    let half_c = c_init * 0.5;
-    let half_d = d_init * 0.5;
-    let inv_range = 0.5 / range_p;
-    let full_range = two_pi * range_p;
+    let ang = get_param(xform_id, variation_id, 4u);
+    let c = get_param(xform_id, variation_id, 5u);
+    let d = get_param(xform_id, variation_id, 6u);
+    let half_c = get_param(xform_id, variation_id, 7u);
+    let half_d = get_param(xform_id, variation_id, 8u);
+    let inv_range = get_param(xform_id, variation_id, 9u);
+    let full_range = get_param(xform_id, variation_id, 10u);
 
     var a = atan2(p.x, p.y);
     var n = i32(rng_next(rng) % u32(range_p));
@@ -120,8 +137,8 @@ fn variation_cpow2(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
         a = a - full_range;
     }
     let lnr2 = log(max(p.x * p.x + p.y * p.y, 1e-30));
-    let r_out = exp(half_c * lnr2 - d_init * a);
-    let th = c_init * a + half_d * lnr2 + ang * floor(divisor * rng_nextf(rng));
+    let r_out = exp(half_c * lnr2 - d * a);
+    let th = c * a + half_d * lnr2 + ang * floor(divisor * rng_nextf(rng));
     return vec3<f32>(r_out * cos(th), r_out * sin(th), p.z);
 }
 "#),
