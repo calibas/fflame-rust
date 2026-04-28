@@ -12,6 +12,16 @@ mod blur;
 mod pre_phase;
 mod post_phase;
 mod extended;
+mod hyperbolic;
+mod trig;
+mod quaternion;
+mod sqrt_hyperbolic;
+mod trig_bs;
+mod exp_log;
+mod shapes;
+mod shapes2;
+mod numbered;
+mod heavy_init;
 
 pub use basic::*;
 pub use advanced::*;
@@ -22,6 +32,16 @@ pub use blur::*;
 pub use pre_phase::*;
 pub use post_phase::*;
 pub use extended::*;
+pub use hyperbolic::*;
+pub use trig::*;
+pub use quaternion::*;
+pub use sqrt_hyperbolic::*;
+pub use trig_bs::*;
+pub use exp_log::*;
+pub use shapes::*;
+pub use shapes2::*;
+pub use numbered::*;
+pub use heavy_init::*;
 
 use super::definition::VariationDef;
 
@@ -126,4 +146,107 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &POST_CURL3D,
     // Later additions
     &CPOW,
+    // Inverse hyperbolic / arc complex (batch 1, 2026-04-26)
+    &ACOTH,
+    &ACOSH,
+    &ACOSECH,
+    &ARCSECH,
+    &ARCSECH2,
+    &ARCSINH,
+    &ARCTANH,
+    // Direct trigonometric and hyperbolic (batch 2, 2026-04-26)
+    &SIN,
+    &COS,
+    &TAN,
+    &SEC,
+    &CSC,
+    &COT,
+    &SINH,
+    &COSH,
+    &TANH,
+    &COTH,
+    &SECH,
+    &CSCH,
+    // Quaternion-style trig/hyperbolic (batch 3, 2026-04-26)
+    &SINQ,
+    &COSQ,
+    &TANQ,
+    &COTQ,
+    &SECQ,
+    &CSCQ,
+    &SINHQ,
+    &COSHQ,
+    &TANHQ,
+    &COTHQ,
+    &SECHQ,
+    &CSCHQ,
+    // Square-root prefixed inverse hyperbolic (batch 4, 2026-04-26)
+    &SQRT_ACOTH,
+    &SQRT_ACOSH,
+    &SQRT_ACOSECH,
+    &SQRT_ASECH,
+    &SQRT_ASINH,
+    &SQRT_ATANH,
+    // Brad Stefanov's parameterized direct trig/hyperbolic (batch 5, 2026-04-26)
+    &SIN2_BS,
+    &COS2_BS,
+    &TAN2_BS,
+    &SEC2_BS,
+    &CSC2_BS,
+    &COT2_BS,
+    &SINH2_BS,
+    &COSH2_BS,
+    &TANH2_BS,
+    &COTH2_BS,
+    &SECH2_BS,
+    &CSCH2_BS,
+    &EXP2_BS,
+    // Exp / log family (batch 6, 2026-04-26)
+    &EXP,
+    &LOG_DB,
+    &LOG_TILE2,
+    &TILE_LOG,
+    // Misc trig + standalone shapes (batch 7, 2026-04-26)
+    &TANCOS,
+    &TANGENT,
+    &TANGENT3D,
+    &SECANT2,
+    &COSINE,
+    &PETAL,
+    &CARDIOID,
+    &HELIX,
+    &HELICOID,
+    &PARABOLA,
+    &PIE,
+    &PIE3D,
+    // Standalone shapes continued (batch 8, 2026-04-26)
+    &BUTTERFLY,
+    &BUTTERFLY3D,
+    &ENNEPERS,
+    &PYRAMID,
+    &RAYS2,
+    &RAYS3,
+    &SPIRALWING,
+    &WHITNEY_UMBRELLA,
+    &CHRYSANTHEMUM,
+    &CELL,
+    &ENNEPERS2,
+    &FLOWER,
+    // Numbered/3D variants of existing variations (batch 9, 2026-04-27)
+    &SPHERICAL3D,
+    &SINUSOIDAL3D,
+    &SQUARE,
+    &SQUARE3D,
+    &DISC3D,
+    &BUBBLE2,
+    &POPCORN2,
+    &SPLITS3D,
+    &WAVES2_3D,
+    &JULIAQ,
+    &JULIA3DQ,
+    &JULIAC,
+    // Heavy-init variants (batch 10, 2026-04-27)
+    &CPOW2,
+    &CPOW3,
+    &DISC2,
 ];
