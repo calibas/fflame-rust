@@ -13,6 +13,7 @@ mod pre_phase;
 mod post_phase;
 mod extended;
 mod hyperbolic;
+mod trig;
 
 pub use basic::*;
 pub use advanced::*;
@@ -24,6 +25,7 @@ pub use pre_phase::*;
 pub use post_phase::*;
 pub use extended::*;
 pub use hyperbolic::*;
+pub use trig::*;
 
 use super::definition::VariationDef;
 
@@ -136,4 +138,17 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &ARCSECH2,
     &ARCSINH,
     &ARCTANH,
+    // Direct trigonometric and hyperbolic (batch 2, 2026-04-26)
+    &SIN,
+    &COS,
+    &TAN,
+    &SEC,
+    &CSC,
+    &COT,
+    &SINH,
+    &COSH,
+    &TANH,
+    &COTH,
+    &SECH,
+    &CSCH,
 ];
