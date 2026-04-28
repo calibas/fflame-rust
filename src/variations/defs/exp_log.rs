@@ -71,15 +71,24 @@ pub static LOG_DB: VariationDef = VariationDef {
         VariationParamDef { name: "fix_period", display_name: "Fix Period", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(0.0), max_value: Some(10.0) },
     ],
-    init_param_count: 0,
-    wgsl_init: None,
+    // 2 derived values stored in slots 2..4:
+    //   2: denom    (0.5 / log(e · base), or 0.5 if base <= 0)
+    //   3: fixpe    (π · fix_period, or π if fix_period <= 0)
+    init_param_count: 2,
+    wgsl_init: Some(r#"
+fn init_log_db(user: array<f32, 2>) -> array<f32, 2> {
+    let base = user[0];
+    let fix_period = user[1];
+    var out: array<f32, 2>;
+    out[0] = select(0.5 / log(max(2.71828182845905 * base, 1e-20)), 0.5, base <= 1e-20);
+    out[1] = select(3.14159265358979 * fix_period, 3.14159265358979, fix_period <= 1e-20);
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_log_db(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    let base = get_param(xform_id, variation_id, 0u);
-    let fix_period = get_param(xform_id, variation_id, 1u);
-
-    let denom = select(0.5 / log(max(2.71828182845905 * base, 1e-20)), 0.5, base <= 1e-20);
-    let fixpe = select(3.14159265358979 * fix_period, 3.14159265358979, fix_period <= 1e-20);
+    let denom = get_param(xform_id, variation_id, 2u);
+    let fixpe = get_param(xform_id, variation_id, 3u);
 
     var fix_atan_period: f32 = 0.0;
     for (var i: u32 = 0u; i < 7u; i = i + 1u) {
@@ -97,11 +106,8 @@ fn variation_log_db(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 "#,
     wgsl_3d: Some(r#"
 fn variation_log_db(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
-    let base = get_param(xform_id, variation_id, 0u);
-    let fix_period = get_param(xform_id, variation_id, 1u);
-
-    let denom = select(0.5 / log(max(2.71828182845905 * base, 1e-20)), 0.5, base <= 1e-20);
-    let fixpe = select(3.14159265358979 * fix_period, 3.14159265358979, fix_period <= 1e-20);
+    let denom = get_param(xform_id, variation_id, 2u);
+    let fixpe = get_param(xform_id, variation_id, 3u);
 
     var fix_atan_period: f32 = 0.0;
     for (var i: u32 = 0u; i < 7u; i = i + 1u) {

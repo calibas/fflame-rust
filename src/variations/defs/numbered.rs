@@ -348,15 +348,28 @@ pub static JULIAQ: VariationDef = VariationDef {
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::Integer,
                             default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0) },
     ],
-    init_param_count: 0,
-    wgsl_init: None,
+    // 3 derived values stored in slots 2..5:
+    //   2: inv_power       (divisor / power)
+    //   3: inv_power_2pi   (2π / power)
+    //   4: half_inv_power  (0.5 · divisor / power)
+    init_param_count: 3,
+    wgsl_init: Some(r#"
+fn init_juliaq(user: array<f32, 2>) -> array<f32, 3> {
+    let power = max(user[0], 1.0);
+    let divisor = user[1];
+    let inv_power = divisor / power;
+    var out: array<f32, 3>;
+    out[0] = inv_power;
+    out[1] = 6.28318530717959 / power;
+    out[2] = 0.5 * inv_power;
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_juliaq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    let power = max(get_param(xform_id, variation_id, 0u), 1.0);
-    let divisor = get_param(xform_id, variation_id, 1u);
-    let inv_power = divisor / power;
-    let inv_power_2pi = 6.28318530717959 / power;
-    let half_inv_power = 0.5 * inv_power;
+    let inv_power = get_param(xform_id, variation_id, 2u);
+    let inv_power_2pi = get_param(xform_id, variation_id, 3u);
+    let half_inv_power = get_param(xform_id, variation_id, 4u);
     let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
     let a = atan2(p.y, p.x) * inv_power + rand_int * inv_power_2pi;
     let r = pow(max(p.x * p.x + p.y * p.y, 1e-30), half_inv_power);
@@ -365,11 +378,9 @@ fn variation_juliaq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
 "#,
     wgsl_3d: Some(r#"
 fn variation_juliaq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
-    let power = max(get_param(xform_id, variation_id, 0u), 1.0);
-    let divisor = get_param(xform_id, variation_id, 1u);
-    let inv_power = divisor / power;
-    let inv_power_2pi = 6.28318530717959 / power;
-    let half_inv_power = 0.5 * inv_power;
+    let inv_power = get_param(xform_id, variation_id, 2u);
+    let inv_power_2pi = get_param(xform_id, variation_id, 3u);
+    let half_inv_power = get_param(xform_id, variation_id, 4u);
     let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
     let a = atan2(p.y, p.x) * inv_power + rand_int * inv_power_2pi;
     let r = pow(max(p.x * p.x + p.y * p.y, 1e-30), half_inv_power);
@@ -401,15 +412,30 @@ pub static JULIA3DQ: VariationDef = VariationDef {
         VariationParamDef { name: "divisor", display_name: "Divisor", param_type: ParamType::Integer,
                             default_value: 2.0, min_value: Some(1.0), max_value: Some(64.0) },
     ],
-    init_param_count: 0,
-    wgsl_init: None,
+    // 4 derived values stored in slots 2..6:
+    //   2: inv_power       (divisor / power)
+    //   3: inv_power_2pi   (2π / power)
+    //   4: half_inv_power  (0.5 · inv_power − 0.5)
+    //   5: abs_inv_power   (|inv_power|)
+    init_param_count: 4,
+    wgsl_init: Some(r#"
+fn init_julia3dq(user: array<f32, 2>) -> array<f32, 4> {
+    let power = max(user[0], 1.0);
+    let divisor = user[1];
+    let inv_power = divisor / power;
+    var out: array<f32, 4>;
+    out[0] = inv_power;
+    out[1] = 6.28318530717959 / power;
+    out[2] = 0.5 * inv_power - 0.5;
+    out[3] = abs(inv_power);
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_julia3dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    let power = max(get_param(xform_id, variation_id, 0u), 1.0);
-    let divisor = get_param(xform_id, variation_id, 1u);
-    let inv_power = divisor / power;
-    let inv_power_2pi = 6.28318530717959 / power;
-    let half_inv_power = 0.5 * inv_power - 0.5;
+    let inv_power = get_param(xform_id, variation_id, 2u);
+    let inv_power_2pi = get_param(xform_id, variation_id, 3u);
+    let half_inv_power = get_param(xform_id, variation_id, 4u);
     let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
     let a = atan2(p.y, p.x) * inv_power + rand_int * inv_power_2pi;
     let r2d = max(p.x * p.x + p.y * p.y, 1e-30);
@@ -420,12 +446,10 @@ fn variation_julia3dq(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<f
 "#,
     wgsl_3d: Some(r#"
 fn variation_julia3dq(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
-    let power = max(get_param(xform_id, variation_id, 0u), 1.0);
-    let divisor = get_param(xform_id, variation_id, 1u);
-    let inv_power = divisor / power;
-    let inv_power_2pi = 6.28318530717959 / power;
-    let half_inv_power = 0.5 * inv_power - 0.5;
-    let abs_inv_power = abs(inv_power);
+    let inv_power = get_param(xform_id, variation_id, 2u);
+    let inv_power_2pi = get_param(xform_id, variation_id, 3u);
+    let half_inv_power = get_param(xform_id, variation_id, 4u);
+    let abs_inv_power = get_param(xform_id, variation_id, 5u);
     let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
     let a = atan2(p.y, p.x) * inv_power + rand_int * inv_power_2pi;
     let z_arg = p.z * abs_inv_power;
@@ -464,16 +488,26 @@ pub static JULIAC: VariationDef = VariationDef {
         VariationParamDef { name: "dist", display_name: "Dist", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    init_param_count: 0,
-    wgsl_init: None,
+    // 2 derived values stored in slots 3..5:
+    //   3: re_recip   (1 / (re_param + ε))
+    //   4: im_scaled  (im_param / 100)
+    init_param_count: 2,
+    wgsl_init: Some(r#"
+fn init_juliac(user: array<f32, 3>) -> array<f32, 2> {
+    let re_param = user[0];
+    let im_param = user[1];
+    var out: array<f32, 2>;
+    out[0] = 1.0 / (re_param + 1e-30);
+    out[1] = im_param / 100.0;
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_juliac(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
-    let re_param = get_param(xform_id, variation_id, 0u);
-    let im_param = get_param(xform_id, variation_id, 1u);
     let dist = get_param(xform_id, variation_id, 2u);
-    let re_recip = 1.0 / (re_param + 1e-30);
-    let im_scaled = im_param / 100.0;
+    let re_recip = get_param(xform_id, variation_id, 3u);
+    let im_scaled = get_param(xform_id, variation_id, 4u);
     let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
     // (rand_int mod re_recip) — using fract/floor since re_recip can be huge
     let arg = atan2(p.y, p.x) + (rand_int - floor(rand_int / max(abs(re_recip), 1e-30)) * re_recip) * two_pi;
@@ -486,11 +520,9 @@ fn variation_juliac(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     wgsl_3d: Some(r#"
 fn variation_juliac(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_pi = 6.28318530717959;
-    let re_param = get_param(xform_id, variation_id, 0u);
-    let im_param = get_param(xform_id, variation_id, 1u);
     let dist = get_param(xform_id, variation_id, 2u);
-    let re_recip = 1.0 / (re_param + 1e-30);
-    let im_scaled = im_param / 100.0;
+    let re_recip = get_param(xform_id, variation_id, 3u);
+    let im_scaled = get_param(xform_id, variation_id, 4u);
     let rand_int = f32(i32(rng_next(rng) & 0x7FFFFFFFu));
     let arg = atan2(p.y, p.x) + (rand_int - floor(rand_int / max(abs(re_recip), 1e-30)) * re_recip) * two_pi;
     let lnmod = dist * 0.5 * log(max(p.x * p.x + p.y * p.y, 1e-30));
