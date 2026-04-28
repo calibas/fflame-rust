@@ -104,13 +104,14 @@ both the shader emitter and the buffer populator, sharing
 | 7 | `shapes.rs` | Misc trig + standalone shapes | 12 | First batch with `Float` and `Angle` ParamTypes. `secant2` uses internal weight — see watchlist. |
 | 8 | `shapes2.rs` | Standalone shapes continued | 12 | `ennepers` upstream uses `=` not `+=` — fixed (see decisions). |
 | 9 | `numbered.rs` | Numbered/3D variants of existing | 12 | First ports with init-step precompute inlined (juliaq/julia3dq/juliac). |
-| **Total new** | | | **91** | |
-| Registry size | | | **175** | (84 base + 91 ported) |
+| 10 | `heavy_init.rs` | cpow2, cpow3, disc2 (heavy init) | 3 | Larger init-step precomputes inlined into the per-iteration body. |
+| **Total new** | | | **94** | |
+| Registry size | | | **178** | (84 base + 94 ported) |
 
 Branch: `variation-bulk-port-batch1`. Commits in order:
 `a7ecc30`, `8698337`, `0ef937e` (refactor), `dd1239c`, `ae80fbc`, `3fc37a8`,
 `d11533a`, `a7664e8`, `28e571a`, `46b8c7e`, `d132ce3` (doc update),
-`a61cc70`.
+`a61cc70`, `3756ce1` (doc update), `4c739ae`.
 
 ### Notable decisions during porting
 
@@ -127,10 +128,13 @@ These are places where I diverged from a literal C++→WGSL port and why:
 - **`sqrt_asech` (batch 4) — preserved upstream bug.** Upstream calls
   `complexAcosH(sqrt(z))` instead of an asech formula — copy-paste from
   `sqrt_acosh`. Kept for parity.
-- **`log_db` (batch 6) — preserved porter bug.** Upstream C++ uses
-  `atan2(x, y)` (swapped); Java source uses `getPrecalcAtanYX()` (correct
-  order). Kept the C++ bug since flames in the wild were built against
-  the buggy C++ port.
+- **`atan2(x, y)` swap bug (recurring).** A systematic C++ porter mistake:
+  the C++ ports translate Java's `getPrecalcAtanYX()` (which is
+  `atan2(y, x)`) as `atan2(FTx, FTy)` (swapped — `atan2(x, y)`). Affects
+  `log_db` (batch 6), `cpow2`/`cpow3`/`disc2` (batch 10), and almost
+  certainly more we haven't ported yet. We preserve the C++ behavior so
+  flames built against the C++ ports render the same. Watch for this in
+  every future port that uses atan2.
 - **`secant2` (batch 7) — internal weight diverges from upstream.** Upstream
   computes the radius for `cos(r)` with `r = pAmount · sqrt(x²+y²)`, so
   the non-linear `cos` part scales with weight. Our outer-multiplier
