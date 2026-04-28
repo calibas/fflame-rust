@@ -178,26 +178,46 @@ pub static CPOW3: VariationDef = VariationDef {
         VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    init_param_count: 0,
-    wgsl_init: None,
+    // 6 derived values stored in slots 4..10 of this variation's slot range:
+    //   4: ang        (2π / divisor)
+    //   5: c
+    //   6: d_calc
+    //   7: half_c
+    //   8: half_d
+    //   9: coeff      (−0.095 · spread / d_calc, or 0 if d_calc == 0)
+    init_param_count: 6,
+    wgsl_init: Some(r#"
+fn init_cpow3(user: array<f32, 4>) -> array<f32, 6> {
+    let r_p = user[0];
+    let d_p = user[1];
+    let divisor = user[2];
+    let spread = user[3];
+    let safe_div = select(divisor, 1e-30, divisor == 0.0);
+    let log_d = select(log(max(d_p, 1e-30)), -log(max(-d_p, 1e-30)), d_p < 0.0);
+    let p_a = atan2(log_d * r_p, 6.28318530717959);
+    let cos_pa = cos(p_a);
+    let c = cos_pa * r_p * cos(p_a) / safe_div;
+    let d_calc = cos_pa * r_p * sin(p_a) / safe_div;
+    var out: array<f32, 6>;
+    out[0] = 6.28318530717959 / safe_div;                            // ang
+    out[1] = c;                                                       // c
+    out[2] = d_calc;                                                  // d_calc
+    out[3] = c * 0.5;                                                 // half_c
+    out[4] = d_calc * 0.5;                                            // half_d
+    out[5] = select(-0.095 * spread / d_calc, 0.0, d_calc == 0.0);    // coeff
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_cpow3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
-    let r_p = get_param(xform_id, variation_id, 0u);
-    let d_p = get_param(xform_id, variation_id, 1u);
     let divisor = get_param(xform_id, variation_id, 2u);
-    let spread = get_param(xform_id, variation_id, 3u);
-
-    let safe_div = select(divisor, 1e-30, divisor == 0.0);
-    let log_d = select(log(max(d_p, 1e-30)), -log(max(-d_p, 1e-30)), d_p < 0.0);
-    let p_a = atan2(log_d * r_p, two_pi);
-    let cos_pa = cos(p_a);
-    let c_init = cos_pa * r_p * cos(p_a) / safe_div;
-    let d_calc = cos_pa * r_p * sin(p_a) / safe_div;
-    let half_c = c_init * 0.5;
-    let half_d = d_calc * 0.5;
-    let ang = two_pi / safe_div;
-    let coeff = select(-0.095 * spread / d_calc, 0.0, d_calc == 0.0);
+    let ang = get_param(xform_id, variation_id, 4u);
+    let c = get_param(xform_id, variation_id, 5u);
+    let d_calc = get_param(xform_id, variation_id, 6u);
+    let half_c = get_param(xform_id, variation_id, 7u);
+    let half_d = get_param(xform_id, variation_id, 8u);
+    let coeff = get_param(xform_id, variation_id, 9u);
 
     var a = atan2(p.x, p.y);
     if (a < 0.0) { a = a + two_pi; }
@@ -207,28 +227,20 @@ fn variation_cpow3(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 
     let lnr2 = log(max(p.x * p.x + p.y * p.y, 1e-30));
     let r_out = exp(half_c * lnr2 - d_calc * a);
-    let th = c_init * a + half_d * lnr2 + ang * floor(divisor * rng_nextf(rng));
+    let th = c * a + half_d * lnr2 + ang * floor(divisor * rng_nextf(rng));
     return vec2<f32>(r_out * cos(th), r_out * sin(th));
 }
 "#,
     wgsl_3d: Some(r#"
 fn variation_cpow3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let two_pi = 6.28318530717959;
-    let r_p = get_param(xform_id, variation_id, 0u);
-    let d_p = get_param(xform_id, variation_id, 1u);
     let divisor = get_param(xform_id, variation_id, 2u);
-    let spread = get_param(xform_id, variation_id, 3u);
-
-    let safe_div = select(divisor, 1e-30, divisor == 0.0);
-    let log_d = select(log(max(d_p, 1e-30)), -log(max(-d_p, 1e-30)), d_p < 0.0);
-    let p_a = atan2(log_d * r_p, two_pi);
-    let cos_pa = cos(p_a);
-    let c_init = cos_pa * r_p * cos(p_a) / safe_div;
-    let d_calc = cos_pa * r_p * sin(p_a) / safe_div;
-    let half_c = c_init * 0.5;
-    let half_d = d_calc * 0.5;
-    let ang = two_pi / safe_div;
-    let coeff = select(-0.095 * spread / d_calc, 0.0, d_calc == 0.0);
+    let ang = get_param(xform_id, variation_id, 4u);
+    let c = get_param(xform_id, variation_id, 5u);
+    let d_calc = get_param(xform_id, variation_id, 6u);
+    let half_c = get_param(xform_id, variation_id, 7u);
+    let half_d = get_param(xform_id, variation_id, 8u);
+    let coeff = get_param(xform_id, variation_id, 9u);
 
     var a = atan2(p.x, p.y);
     if (a < 0.0) { a = a + two_pi; }
@@ -238,7 +250,7 @@ fn variation_cpow3(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<func
 
     let lnr2 = log(max(p.x * p.x + p.y * p.y, 1e-30));
     let r_out = exp(half_c * lnr2 - d_calc * a);
-    let th = c_init * a + half_d * lnr2 + ang * floor(divisor * rng_nextf(rng));
+    let th = c * a + half_d * lnr2 + ang * floor(divisor * rng_nextf(rng));
     return vec3<f32>(r_out * cos(th), r_out * sin(th), p.z);
 }
 "#),
@@ -269,16 +281,17 @@ pub static DISC2: VariationDef = VariationDef {
         VariationParamDef { name: "twist", display_name: "Twist", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    init_param_count: 0,
-    wgsl_init: None,
-    wgsl_2d: r#"
-fn variation_disc2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    // 3 derived values stored in slots 2..5:
+    //   2: timespi  (rot · π)
+    //   3: cosadd   (with conditional adjustment)
+    //   4: sinadd   (with conditional adjustment)
+    init_param_count: 3,
+    wgsl_init: Some(r#"
+fn init_disc2(user: array<f32, 2>) -> array<f32, 3> {
     let pi = 3.14159265358979;
     let two_pi = 6.28318530717959;
-    let rot = get_param(xform_id, variation_id, 0u);
-    let twist = get_param(xform_id, variation_id, 1u);
-
-    let timespi = rot * pi;
+    let rot = user[0];
+    let twist = user[1];
     var sinadd = sin(twist);
     var cosadd = cos(twist) - 1.0;
     if (twist > two_pi) {
@@ -291,7 +304,19 @@ fn variation_disc2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
         cosadd = cosadd * k;
         sinadd = sinadd * k;
     }
-
+    var out: array<f32, 3>;
+    out[0] = rot * pi;   // timespi
+    out[1] = cosadd;
+    out[2] = sinadd;
+    return out;
+}
+"#),
+    wgsl_2d: r#"
+fn variation_disc2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    let pi = 3.14159265358979;
+    let timespi = get_param(xform_id, variation_id, 2u);
+    let cosadd = get_param(xform_id, variation_id, 3u);
+    let sinadd = get_param(xform_id, variation_id, 4u);
     let t = timespi * (p.x + p.y);
     let r = atan2(p.x, p.y) / pi;
     return vec2<f32>((sin(t) + cosadd) * r, (cos(t) + sinadd) * r);
@@ -300,24 +325,9 @@ fn variation_disc2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
     wgsl_3d: Some(r#"
 fn variation_disc2(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let pi = 3.14159265358979;
-    let two_pi = 6.28318530717959;
-    let rot = get_param(xform_id, variation_id, 0u);
-    let twist = get_param(xform_id, variation_id, 1u);
-
-    let timespi = rot * pi;
-    var sinadd = sin(twist);
-    var cosadd = cos(twist) - 1.0;
-    if (twist > two_pi) {
-        let k = 1.0 + twist - two_pi;
-        cosadd = cosadd * k;
-        sinadd = sinadd * k;
-    }
-    if (twist < -two_pi) {
-        let k = 1.0 + twist + two_pi;
-        cosadd = cosadd * k;
-        sinadd = sinadd * k;
-    }
-
+    let timespi = get_param(xform_id, variation_id, 2u);
+    let cosadd = get_param(xform_id, variation_id, 3u);
+    let sinadd = get_param(xform_id, variation_id, 4u);
     let t = timespi * (p.x + p.y);
     let r = atan2(p.x, p.y) / pi;
     return vec3<f32>((sin(t) + cosadd) * r, (cos(t) + sinadd) * r, p.z);
