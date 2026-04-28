@@ -544,9 +544,9 @@ impl ShaderConstants {
                     continue;
                 }
                 code.push_str(&format!("        case {}u: {{\n", xform_idx));
-                code.push_str("            switch(var_idx * 12u + param_slot) {\n");
+                code.push_str("            switch(var_idx * 16u + param_slot) {\n");
                 for ((var_idx, param_slot), value) in &xform.variation_params {
-                    let combined_idx = var_idx * 12 + param_slot;
+                    let combined_idx = var_idx * 16 + param_slot;
                     code.push_str(&format!(
                         "                case {}u: {{ return {:.8}; }}\n",
                         combined_idx, value

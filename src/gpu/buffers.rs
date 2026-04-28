@@ -7,7 +7,7 @@ use crate::scene::palette::Palette;
 pub const MAX_TRANSFORMS: usize = 32;
 
 /// Maximum parameters per variation (expandable if needed)
-pub const MAX_PARAMS_PER_VARIATION: usize = 12;
+pub const MAX_PARAMS_PER_VARIATION: usize = 16;
 
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
@@ -120,13 +120,14 @@ impl GpuTransform {
 }
 
 /// GPU representation of variation parameters for ONE transform
-/// Total size: 100 variations × 12 params = 1200 floats = 4800 bytes per transform
+/// Total size: 100 variations × 16 params = 1600 floats = 6400 bytes per transform
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct GpuVariationParams {
     /// Flat array indexed by: variation_id * MAX_PARAMS_PER_VARIATION + param_slot
-    /// Each variation gets MAX_PARAMS_PER_VARIATION consecutive slots
-    pub params: [f32; 1200],  // 100 variations × 12 params
+    /// Each variation gets MAX_PARAMS_PER_VARIATION consecutive slots.
+    /// Slots `0..N` are user parameters, slots `N..N+M` are init-derived.
+    pub params: [f32; 1600],  // 100 variations × 16 params
 }
 
 // Manual implementation for bytemuck (arrays > 128 not auto-derived)
@@ -141,7 +142,7 @@ impl GpuVariationParams {
         local_map: &std::collections::HashMap<String, u32>,
         registry: &crate::variations::VariationRegistry,
     ) -> Self {
-        let mut params = [0.0f32; 1200];
+        let mut params = [0.0f32; 1600];
 
         for (var_name, _weight) in &xform.variations {
             let local_idx = match local_map.get(var_name) {
