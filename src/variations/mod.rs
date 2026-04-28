@@ -109,6 +109,16 @@ pub struct VariationInfo {
     /// Optional: WGSL source code for 3D
     pub wgsl_source_3d: Option<String>,
 
+    /// Optional: WGSL source code for the init function. When `Some`, a small
+    /// GPU compute dispatch runs `init_<name>(user_params)` once per param
+    /// change and writes derived values into the variation_params buffer.
+    pub wgsl_source_init: Option<String>,
+
+    /// Number of init-derived parameters this variation produces. Stored
+    /// alongside user parameters in the buffer at slots
+    /// `parameters.len()..parameters.len() + init_param_count`.
+    pub init_param_count: usize,
+
     /// Parameters for this variation
     pub parameters: Vec<VariationParameter>,
 
@@ -154,6 +164,8 @@ impl VariationInfo {
             is_core: false,
             wgsl_source: Some(dl.shader_2d.clone()),
             wgsl_source_3d: dl.shader_3d.clone(),
+            wgsl_source_init: dl.shader_init.clone(),
+            init_param_count: dl.init_param_count,
             parameters,
             version: dl.version,
         }
@@ -171,6 +183,8 @@ impl VariationInfo {
             is_core: true, // All VariationDef are core variations
             wgsl_source: Some(def.wgsl_2d.to_string()),
             wgsl_source_3d: def.wgsl_3d.map(|s| s.to_string()),
+            wgsl_source_init: def.wgsl_init.map(|s| s.to_string()),
+            init_param_count: def.init_param_count,
             parameters: def.parameters_to_runtime(),
             version: 0,
         }

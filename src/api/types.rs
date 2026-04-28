@@ -711,6 +711,14 @@ pub struct VariationDownload {
     pub shader_2d: String,
     #[serde(default)]
     pub shader_3d: Option<String>,
+    /// Number of init-derived parameters this variation produces.
+    /// Old API responses without this field default to 0.
+    #[serde(default)]
+    pub init_param_count: usize,
+    /// Optional WGSL init function, run once per param change on the GPU.
+    /// Old API responses without this field default to None.
+    #[serde(default)]
+    pub shader_init: Option<String>,
 }
 
 /// Summary of a variation in a list response (no shader code).
