@@ -310,11 +310,14 @@ impl ShaderConstants {
         let has_final = flame.final_transform.is_some();
         let final_idx = num_transforms; // Final comes after regular transforms
 
-        // Build ID map for variation name -> registry index
-        let mut id_map: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-        for (i, name) in registry.names().iter().enumerate() {
-            id_map.insert(name.clone(), i as u32);
-        }
+        // Per-flame local index map. Must match what the buffer populator
+        // and the shader builder use, so that var_idx in the inlined weight
+        // table aligns with `xform.variations[var_idx]` in the apply_variations
+        // shader code.
+        let id_map = crate::scene::transforms::compute_local_index_map(
+            flame.extract_active_variations().into_keys(),
+            registry,
+        );
 
         // Inline all transforms
         let mut inlined = Vec::with_capacity(flame.transforms.len());
@@ -580,6 +583,40 @@ impl ShaderBuilder {
         Self { registry }
     }
 
+    /// Build the per-flame active-variation list with LOCAL indices (`0..N`).
+    /// The local map is shared across the GPU buffer populator and the shader
+    /// builder so the slot in `xform.variations[idx]` and the `variation_id`
+    /// passed to parameterized variation calls always match the buffer layout.
+    ///
+    /// `mode_filter`: if `Some(true)` for 2D, drops variations that aren't
+    /// `Basic2D`/`Advanced2D`. This is purely a code-emission filter — the
+    /// dropped variations still occupy their local slot in the buffer
+    /// (harmless: nothing reads them in this shader).
+    fn active_with_local_indices(
+        &self,
+        active_variations: &HashMap<String, f32>,
+        render_3d: bool,
+    ) -> Vec<(String, u32)> {
+        use crate::variations::VariationCategory;
+        let local_map = crate::scene::transforms::compute_local_index_map(
+            active_variations.keys().cloned(),
+            &self.registry,
+        );
+        // Iterate registry order so output is deterministic
+        self.registry.names().iter()
+            .filter_map(|name| {
+                let local_idx = *local_map.get(name)?;
+                if !render_3d {
+                    let info = self.registry.get(name)?;
+                    if !matches!(info.category, VariationCategory::Basic2D | VariationCategory::Advanced2D) {
+                        return None;
+                    }
+                }
+                Some((name.clone(), local_idx))
+            })
+            .collect()
+    }
+
     /// Generate variation function code for ONLY active variations from embedded WGSL
     ///
     /// Only includes variation functions that are actually used in the current flame.
@@ -633,30 +670,7 @@ impl ShaderBuilder {
         xaos_enabled: bool,
         constants: &ShaderConstants,
     ) -> String {
-        use crate::variations::VariationCategory;
-
-        // Build a map of variation name -> registry index
-        let mut index_map: HashMap<String, u32> = HashMap::new();
-        for (i, name) in self.registry.names().iter().enumerate() {
-            if render_3d {
-                // 3D mode: include ALL variations
-                index_map.insert(name.clone(), i as u32);
-            } else {
-                // 2D mode: only include 2D variations
-                if let Some(info) = self.registry.get(name) {
-                    if matches!(info.category, VariationCategory::Basic2D | VariationCategory::Advanced2D) {
-                        index_map.insert(name.clone(), i as u32);
-                    }
-                }
-            }
-        }
-
-        // Filter to only active variations
-        let active: Vec<(String, u32)> = index_map
-            .iter()
-            .filter(|(name, _)| active_variations.contains_key(*name))
-            .map(|(name, idx)| (name.clone(), *idx))
-            .collect();
+        let active = self.active_with_local_indices(active_variations, render_3d);
 
         let mut shader = String::new();
 
@@ -1183,23 +1197,7 @@ impl ShaderBuilder {
     /// Build 2D TILED trajectory shader with active variations
     /// Uses full-resolution coordinates and routes samples to tile buffers
     pub fn build_trajectory_2d_tiled(&self, active_variations: &HashMap<String, f32>) -> String {
-        use crate::variations::VariationCategory;
-        use std::collections::HashMap;
-
-        let mut index_map: HashMap<String, u32> = HashMap::new();
-        for (i, name) in self.registry.names().iter().enumerate() {
-            if let Some(info) = self.registry.get(name) {
-                if matches!(info.category, VariationCategory::Basic2D | VariationCategory::Advanced2D) {
-                    index_map.insert(name.clone(), i as u32);
-                }
-            }
-        }
-
-        let active_2d: Vec<(String, u32)> = index_map
-            .iter()
-            .filter(|(name, _)| active_variations.contains_key(*name))
-            .map(|(name, idx)| (name.clone(), *idx))
-            .collect();
+        let active_2d = self.active_with_local_indices(active_variations, false);
 
         let mut shader = String::new();
 
@@ -1235,18 +1233,7 @@ impl ShaderBuilder {
 
     /// Build 3D TILED trajectory shader with active variations
     pub fn build_trajectory_3d_tiled(&self, active_variations: &HashMap<String, f32>) -> String {
-        use std::collections::HashMap;
-
-        let mut index_map: HashMap<String, u32> = HashMap::new();
-        for (i, name) in self.registry.names().iter().enumerate() {
-            index_map.insert(name.clone(), i as u32);
-        }
-
-        let active_3d: Vec<(String, u32)> = index_map
-            .iter()
-            .filter(|(name, _)| active_variations.contains_key(*name))
-            .map(|(name, idx)| (name.clone(), *idx))
-            .collect();
+        let active_3d = self.active_with_local_indices(active_variations, true);
 
         let mut shader = String::new();
 
@@ -1291,18 +1278,7 @@ impl ShaderBuilder {
 
     /// Build 3D EXPORT shader - outputs samples to buffer for CPU histogram
     pub fn build_export_3d(&self, active_variations: &HashMap<String, f32>) -> String {
-        use std::collections::HashMap;
-
-        let mut index_map: HashMap<String, u32> = HashMap::new();
-        for (i, name) in self.registry.names().iter().enumerate() {
-            index_map.insert(name.clone(), i as u32);
-        }
-
-        let active_3d: Vec<(String, u32)> = index_map
-            .iter()
-            .filter(|(name, _)| active_variations.contains_key(*name))
-            .map(|(name, idx)| (name.clone(), *idx))
-            .collect();
+        let active_3d = self.active_with_local_indices(active_variations, true);
 
         let mut shader = String::new();
 

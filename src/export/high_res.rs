@@ -220,17 +220,7 @@ impl HighResExporter {
         });
 
         // Create and populate variation params buffer (include final transform if present)
-        let mut variation_params: Vec<GpuVariationParams> = config
-            .flame
-            .transforms
-            .iter()
-            .map(|xform| GpuVariationParams::from_transform(xform, &global_registry()))
-            .collect();
-
-        // Append final transform variation params if present
-        if let Some(ref final_xform) = config.flame.final_transform {
-            variation_params.push(GpuVariationParams::from_transform(final_xform, &global_registry()));
-        }
+        let variation_params = GpuVariationParams::from_flame(&config.flame, &global_registry());
 
         let max_transforms = 32;
         let variation_params_size = max_transforms * std::mem::size_of::<GpuVariationParams>() as u64;
