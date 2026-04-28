@@ -203,7 +203,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &EXP2_BS,
     // Exp / log family (batch 6, 2026-04-26)
     &EXP,
-    &LOG_APO,
     &LOG_DB,
     &LOG_TILE2,
     &TILE_LOG,
