@@ -951,9 +951,12 @@ impl ShaderBuilder {
                         params.push_str(&format!(", xform.variations[{}]", idx));
                     }
 
-                    // Add xform_id and variation_id if variation has parameters
+                    // Add xform_id and variation_id if variation has parameters,
+                    // OR just xform_id if it needs affine access without params.
                     if has_params {
                         params.push_str(&format!(", xform_id, {}u", idx));
+                    } else if info.needs_affine {
+                        params.push_str(", xform_id");
                     }
 
                     // Add RNG if needed
@@ -987,6 +990,12 @@ impl ShaderBuilder {
                     format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
                 } else {
                     format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
+                }
+            } else if info.needs_affine {
+                if info.needs_rng {
+                    format!("{}(temp, xform_id, rng)", info.wgsl_function)
+                } else {
+                    format!("{}(temp, xform_id)", info.wgsl_function)
                 }
             } else {
                 if info.needs_rng {
@@ -1129,9 +1138,12 @@ impl ShaderBuilder {
                         params.push_str(&format!(", xform.variations[{}]", idx));
                     }
 
-                    // Add xform_id and variation_id if variation has parameters
+                    // Add xform_id and variation_id if variation has parameters,
+                    // OR just xform_id if it needs affine access without params.
                     if has_params {
                         params.push_str(&format!(", xform_id, {}u", idx));
+                    } else if info.needs_affine {
+                        params.push_str(", xform_id");
                     }
 
                     // Add RNG if needed
@@ -1237,6 +1249,12 @@ impl ShaderBuilder {
                             format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
                         } else {
                             format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
+                        }
+                    } else if info.needs_affine {
+                        if info.needs_rng {
+                            format!("{}(temp, xform_id, rng)", info.wgsl_function)
+                        } else {
+                            format!("{}(temp, xform_id)", info.wgsl_function)
                         }
                     } else {
                         if info.needs_rng {
