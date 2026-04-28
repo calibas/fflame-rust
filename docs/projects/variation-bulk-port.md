@@ -76,16 +76,91 @@ What we **don't** support:
 
 ## Plan
 
-1. **This doc + lists** — done
-2. **Bulk-fetch the 415 .cpp files** for offline analysis
-3. **Per-file classification** — pure / parameterized / RNG / uses-internal-weight / broken
-4. **Port in batches** — start with the trig/hyperbolic family (uniform, low risk), move to numbered variants, then bigger shapes
-5. **Database import scripts** — generate from the ported `VariationDef`s for upload to the variations API
-6. **Test pass** — flame referencing each new variation renders correctly via local registry, then via API fetch with cache cleared
+1. ✅ **This doc + lists** — done
+2. ✅ **Bulk-fetch the 415 .cpp files** for offline analysis — done (subagent run, 2026-04-26)
+3. ✅ **Per-file classification** — pure / parameterized / RNG / uses-internal-weight / broken — done (see [Classification](#classification-auto-generated-2026-04-26) below)
+4. 🚧 **Port in batches** — 8 batches landed (79 variations); see [Porting progress](#porting-progress-2026-04-27) below
+5. ⏳ **Database import scripts** — generate from the ported `VariationDef`s for upload to the variations API
+6. ⏳ **Test pass** — flame referencing each new variation renders correctly via local registry, then via API fetch with cache cleared
+
+A prerequisite that surfaced during step 4 and got its own commit: the GPU
+buffer was sized `[f32; 100]` and indexed by global registry index, so the
+registry was capped at 100 even though the shader only emits code for the
+few active variations. The fix was per-flame **local index assignment** for
+both the shader emitter and the buffer populator, sharing
+`compute_local_index_map` in `src/scene/transforms.rs`. Buffer cap is now a
+"max 100 active per flame" constraint, not a registry-size constraint.
+
+## Porting progress (2026-04-27)
+
+| Batch | File | Family | Count | Notes |
+|---|---|---|---:|---|
+| 1 | `hyperbolic.rs` | Inverse hyperbolic (acoth, acosh, etc.) | 7 | First batch. RNG miss in classifier surfaced (acosh/acosech use GOODRAND_01). |
+| 2 | `trig.rs` | Direct trig + hyperbolic (sin, cos, …, sinh, cosh, …) | 12 | Upstream's `sech` is mislabeled csch — preserved. |
+| 3 | `quaternion.rs` | zephyrtronium quaternion (sinq, cosq, …) | 12 | All 3D-aware. 2D form is the natural collapse at `z=0`. |
+| 4 | `sqrt_hyperbolic.rs` | sqrt-prefixed inverse hyperbolic | 6 | All RNG (classifier missed); `sqrt_asech` is upstream-bugged → calls AcosH not AsecH. Preserved. |
+| 5 | `trig_bs.rs` | Brad Stefanov parameterized trig (sin2_bs …) | 13 | First **param** batch — validates the param flow. `sech2_bs` uses the *correct* sech denom (cos+cosh), unlike `trig.rs:sech`. |
+| 6 | `exp_log.rs` | exp + log_apo + log_db + log_tile2 + tile_log | 5 | First **param + RNG** combo. `log_db` upstream has `atan2(x,y)` (swapped) — preserved. |
+| 7 | `shapes.rs` | Misc trig + standalone shapes | 12 | First batch with `Float` and `Angle` ParamTypes. `secant2` uses internal weight — see watchlist. |
+| 8 | `shapes2.rs` | Standalone shapes continued | 12 | `ennepers` upstream uses `=` not `+=` — fixed (see decisions). |
+| **Total new** | | | **79** | |
+| Registry size | | | **163** | (84 base + 79 ported) |
+
+Branch: `variation-bulk-port-batch1`. Commits in order:
+`a7ecc30`, `8698337`, `0ef937e` (refactor), `dd1239c`, `ae80fbc`, `3fc37a8`,
+`d11533a`, `a7664e8`, `28e571a`, `46b8c7e`.
+
+### Notable decisions during porting
+
+These are places where I diverged from a literal C++→WGSL port and why:
+
+- **`ennepers` (batch 8) — fixed upstream typo.** Upstream writes
+  `FPx = pAmount * (x - x³/3) + x·y²` (assignment, not `+=`, and only the
+  first term scaled by weight). Treating both as porter typos and
+  accumulating both terms with the outer weight produces the more sensible
+  Enneper-surface mapping `(x(1 − x²/3 + y²), y(1 − y²/3 + x²))`.
+- **`sech` (batch 2) — preserved upstream bug.** Upstream's "sech" formula
+  divides by `(e^z − e^-z)` instead of `(e^z + e^-z)`, so it actually
+  computes csch(z·π/4). Kept the bug so JWildfire flames render the same.
+- **`sqrt_asech` (batch 4) — preserved upstream bug.** Upstream calls
+  `complexAcosH(sqrt(z))` instead of an asech formula — copy-paste from
+  `sqrt_acosh`. Kept for parity.
+- **`log_db` (batch 6) — preserved porter bug.** Upstream C++ uses
+  `atan2(x, y)` (swapped); Java source uses `getPrecalcAtanYX()` (correct
+  order). Kept the C++ bug since flames in the wild were built against
+  the buggy C++ port.
+- **`secant2` (batch 7) — internal weight diverges from upstream.** Upstream
+  computes the radius for `cos(r)` with `r = pAmount · sqrt(x²+y²)`, so
+  the non-linear `cos` part scales with weight. Our outer-multiplier
+  convention can't capture that. We compute with unweighted `r` — at the
+  conventional `weight = 1` results match upstream, drift at other weights.
+  Added to internal-weight watchlist.
+- **`acosh`, `acosech`, `sqrt_*`** — classifier missed `GOODRAND_01`. Marked
+  `needs_rng: true`. Same heuristic gap reported in classification notes.
+- **Init-step inlining (`log_apo`, `log_db`, ...)** — upstream computes
+  `_denom = 0.5 / log(base)` etc. in `init()`. We have no init hook, so we
+  recompute per-iteration. Negligible perf cost, slight code duplication.
+
+### Newly-found classifier misses (during porting)
+
+Patterns the auto-classifier didn't flag but porting surfaced:
+
+- **`GOODRAND_01` not always recognized** — the heuristic matched
+  `GOODRAND_0[1X]?` but missed it in some files where the call appears in
+  unusual positions. Affected: `acosh`, `acosech`, `sqrt_acoth`,
+  `sqrt_acosh`, `sqrt_acosech`, `sqrt_asech`, `sqrt_asinh`, `sqrt_atanh`,
+  `chrysanthemum`. All are RNG-dependent; corrected when porting.
+- **Internal weight not always flagged** — `secant2` (computes
+  `r = VVAR · sqrt(...)` then uses `cos(r)`), `rays` (`tanr = VVAR · …`),
+  `rays1` (`u = … + VVAR · (2/π)²`), `flux` (`xpw = FTx + VVAR`). All
+  add to the watchlist below.
+- **Init-time precomputed fields not always flagged** — `target` reads
+  `VAR(_t_size_2)` which doesn't appear in `APO_VARIABLES`. `yin_yang`
+  reads `cosa/sina/cosb/sinb` similarly. Both need Java-source recovery.
 
 ## Open questions
 
-- **Internal weight convention** — for variations that use `weight` inside their formula (not just as outer multiplier), do we want to extend `VariationDef` to optionally pass weight into the function, or accept the per-variation rewrite cost? Decision deferred to first-encounter during porting.
+- **Internal weight convention** — for variations that use `weight` inside their formula (not just as outer multiplier), do we want to extend `VariationDef` to optionally pass weight into the function, or accept the per-variation rewrite cost? Current approach: hard-code weight=1 internal, which matches upstream at weight=1 and drifts otherwise. Document the divergence per variation. Revisit if a high-value flame needs full fidelity.
 - **`_wf` salvage pass** — some `_wf` variations are pure functions despite the suffix; worth a quick scan before discarding all 54.
 - **Renames for our 6 ours-only entries** — keep current names (preset compatibility) and port upstream's `_3d` / `2` / `7` variants under their upstream names (so a flame from JWildfire loads correctly).
 
@@ -621,6 +696,7 @@ Options per case:
 | `cubic3d` | `param` | 180 | 2 | yes | VVAR used internally |
 | `elliptic2` | `param_rng` | 241 | 11 | no | VVAR used internally |
 | `extrude` | `param_rng` | 142 | 1 | yes | VVAR used internally |
+| `flux` | `param` | 150 | 1 | no | added during porting (batch 8 skip): `xpw = FTx + VVAR` shifts position by weight |
 | `fourth` | `param` | 262 | 5 | no | VVAR used internally |
 | `glynnia` | `rng` | 198 | 0 | no | VVAR used internally |
 | `glynnia3` | `param_rng` | 246 | 4 | no | VVAR used internally |
@@ -633,17 +709,41 @@ Options per case:
 | `popcorn2_3d` | `param` | 115 | 4 | yes | VVAR used internally |
 | `prepost_affine` | `param` | 314 | 9 | yes | VVAR used internally |
 | `prepost_mobius` | `param` | 250 | 8 | no | VVAR used internally |
+| `rays` | `rng` | 119 | 0 | no | added during porting (batch 8 skip): `ang = VVAR·rng·π`, `r = VVAR/(x²+y²)`, `tanr = VVAR·tan(ang)·r` — three internal uses |
+| `rays1` | `pure` | 119 | 0 | no | added during porting (batch 8 skip): `u = 1/tan(sqrt(t)) + VVAR·(2/π)²` — additive |
 | `scry2` | `param` | 242 | 3 | no | VVAR used internally |
 | `scry_3d` | `pure` | 92 | 0 | yes | VVAR used internally |
+| `secant2` | `pure` | 131 | 0 | no | added during porting (ported with caveat in batch 7): `r = VVAR·sqrt(...)` then `cos(r)` — non-linear weight scaling |
 | `sigmoid` | `param` | 200 | 2 | no | VVAR used internally |
 | `spliptic_bs` | `param_rng` | 188 | 2 | no | VVAR used internally |
 | `squircular` | `pure` | 118 | 0 | no | VVAR used internally |
 | `truchet_fill` | `param` | 282 | 3 | no | VVAR used internally |
 | `waffle` | `param_rng` | 219 | 4 | no | VVAR used internally |
 
-### Porter-omitted params watchlist
+**During the port:** `secant2` was shipped at weight=1 fidelity (deviates at
+other weights, see decisions above). `rays`, `rays1`, `flux` were skipped
+from their respective batches — revisit when we make the design call on
+internal-weight handling.
 
-These C++ files declare zero `VAR_REAL` parameters but their `PluginVarPrepare` initializes private `_xxx` fields to literal constants and `PluginVarCalc` reads them. The C++ porter forgot to expose them as user parameters — the original Java (in the comment block at the bottom of each file) defines them properly. When porting, recover the parameter names, defaults, and ranges from the Java source.
+### Porter-omitted params / init-precomputed-fields watchlist
+
+Two related conditions, both flagged here:
+
+1. **Porter-omitted params**: the C++ file declares zero `VAR_REAL`s but
+   `PluginVarPrepare` initializes private `_xxx` fields to literal constants
+   and `PluginVarCalc` reads them. The porter forgot to expose them as user
+   parameters — the original Java has the correct param schema in the
+   comment block. Recover from there.
+
+2. **Init-precomputed fields with declared params** (added during porting):
+   the file *does* declare params but `PluginVarPrepare` precomputes
+   `cos(angle)`, `1/(2·log(base))`, etc. into private fields the body uses.
+   We don't have an init hook, so we either (a) inline the precompute
+   per-iteration (cheap), or (b) extend `VariationDef` with an init step.
+   Several already ported (e.g. `log_apo`, `log_db`) inline successfully;
+   listed below are ones not yet ported because the precompute uses fields
+   not exposed as user params at all (`_t_size_2`, `cosa/sina/cosb/sinb`)
+   and the formulas need Java recovery.
 
 | name | bucket | LOC | omitted-param count | 3d | notes |
 |---|---|---:|---:|:---:|---|
@@ -661,7 +761,9 @@ These C++ files declare zero `VAR_REAL` parameters but their `PluginVarPrepare` 
 | `post_heat` | `pure` | 278 | 9 | yes | 9 porter-omitted params (recover from Java) |
 | `pre_blur3d` | `rng` | 162 | 5 | no | 5 porter-omitted params (recover from Java) |
 | `seashell3d` | `rng` | 186 | 4 | yes | 4 porter-omitted params (recover from Java) |
+| `target` | `param` | 193 | 1 init | no | added during porting (batch 7 skip): reads `_t_size_2 = size/2`. Likely safe to inline once Java is checked. |
 | `wdisc` | `pure` | 137 | 2 | no | 2 porter-omitted params (recover from Java) |
+| `yin_yang` | `param_rng` | 102 | 4 init | no | added during porting (batch 8 skip): reads `cosa/sina/cosb/sinb` precomputed from `ang1`/`ang2`. Inlinable. |
 
 ### Anomalies
 
