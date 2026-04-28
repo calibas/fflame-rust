@@ -48,13 +48,21 @@ unsafe impl bytemuck::Pod for GpuTransform {}
 unsafe impl bytemuck::Zeroable for GpuTransform {}
 
 impl GpuTransform {
-    /// Create from Transform using a VariationRegistry
-    pub fn from_transform(xform: &Transform, registry: &crate::variations::VariationRegistry) -> Self {
-        Self::from_transform_with_opacity(xform, xform.opacity, registry)
+    /// Create from Transform using a per-flame local index map.
+    /// See `crate::scene::transforms::compute_local_index_map` for context.
+    pub fn from_transform(
+        xform: &Transform,
+        local_map: &std::collections::HashMap<String, u32>,
+    ) -> Self {
+        Self::from_transform_with_opacity(xform, xform.opacity, local_map)
     }
 
     /// Create from Transform with an explicit effective opacity (for solo mode)
-    pub fn from_transform_with_opacity(xform: &Transform, effective_opacity: f32, registry: &crate::variations::VariationRegistry) -> Self {
+    pub fn from_transform_with_opacity(
+        xform: &Transform,
+        effective_opacity: f32,
+        local_map: &std::collections::HashMap<String, u32>,
+    ) -> Self {
         Self {
             a: xform.a,
             b: xform.b,
@@ -72,7 +80,7 @@ impl GpuTransform {
             post_f: xform.post_f,
             post_g: xform.post_g,
             post_enabled: if xform.post_affine_enabled { 1.0 } else { 0.0 },
-            variations: xform.to_fixed_array(registry),
+            variations: xform.to_fixed_array(local_map),
             color: xform.color,
             color_speed: xform.color_speed,
             opacity: effective_opacity,
@@ -80,10 +88,14 @@ impl GpuTransform {
         }
     }
 
-    /// Create GPU transforms from a Flame, handling solo mode
-    /// When solo_transform is Some(idx), that transform keeps its opacity,
-    /// all others get opacity 0.0 (invisible)
+    /// Create GPU transforms from a Flame, handling solo mode.
+    /// Computes the per-flame local index map once, then populates each
+    /// transform's variation slot array against that map.
     pub fn from_flame(flame: &Flame, registry: &crate::variations::VariationRegistry) -> Vec<Self> {
+        let local_map = crate::scene::transforms::compute_local_index_map(
+            flame.extract_active_variations().into_keys(),
+            registry,
+        );
         let solo_idx = flame.solo_transform;
 
         let mut gpu_transforms: Vec<Self> = flame.transforms
@@ -94,13 +106,13 @@ impl GpuTransform {
                     Some(solo) if i != solo => 0.0,
                     _ => xform.opacity,
                 };
-                Self::from_transform_with_opacity(xform, effective_opacity, registry)
+                Self::from_transform_with_opacity(xform, effective_opacity, &local_map)
             })
             .collect();
 
         // Append final transform if present (not affected by solo mode)
         if let Some(ref final_xform) = flame.final_transform {
-            gpu_transforms.push(Self::from_transform(final_xform, registry));
+            gpu_transforms.push(Self::from_transform(final_xform, &local_map));
         }
 
         gpu_transforms
@@ -122,43 +134,62 @@ unsafe impl bytemuck::Pod for GpuVariationParams {}
 unsafe impl bytemuck::Zeroable for GpuVariationParams {}
 
 impl GpuVariationParams {
-    /// Create from Transform using VariationRegistry
+    /// Create the param-array for a single transform, indexed by per-flame
+    /// local variation indices (the same map used for `GpuTransform.variations`).
     pub fn from_transform(
         xform: &Transform,
+        local_map: &std::collections::HashMap<String, u32>,
         registry: &crate::variations::VariationRegistry,
     ) -> Self {
         let mut params = [0.0f32; 1200];
 
-        // For each active variation, copy its parameters
         for (var_name, _weight) in &xform.variations {
-            if let Some(info) = registry.get(var_name) {
-                // Get variation ID from registry
-                let var_id = registry.names()
-                    .iter()
-                    .position(|n| n == var_name)
-                    .unwrap_or(0);
+            let local_idx = match local_map.get(var_name) {
+                Some(&i) => i as usize,
+                None => continue, // not active or dropped past the cap
+            };
+            let info = match registry.get(var_name) {
+                Some(i) => i,
+                None => continue,
+            };
 
-                // Copy each parameter for this variation
-                for (param_idx, param_def) in info.parameters.iter().enumerate() {
-                    if param_idx >= MAX_PARAMS_PER_VARIATION {
-                        break;  // Safety check
-                    }
-
-                    // Get parameter value (or default)
-                    let value = xform.get_variation_param_or_default(
-                        var_name,
-                        &param_def.name,
-                        registry,
-                    );
-
-                    // Write to buffer at correct index
-                    let buffer_idx = var_id * MAX_PARAMS_PER_VARIATION + param_idx;
+            for (param_idx, param_def) in info.parameters.iter().enumerate() {
+                if param_idx >= MAX_PARAMS_PER_VARIATION {
+                    break;
+                }
+                let value = xform.get_variation_param_or_default(
+                    var_name,
+                    &param_def.name,
+                    registry,
+                );
+                let buffer_idx = local_idx * MAX_PARAMS_PER_VARIATION + param_idx;
+                if buffer_idx < params.len() {
                     params[buffer_idx] = value;
                 }
             }
         }
 
         Self { params }
+    }
+
+    /// Create the full per-flame param-array vector, computing the local index
+    /// map once and applying it consistently to all transforms.
+    pub fn from_flame(
+        flame: &Flame,
+        registry: &crate::variations::VariationRegistry,
+    ) -> Vec<Self> {
+        let local_map = crate::scene::transforms::compute_local_index_map(
+            flame.extract_active_variations().into_keys(),
+            registry,
+        );
+        let mut result: Vec<Self> = flame.transforms
+            .iter()
+            .map(|xform| Self::from_transform(xform, &local_map, registry))
+            .collect();
+        if let Some(ref final_xform) = flame.final_transform {
+            result.push(Self::from_transform(final_xform, &local_map, registry));
+        }
+        result
     }
 }
 
@@ -494,15 +525,7 @@ impl FlameBuffers {
         });
 
         // Upload initial variation parameters (include final transform if present)
-        let mut gpu_params: Vec<GpuVariationParams> = flame
-            .transforms
-            .iter()
-            .map(|xform| GpuVariationParams::from_transform(xform, &registry))
-            .collect();
-        // Append final transform params if present (same as update_variation_params)
-        if let Some(ref final_xform) = flame.final_transform {
-            gpu_params.push(GpuVariationParams::from_transform(final_xform, &registry));
-        }
+        let gpu_params = GpuVariationParams::from_flame(flame, &registry);
         queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&gpu_params));
 
         // Create params uniform buffer
@@ -1006,16 +1029,7 @@ impl FlameBuffers {
 
         // Create a fixed-size array with all variation parameters, padding with zeroes
         let registry = crate::variations::global_registry();
-        let mut gpu_params: Vec<GpuVariationParams> = flame
-            .transforms
-            .iter()
-            .map(|xform| GpuVariationParams::from_transform(xform, &registry))
-            .collect();
-
-        // Append final transform parameters if present
-        if let Some(final_xform) = &flame.final_transform {
-            gpu_params.push(GpuVariationParams::from_transform(final_xform, &registry));
-        }
+        let mut gpu_params = GpuVariationParams::from_flame(flame, &registry);
 
         // Pad with zeroed params to fill the buffer
         while gpu_params.len() < MAX_TRANSFORMS {
