@@ -208,43 +208,23 @@ business as usual.
 
 ## Implementation steps
 
-### PR 1 — infrastructure (no behavior changes)
+### PR 1 — infrastructure (no behavior changes) ✅ COMPLETE
 
-1. **Add fields to `VariationDef`** (`src/variations/definition.rs`)
-   - `wgsl_init: Option<&'static str>`, `init_param_count: usize`
-   - Default to `None` / 0 — all existing variations work unchanged
+1. ✅ **Add fields to `VariationDef`** (commit `dce6d4d`)
+2. ✅ **API schema fields** (commit `1605f51`)
+3. ✅ **Bump per-variation slot count 12 → 16** (commit `4aea156`)
+4-5. ✅ **Init shader generator + ShaderCache integration** (commit `3b2114f`)
+6. ✅ **Dispatch wiring** (commit `aabed2b`)
 
-2. **API schema fields** (`src/api/types.rs`)
-   - Add matching fields to `VariationDownload` with `#[serde(default)]`
-   - Update `register_from_api` in `src/variations/mod.rs` to copy through
+All six steps landed as no-op extensions: every existing variation sets
+`wgsl_init: None` and `init_param_count: 0`, so the init pipeline returns
+`None`, the init dispatch is skipped, and rendering is bit-identical to
+pre-PR-1 baseline (verified after each step against
+`tests/visual/configs/variations/misc-variations.fflame`).
 
-3. **Bump per-variation slot count from 12 → 16**
-   - `MAX_PARAMS_PER_VARIATION` in `src/gpu/buffers.rs`
-   - `VariationParams.params` type from `[f32; 1200]` → `[f32; 1600]`
-   - WGSL `header.wgsl` matching update (`array<f32, 1600>`)
-   - Touch the inlined `var_idx * 12u + param_slot` math in
-     `shader_builder_v2.rs` (becomes `* 16u`)
-
-4. **Init pipeline in `ShaderCache`** (`src/shader_cache.rs`)
-   - Build alongside the main pipeline whenever active variations change
-   - Cache invalidation already handles "active set changed" → rebuild both
-
-5. **Init shader generator** (new method in `src/shader_builder_v2.rs`)
-   - `build_init_shader(active_variations, ...)` — emits the init compute
-     shader from the variations' `wgsl_init` fragments
-   - Emits a switch over `(xform_idx, local_var_idx)` pairs, calling the
-     right `init_<name>` function for each
-   - Returns `Some(shader_source)` if any active variation has init,
-     `None` otherwise (allows skipping the dispatch entirely)
-   - Workgroup size = 64 fixed, dispatch count = `ceil(active_pairs / 64)`
-
-6. **Dispatch wiring** (`src/renderer/compute_kernel.rs` and similar)
-   - Add a `variation_init_pipeline: Option<ComputePipeline>` field
-   - Add an `init_dirty: bool` flag updated by the param-write path
-   - In the render encoder, before the main dispatch, if init pipeline
-     exists and init-dirty, enqueue the init dispatch and clear the flag
-   - One memory barrier between init and main dispatch (storage buffer
-     read-write hazard)
+End-to-end verification of the init-dispatch path itself happens in PR 2
+when we migrate the first heavy-init variation — at that point the init
+pipeline becomes `Some` and the dispatch actually fires.
 
 6. **Inlined-constants mode reuse**
    - Per decision A above: no init baking in this mode. The init dispatch
