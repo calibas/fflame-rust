@@ -23,6 +23,7 @@ mod shapes2;
 mod numbered;
 mod heavy_init;
 mod init_ports;
+mod affine_ports;
 
 pub use basic::*;
 pub use advanced::*;
@@ -44,6 +45,7 @@ pub use shapes2::*;
 pub use numbered::*;
 pub use heavy_init::*;
 pub use init_ports::*;
+pub use affine_ports::*;
 
 use super::definition::VariationDef;
 
@@ -255,4 +257,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // porter-omitted-init watchlist, enabled by the new wgsl_init system
     &TARGET,
     &YIN_YANG,
+    // Affine-access ports (off the affine-access watchlist)
+    &POPCORN,
 ];
