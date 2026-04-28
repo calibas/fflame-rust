@@ -2,9 +2,10 @@
 
 // Get a variation parameter value for a specific transform
 // variation_id: Index of the variation (0-99)
-// param_slot: Parameter slot within the variation (0-11)
+// param_slot: Parameter slot within the variation (0-15; user params first,
+//             then init-derived values)
 fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {
-    let idx = variation_id * 12u + param_slot;
+    let idx = variation_id * 16u + param_slot;
     return variation_params[xform_id].params[idx];
 }
 

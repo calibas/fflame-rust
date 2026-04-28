@@ -77,7 +77,7 @@ struct Params {
 
 // Variation parameters for one transform
 struct VariationParams {
-    params: array<f32, 1200>,  // 100 variations × 12 params
+    params: array<f32, 1600>,  // 100 variations × 16 params (user + init-derived)
 }
 
 // Output sample structure (x, y, r, g, b with padding for alignment)
