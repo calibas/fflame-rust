@@ -52,6 +52,18 @@ pub struct VariationDef {
     /// Parameters for this variation
     pub parameters: &'static [VariationParamDef],
 
+    /// Number of init-derived ("private") parameters this variation produces.
+    /// Stored alongside user parameters in the variation_params buffer at slots
+    /// `parameters.len()..parameters.len() + init_param_count`.
+    pub init_param_count: usize,
+
+    /// Optional WGSL init function. When `Some`, a small GPU compute dispatch
+    /// runs once per param change and writes derived values into the buffer.
+    /// The variation body reads them via `get_param(...)` like any other slot.
+    /// Function signature: `fn init_NAME(user: array<f32, N>) -> array<f32, M>`
+    /// where N = parameters.len() and M = init_param_count.
+    pub wgsl_init: Option<&'static str>,
+
     /// 2D WGSL implementation
     /// Function signature should match one of:
     /// - `fn variation_NAME(p: vec2<f32>) -> vec2<f32>`

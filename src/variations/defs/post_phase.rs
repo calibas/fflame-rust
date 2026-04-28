@@ -21,6 +21,8 @@ pub static POST_BWRAPS: VariationDef = VariationDef {
         param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0),
         param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0),
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_post_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Post_Bwraps - bubble wrap effect applied after variations
@@ -154,6 +156,8 @@ pub static POST_CROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0),
         param!("zero", "Zero", bool, false),
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_post_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Post_Crop - same as crop but applied after variations
@@ -262,6 +266,8 @@ pub static POST_FALLOFF2: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_post_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Post_Falloff2 - Same as pre_falloff2 but applied after variations
@@ -390,6 +396,8 @@ pub static POST_CURL: VariationDef = VariationDef {
         param!("c1", "C1", unlimited_float, 0.0, -5.0, 5.0),
         param!("c2", "C2", unlimited_float, 0.0, -5.0, 5.0),
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_post_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Post_Curl - Same as curl but applied after variations
@@ -438,6 +446,8 @@ pub static POST_CURL3D: VariationDef = VariationDef {
         param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0),
         param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0),
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_post_curl3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Post_Curl3D - 2D version (placeholder)

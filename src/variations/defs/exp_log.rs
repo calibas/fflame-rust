@@ -27,6 +27,8 @@ pub static EXP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_exp(p: vec2<f32>) -> vec2<f32> {
     let e = exp(p.x);
@@ -69,6 +71,8 @@ pub static LOG_DB: VariationDef = VariationDef {
         VariationParamDef { name: "fix_period", display_name: "Fix Period", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(0.0), max_value: Some(10.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_log_db(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let base = get_param(xform_id, variation_id, 0u);
@@ -137,6 +141,8 @@ pub static LOG_TILE2: VariationDef = VariationDef {
         VariationParamDef { name: "spreadz", display_name: "Spread Z", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_log_tile2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sx = get_param(xform_id, variation_id, 0u);
@@ -179,6 +185,8 @@ pub static TILE_LOG: VariationDef = VariationDef {
         VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_tile_log(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let sp = get_param(xform_id, variation_id, 0u);
