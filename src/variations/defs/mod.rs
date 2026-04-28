@@ -17,6 +17,7 @@ mod trig;
 mod quaternion;
 mod sqrt_hyperbolic;
 mod trig_bs;
+mod exp_log;
 
 pub use basic::*;
 pub use advanced::*;
@@ -32,6 +33,7 @@ pub use trig::*;
 pub use quaternion::*;
 pub use sqrt_hyperbolic::*;
 pub use trig_bs::*;
+pub use exp_log::*;
 
 use super::definition::VariationDef;
 
@@ -191,4 +193,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SECH2_BS,
     &CSCH2_BS,
     &EXP2_BS,
+    // Exp / log family (batch 6, 2026-04-26)
+    &EXP,
+    &LOG_APO,
+    &LOG_DB,
+    &LOG_TILE2,
+    &TILE_LOG,
 ];
