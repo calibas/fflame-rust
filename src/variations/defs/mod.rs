@@ -16,6 +16,7 @@ mod hyperbolic;
 mod trig;
 mod quaternion;
 mod sqrt_hyperbolic;
+mod trig_bs;
 
 pub use basic::*;
 pub use advanced::*;
@@ -30,6 +31,7 @@ pub use hyperbolic::*;
 pub use trig::*;
 pub use quaternion::*;
 pub use sqrt_hyperbolic::*;
+pub use trig_bs::*;
 
 use super::definition::VariationDef;
 
@@ -175,4 +177,18 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SQRT_ASECH,
     &SQRT_ASINH,
     &SQRT_ATANH,
+    // Brad Stefanov's parameterized direct trig/hyperbolic (batch 5, 2026-04-26)
+    &SIN2_BS,
+    &COS2_BS,
+    &TAN2_BS,
+    &SEC2_BS,
+    &CSC2_BS,
+    &COT2_BS,
+    &SINH2_BS,
+    &COSH2_BS,
+    &TANH2_BS,
+    &COTH2_BS,
+    &SECH2_BS,
+    &CSCH2_BS,
+    &EXP2_BS,
 ];
