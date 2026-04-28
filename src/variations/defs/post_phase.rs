@@ -21,6 +21,7 @@ pub static POST_BWRAPS: VariationDef = VariationDef {
         param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0),
         param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0),
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -156,6 +157,7 @@ pub static POST_CROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0),
         param!("zero", "Zero", bool, false),
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -266,6 +268,7 @@ pub static POST_FALLOFF2: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -396,6 +399,7 @@ pub static POST_CURL: VariationDef = VariationDef {
         param!("c1", "C1", unlimited_float, 0.0, -5.0, 5.0),
         param!("c2", "C2", unlimited_float, 0.0, -5.0, 5.0),
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -446,6 +450,7 @@ pub static POST_CURL3D: VariationDef = VariationDef {
         param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0),
         param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0),
     ],
+    needs_affine: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
