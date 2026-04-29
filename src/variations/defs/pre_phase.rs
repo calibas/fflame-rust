@@ -15,6 +15,9 @@ pub static PRE_ZSCALE: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_pre_zscale(p: vec2<f32>, weight: f32) -> vec2<f32> {
     // Pre_ZScale only affects Z (3D mode), pass through in 2D
@@ -37,6 +40,9 @@ pub static PRE_ZTRANSLATE: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_pre_ztranslate(p: vec2<f32>, weight: f32) -> vec2<f32> {
     // Pre_ZTranslate only affects Z (3D mode), pass through in 2D
@@ -59,6 +65,9 @@ pub static PRE_SPHERICAL: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_pre_spherical(p: vec2<f32>) -> vec2<f32> {
     // Apophysis Pre-Spherical: Pre-phase spherical distortion
@@ -82,6 +91,9 @@ pub static PRE_SINUSOIDAL: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_pre_sinusoidal(p: vec2<f32>, weight: f32) -> vec2<f32> {
     // Apophysis Pre-Sinusoidal: Pre-phase sinusoidal wave
@@ -103,6 +115,9 @@ pub static PRE_DISC: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_pre_disc(p: vec2<f32>, weight: f32) -> vec2<f32> {
     // Apophysis Pre-Disc: Pre-phase disc transformation
@@ -136,16 +151,52 @@ pub static PRE_BWRAPS: VariationDef = VariationDef {
         param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0),
         param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0),
     ],
+    // 5 derived values at slots 5..10:
+    //   5: g2                  (gain² / (radius + ε) + ε)
+    //   6: r2                  (radius²)
+    //   7: rfactor             (radius / max_bubble)
+    //   8: inner_twist_rad     (inner_twist · π/180)
+    //   9: outer_twist_rad     (outer_twist · π/180)
+    needs_affine: false,
+    init_param_count: 5,
+    wgsl_init: Some(r#"
+fn init_pre_bwraps(user: array<f32, 5>) -> array<f32, 5> {
+    let cellsize = user[0];
+    let space = user[1];
+    let gain = user[2];
+    let inner_twist = user[3];
+    let outer_twist = user[4];
+    var out: array<f32, 5>;
+    if (cellsize == 0.0) {
+        out[0] = 0.0; out[1] = 0.0; out[2] = 0.0;
+        out[3] = inner_twist * 3.14159265358979 / 180.0;
+        out[4] = outer_twist * 3.14159265358979 / 180.0;
+        return out;
+    }
+    let radius = 0.5 * (cellsize / (1.0 + space * space));
+    let g2 = (gain * gain) / (radius + 1e-6) + 1e-6;
+    var max_bubble = g2 * radius;
+    if (max_bubble > 2.0) {
+        max_bubble = 1.0;
+    } else {
+        max_bubble = max_bubble * (1.0 / ((max_bubble * max_bubble) / 4.0 + 1.0));
+    }
+    out[0] = g2;
+    out[1] = radius * radius;
+    out[2] = radius / max_bubble;
+    out[3] = inner_twist * 3.14159265358979 / 180.0;
+    out[4] = outer_twist * 3.14159265358979 / 180.0;
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_pre_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
-    // Apophysis Pre_Bwraps - bubble wrap effect applied before variations
-    const PI: f32 = 3.14159265359;
-
     let cellsize = get_param(xform_id, variation_id, 0u);
-    let space = get_param(xform_id, variation_id, 1u);
-    let gain = get_param(xform_id, variation_id, 2u);
-    let inner_twist = get_param(xform_id, variation_id, 3u) * PI / 180.0;
-    let outer_twist = get_param(xform_id, variation_id, 4u) * PI / 180.0;
+    let g2 = get_param(xform_id, variation_id, 5u);
+    let r2 = get_param(xform_id, variation_id, 6u);
+    let rfactor = get_param(xform_id, variation_id, 7u);
+    let inner_twist = get_param(xform_id, variation_id, 8u);
+    let outer_twist = get_param(xform_id, variation_id, 9u);
 
     if cellsize == 0.0 {
         return p;
@@ -156,19 +207,6 @@ fn variation_pre_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
 
     var lx = p.x - cx;
     var ly = p.y - cy;
-
-    let radius = 0.5 * (cellsize / (1.0 + space * space));
-    let g2 = gain * gain / (radius + 1e-6) + 1e-6;
-    var max_bubble = g2 * radius;
-
-    if max_bubble > 2.0 {
-        max_bubble = 1.0;
-    } else {
-        max_bubble = max_bubble * (1.0 / (max_bubble * max_bubble / 4.0 + 1.0));
-    }
-
-    let r2 = radius * radius;
-    let rfactor = radius / max_bubble;
 
     if (lx * lx + ly * ly) <= r2 {
         lx = lx * g2;
@@ -196,14 +234,12 @@ fn variation_pre_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<
 "#,
     wgsl_3d: Some(r#"
 fn variation_pre_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
-    // Apophysis Pre_Bwraps - 3D (Z passes through)
-    const PI: f32 = 3.14159265359;
-
     let cellsize = get_param(xform_id, variation_id, 0u);
-    let space = get_param(xform_id, variation_id, 1u);
-    let gain = get_param(xform_id, variation_id, 2u);
-    let inner_twist = get_param(xform_id, variation_id, 3u) * PI / 180.0;
-    let outer_twist = get_param(xform_id, variation_id, 4u) * PI / 180.0;
+    let g2 = get_param(xform_id, variation_id, 5u);
+    let r2 = get_param(xform_id, variation_id, 6u);
+    let rfactor = get_param(xform_id, variation_id, 7u);
+    let inner_twist = get_param(xform_id, variation_id, 8u);
+    let outer_twist = get_param(xform_id, variation_id, 9u);
 
     if cellsize == 0.0 {
         return p;
@@ -214,19 +250,6 @@ fn variation_pre_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<
 
     var lx = p.x - cx;
     var ly = p.y - cy;
-
-    let radius = 0.5 * (cellsize / (1.0 + space * space));
-    let g2 = gain * gain / (radius + 1e-6) + 1e-6;
-    var max_bubble = g2 * radius;
-
-    if max_bubble > 2.0 {
-        max_bubble = 1.0;
-    } else {
-        max_bubble = max_bubble * (1.0 / (max_bubble * max_bubble / 4.0 + 1.0));
-    }
-
-    let r2 = radius * radius;
-    let rfactor = radius / max_bubble;
 
     if (lx * lx + ly * ly) <= r2 {
         lx = lx * g2;
@@ -269,6 +292,9 @@ pub static PRE_CROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0),
         param!("zero", "Zero", bool, false),
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_pre_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Pre_Crop - same as crop but applied before variations
@@ -377,6 +403,9 @@ pub static PRE_FALLOFF2: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_pre_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Pre_Falloff2 - Distance-based scatter with multiple blur modes

@@ -853,25 +853,25 @@ mod tests {
         let registry = global_registry();
 
         // Simple case: julian_power
-        let result = find_variation_and_param("julian_power", registry);
+        let result = find_variation_and_param("julian_power", &registry);
         assert_eq!(result, Some(("julian".to_string(), "power".to_string())));
 
         // Simple case: blob_high
-        let result = find_variation_and_param("blob_high", registry);
+        let result = find_variation_and_param("blob_high", &registry);
         assert_eq!(result, Some(("blob".to_string(), "high".to_string())));
 
         // Case with underscores in variation name (if pre_blur had params)
         // For now we don't have pre_blur params, but the logic should handle it
-        let result = find_variation_and_param("pre_blur_strength", registry);
+        let result = find_variation_and_param("pre_blur_strength", &registry);
         // pre_blur has no "strength" param, so this should return None
         assert_eq!(result, None);
 
         // Invalid parameter name
-        let result = find_variation_and_param("julian_invalid", registry);
+        let result = find_variation_and_param("julian_invalid", &registry);
         assert_eq!(result, None);
 
         // Invalid variation name
-        let result = find_variation_and_param("invalid_param", registry);
+        let result = find_variation_and_param("invalid_param", &registry);
         assert_eq!(result, None);
     }
 }

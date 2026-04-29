@@ -28,6 +28,9 @@ pub static SQRT_ACOTH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_sqrt_acoth(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -76,6 +79,9 @@ pub static SQRT_ACOSH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_sqrt_acosh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -135,6 +141,9 @@ pub static SQRT_ACOSECH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_sqrt_acosech(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -201,6 +210,9 @@ pub static SQRT_ASECH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_sqrt_asech(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -256,6 +268,9 @@ pub static SQRT_ASINH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_sqrt_asinh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_over_pi = 0.6366197723675814;
@@ -311,6 +326,9 @@ pub static SQRT_ATANH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_sqrt_atanh(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let one_over_pi = 0.3183098861837907;

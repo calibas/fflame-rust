@@ -119,6 +119,17 @@ pub struct FlameRenderer {
     // adjust_scale_bind_group removed - pipeline unused
     tonemap_bind_group: BindGroup,
 
+    /// Bind group for the init compute pass. Stable across the renderer's
+    /// lifetime — references the variation_params buffer with read_write
+    /// access. Init pipeline lives in `pipelines.shader_cache.init_pipeline`
+    /// and is `None` when no active variation has `wgsl_init`.
+    init_bind_group: BindGroup,
+
+    /// Set whenever variation params are written to the buffer. The next
+    /// `compute_pass` will dispatch the init shader (if one is built) and
+    /// clear this flag.
+    init_dirty: bool,
+
     // Output texture that tonemap_pass renders to (for both display and export)
     fractal_texture: Texture,
     fractal_texture_view: TextureView,
@@ -187,6 +198,7 @@ impl FlameRenderer {
         let accumulate_bind_group = pipelines.create_accumulate_bind_group(device, &buffers);
         // adjust_scale_bind_group removed - pipeline unused
         let tonemap_bind_group = pipelines.create_tonemap_bind_group(device, &buffers);
+        let init_bind_group = pipelines.create_init_bind_group(device, &buffers);
 
         // Create fractal output texture (Rgba8Unorm for compatibility with tonemap pipeline)
         let fractal_texture = device.create_texture(&TextureDescriptor {
@@ -222,6 +234,8 @@ impl FlameRenderer {
             accumulate_bind_group,
             // adjust_scale_bind_group removed
             tonemap_bind_group,
+            init_bind_group,
+            init_dirty: true, // Run init once on first frame to populate slots
             fractal_texture,
             fractal_texture_view,
             width,
@@ -277,6 +291,7 @@ impl FlameRenderer {
 
         // Recreate bind groups (must be after xaos buffer is restored)
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         self.accumulate_bind_group = self.pipelines.create_accumulate_bind_group(device, &self.buffers);
         self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
 
@@ -413,6 +428,28 @@ impl FlameRenderer {
         // Path buffer persists across batches to accumulate path data for all pixels
         if clear_paths {
             self.buffers.clear_paths(encoder);
+        }
+
+        // Run init dispatch if any active variation has wgsl_init AND params
+        // have changed since last dispatch. The init pipeline writes derived
+        // values into slots N..N+M of the variation_params buffer; the main
+        // pass then reads them via get_param() like any other slot.
+        if self.init_dirty {
+            if let Some(init_pipeline) = self.pipelines.shader_cache.init_pipeline.as_ref() {
+                let pair_count = self.pipelines.shader_cache.init_pair_count;
+                if pair_count > 0 {
+                    let workgroup_count = (pair_count + 63) / 64;
+                    let mut init_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                        label: Some("Variation Init Pass"),
+                        timestamp_writes: None,
+                    });
+                    init_pass.set_pipeline(init_pipeline);
+                    init_pass.set_bind_group(0, &self.init_bind_group, &[]);
+                    init_pass.dispatch_workgroups(workgroup_count, 1, 1);
+                    drop(init_pass);
+                }
+            }
+            self.init_dirty = false;
         }
 
         let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
@@ -616,17 +653,20 @@ impl FlameRenderer {
             log::info!("Shaders recompiled during preset load - recreating bind group");
             // Recreate compute bind group with new pipeline
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
 
         // 1. Update transforms and variation parameters in GPU buffer
         self.buffers.update_transforms(queue, &config.flame);
         self.buffers.update_variation_params(queue, &config.flame);
+        self.init_dirty = true;
 
         // 1b. Update xaos buffer (create/drop as needed)
         let xaos_buffer_changed = self.update_xaos_buffer(device, queue, &config.flame);
         if xaos_buffer_changed {
             // Recreate bind group with new xaos buffer
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
 
         // 2. Update color mode, path map style, and capture mode
@@ -737,16 +777,19 @@ impl FlameRenderer {
             log::info!("Shaders recompiled due to variation/constant changes - recreating bind group");
             // Recreate compute bind group with new pipeline
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
 
         self.buffers.update_transforms(queue, flame);
         self.buffers.update_variation_params(queue, flame);
+        self.init_dirty = true;
 
         // Update xaos buffer (create/drop as needed)
         let xaos_buffer_changed = self.update_xaos_buffer(device, queue, flame);
         if xaos_buffer_changed {
             // Recreate bind group with new xaos buffer
             self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+            self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
         }
 
         // Update render mode, perspective, DOF, fog, and background color
@@ -1240,6 +1283,7 @@ impl FlameRenderer {
         self.buffers.update_palette(queue, palette, palette_rotation, palette_squeeze);
         // Recreate compute bind group to ensure palette texture is bound
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
     }
 
     /// Change palette texture size (requires recreating buffers)
@@ -1251,6 +1295,7 @@ impl FlameRenderer {
 
         // Only the compute bind group references the palette texture view
         self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+        self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
 
         true
     }
@@ -1408,6 +1453,7 @@ impl FlameRenderer {
             if self.buffers.create_path_buffers(device, queue) {
                 // Rebuild bind groups with new buffers
                 self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
                 self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
                 changed = true;
             }
@@ -1416,6 +1462,7 @@ impl FlameRenderer {
             if self.buffers.drop_path_buffers() {
                 // Rebuild bind groups with dummy buffers
                 self.compute_bind_group = self.pipelines.create_compute_bind_group(device, &self.buffers);
+                self.init_bind_group = self.pipelines.create_init_bind_group(device, &self.buffers);
                 self.tonemap_bind_group = self.pipelines.create_tonemap_bind_group(device, &self.buffers);
                 changed = true;
             }

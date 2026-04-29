@@ -88,9 +88,9 @@ struct TileParams {
 }
 
 // Variation parameters for one transform
-// Indexed as: params[variation_id * 12 + param_slot]
+// Indexed as: params[variation_id * 16 + param_slot]
 struct VariationParams {
-    params: array<f32, 1200>,  // 100 variations × 12 params
+    params: array<f32, 1600>,  // 100 variations × 16 params (user + init-derived)
 }
 
 // Bindings - same as non-tiled

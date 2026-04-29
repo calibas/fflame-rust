@@ -544,9 +544,9 @@ impl ShaderConstants {
                     continue;
                 }
                 code.push_str(&format!("        case {}u: {{\n", xform_idx));
-                code.push_str("            switch(var_idx * 12u + param_slot) {\n");
+                code.push_str("            switch(var_idx * 16u + param_slot) {\n");
                 for ((var_idx, param_slot), value) in &xform.variation_params {
-                    let combined_idx = var_idx * 12 + param_slot;
+                    let combined_idx = var_idx * 16 + param_slot;
                     code.push_str(&format!(
                         "                case {}u: {{ return {:.8}; }}\n",
                         combined_idx, value
@@ -615,6 +615,148 @@ impl ShaderBuilder {
                 Some((name.clone(), local_idx))
             })
             .collect()
+    }
+
+    /// Build the init compute shader for a flame's active variations.
+    ///
+    /// Returns `Some(wgsl)` if any active variation in the flame has a
+    /// `wgsl_init` function; returns `None` otherwise (in which case no init
+    /// dispatch is needed).
+    ///
+    /// The returned shader has a single bind group layout:
+    ///   `@group(0) @binding(0) var<storage, read_write> variation_params`
+    ///
+    /// Dispatch with `ceil(pair_count / 64)` workgroups of size 64. Each
+    /// thread handles one (xform_idx, init-bearing-variation) pair —
+    /// reads user params from the buffer, runs the init function, writes
+    /// derived values back into the same buffer at slots
+    /// `local_idx * 16 + N..local_idx * 16 + N + M`.
+    pub fn build_init_shader(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        active_variations: &HashMap<String, f32>,
+    ) -> Option<String> {
+        use std::collections::HashSet;
+
+        let local_map = crate::scene::transforms::compute_local_index_map(
+            active_variations.keys().cloned(),
+            &self.registry,
+        );
+
+        // Collect (xform_idx, var_name, local_idx) tuples for every transform
+        // that uses a variation with `wgsl_init`. Order matters — pair_idx in
+        // the dispatch is the index into this list.
+        let mut pairs: Vec<(u32, String, u32)> = Vec::new();
+        let mut emit_variation = |xform_idx: u32, xform: &crate::scene::transforms::Transform| {
+            for (var_name, weight) in &xform.variations {
+                if weight.abs() < 1e-6 {
+                    continue;
+                }
+                let info = match self.registry.get(var_name) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                if info.wgsl_source_init.is_none() {
+                    continue;
+                }
+                let local_idx = match local_map.get(var_name) {
+                    Some(&i) => i,
+                    None => continue,
+                };
+                pairs.push((xform_idx, var_name.clone(), local_idx));
+            }
+        };
+        for (i, xform) in flame.transforms.iter().enumerate() {
+            emit_variation(i as u32, xform);
+        }
+        if let Some(final_xform) = &flame.final_transform {
+            emit_variation(flame.transforms.len() as u32, final_xform);
+        }
+
+        if pairs.is_empty() {
+            return None;
+        }
+
+        let pair_count = pairs.len();
+        let mut shader = String::new();
+
+        // 1. VariationParams struct + buffer binding (read_write).
+        //    Mirror the layout used by the main shader's `variation_params`,
+        //    but with read_write access mode.
+        shader.push_str(
+            "struct VariationParams {\n\
+             \x20   params: array<f32, 1600>,\n\
+             }\n\n\
+             @group(0) @binding(0) var<storage, read_write> variation_params: array<VariationParams>;\n\n",
+        );
+
+        // 2. Emit each unique variation's init function (dedup by name).
+        let mut emitted: HashSet<String> = HashSet::new();
+        for (_xform_idx, var_name, _local_idx) in &pairs {
+            if !emitted.insert(var_name.clone()) {
+                continue;
+            }
+            if let Some(info) = self.registry.get(var_name) {
+                if let Some(init_src) = &info.wgsl_source_init {
+                    shader.push_str(init_src);
+                    shader.push('\n');
+                }
+            }
+        }
+
+        // 3. Main entry point — switch on pair_idx, decode to (xform, var)
+        //    and call the right init.
+        shader.push_str(&format!(
+            "const TOTAL_INIT_PAIRS: u32 = {}u;\n\n",
+            pair_count
+        ));
+        shader.push_str(
+            "@compute @workgroup_size(64)\n\
+             fn init_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n\
+             \x20   let pair_idx = gid.x;\n\
+             \x20   if (pair_idx >= TOTAL_INIT_PAIRS) { return; }\n\
+             \x20   switch (pair_idx) {\n",
+        );
+
+        for (case_idx, (xform_idx, var_name, local_idx)) in pairs.iter().enumerate() {
+            let info = match self.registry.get(var_name) {
+                Some(i) => i,
+                None => continue,
+            };
+            let n_user = info.parameters.len();
+            let n_init = info.init_param_count;
+            let base_slot = (*local_idx as usize) * 16;
+            shader.push_str(&format!("        case {}u: {{\n", case_idx));
+            // Read user params
+            shader.push_str(&format!("            var user: array<f32, {}>;\n", n_user));
+            for i in 0..n_user {
+                shader.push_str(&format!(
+                    "            user[{i}] = variation_params[{x}u].params[{slot}u];\n",
+                    i = i,
+                    x = xform_idx,
+                    slot = base_slot + i,
+                ));
+            }
+            // Call init
+            shader.push_str(&format!(
+                "            let derived = init_{name}(user);\n",
+                name = var_name,
+            ));
+            // Write init params
+            for i in 0..n_init {
+                shader.push_str(&format!(
+                    "            variation_params[{x}u].params[{slot}u] = derived[{i}];\n",
+                    i = i,
+                    x = xform_idx,
+                    slot = base_slot + n_user + i,
+                ));
+            }
+            shader.push_str("        }\n");
+        }
+
+        shader.push_str("        default: { /* unreachable */ }\n    }\n}\n");
+
+        Some(shader)
     }
 
     /// Generate variation function code for ONLY active variations from embedded WGSL
@@ -809,9 +951,12 @@ impl ShaderBuilder {
                         params.push_str(&format!(", xform.variations[{}]", idx));
                     }
 
-                    // Add xform_id and variation_id if variation has parameters
+                    // Add xform_id and variation_id if variation has parameters,
+                    // OR just xform_id if it needs affine access without params.
                     if has_params {
                         params.push_str(&format!(", xform_id, {}u", idx));
+                    } else if info.needs_affine {
+                        params.push_str(", xform_id");
                     }
 
                     // Add RNG if needed
@@ -845,6 +990,12 @@ impl ShaderBuilder {
                     format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
                 } else {
                     format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
+                }
+            } else if info.needs_affine {
+                if info.needs_rng {
+                    format!("{}(temp, xform_id, rng)", info.wgsl_function)
+                } else {
+                    format!("{}(temp, xform_id)", info.wgsl_function)
                 }
             } else {
                 if info.needs_rng {
@@ -987,9 +1138,12 @@ impl ShaderBuilder {
                         params.push_str(&format!(", xform.variations[{}]", idx));
                     }
 
-                    // Add xform_id and variation_id if variation has parameters
+                    // Add xform_id and variation_id if variation has parameters,
+                    // OR just xform_id if it needs affine access without params.
                     if has_params {
                         params.push_str(&format!(", xform_id, {}u", idx));
+                    } else if info.needs_affine {
+                        params.push_str(", xform_id");
                     }
 
                     // Add RNG if needed
@@ -1095,6 +1249,12 @@ impl ShaderBuilder {
                             format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
                         } else {
                             format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
+                        }
+                    } else if info.needs_affine {
+                        if info.needs_rng {
+                            format!("{}(temp, xform_id, rng)", info.wgsl_function)
+                        } else {
+                            format!("{}(temp, xform_id)", info.wgsl_function)
                         }
                     } else {
                         if info.needs_rng {

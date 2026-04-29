@@ -37,6 +37,9 @@ pub static TANCOS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_tancos(p: vec2<f32>) -> vec2<f32> {
     let d1 = 1e-30 + p.x * p.x + p.y * p.y;
@@ -65,6 +68,9 @@ pub static TANGENT: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_tangent(p: vec2<f32>) -> vec2<f32> {
     let d = cos(p.y);
@@ -91,6 +97,9 @@ pub static TANGENT3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_tangent3d(p: vec2<f32>) -> vec2<f32> {
     let d = cos(p.y);
@@ -123,6 +132,9 @@ pub static SECANT2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_secant2(p: vec2<f32>) -> vec2<f32> {
     let r = sqrt(p.x * p.x + p.y * p.y) + 1e-30;
@@ -155,6 +167,9 @@ pub static COSINE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_cosine(p: vec2<f32>) -> vec2<f32> {
     let r = p.x * 3.14159265358979;
@@ -183,6 +198,9 @@ pub static PETAL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_petal(p: vec2<f32>) -> vec2<f32> {
     let cx = cos(p.x);
@@ -226,6 +244,9 @@ pub static CARDIOID: VariationDef = VariationDef {
         VariationParamDef { name: "a", display_name: "A", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_cardioid(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a_param = get_param(xform_id, variation_id, 0u);
@@ -260,6 +281,9 @@ pub static HELIX: VariationDef = VariationDef {
         VariationParamDef { name: "width", display_name: "Width", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_helix(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // 2D collapse: z=0, so sin(0)=0 cos(0)=1 → x' = x + width, y' = y
@@ -292,6 +316,9 @@ pub static HELICOID: VariationDef = VariationDef {
         VariationParamDef { name: "frequency", display_name: "Frequency", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_helicoid(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // 2D collapse: phase = atan2(y,x) — rotation by 0 → identity
@@ -329,6 +356,9 @@ pub static PARABOLA: VariationDef = VariationDef {
         VariationParamDef { name: "height", display_name: "Height", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_parabola(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let width = get_param(xform_id, variation_id, 0u);
@@ -372,6 +402,9 @@ pub static PIE: VariationDef = VariationDef {
         VariationParamDef { name: "thickness", display_name: "Thickness", param_type: ParamType::Float,
                             default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_pie(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
@@ -415,6 +448,9 @@ pub static PIE3D: VariationDef = VariationDef {
         VariationParamDef { name: "thickness", display_name: "Thickness", param_type: ParamType::Float,
                             default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_pie3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let two_pi = 6.28318530717959;
