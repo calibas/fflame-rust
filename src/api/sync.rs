@@ -160,6 +160,7 @@ fn transform_to_api(t: &Transform) -> CreateTransformInput {
         color: Some(t.color),
         color_speed: Some(t.color_speed),
         opacity: Some(t.opacity),
+        direct_color: if t.direct_color.abs() > 1e-6 { Some(t.direct_color) } else { None },
         variations: if t.variations.is_empty() { None } else { Some(t.variations.clone()) },
         variation_params: if t.variation_params.is_empty() { None } else { Some(t.variation_params.clone()) },
         post_affine_enabled: Some(t.post_affine_enabled),
@@ -186,6 +187,7 @@ fn transform_from_api(resp: &TransformResponse) -> Transform {
         color: resp.color,
         color_speed: resp.color_speed,
         opacity: resp.opacity,
+        direct_color: resp.direct_color,
         variations: resp.variations.clone(),
         variation_params: resp.variation_params.clone(),
         post_affine_enabled: resp.post_affine_enabled,
@@ -676,6 +678,7 @@ mod tests {
             color: api.color.unwrap(),
             color_speed: api.color_speed.unwrap(),
             opacity: api.opacity.unwrap(),
+            direct_color: api.direct_color.unwrap_or(0.0),
             variations: api.variations.unwrap_or_default(),
             variation_params: api.variation_params.unwrap_or_default(),
             post_affine_enabled: api.post_affine_enabled.unwrap(),
@@ -692,6 +695,7 @@ mod tests {
         assert_eq!(t.a, restored.a);
         assert_eq!(t.weight, restored.weight);
         assert_eq!(t.opacity, restored.opacity);
+        assert_eq!(t.direct_color, restored.direct_color);
     }
 
     #[test]

@@ -106,6 +106,12 @@ pub struct Transform {
     /// NOTE: Ignored for final transforms.
     pub opacity: f32,
 
+    /// Direct-color blend strength (0.0 to 1.0, Apophysis `pluginColor`).
+    /// 0.0 = standard color evolution; 1.0 = direct-color variations fully
+    /// override the iteration color. No effect when no direct-color
+    /// variations are active in the flame. Default 0.0.
+    pub direct_color: f32,
+
     // Post-affine transformation matrix (optional, applied after variations)
     // Same formula as pre-affine: x' = ax + by + e, y' = cx + dy + f, z' = z + g
     // When disabled, post-affine is skipped entirely (zero shader cost).
@@ -143,6 +149,7 @@ impl Default for Transform {
             color: 0.5,        // Mid-palette position (neutral default)
             color_speed: 0.0,  // Apophysis default: 50/50 blend
             opacity: 1.0,      // Apophysis default: always visible
+            direct_color: 0.0, // Apophysis default: no direct-color blending
             post_affine_enabled: false,
             post_a: 1.0,
             post_b: 0.0,
@@ -521,9 +528,12 @@ impl Serialize for Transform {
         let variations_sorted: BTreeMap<_, _> = self.variations.iter().collect();
         let params_sorted: BTreeMap<_, _> = self.variation_params.iter().collect();
 
-        // Count fields: 13 base + up to 8 post-affine
+        // Count fields: 13 base + 1 if direct_color != 0 + up to 8 post-affine
         let has_post = self.post_affine_enabled;
-        let field_count = 13 + if has_post { 8 } else { 0 };
+        let has_direct_color = self.direct_color.abs() > 1e-6;
+        let field_count = 13
+            + if has_direct_color { 1 } else { 0 }
+            + if has_post { 8 } else { 0 };
 
         let mut state = serializer.serialize_struct("Transform", field_count)?;
         state.serialize_field("a", &self.a)?;
@@ -539,6 +549,10 @@ impl Serialize for Transform {
         state.serialize_field("color", &self.color)?;
         state.serialize_field("color_speed", &self.color_speed)?;
         state.serialize_field("opacity", &self.opacity)?;
+        // Only serialize direct_color when non-zero (keeps .fflame files clean)
+        if has_direct_color {
+            state.serialize_field("direct_color", &self.direct_color)?;
+        }
         // Only serialize post-affine fields when enabled (keeps .fflame files clean)
         if has_post {
             state.serialize_field("post_affine_enabled", &self.post_affine_enabled)?;
@@ -564,6 +578,7 @@ impl<'de> Deserialize<'de> for Transform {
         #[serde(field_identifier, rename_all = "snake_case")]
         enum Field {
             A, B, C, D, E, F, G, Weight, Variations, VariationParams, Color, ColorSpeed, Opacity,
+            DirectColor,
             PostAffineEnabled, PostA, PostB, PostC, PostD, PostE, PostF, PostG,
         }
 
@@ -593,6 +608,7 @@ impl<'de> Deserialize<'de> for Transform {
                 let mut color = None;
                 let mut color_speed = None;
                 let mut opacity = None;
+                let mut direct_color = None;
                 let mut post_affine_enabled = None;
                 let mut post_a = None;
                 let mut post_b = None;
@@ -682,6 +698,7 @@ impl<'de> Deserialize<'de> for Transform {
                         }
                         Field::ColorSpeed => color_speed = Some(map.next_value()?),
                         Field::Opacity => opacity = Some(map.next_value()?),
+                        Field::DirectColor => direct_color = Some(map.next_value()?),
                         Field::PostAffineEnabled => post_affine_enabled = Some(map.next_value()?),
                         Field::PostA => post_a = Some(map.next_value()?),
                         Field::PostB => post_b = Some(map.next_value()?),
@@ -707,6 +724,7 @@ impl<'de> Deserialize<'de> for Transform {
                     color: color.ok_or_else(|| de::Error::missing_field("color"))?,
                     color_speed: color_speed.unwrap_or(0.0), // Default to 0.0 for backward compatibility
                     opacity: opacity.unwrap_or(1.0), // Default to 1.0 for backward compatibility
+                    direct_color: direct_color.unwrap_or(0.0), // Default 0.0 (no direct-color blending)
                     // Post-affine defaults to disabled + identity (backward compatible)
                     post_affine_enabled: post_affine_enabled.unwrap_or(false),
                     post_a: post_a.unwrap_or(1.0),
@@ -720,7 +738,7 @@ impl<'de> Deserialize<'de> for Transform {
             }
         }
 
-        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "color", "color_speed", "opacity", "post_affine_enabled", "post_a", "post_b", "post_c", "post_d", "post_e", "post_f", "post_g"];
+        const FIELDS: &[&str] = &["a", "b", "c", "d", "e", "f", "g", "weight", "variations", "variation_params", "color", "color_speed", "opacity", "direct_color", "post_affine_enabled", "post_a", "post_b", "post_c", "post_d", "post_e", "post_f", "post_g"];
         deserializer.deserialize_struct("Transform", FIELDS, TransformVisitor)
     }
 }

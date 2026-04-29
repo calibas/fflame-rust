@@ -147,6 +147,10 @@ pub struct CreateTransformInput {
     pub color_speed: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opacity: Option<f32>,
+    /// Apophysis direct-color blend strength (pluginColor). Optional;
+    /// older API servers without this field default to 0.0 client-side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct_color: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variations: Option<HashMap<String, f32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -185,6 +189,10 @@ pub struct TransformResponse {
     pub color: f32,
     pub color_speed: f32,
     pub opacity: f32,
+    /// Apophysis direct-color blend strength. Older API responses without
+    /// this field default to 0.0.
+    #[serde(default)]
+    pub direct_color: f32,
     pub variations: HashMap<String, f32>,
     pub variation_params: HashMap<String, f32>,
     pub post_affine_enabled: bool,
