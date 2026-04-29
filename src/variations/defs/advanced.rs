@@ -317,7 +317,7 @@ pub static WAVES: VariationDef = VariationDef {
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
-fn variation_waves(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
+fn variation_waves(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xf = transforms[xform_id];
     return vec2<f32>(
         p.x + xf.b * sin(p.y / (xf.e * xf.e + 1e-6)),
@@ -326,7 +326,7 @@ fn variation_waves(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_waves(p: vec3<f32>, xform_id: u32) -> vec3<f32> {
+fn variation_waves(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xf = transforms[xform_id];
     return vec3<f32>(
         p.x + xf.b * sin(p.y / (xf.e * xf.e + 1e-6)),

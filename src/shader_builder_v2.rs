@@ -926,52 +926,30 @@ impl ShaderBuilder {
 
             for (name, idx, info) in &pre_variations {
                 // Pre-variations directly modify temp (NOT weighted sum!)
+                let needs_rng = info.needs_rng;
+                let has_params = !info.parameters.is_empty();
 
-                // Handle rotation variations (hardcoded function names)
-                if name.contains("rotate") {
-                    let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
-                    code.push_str(&format!(
-                        "    // {}: {} (PRE)\n\
-                         \x20   if (xform.variations[{}] != 0.0) {{\n\
-                         \x20       temp = {}(temp, xform.variations[{}]);\n\
-                         \x20   }}\n\n",
-                        idx, info.display_name, idx, rotate_fn, idx
-                    ));
-                } else {
-                    // Generic Pre-phase variation handling
-                    let needs_rng = info.needs_rng;
-                    let has_params = !info.parameters.is_empty();
+                let mut params = String::new();
 
-                    // Build parameter list based on variation needs
-                    let mut params = String::new();
-
-                    // Pre-phase variations that need weight parameter
-                    if name.contains("zscale") || name.contains("ztranslate")
-                        || name.contains("sinusoidal") || name.contains("disc") {
-                        params.push_str(&format!(", xform.variations[{}]", idx));
-                    }
-
-                    // Add xform_id and variation_id if variation has parameters,
-                    // OR just xform_id if it needs transform access without params.
-                    if has_params {
-                        params.push_str(&format!(", xform_id, {}u", idx));
-                    } else if info.needs_transform {
-                        params.push_str(", xform_id");
-                    }
-
-                    // Add RNG if needed
-                    if needs_rng {
-                        params.push_str(", rng");
-                    }
-
-                    code.push_str(&format!(
-                        "    // {}: {} (PRE)\n\
-                         \x20   if (xform.variations[{}] != 0.0) {{\n\
-                         \x20       temp = variation_{}(temp{});\n\
-                         \x20   }}\n\n",
-                        idx, info.display_name, idx, name, params
-                    ));
+                // Variations with parameters get (xform_id, variation_id) for
+                // get_param lookups. needs_transform variations also get both
+                // so they can read transforms[xform_id].variations[variation_id]
+                // (e.g., pre_rotate_x reads its own weight from the buffer).
+                if has_params || info.needs_transform {
+                    params.push_str(&format!(", xform_id, {}u", idx));
                 }
+
+                if needs_rng {
+                    params.push_str(", rng");
+                }
+
+                code.push_str(&format!(
+                    "    // {}: {} (PRE)\n\
+                     \x20   if (xform.variations[{}] != 0.0) {{\n\
+                     \x20       temp = variation_{}(temp{});\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, idx, name, params
+                ));
             }
         } else {
             code.push_str("    var temp = p;\n\n");
@@ -985,17 +963,11 @@ impl ShaderBuilder {
         code.push_str("    var result = vec2<f32>(0.0, 0.0);\n\n");
 
         for (_name, idx, info) in &normal_variations {
-            let call = if !info.parameters.is_empty() {
+            let call = if !info.parameters.is_empty() || info.needs_transform {
                 if info.needs_rng {
                     format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
                 } else {
                     format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
-                }
-            } else if info.needs_transform {
-                if info.needs_rng {
-                    format!("{}(temp, xform_id, rng)", info.wgsl_function)
-                } else {
-                    format!("{}(temp, xform_id)", info.wgsl_function)
                 }
             } else {
                 if info.needs_rng {
@@ -1037,18 +1009,15 @@ impl ShaderBuilder {
                 let needs_rng = info.needs_rng;
                 let has_params = !info.parameters.is_empty();
 
-                // Build parameter list
                 let mut params = String::from("result");
 
-                // Post-variations with parameters (like post_bwraps)
-                if has_params {
+                // has_params || needs_transform → pass (xform_id, variation_id).
+                // Pure no-param no-needs_transform variations (e.g. flatten 2D
+                // stub) get just `result`.
+                if has_params || info.needs_transform {
                     params.push_str(&format!(", xform_id, {}u", idx));
-                } else {
-                    // Traditional post-variations (rotate_x, rotate_y, flatten) use weight
-                    params.push_str(&format!(", xform.variations[{}]", idx));
                 }
 
-                // Add RNG if needed
                 if needs_rng {
                     params.push_str(", rng");
                 }
@@ -1113,52 +1082,30 @@ impl ShaderBuilder {
 
             for (name, idx, info) in &pre_variations {
                 // Pre-variations directly modify temp (NOT weighted sum!)
+                let needs_rng = info.needs_rng;
+                let has_params = !info.parameters.is_empty();
 
-                // Handle rotation variations (hardcoded function names)
-                if name.contains("rotate") {
-                    let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
-                    code.push_str(&format!(
-                        "    // {}: {} (PRE)\n\
-                         \x20   if (xform.variations[{}] != 0.0) {{\n\
-                         \x20       temp = {}(temp, xform.variations[{}]);\n\
-                         \x20   }}\n\n",
-                        idx, info.display_name, idx, rotate_fn, idx
-                    ));
-                } else {
-                    // Generic Pre-phase variation handling
-                    let needs_rng = info.needs_rng;
-                    let has_params = !info.parameters.is_empty();
+                let mut params = String::new();
 
-                    // Build parameter list based on variation needs
-                    let mut params = String::new();
-
-                    // Pre-phase variations that need weight parameter
-                    if name.contains("zscale") || name.contains("ztranslate")
-                        || name.contains("sinusoidal") || name.contains("disc") {
-                        params.push_str(&format!(", xform.variations[{}]", idx));
-                    }
-
-                    // Add xform_id and variation_id if variation has parameters,
-                    // OR just xform_id if it needs transform access without params.
-                    if has_params {
-                        params.push_str(&format!(", xform_id, {}u", idx));
-                    } else if info.needs_transform {
-                        params.push_str(", xform_id");
-                    }
-
-                    // Add RNG if needed
-                    if needs_rng {
-                        params.push_str(", rng");
-                    }
-
-                    code.push_str(&format!(
-                        "    // {}: {} (PRE)\n\
-                         \x20   if (xform.variations[{}] != 0.0) {{\n\
-                         \x20       temp = variation_{}(temp{});\n\
-                         \x20   }}\n\n",
-                        idx, info.display_name, idx, name, params
-                    ));
+                // Variations with parameters get (xform_id, variation_id) for
+                // get_param lookups. needs_transform variations also get both
+                // so they can read transforms[xform_id].variations[variation_id]
+                // (e.g., pre_rotate_x reads its own weight from the buffer).
+                if has_params || info.needs_transform {
+                    params.push_str(&format!(", xform_id, {}u", idx));
                 }
+
+                if needs_rng {
+                    params.push_str(", rng");
+                }
+
+                code.push_str(&format!(
+                    "    // {}: {} (PRE)\n\
+                     \x20   if (xform.variations[{}] != 0.0) {{\n\
+                     \x20       temp = variation_{}(temp{});\n\
+                     \x20   }}\n\n",
+                    idx, info.display_name, idx, name, params
+                ));
             }
         } else {
             code.push_str("    var temp = p;\n\n");
@@ -1244,17 +1191,11 @@ impl ShaderBuilder {
                 }
                 _ => {
                     // Standard variation with function call
-                    let call = if !info.parameters.is_empty() {
+                    let call = if !info.parameters.is_empty() || info.needs_transform {
                         if info.needs_rng {
                             format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
                         } else {
                             format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
-                        }
-                    } else if info.needs_transform {
-                        if info.needs_rng {
-                            format!("{}(temp, xform_id, rng)", info.wgsl_function)
-                        } else {
-                            format!("{}(temp, xform_id)", info.wgsl_function)
                         }
                     } else {
                         if info.needs_rng {
@@ -1311,29 +1252,15 @@ impl ShaderBuilder {
                         let needs_rng = info.needs_rng;
                         let has_params = !info.parameters.is_empty();
 
-                        // Build parameter list
                         let mut params = String::from("result");
 
-                        // Post-variations with parameters (like post_bwraps)
-                        if has_params {
+                        // has_params || needs_transform → pass (xform_id, variation_id).
+                        // Pure no-param post variations (none currently in this
+                        // path after migrations) call with just `result`.
+                        if has_params || info.needs_transform {
                             params.push_str(&format!(", xform_id, {}u", idx));
-                        } else if name.contains("rotate") {
-                            // Traditional rotate variations use weight
-                            let rotate_fn = if name.contains("_x") { "rotate_x" } else { "rotate_y" };
-                            code.push_str(&format!(
-                                "    // {}: {} (POST - Rotation)\n\
-                                 \x20   if (xform.variations[{}] != 0.0) {{\n\
-                                 \x20       result = {}(result, xform.variations[{}]);\n\
-                                 \x20   }}\n\n",
-                                idx, info.display_name, idx, rotate_fn, idx
-                            ));
-                            continue;  // Skip the generic code below
-                        } else {
-                            // Other traditional post-variations use weight
-                            params.push_str(&format!(", xform.variations[{}]", idx));
                         }
 
-                        // Add RNG if needed
                         if needs_rng {
                             params.push_str(", rng");
                         }
