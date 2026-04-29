@@ -15,6 +15,9 @@ pub static ZTRANSLATE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_ztranslate(p: vec2<f32>) -> vec2<f32> {
     // ZTranslate only affects Z (3D mode), pass through in 2D
@@ -40,6 +43,9 @@ pub static JULIA3D: VariationDef = VariationDef {
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -10.0, 10.0),
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_julia3d(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Julia3D in 2D mode (Z = 0)
@@ -165,6 +171,9 @@ pub static FALLOFF2: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_falloff2(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Falloff2: Distance-based blur effect with 3 modes
@@ -290,19 +299,32 @@ pub static WEDGE: VariationDef = VariationDef {
         param!("count", "Count", int, 2.0, 1.0, 20.0),
         param!("swirl", "Swirl", unlimited_float, 0.0, -30.0, 30.0),
     ],
+    // 2 derived values at slots 4..6:
+    //   4: angle_rad  (angle_deg · π/180)
+    //   5: comp_fac   (1 − angle_rad · count / (2π))
+    needs_affine: false,
+    init_param_count: 2,
+    wgsl_init: Some(r#"
+fn init_wedge(user: array<f32, 4>) -> array<f32, 2> {
+    let angle_deg = user[0];
+    let count = user[2];
+    let angle_rad = angle_deg * 3.14159265358979 / 180.0;
+    var out: array<f32, 2>;
+    out[0] = angle_rad;
+    out[1] = 1.0 - angle_rad * count * 0.15915494309189534;  // 1/(2π)
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_wedge(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
-    // Apophysis Wedge: Wedge shape with controllable angle and swirl
     const PI: f32 = 3.14159265359;
-    const C1_2PI: f32 = 0.15915494309189533576888376337251;
+    const C1_2PI: f32 = 0.15915494309189534;
 
-    let angle_deg = get_param(xform_id, variation_id, 0u);
     let hole = get_param(xform_id, variation_id, 1u);
     let count = get_param(xform_id, variation_id, 2u);
     let swirl = get_param(xform_id, variation_id, 3u);
-
-    let angle_rad = angle_deg * PI / 180.0;
-    let comp_fac = 1.0 - angle_rad * count * C1_2PI;
+    let angle_rad = get_param(xform_id, variation_id, 4u);
+    let comp_fac = get_param(xform_id, variation_id, 5u);
 
     let r = sqrt(dot(p, p));
     var a = atan2(p.y, p.x) + swirl * r;
@@ -315,17 +337,14 @@ fn variation_wedge(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> 
 "#,
     wgsl_3d: Some(r#"
 fn variation_wedge(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
-    // Apophysis Wedge: 3D (Z passes through)
     const PI: f32 = 3.14159265359;
-    const C1_2PI: f32 = 0.15915494309189533576888376337251;
+    const C1_2PI: f32 = 0.15915494309189534;
 
-    let angle_deg = get_param(xform_id, variation_id, 0u);
     let hole = get_param(xform_id, variation_id, 1u);
     let count = get_param(xform_id, variation_id, 2u);
     let swirl = get_param(xform_id, variation_id, 3u);
-
-    let angle_rad = angle_deg * PI / 180.0;
-    let comp_fac = 1.0 - angle_rad * count * C1_2PI;
+    let angle_rad = get_param(xform_id, variation_id, 4u);
+    let comp_fac = get_param(xform_id, variation_id, 5u);
 
     let r = sqrt(dot(p.xy, p.xy));
     var a = atan2(p.y, p.x) + swirl * r;
@@ -349,6 +368,9 @@ pub static EPISPIRAL: VariationDef = VariationDef {
         param!("thickness", "Thickness", unlimited_float, 0.0, -2.0, 2.0),
         param!("holes", "Holes", unlimited_float, 1.0, -10.0, 10.0),
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_epispiral(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Epispiral: Epicycloid spiral pattern with random thickness
@@ -398,31 +420,49 @@ pub static BWRAPS: VariationDef = VariationDef {
         param!("inner_twist", "Inner Twist", unlimited_float, 0.0, -10.0, 10.0),
         param!("outer_twist", "Outer Twist", unlimited_float, 0.0, -10.0, 10.0),
     ],
-    wgsl_2d: r#"
-fn variation_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
-    // Apophysis BWraps: Bubble wraps with cell-based transformation
-    let cellsize = get_param(xform_id, variation_id, 0u);
-    let space = get_param(xform_id, variation_id, 1u);
-    let gain = get_param(xform_id, variation_id, 2u);
-    let inner_twist = get_param(xform_id, variation_id, 3u);
-    let outer_twist = get_param(xform_id, variation_id, 4u);
-
+    // 3 derived values at slots 5..8:
+    //   5: g2        (gain² / (radius + ε) + ε)
+    //   6: r2        (radius²)
+    //   7: rfactor   (radius / max_bubble, where max_bubble = clamp(g2·radius))
+    needs_affine: false,
+    init_param_count: 3,
+    wgsl_init: Some(r#"
+fn init_bwraps(user: array<f32, 5>) -> array<f32, 3> {
+    let cellsize = user[0];
+    let space = user[1];
+    let gain = user[2];
+    var out: array<f32, 3>;
     if (cellsize == 0.0) {
-        return p;
+        // Body short-circuits when cellsize == 0; init values irrelevant.
+        out[0] = 0.0; out[1] = 0.0; out[2] = 0.0;
+        return out;
     }
-
     let radius = 0.5 * (cellsize / (1.0 + space * space));
     let g2 = (gain * gain) / (radius + 1e-6) + 1e-6;
     var max_bubble = g2 * radius;
-
     if (max_bubble > 2.0) {
         max_bubble = 1.0;
     } else {
         max_bubble = max_bubble * (1.0 / ((max_bubble * max_bubble) / 4.0 + 1.0));
     }
+    out[0] = g2;
+    out[1] = radius * radius;
+    out[2] = radius / max_bubble;
+    return out;
+}
+"#),
+    wgsl_2d: r#"
+fn variation_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    let cellsize = get_param(xform_id, variation_id, 0u);
+    let inner_twist = get_param(xform_id, variation_id, 3u);
+    let outer_twist = get_param(xform_id, variation_id, 4u);
+    let g2 = get_param(xform_id, variation_id, 5u);
+    let r2 = get_param(xform_id, variation_id, 6u);
+    let rfactor = get_param(xform_id, variation_id, 7u);
 
-    let r2 = radius * radius;
-    let rfactor = radius / max_bubble;
+    if (cellsize == 0.0) {
+        return p;
+    }
 
     let cx = (floor(p.x / cellsize) + 0.5) * cellsize;
     let cy = (floor(p.y / cellsize) + 0.5) * cellsize;
@@ -452,29 +492,16 @@ fn variation_bwraps(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
 "#,
     wgsl_3d: Some(r#"
 fn variation_bwraps(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
-    // Apophysis BWraps: 3D (Z passes through)
     let cellsize = get_param(xform_id, variation_id, 0u);
-    let space = get_param(xform_id, variation_id, 1u);
-    let gain = get_param(xform_id, variation_id, 2u);
     let inner_twist = get_param(xform_id, variation_id, 3u);
     let outer_twist = get_param(xform_id, variation_id, 4u);
+    let g2 = get_param(xform_id, variation_id, 5u);
+    let r2 = get_param(xform_id, variation_id, 6u);
+    let rfactor = get_param(xform_id, variation_id, 7u);
 
     if (cellsize == 0.0) {
         return p;
     }
-
-    let radius = 0.5 * (cellsize / (1.0 + space * space));
-    let g2 = (gain * gain) / (radius + 1e-6) + 1e-6;
-    var max_bubble = g2 * radius;
-
-    if (max_bubble > 2.0) {
-        max_bubble = 1.0;
-    } else {
-        max_bubble = max_bubble * (1.0 / ((max_bubble * max_bubble) / 4.0 + 1.0));
-    }
-
-    let r2 = radius * radius;
-    let rfactor = radius / max_bubble;
 
     let cx = (floor(p.x / cellsize) + 0.5) * cellsize;
     let cy = (floor(p.y / cellsize) + 0.5) * cellsize;
@@ -514,6 +541,9 @@ pub static JULIASCOPE: VariationDef = VariationDef {
         param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0),
         param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0),
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_juliascope(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis JuliaScope variation
@@ -593,6 +623,9 @@ pub static JULIA3DZ: VariationDef = VariationDef {
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0),
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_julia3dz(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Julia3Dz is a 3D variation, pass through in 2D
@@ -657,6 +690,9 @@ pub static CURL3D: VariationDef = VariationDef {
         param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0),
         param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0),
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_curl3d(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Curl3D is a 3D variation, apply XY curl in 2D
@@ -704,16 +740,24 @@ pub static RADIAL_BLUR: VariationDef = VariationDef {
     parameters: &[
         param!("angle", "Angle", angle, 0.0),
     ],
+    // 2 derived values at slots 1..3:
+    //   1: spin_var  (sin(angle_deg · π/360))
+    //   2: zoom_var  (cos(angle_deg · π/360))
+    needs_affine: false,
+    init_param_count: 2,
+    wgsl_init: Some(r#"
+fn init_radial_blur(user: array<f32, 1>) -> array<f32, 2> {
+    let half_angle_rad = user[0] * 3.14159265358979 / 360.0;  // (deg·π/180)·0.5
+    var out: array<f32, 2>;
+    out[0] = sin(half_angle_rad);  // spin_var
+    out[1] = cos(half_angle_rad);  // zoom_var
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_radial_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    // Apophysis Radial Blur - combines radial spin and zoom blur
-    const PI: f32 = 3.14159265359;
-
-    let angle_deg = get_param(xform_id, variation_id, 0u);
-    let angle_rad = angle_deg * PI / 180.0;
-
-    let spin_var = sin(angle_rad * 0.5);
-    let zoom_var = cos(angle_rad * 0.5);
+    let spin_var = get_param(xform_id, variation_id, 1u);
+    let zoom_var = get_param(xform_id, variation_id, 2u);
 
     let rnd_g = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
 
@@ -729,14 +773,8 @@ fn variation_radial_blur(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: pt
 "#,
     wgsl_3d: Some(r#"
 fn variation_radial_blur(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
-    // Apophysis Radial Blur - 3D (Z passes through)
-    const PI: f32 = 3.14159265359;
-
-    let angle_deg = get_param(xform_id, variation_id, 0u);
-    let angle_rad = angle_deg * PI / 180.0;
-
-    let spin_var = sin(angle_rad * 0.5);
-    let zoom_var = cos(angle_rad * 0.5);
+    let spin_var = get_param(xform_id, variation_id, 1u);
+    let zoom_var = get_param(xform_id, variation_id, 2u);
 
     let rnd_g = rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) + rng_nextf(rng) - 2.0;
 
@@ -760,6 +798,9 @@ pub static BLUR_CIRCLE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_blur_circle(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Blur Circle - uniform blur in a circle
@@ -847,6 +888,9 @@ pub static BLUR_ZOOM: VariationDef = VariationDef {
         param!("x", "X", unlimited_float, 0.0, -20.0, 20.0),
         param!("y", "Y", unlimited_float, 0.0, -20.0, 20.0),
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_blur_zoom(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Blur Zoom - zoom blur from a center point
@@ -890,6 +934,9 @@ pub static BLUR_PIXELIZE: VariationDef = VariationDef {
         param!("size", "Size", unlimited_float, 0.1, 0.0000001, 10.0),
         param!("scale", "Scale", unlimited_float, 1.0, -20.0, 20.0),
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_blur_pixelize(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Blur Pixelize - pixelated/mosaic blur effect
@@ -939,6 +986,9 @@ pub static SEPARATION: VariationDef = VariationDef {
         param!("xinside", "X Inside", unlimited_float, 0.0, -20.0, 20.0),
         param!("yinside", "Y Inside", unlimited_float, 0.0, -20.0, 20.0),
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_separation(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Separation - separates positive/negative quadrants
@@ -1003,6 +1053,9 @@ pub static MOBIUS: VariationDef = VariationDef {
         param!("re_d", "Re D", unlimited_float, 1.0, -20.0, 20.0),
         param!("im_d", "Im D", unlimited_float, 0.0, -20.0, 20.0),
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_mobius(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Mobius - Möbius transformation f(z) = (Az + B)/(Cz + D)
@@ -1072,6 +1125,9 @@ pub static CROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0),
         param!("zero", "Zero", bool, false),
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_crop(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     // Apophysis Crop - crops to a rectangular region with optional scatter

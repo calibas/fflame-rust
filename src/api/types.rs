@@ -706,11 +706,24 @@ pub struct VariationDownload {
     pub phase: ApiVariationPhase,
     #[serde(default)]
     pub needs_rng: bool,
+    /// Whether this variation reads affine matrix fields. When true, the
+    /// generated WGSL signature includes `xform_id: u32`. Old API responses
+    /// without this field default to false.
+    #[serde(default)]
+    pub needs_affine: bool,
     #[serde(default)]
     pub parameters: Vec<ApiVariationParameter>,
     pub shader_2d: String,
     #[serde(default)]
     pub shader_3d: Option<String>,
+    /// Number of init-derived parameters this variation produces.
+    /// Old API responses without this field default to 0.
+    #[serde(default)]
+    pub init_param_count: usize,
+    /// Optional WGSL init function, run once per param change on the GPU.
+    /// Old API responses without this field default to None.
+    #[serde(default)]
+    pub shader_init: Option<String>,
 }
 
 /// Summary of a variation in a list response (no shader code).

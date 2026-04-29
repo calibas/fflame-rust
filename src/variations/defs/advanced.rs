@@ -14,6 +14,9 @@ pub static POLAR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_polar(p: vec2<f32>) -> vec2<f32> {
     let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
@@ -37,6 +40,9 @@ pub static HANDKERCHIEF: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_handkerchief(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
@@ -60,6 +66,9 @@ pub static HEART: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_heart(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
@@ -85,6 +94,9 @@ pub static DISC: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_disc(p: vec2<f32>) -> vec2<f32> {
     let theta = atan2(p.x, p.y);  // Apophysis uses atan2(x,y)
@@ -112,6 +124,9 @@ pub static SPIRAL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_spiral(p: vec2<f32>) -> vec2<f32> {
     let r = length(p) + 1e-6;
@@ -144,6 +159,9 @@ pub static HYPERBOLIC: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_hyperbolic(p: vec2<f32>) -> vec2<f32> {
     let r2 = dot(p, p) + 1e-6;
@@ -165,6 +183,9 @@ pub static DIAMOND: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_diamond(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
@@ -188,6 +209,9 @@ pub static EX: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_ex(p: vec2<f32>) -> vec2<f32> {
     let r = length(p);
@@ -219,6 +243,9 @@ pub static JULIA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn julia(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let r = length(p);
@@ -248,6 +275,9 @@ pub static BENT: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_bent(p: vec2<f32>) -> vec2<f32> {
     let nx = select(2.0 * p.x, p.x, p.x >= 0.0);
@@ -264,6 +294,18 @@ fn variation_bent(p: vec3<f32>) -> vec3<f32> {
 "#),
 };
 
+// waves: Scott Draves's classic waves variation, using affine matrix fields.
+//   x' = x + b · sin(y / (c² + ε))
+//   y' = y + e · sin(x / (f² + ε))
+// In the standard Apophysis affine notation, b/c/e/f are read directly from
+// the transform's affine matrix:
+//   our `xform.b`  (= XFORM_COEFF_10) → X amplitude
+//   our `xform.e`  (= XFORM_COEFF_20, X translation) → X wavelength (squared)
+//   our `xform.d`  (= XFORM_COEFF_11) → Y amplitude
+//   our `xform.f`  (= XFORM_COEFF_21, Y translation) → Y wavelength (squared)
+//
+// First variation to use `needs_affine: true` — the body reads from the
+// `transforms` storage buffer via xform_id.
 pub static WAVES: VariationDef = VariationDef {
     name: "waves",
     display_name: "Waves",
@@ -271,27 +313,24 @@ pub static WAVES: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: true,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
-fn variation_waves(p: vec2<f32>) -> vec2<f32> {
-    let b = 0.5;
-    let c = 0.5;
-    let e = 0.5;
-    let f = 0.5;
+fn variation_waves(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
+    let xf = transforms[xform_id];
     return vec2<f32>(
-        p.x + b * sin(p.y / (c * c + 1e-6)),
-        p.y + e * sin(p.x / (f * f + 1e-6))
+        p.x + xf.b * sin(p.y / (xf.e * xf.e + 1e-6)),
+        p.y + xf.d * sin(p.x / (xf.f * xf.f + 1e-6))
     );
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_waves(p: vec3<f32>) -> vec3<f32> {
-    let b = 0.5;
-    let c = 0.5;
-    let e = 0.5;
-    let f = 0.5;
+fn variation_waves(p: vec3<f32>, xform_id: u32) -> vec3<f32> {
+    let xf = transforms[xform_id];
     return vec3<f32>(
-        p.x + b * sin(p.y / (c * c + 1e-6)),
-        p.y + e * sin(p.x / (f * f + 1e-6)),
+        p.x + xf.b * sin(p.y / (xf.e * xf.e + 1e-6)),
+        p.y + xf.d * sin(p.x / (xf.f * xf.f + 1e-6)),
         p.z
     );
 }
@@ -324,19 +363,29 @@ pub static JULIAN: VariationDef = VariationDef {
             max_value: Some(100.0),
         },
     ],
+    needs_affine: false,
+    // 1 derived value at slot 2:
+    //   2: cpower  (dist / |power| / 2)
+    init_param_count: 1,
+    wgsl_init: Some(r#"
+fn init_julian(user: array<f32, 2>) -> array<f32, 1> {
+    let power = user[0];
+    let dist = user[1];
+    var out: array<f32, 1>;
+    out[0] = dist / max(abs(power), 1e-30) / 2.0;
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_julian(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
     let power = get_param(xform_id, variation_id, 0u);
-    let dist = get_param(xform_id, variation_id, 1u);
-
-    let abs_power = abs(power);
-    let cpower = dist / abs_power / 2.0;
+    let cpower = get_param(xform_id, variation_id, 2u);
 
     let r2 = dot(p, p);
     let r = pow(r2, cpower);
     let theta = atan2(p.y, p.x);
 
-    let trunc_val = floor(abs_power * rng_nextf(rng));
+    let trunc_val = floor(abs(power) * rng_nextf(rng));
     let t = (theta + 6.28318530718 * trunc_val) / power;
 
     return vec2<f32>(r * cos(t), r * sin(t));
@@ -345,16 +394,13 @@ fn variation_julian(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<fun
     wgsl_3d: Some(r#"
 fn variation_julian(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
     let power = get_param(xform_id, variation_id, 0u);
-    let dist = get_param(xform_id, variation_id, 1u);
-
-    let abs_power = abs(power);
-    let cpower = dist / abs_power / 2.0;
+    let cpower = get_param(xform_id, variation_id, 2u);
 
     let r2 = dot(p.xy, p.xy);
     let r = pow(r2, cpower);
     let theta = atan2(p.y, p.x);
 
-    let trunc_val = floor(abs_power * rng_nextf(rng));
+    let trunc_val = floor(abs(power) * rng_nextf(rng));
     let t = (theta + 6.28318530718 * trunc_val) / power;
 
     return vec3<f32>(r * cos(t), r * sin(t), p.z);
@@ -394,6 +440,9 @@ pub static BLOB: VariationDef = VariationDef {
             max_value: Some(20.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_blob(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let p1 = get_param(xform_id, variation_id, 0u);  // high
@@ -431,6 +480,9 @@ pub static EYEFISH: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_eyefish(p: vec2<f32>) -> vec2<f32> {
     let r_xy = length(p) + 1.0;
@@ -454,6 +506,9 @@ pub static BUBBLE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_bubble(p: vec2<f32>) -> vec2<f32> {
     let r2 = dot(p, p);
@@ -482,6 +537,9 @@ pub static CYLINDER: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_cylinder(p: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(sin(p.x), p.y);
@@ -502,6 +560,9 @@ pub static NOISE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_noise(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let theta = rng_nextf(rng) * 6.28318530718;  // 2π
@@ -525,6 +586,9 @@ pub static BLUR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let theta = rng_nextf(rng) * 6.28318530718;  // 2π
@@ -548,6 +612,9 @@ pub static GAUSSIAN_BLUR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_gaussian_blur(p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {
     let theta = rng_nextf(rng) * 6.28318530718;  // 2π
@@ -573,6 +640,9 @@ pub static POLAR2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_polar2(p: vec2<f32>) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -600,6 +670,9 @@ pub static CROSS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_cross(p: vec2<f32>) -> vec2<f32> {
     var r = abs((p.x - p.y) * (p.x + p.y) + 1e-6);
@@ -625,6 +698,9 @@ pub static LOONIE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_loonie(p: vec2<f32>) -> vec2<f32> {
     let r2 = dot(p, p);
@@ -656,6 +732,9 @@ pub static SCRY: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_scry(p: vec2<f32>) -> vec2<f32> {
     let t = dot(p, p);
@@ -679,6 +758,9 @@ pub static FOCI: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_foci(p: vec2<f32>) -> vec2<f32> {
     let expx = exp(p.x) * 0.5;
@@ -712,6 +794,9 @@ pub static ELLIPTIC: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_elliptic(p: vec2<f32>) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -802,6 +887,9 @@ pub static WAVES2: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_waves2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let freqx = get_param(xform_id, variation_id, 0u);
@@ -847,24 +935,29 @@ pub static LOG: VariationDef = VariationDef {
             max_value: Some(100.0),
         },
     ],
+    needs_affine: false,
+    // 1 derived value at slot 1:
+    //   1: denom  (0.5 / log(base))
+    init_param_count: 1,
+    wgsl_init: Some(r#"
+fn init_log(user: array<f32, 1>) -> array<f32, 1> {
+    var out: array<f32, 1>;
+    out[0] = 0.5 / log(max(user[0], 1.000001));
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_log(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
-    let base = get_param(xform_id, variation_id, 0u);
-    let denom = 0.5 / log(base);
+    let denom = get_param(xform_id, variation_id, 1u);
     let r2 = dot(p, p);
-    let new_x = log(r2) * denom;
-    let new_y = atan2(p.y, p.x);
-    return vec2<f32>(new_x, new_y);
+    return vec2<f32>(log(r2) * denom, atan2(p.y, p.x));
 }
 "#,
     wgsl_3d: Some(r#"
 fn variation_log(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
-    let base = get_param(xform_id, variation_id, 0u);
-    let denom = 0.5 / log(base);
+    let denom = get_param(xform_id, variation_id, 1u);
     let r2 = dot(p.xy, p.xy);
-    let new_x = log(r2) * denom;
-    let new_y = atan2(p.y, p.x);
-    return vec3<f32>(new_x, new_y, p.z);
+    return vec3<f32>(log(r2) * denom, atan2(p.y, p.x), p.z);
 }
 "#),
 };
@@ -885,12 +978,24 @@ pub static ESCHER: VariationDef = VariationDef {
             max_value: Some(180.0),
         },
     ],
+    needs_affine: false,
+    // 2 derived values at slots 1..3:
+    //   1: c  (0.5 · (1 + cos(beta·π/180)))
+    //   2: d  (0.5 · sin(beta·π/180))
+    init_param_count: 2,
+    wgsl_init: Some(r#"
+fn init_escher(user: array<f32, 1>) -> array<f32, 2> {
+    let beta = user[0] * 3.14159265358979 / 180.0;
+    var out: array<f32, 2>;
+    out[0] = 0.5 * (1.0 + cos(beta));  // c
+    out[1] = 0.5 * sin(beta);          // d
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_escher(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
-    const PI: f32 = 3.14159265359;
-    let beta = get_param(xform_id, variation_id, 0u) * PI / 180.0;
-    let c = 0.5 * (1.0 + cos(beta));
-    let d = 0.5 * sin(beta);
+    let c = get_param(xform_id, variation_id, 1u);
+    let d = get_param(xform_id, variation_id, 2u);
     let a = atan2(p.y, p.x);
     let lnr = 0.5 * log(dot(p, p));
     let m = exp(c * lnr - d * a);
@@ -900,10 +1005,8 @@ fn variation_escher(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32>
 "#,
     wgsl_3d: Some(r#"
 fn variation_escher(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
-    const PI: f32 = 3.14159265359;
-    let beta = get_param(xform_id, variation_id, 0u) * PI / 180.0;
-    let c = 0.5 * (1.0 + cos(beta));
-    let d = 0.5 * sin(beta);
+    let c = get_param(xform_id, variation_id, 1u);
+    let d = get_param(xform_id, variation_id, 2u);
     let a = atan2(p.y, p.x);
     let lnr = 0.5 * log(dot(p.xy, p.xy));
     let m = exp(c * lnr - d * a);
@@ -929,6 +1032,9 @@ pub static BIPOLAR: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_bipolar(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -1027,6 +1133,9 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_lazysusan(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -1085,6 +1194,9 @@ pub static RINGS2: VariationDef = VariationDef {
             max_value: Some(5.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_rings2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let val = get_param(xform_id, variation_id, 0u);
@@ -1129,6 +1241,9 @@ pub static FAN2: VariationDef = VariationDef {
             max_value: Some(5.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_fan2(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -1207,6 +1322,9 @@ pub static PDJ: VariationDef = VariationDef {
             max_value: Some(20.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_pdj(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let a = get_param(xform_id, variation_id, 0u);
@@ -1258,6 +1376,9 @@ pub static CURL: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_curl(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let c1 = get_param(xform_id, variation_id, 0u);
@@ -1311,6 +1432,9 @@ pub static RECTANGLES: VariationDef = VariationDef {
             max_value: Some(5.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_rectangles(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let rect_x = get_param(xform_id, variation_id, 0u);
@@ -1358,6 +1482,9 @@ pub static SPLITS: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_splits(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let splits_x = get_param(xform_id, variation_id, 0u);
@@ -1421,6 +1548,9 @@ pub static NGON: VariationDef = VariationDef {
             max_value: Some(20.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_ngon(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     const PI: f32 = 3.14159265359;
@@ -1500,6 +1630,9 @@ pub static AUGER: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_auger(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let freq = get_param(xform_id, variation_id, 0u);
@@ -1578,18 +1711,34 @@ pub static CPOW: VariationDef = VariationDef {
             max_value: Some(10.0),
         },
     ],
+    needs_affine: false,
+    // 3 derived values at slots 3..6:
+    //   3: va  (2π / power)
+    //   4: vc  (r / power)
+    //   5: vd  (i / power)
+    init_param_count: 3,
+    wgsl_init: Some(r#"
+fn init_cpow(user: array<f32, 3>) -> array<f32, 3> {
+    let r_param = user[0];
+    let i_param = user[1];
+    let power = user[2];
+    let safe_power = select(power, 1e-30, power == 0.0);
+    var out: array<f32, 3>;
+    out[0] = 6.28318530717959 / safe_power;  // va
+    out[1] = r_param / safe_power;           // vc
+    out[2] = i_param / safe_power;           // vd
+    return out;
+}
+"#),
     wgsl_2d: r#"
 fn variation_cpow(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec2<f32> {
-    let r_param = get_param(xform_id, variation_id, 0u);
-    let i_param = get_param(xform_id, variation_id, 1u);
     let power = get_param(xform_id, variation_id, 2u);
+    let va = get_param(xform_id, variation_id, 3u);
+    let vc = get_param(xform_id, variation_id, 4u);
+    let vd = get_param(xform_id, variation_id, 5u);
 
     let a = atan2(p.y, p.x);
     let lnr = 0.5 * log(dot(p, p) + 1e-20);
-
-    let va = 6.28318530718 / power;
-    let vc = r_param / power;
-    let vd = i_param / power;
 
     let ang = vc * a + vd * lnr + va * floor(power * rng_nextf(rng));
     let m = exp(vc * lnr - vd * a);
@@ -1599,16 +1748,13 @@ fn variation_cpow(p: vec2<f32>, xform_id: u32, variation_id: u32, rng: ptr<funct
 "#,
     wgsl_3d: Some(r#"
 fn variation_cpow(p: vec3<f32>, xform_id: u32, variation_id: u32, rng: ptr<function, RngState>) -> vec3<f32> {
-    let r_param = get_param(xform_id, variation_id, 0u);
-    let i_param = get_param(xform_id, variation_id, 1u);
     let power = get_param(xform_id, variation_id, 2u);
+    let va = get_param(xform_id, variation_id, 3u);
+    let vc = get_param(xform_id, variation_id, 4u);
+    let vd = get_param(xform_id, variation_id, 5u);
 
     let a = atan2(p.y, p.x);
     let lnr = 0.5 * log(dot(p.xy, p.xy) + 1e-20);
-
-    let va = 6.28318530718 / power;
-    let vc = r_param / power;
-    let vd = i_param / power;
 
     let ang = vc * a + vd * lnr + va * floor(power * rng_nextf(rng));
     let m = exp(vc * lnr - vd * a);

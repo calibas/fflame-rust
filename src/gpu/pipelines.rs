@@ -483,6 +483,24 @@ impl FlamePipelines {
         })
     }
 
+    /// Create the init compute pass bind group.
+    /// One binding: variation_params buffer with read_write access. Layout is
+    /// owned by the ShaderCache (`init_bind_group_layout`).
+    pub fn create_init_bind_group(
+        &self,
+        device: &Device,
+        buffers: &super::buffers::FlameBuffers,
+    ) -> BindGroup {
+        device.create_bind_group(&BindGroupDescriptor {
+            label: Some("Variation Init Bind Group"),
+            layout: &self.shader_cache.init_bind_group_layout,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: buffers.variation_params_buffer.as_entire_binding(),
+            }],
+        })
+    }
+
     /// Create bind group for accumulation pass
     pub fn create_accumulate_bind_group(
         &self,

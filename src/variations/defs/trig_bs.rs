@@ -44,6 +44,9 @@ pub static SIN2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_sin2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -87,6 +90,9 @@ pub static COS2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_cos2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -132,6 +138,9 @@ pub static TAN2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_tan2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -179,6 +188,9 @@ pub static SEC2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_sec2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -226,6 +238,9 @@ pub static CSC2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_csc2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -275,6 +290,9 @@ pub static COT2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_cot2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -325,6 +343,9 @@ pub static SINH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_sinh2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -368,6 +389,9 @@ pub static COSH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_cosh2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -413,6 +437,9 @@ pub static TANH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_tanh2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -462,6 +489,9 @@ pub static COTH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_coth2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -513,6 +543,9 @@ pub static SECH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_sech2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -560,6 +593,9 @@ pub static CSCH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_csch2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);
@@ -607,6 +643,9 @@ pub static EXP2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
+    needs_affine: false,
+    init_param_count: 0,
+    wgsl_init: None,
     wgsl_2d: r#"
 fn variation_exp2_bs(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let x1 = get_param(xform_id, variation_id, 0u);

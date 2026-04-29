@@ -42,6 +42,23 @@ pub struct ShaderCache {
     /// Compute pipelines
     pub compute_pipeline_2d: ComputePipeline,
     pub compute_pipeline_3d: ComputePipeline,
+
+    /// Init compute pipeline for variations with `wgsl_init`. `None` when no
+    /// active variation in the current flame has init. Rebuilt alongside the
+    /// main pipelines whenever the active variation set changes.
+    pub init_pipeline: Option<ComputePipeline>,
+
+    /// Init shader source (for debugging/inspection); `None` when no init
+    /// variation is active.
+    pub init_shader_source: Option<String>,
+
+    /// Total (xform_idx, init-bearing-variation) pair count for the current
+    /// init shader. Used to size the dispatch (`ceil(pair_count / 64)`).
+    pub init_pair_count: u32,
+
+    /// Bind group layout for the init pipeline. Single binding: the
+    /// variation_params storage buffer with read_write access.
+    pub init_bind_group_layout: BindGroupLayout,
 }
 
 impl ShaderCache {
@@ -103,6 +120,18 @@ impl ShaderCache {
 
         let last_registry_version = crate::variations::global_registry().version();
 
+        // Build init pipeline alongside the main pipeline. Returns None /
+        // None / 0 when no active variation has `wgsl_init` — which is the
+        // current state for every variation in the registry.
+        let init_bind_group_layout = Self::create_init_bind_group_layout(device);
+        let (init_shader_source, init_pipeline, init_pair_count) = Self::build_init_resources(
+            device,
+            &init_bind_group_layout,
+            &builder,
+            flame,
+            &active_variations,
+        );
+
         Self {
             active_variations,
             path_features_enabled,
@@ -114,6 +143,10 @@ impl ShaderCache {
             shader_source_3d,
             compute_pipeline_2d,
             compute_pipeline_3d,
+            init_pipeline,
+            init_shader_source,
+            init_pair_count,
+            init_bind_group_layout,
         }
     }
 
@@ -277,6 +310,19 @@ impl ShaderCache {
             self.compute_pipeline_3d = self.compute_pipeline_2d.clone();
         }
 
+        // Rebuild init pipeline. Cheap when there's nothing to do (returns
+        // None immediately if no active variation has `wgsl_init`).
+        let (init_src, init_pipeline, init_pair_count) = Self::build_init_resources(
+            device,
+            &self.init_bind_group_layout,
+            &builder,
+            flame,
+            &needed,
+        );
+        self.init_shader_source = init_src;
+        self.init_pipeline = init_pipeline;
+        self.init_pair_count = init_pair_count;
+
         self.active_variations = needed;
         self.path_features_enabled = path_features_enabled;
         self.xaos_enabled = xaos_enabled;
@@ -338,5 +384,68 @@ impl ShaderCache {
     /// Get the active variation set (for debugging)
     pub fn active_variations(&self) -> &HashMap<String, f32> {
         &self.active_variations
+    }
+
+    /// Create the bind group layout for the init compute shader.
+    /// Single binding: the variation_params storage buffer with read_write access.
+    pub fn create_init_bind_group_layout(device: &Device) -> BindGroupLayout {
+        device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("Variation Init BGL"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::COMPUTE,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        })
+    }
+
+    /// Build the init shader source and pipeline for the given flame, if any
+    /// active variation has `wgsl_init`. Returns `(source, pipeline, pair_count)`
+    /// where `pair_count` is the number of (xform, init-bearing-variation)
+    /// pairs the dispatch will cover.
+    fn build_init_resources(
+        device: &Device,
+        init_bind_group_layout: &BindGroupLayout,
+        builder: &ShaderBuilder,
+        flame: &Flame,
+        active_variations: &HashMap<String, f32>,
+    ) -> (Option<String>, Option<ComputePipeline>, u32) {
+        let source = match builder.build_init_shader(flame, active_variations) {
+            Some(s) => s,
+            None => return (None, None, 0),
+        };
+
+        // Count "case Nu: {" lines to determine pair count for dispatch sizing.
+        let pair_count = source
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                t.starts_with("case ") && t.contains("u: {")
+            })
+            .count() as u32;
+
+        let module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("Variation Init"),
+            source: ShaderSource::Wgsl(source.clone().into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Variation Init Layout"),
+            bind_group_layouts: &[init_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("Variation Init"),
+            layout: Some(&pipeline_layout),
+            module: &module,
+            entry_point: Some("init_main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        (Some(source), Some(pipeline), pair_count)
     }
 }
