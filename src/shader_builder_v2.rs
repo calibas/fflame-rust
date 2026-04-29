@@ -952,10 +952,10 @@ impl ShaderBuilder {
                     }
 
                     // Add xform_id and variation_id if variation has parameters,
-                    // OR just xform_id if it needs affine access without params.
+                    // OR just xform_id if it needs transform access without params.
                     if has_params {
                         params.push_str(&format!(", xform_id, {}u", idx));
-                    } else if info.needs_affine {
+                    } else if info.needs_transform {
                         params.push_str(", xform_id");
                     }
 
@@ -991,7 +991,7 @@ impl ShaderBuilder {
                 } else {
                     format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
                 }
-            } else if info.needs_affine {
+            } else if info.needs_transform {
                 if info.needs_rng {
                     format!("{}(temp, xform_id, rng)", info.wgsl_function)
                 } else {
@@ -1139,10 +1139,10 @@ impl ShaderBuilder {
                     }
 
                     // Add xform_id and variation_id if variation has parameters,
-                    // OR just xform_id if it needs affine access without params.
+                    // OR just xform_id if it needs transform access without params.
                     if has_params {
                         params.push_str(&format!(", xform_id, {}u", idx));
-                    } else if info.needs_affine {
+                    } else if info.needs_transform {
                         params.push_str(", xform_id");
                     }
 
@@ -1250,7 +1250,7 @@ impl ShaderBuilder {
                         } else {
                             format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
                         }
-                    } else if info.needs_affine {
+                    } else if info.needs_transform {
                         if info.needs_rng {
                             format!("{}(temp, xform_id, rng)", info.wgsl_function)
                         } else {

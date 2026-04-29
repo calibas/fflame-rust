@@ -44,7 +44,7 @@ pub static SIN2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -90,7 +90,7 @@ pub static COS2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -138,7 +138,7 @@ pub static TAN2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -188,7 +188,7 @@ pub static SEC2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -238,7 +238,7 @@ pub static CSC2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -290,7 +290,7 @@ pub static COT2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -343,7 +343,7 @@ pub static SINH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -389,7 +389,7 @@ pub static COSH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -437,7 +437,7 @@ pub static TANH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -489,7 +489,7 @@ pub static COTH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 2.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -543,7 +543,7 @@ pub static SECH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -593,7 +593,7 @@ pub static CSCH2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -643,7 +643,7 @@ pub static EXP2_BS: VariationDef = VariationDef {
         VariationParamDef { name: "y2", display_name: "Y2", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

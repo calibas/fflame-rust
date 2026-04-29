@@ -14,7 +14,7 @@ pub static LINEAR: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -36,7 +36,7 @@ pub static SINUSOIDAL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -58,7 +58,7 @@ pub static SPHERICAL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -82,7 +82,7 @@ pub static SWIRL: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -110,7 +110,7 @@ pub static HORSESHOE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

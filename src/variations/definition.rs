@@ -49,11 +49,12 @@ pub struct VariationDef {
     /// Whether this variation requires RNG
     pub needs_rng: bool,
 
-    /// Whether this variation reads from the per-transform affine matrix
-    /// (the `transforms[xform_id]` storage buffer). When true, the function
-    /// signature includes `xform_id: u32` even for variations without
-    /// parameters, so the body can read `transforms[xform_id].a/b/c/d/e/f`.
-    pub needs_affine: bool,
+    /// Whether this variation needs `xform_id` so it can read fields from
+    /// the per-transform `transforms[xform_id]` storage buffer — affine
+    /// matrix (a/b/c/d/e/f), weight, color, opacity, direct_color. When
+    /// true, the function signature includes `xform_id: u32` even for
+    /// variations without parameters.
+    pub needs_transform: bool,
 
     /// Parameters for this variation
     pub parameters: &'static [VariationParamDef],
