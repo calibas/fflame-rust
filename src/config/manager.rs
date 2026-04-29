@@ -979,6 +979,14 @@ impl ConfigManager {
                     .ok_or(ConfigError::InvalidIndex)?;
                 Ok(xform.opacity.into())
             }
+            ConfigPath::TransformDirectColor { index } => {
+                let xform = config
+                    .flame
+                    .transforms
+                    .get(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                Ok(xform.direct_color.into())
+            }
             ConfigPath::TransformAffine { index, param } => {
                 let xform = config
                     .flame
@@ -1483,6 +1491,15 @@ impl ConfigManager {
                     .get_mut(*index)
                     .ok_or(ConfigError::InvalidIndex)?;
                 xform.opacity = value.try_into()?;
+            }
+            ConfigPath::TransformDirectColor { index } => {
+                let xform = self
+                    .current
+                    .flame
+                    .transforms
+                    .get_mut(*index)
+                    .ok_or(ConfigError::InvalidIndex)?;
+                xform.direct_color = value.try_into()?;
             }
             ConfigPath::TransformAffine { index, param } => {
                 let xform = self

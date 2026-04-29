@@ -79,6 +79,7 @@ pub enum ConfigPath {
     TransformColor { index: usize },
     TransformColorSpeed { index: usize },
     TransformOpacity { index: usize },
+    TransformDirectColor { index: usize },
     TransformAffine { index: usize, param: AffineParam },
     TransformVariation { index: usize, variation: String },
     TransformVariationParam {
@@ -251,6 +252,9 @@ impl Display for ConfigPath {
             }
             ConfigPath::TransformOpacity { index } => {
                 write!(f, "Transform {} → Opacity", index + 1)
+            }
+            ConfigPath::TransformDirectColor { index } => {
+                write!(f, "Transform {} → Direct Color", index + 1)
             }
             ConfigPath::TransformAffine { index, param } => {
                 write!(f, "Transform {} → Affine {:?}", index + 1, param)
@@ -476,6 +480,10 @@ impl ConfigPath {
             ),
             ConfigPath::TransformOpacity { index } => I18nKey::with_params(
                 "history.param.transform_opacity",
+                vec![("index", (index + 1).to_string())],
+            ),
+            ConfigPath::TransformDirectColor { index } => I18nKey::with_params(
+                "history.param.transform_direct_color",
                 vec![("index", (index + 1).to_string())],
             ),
             ConfigPath::TransformAffine { index, param } => I18nKey::with_params(
@@ -1268,6 +1276,7 @@ impl ConfigPath {
             | ConfigPath::TransformColor { .. }
             | ConfigPath::TransformColorSpeed { .. }
             | ConfigPath::TransformOpacity { .. }
+            | ConfigPath::TransformDirectColor { .. }
             | ConfigPath::TransformAffine { .. }
             | ConfigPath::TransformPostAffineEnabled { .. }
             | ConfigPath::TransformPostAffine { .. }
@@ -1381,6 +1390,7 @@ impl ConfigPath {
             ConfigPath::TransformColor { index } => format!("Transform.{}.Color", index),
             ConfigPath::TransformColorSpeed { index } => format!("Transform.{}.ColorSpeed", index),
             ConfigPath::TransformOpacity { index } => format!("Transform.{}.Opacity", index),
+            ConfigPath::TransformDirectColor { index } => format!("Transform.{}.DirectColor", index),
             ConfigPath::TransformAffine { index, param } => {
                 format!("Transform.{}.Affine.{}", index, param.to_char())
             }
@@ -1524,6 +1534,7 @@ impl ConfigPath {
                 "Color" => return Some(ConfigPath::TransformColor { index }),
                 "ColorSpeed" => return Some(ConfigPath::TransformColorSpeed { index }),
                 "Opacity" => return Some(ConfigPath::TransformOpacity { index }),
+                "DirectColor" => return Some(ConfigPath::TransformDirectColor { index }),
                 "Affine" if parts.len() == 4 => {
                     let param = AffineParam::from_char(parts[3].chars().next()?)?;
                     return Some(ConfigPath::TransformAffine { index, param });
@@ -1714,6 +1725,7 @@ pub fn json_to_config_value(json: &serde_json::Value, path: &ConfigPath) -> Opti
         | ConfigPath::TransformColor { .. }
         | ConfigPath::TransformColorSpeed { .. }
         | ConfigPath::TransformOpacity { .. }
+        | ConfigPath::TransformDirectColor { .. }
         | ConfigPath::TransformAffine { .. }
         | ConfigPath::TransformPostAffine { .. }
         | ConfigPath::TransformVariation { .. }
