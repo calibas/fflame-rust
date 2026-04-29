@@ -23,7 +23,7 @@ pub static POST_BWRAPS: VariationDef = VariationDef {
     ],
     // 5 derived values at slots 5..10 (identical layout to pre_bwraps):
     //   5: g2,  6: r2,  7: rfactor,  8: inner_twist_rad,  9: outer_twist_rad
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 5,
     wgsl_init: Some(r#"
 fn init_post_bwraps(user: array<f32, 5>) -> array<f32, 5> {
@@ -158,7 +158,7 @@ pub static POST_CROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0),
         param!("zero", "Zero", bool, false),
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -269,7 +269,7 @@ pub static POST_FALLOFF2: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -400,7 +400,7 @@ pub static POST_CURL: VariationDef = VariationDef {
         param!("c1", "C1", unlimited_float, 0.0, -5.0, 5.0),
         param!("c2", "C2", unlimited_float, 0.0, -5.0, 5.0),
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -451,7 +451,7 @@ pub static POST_CURL3D: VariationDef = VariationDef {
         param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0),
         param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0),
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

@@ -36,7 +36,7 @@ pub static BUTTERFLY: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -67,7 +67,7 @@ pub static BUTTERFLY3D: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -102,7 +102,7 @@ pub static ENNEPERS: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -133,7 +133,7 @@ pub static PYRAMID: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -167,7 +167,7 @@ pub static RAYS2: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -202,7 +202,7 @@ pub static RAYS3: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -245,7 +245,7 @@ pub static SPIRALWING: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -281,7 +281,7 @@ pub static WHITNEY_UMBRELLA: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -309,7 +309,7 @@ pub static CHRYSANTHEMUM: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -355,7 +355,7 @@ pub static CELL: VariationDef = VariationDef {
         VariationParamDef { name: "size", display_name: "Size", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.6, min_value: Some(0.01), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -422,7 +422,7 @@ pub static ENNEPERS2: VariationDef = VariationDef {
         VariationParamDef { name: "c", display_name: "C", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.075, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -475,7 +475,7 @@ pub static FLOWER: VariationDef = VariationDef {
         VariationParamDef { name: "petals", display_name: "Petals", param_type: ParamType::UnlimitedFloat,
                             default_value: 7.0, min_value: Some(1.0), max_value: Some(64.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

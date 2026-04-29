@@ -706,11 +706,13 @@ pub struct VariationDownload {
     pub phase: ApiVariationPhase,
     #[serde(default)]
     pub needs_rng: bool,
-    /// Whether this variation reads affine matrix fields. When true, the
-    /// generated WGSL signature includes `xform_id: u32`. Old API responses
-    /// without this field default to false.
-    #[serde(default)]
-    pub needs_affine: bool,
+    /// Whether this variation needs `xform_id` for reads from the
+    /// per-transform `transforms[xform_id]` storage buffer (affine, weight,
+    /// color, etc.). When true, the generated WGSL signature includes
+    /// `xform_id: u32`. Old API responses using `needs_affine` are accepted
+    /// via serde alias; new payloads use `needs_transform`.
+    #[serde(default, alias = "needs_affine")]
+    pub needs_transform: bool,
     #[serde(default)]
     pub parameters: Vec<ApiVariationParameter>,
     pub shader_2d: String,

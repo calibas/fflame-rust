@@ -1,6 +1,6 @@
 //! Variations that depend on affine matrix access
 //!
-//! These need `needs_affine: true` so the body can read from
+//! These need `needs_transform: true` so the body can read from
 //! `transforms[xform_id]`. Before the affine-access plumbing landed, these
 //! couldn't be ported faithfully.
 //!
@@ -28,7 +28,7 @@ pub static POPCORN: VariationDef = VariationDef {
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
     needs_rng: false,
-    needs_affine: true,
+    needs_transform: true,
     parameters: &[],
     init_param_count: 0,
     wgsl_init: None,

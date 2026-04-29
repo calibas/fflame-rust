@@ -27,7 +27,7 @@ pub static EXP: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -75,7 +75,7 @@ pub static LOG_DB: VariationDef = VariationDef {
     // 2 derived values stored in slots 2..4:
     //   2: denom    (0.5 / log(e · base), or 0.5 if base <= 0)
     //   3: fixpe    (π · fix_period, or π if fix_period <= 0)
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_log_db(user: array<f32, 2>) -> array<f32, 2> {
@@ -149,7 +149,7 @@ pub static LOG_TILE2: VariationDef = VariationDef {
         VariationParamDef { name: "spreadz", display_name: "Spread Z", param_type: ParamType::UnlimitedFloat,
                             default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -194,7 +194,7 @@ pub static TILE_LOG: VariationDef = VariationDef {
         VariationParamDef { name: "spread", display_name: "Spread", param_type: ParamType::UnlimitedFloat,
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
-    needs_affine: false,
+    needs_transform: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
