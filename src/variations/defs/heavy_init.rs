@@ -70,6 +70,7 @@ pub static CPOW2: VariationDef = VariationDef {
     //   9: inv_range  (0.5 / range)
     //   10: full_range (2π · range)
     needs_transform: false,
+    writes_color: false,
     init_param_count: 7,
     wgsl_init: Some(r#"
 fn init_cpow2(user: array<f32, 4>) -> array<f32, 7> {
@@ -187,6 +188,7 @@ pub static CPOW3: VariationDef = VariationDef {
     //   8: half_d
     //   9: coeff      (−0.095 · spread / d_calc, or 0 if d_calc == 0)
     needs_transform: false,
+    writes_color: false,
     init_param_count: 6,
     wgsl_init: Some(r#"
 fn init_cpow3(user: array<f32, 4>) -> array<f32, 6> {
@@ -288,6 +290,7 @@ pub static DISC2: VariationDef = VariationDef {
     //   3: cosadd   (with conditional adjustment)
     //   4: sinadd   (with conditional adjustment)
     needs_transform: false,
+    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_disc2(user: array<f32, 2>) -> array<f32, 3> {

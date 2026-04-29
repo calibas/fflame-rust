@@ -28,6 +28,7 @@ pub static EXP: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -76,6 +77,7 @@ pub static LOG_DB: VariationDef = VariationDef {
     //   2: denom    (0.5 / log(e · base), or 0.5 if base <= 0)
     //   3: fixpe    (π · fix_period, or π if fix_period <= 0)
     needs_transform: false,
+    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_log_db(user: array<f32, 2>) -> array<f32, 2> {
@@ -150,6 +152,7 @@ pub static LOG_TILE2: VariationDef = VariationDef {
                             default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -195,6 +198,7 @@ pub static TILE_LOG: VariationDef = VariationDef {
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

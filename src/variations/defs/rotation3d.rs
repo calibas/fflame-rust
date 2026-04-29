@@ -17,6 +17,7 @@ pub static PRE_ROTATE_X: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -47,6 +48,7 @@ pub static PRE_ROTATE_Y: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -77,6 +79,7 @@ pub static POST_ROTATE_X: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -107,6 +110,7 @@ pub static POST_ROTATE_Y: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

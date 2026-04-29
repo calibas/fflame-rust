@@ -27,6 +27,7 @@ pub static ACOTH: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -68,6 +69,7 @@ pub static ACOSH: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -122,6 +124,7 @@ pub static ACOSECH: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -186,6 +189,7 @@ pub static ARCSECH: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -258,6 +262,7 @@ pub static ARCSECH2: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -337,6 +342,7 @@ pub static ARCSINH: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -388,6 +394,7 @@ pub static ARCTANH: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

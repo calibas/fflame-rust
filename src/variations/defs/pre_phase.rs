@@ -16,6 +16,7 @@ pub static PRE_ZSCALE: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -41,6 +42,7 @@ pub static PRE_ZTRANSLATE: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -66,6 +68,7 @@ pub static PRE_SPHERICAL: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -92,6 +95,7 @@ pub static PRE_SINUSOIDAL: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -118,6 +122,7 @@ pub static PRE_DISC: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -162,6 +167,7 @@ pub static PRE_BWRAPS: VariationDef = VariationDef {
     //   8: inner_twist_rad     (inner_twist · π/180)
     //   9: outer_twist_rad     (outer_twist · π/180)
     needs_transform: false,
+    writes_color: false,
     init_param_count: 5,
     wgsl_init: Some(r#"
 fn init_pre_bwraps(user: array<f32, 5>) -> array<f32, 5> {
@@ -297,6 +303,7 @@ pub static PRE_CROP: VariationDef = VariationDef {
         param!("zero", "Zero", bool, false),
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -408,6 +415,7 @@ pub static PRE_FALLOFF2: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

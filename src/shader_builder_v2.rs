@@ -896,7 +896,12 @@ impl ShaderBuilder {
 
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
-             fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {\n"
+             // The `vc` pointer is the iteration-local color register Apophysis calls\n\
+             // `vc` — direct-color variations (writes_color: true) overwrite it; ordinary\n\
+             // variations leave it alone. Main loop reads it after the call to compute\n\
+             // the Step 3 lerp with xform.direct_color. Currently no DC variations are\n\
+             // registered, so vc is unused in the body — the compiler eliminates it.\n\
+             fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {\n"
         );
 
         // Separate variations by phase
@@ -1052,7 +1057,8 @@ impl ShaderBuilder {
 
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
-             fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {\n"
+             // See 2D variant for the meaning of the `vc` pointer.\n\
+             fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {\n"
         );
 
         // Separate variations by phase
