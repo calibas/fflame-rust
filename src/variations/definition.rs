@@ -56,6 +56,14 @@ pub struct VariationDef {
     /// variations without parameters.
     pub needs_transform: bool,
 
+    /// Whether this variation writes to the iteration-local color register
+    /// `vc` (Apophysis direct-color "DC" variations). When true, the WGSL
+    /// signature gains `vc: ptr<function, f32>` so the body can do
+    /// `*vc = palette_position;` based on geometry. The main loop lerps
+    /// between standard color evolution and `vc` using the transform's
+    /// `direct_color` field.
+    pub writes_color: bool,
+
     /// Parameters for this variation
     pub parameters: &'static [VariationParamDef],
 

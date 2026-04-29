@@ -37,6 +37,7 @@ pub static BUTTERFLY: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -68,6 +69,7 @@ pub static BUTTERFLY3D: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -103,6 +105,7 @@ pub static ENNEPERS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -134,6 +137,7 @@ pub static PYRAMID: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -168,6 +172,7 @@ pub static RAYS2: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -203,6 +208,7 @@ pub static RAYS3: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -246,6 +252,7 @@ pub static SPIRALWING: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -282,6 +289,7 @@ pub static WHITNEY_UMBRELLA: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -310,6 +318,7 @@ pub static CHRYSANTHEMUM: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -356,6 +365,7 @@ pub static CELL: VariationDef = VariationDef {
                             default_value: 0.6, min_value: Some(0.01), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -423,6 +433,7 @@ pub static ENNEPERS2: VariationDef = VariationDef {
                             default_value: 0.075, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -476,6 +487,7 @@ pub static FLOWER: VariationDef = VariationDef {
                             default_value: 7.0, min_value: Some(1.0), max_value: Some(64.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

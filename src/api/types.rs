@@ -721,6 +721,11 @@ pub struct VariationDownload {
     /// via serde alias; new payloads use `needs_transform`.
     #[serde(default, alias = "needs_affine")]
     pub needs_transform: bool,
+    /// Whether this variation writes the iteration-local color register `vc`
+    /// (Apophysis direct-color variations). When true, the WGSL signature
+    /// gains `vc: ptr<function, f32>`. Old API responses default to false.
+    #[serde(default)]
+    pub writes_color: bool,
     #[serde(default)]
     pub parameters: Vec<ApiVariationParameter>,
     pub shader_2d: String,

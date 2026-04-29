@@ -32,6 +32,7 @@ pub static SPHERICAL3D: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -62,6 +63,7 @@ pub static SINUSOIDAL3D: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -88,6 +90,7 @@ pub static SQUARE: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -113,6 +116,7 @@ pub static SQUARE3D: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -142,6 +146,7 @@ pub static DISC3D: VariationDef = VariationDef {
                             default_value: 3.14159265358979, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -185,6 +190,7 @@ pub static BUBBLE2: VariationDef = VariationDef {
                             default_value: 0.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -230,6 +236,7 @@ pub static POPCORN2: VariationDef = VariationDef {
                             default_value: 1.5, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -269,6 +276,7 @@ pub static SPLITS3D: VariationDef = VariationDef {
                             default_value: 0.2, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -313,6 +321,7 @@ pub static WAVES2_3D: VariationDef = VariationDef {
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -362,6 +371,7 @@ pub static JULIAQ: VariationDef = VariationDef {
     //   3: inv_power_2pi   (2π / power)
     //   4: half_inv_power  (0.5 · divisor / power)
     needs_transform: false,
+    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_juliaq(user: array<f32, 2>) -> array<f32, 3> {
@@ -428,6 +438,7 @@ pub static JULIA3DQ: VariationDef = VariationDef {
     //   4: half_inv_power  (0.5 · inv_power − 0.5)
     //   5: abs_inv_power   (|inv_power|)
     needs_transform: false,
+    writes_color: false,
     init_param_count: 4,
     wgsl_init: Some(r#"
 fn init_julia3dq(user: array<f32, 2>) -> array<f32, 4> {
@@ -503,6 +514,7 @@ pub static JULIAC: VariationDef = VariationDef {
     //   3: re_recip   (1 / (re_param + ε))
     //   4: im_scaled  (im_param / 100)
     needs_transform: false,
+    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_juliac(user: array<f32, 3>) -> array<f32, 2> {

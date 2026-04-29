@@ -15,6 +15,7 @@ pub static POLAR: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -41,6 +42,7 @@ pub static HANDKERCHIEF: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -67,6 +69,7 @@ pub static HEART: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -95,6 +98,7 @@ pub static DISC: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -125,6 +129,7 @@ pub static SPIRAL: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -160,6 +165,7 @@ pub static HYPERBOLIC: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -184,6 +190,7 @@ pub static DIAMOND: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -210,6 +217,7 @@ pub static EX: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -244,6 +252,7 @@ pub static JULIA: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -276,6 +285,7 @@ pub static BENT: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -314,6 +324,7 @@ pub static WAVES: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -366,6 +377,7 @@ pub static JULIAN: VariationDef = VariationDef {
     needs_transform: false,
     // 1 derived value at slot 2:
     //   2: cpower  (dist / |power| / 2)
+    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_julian(user: array<f32, 2>) -> array<f32, 1> {
@@ -441,6 +453,7 @@ pub static BLOB: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -481,6 +494,7 @@ pub static EYEFISH: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -507,6 +521,7 @@ pub static BUBBLE: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -538,6 +553,7 @@ pub static CYLINDER: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -561,6 +577,7 @@ pub static NOISE: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -587,6 +604,7 @@ pub static BLUR: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -613,6 +631,7 @@ pub static GAUSSIAN_BLUR: VariationDef = VariationDef {
     needs_rng: true,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -641,6 +660,7 @@ pub static POLAR2: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -671,6 +691,7 @@ pub static CROSS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -699,6 +720,7 @@ pub static LOONIE: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -733,6 +755,7 @@ pub static SCRY: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -759,6 +782,7 @@ pub static FOCI: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -795,6 +819,7 @@ pub static ELLIPTIC: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -888,6 +913,7 @@ pub static WAVES2: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -938,6 +964,7 @@ pub static LOG: VariationDef = VariationDef {
     needs_transform: false,
     // 1 derived value at slot 1:
     //   1: denom  (0.5 / log(base))
+    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_log(user: array<f32, 1>) -> array<f32, 1> {
@@ -982,6 +1009,7 @@ pub static ESCHER: VariationDef = VariationDef {
     // 2 derived values at slots 1..3:
     //   1: c  (0.5 · (1 + cos(beta·π/180)))
     //   2: d  (0.5 · sin(beta·π/180))
+    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_escher(user: array<f32, 1>) -> array<f32, 2> {
@@ -1033,6 +1061,7 @@ pub static BIPOLAR: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1134,6 +1163,7 @@ pub static LAZYSUSAN: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1195,6 +1225,7 @@ pub static RINGS2: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1242,6 +1273,7 @@ pub static FAN2: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1323,6 +1355,7 @@ pub static PDJ: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1377,6 +1410,7 @@ pub static CURL: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1433,6 +1467,7 @@ pub static RECTANGLES: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1483,6 +1518,7 @@ pub static SPLITS: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1549,6 +1585,7 @@ pub static NGON: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1631,6 +1668,7 @@ pub static AUGER: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1716,6 +1754,7 @@ pub static CPOW: VariationDef = VariationDef {
     //   3: va  (2π / power)
     //   4: vc  (r / power)
     //   5: vd  (i / power)
+    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_cpow(user: array<f32, 3>) -> array<f32, 3> {

@@ -88,9 +88,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // visibility only, not IFS dynamics. Transform must update position for correct chaos game.
         let should_plot = rng_nextf(&rng) < xform.opacity;
 
-        // Apply affine + variations
+        // Apophysis 3-step color flow (XForm.pas:312-313, 1067, 1078-1081):
+        //   Step 1: c_base = color_speed-blended palette index
+        //   Step 2: variations run; DC variations (writes_color:true) write *vc
+        //   Step 3: color_index = c_base + direct_color * (vc - c_base)
+        // When no DC variations are registered or direct_color=0, vc is unused
+        // and Step 3 reduces to color_index = c_base, bit-identical to today.
+        var c_base: f32 = color_index;
+        if (COLOR_MODE == 0u) {
+            let symmetry = xform.color_speed;
+            c_base = color_index * (1.0 + symmetry) * 0.5 + xform.color * (1.0 - symmetry) * 0.5;
+        }
+        var vc: f32 = c_base;
+
+        // Apply affine + variations (Step 2)
         let affine_p = apply_affine(xform, current);
-        current = apply_variations(xform, xform_idx, affine_p, &rng);
+        current = apply_variations(xform, xform_idx, affine_p, &rng, &vc);
 
         // Apply post-affine (compile-time gated for zero cost when unused)
         if (HAS_POST_AFFINE) {
@@ -102,17 +115,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Calculate speed (distance traveled)
         let speed = length(current - old_pos);
 
-        // Update color based on color mode (hard-coded COLOR_MODE)
+        // Step 3: write final color_index (palette mode), or speed-based (speed mode)
         if (COLOR_MODE == 0u) {
-            // Palette mode: Apophysis color coordinate evolution
-            // Formula: new_c = old_c * (1 + symmetry)/2 + transform_color * (1 - symmetry)/2
-            // where symmetry = color_speed (-1 to 1)
-            let symmetry = xform.color_speed;
-            let colorC1 = (1.0 + symmetry) / 2.0;
-            let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
-            color_index = color_index * colorC1 + colorC2;
+            color_index = c_base + xform.direct_color * (vc - c_base);
         } else if (COLOR_MODE == 1u) {
-            // Speed mode: blend with speed-based color
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         }
@@ -162,12 +168,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             var final_pos = current;
             if (HAS_FINAL_TRANSFORM) {
                 let final_xform = transforms[FINAL_TRANSFORM_INDEX];
+                // Final transform's vc is discarded — DC blend is per-iteration only.
+                var final_vc: f32 = color_index;
 {{#if RENDER_3D}}
                 let affine_p = apply_affine(final_xform, final_pos);
-                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng);
+                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng, &final_vc);
 {{else}}
                 let affine_p = apply_affine(final_xform, current);
-                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng);
+                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng, &final_vc);
 {{/if}}
                 // Post-affine on final transform
                 if (HAS_POST_AFFINE) {

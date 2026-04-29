@@ -30,6 +30,7 @@ pub static POPCORN: VariationDef = VariationDef {
     needs_rng: false,
     needs_transform: true,
     parameters: &[],
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

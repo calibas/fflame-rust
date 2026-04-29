@@ -24,6 +24,7 @@ pub static POST_BWRAPS: VariationDef = VariationDef {
     // 5 derived values at slots 5..10 (identical layout to pre_bwraps):
     //   5: g2,  6: r2,  7: rfactor,  8: inner_twist_rad,  9: outer_twist_rad
     needs_transform: false,
+    writes_color: false,
     init_param_count: 5,
     wgsl_init: Some(r#"
 fn init_post_bwraps(user: array<f32, 5>) -> array<f32, 5> {
@@ -159,6 +160,7 @@ pub static POST_CROP: VariationDef = VariationDef {
         param!("zero", "Zero", bool, false),
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -270,6 +272,7 @@ pub static POST_FALLOFF2: VariationDef = VariationDef {
         },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -401,6 +404,7 @@ pub static POST_CURL: VariationDef = VariationDef {
         param!("c2", "C2", unlimited_float, 0.0, -5.0, 5.0),
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -452,6 +456,7 @@ pub static POST_CURL3D: VariationDef = VariationDef {
         param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0),
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

@@ -38,6 +38,7 @@ pub static TANCOS: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -69,6 +70,7 @@ pub static TANGENT: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -98,6 +100,7 @@ pub static TANGENT3D: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -133,6 +136,7 @@ pub static SECANT2: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -168,6 +172,7 @@ pub static COSINE: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -199,6 +204,7 @@ pub static PETAL: VariationDef = VariationDef {
     needs_rng: false,
     parameters: &[],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -245,6 +251,7 @@ pub static CARDIOID: VariationDef = VariationDef {
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -282,6 +289,7 @@ pub static HELIX: VariationDef = VariationDef {
                             default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -317,6 +325,7 @@ pub static HELICOID: VariationDef = VariationDef {
                             default_value: 1.0, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -357,6 +366,7 @@ pub static PARABOLA: VariationDef = VariationDef {
                             default_value: 0.5, min_value: Some(-10.0), max_value: Some(10.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -403,6 +413,7 @@ pub static PIE: VariationDef = VariationDef {
                             default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -449,6 +460,7 @@ pub static PIE3D: VariationDef = VariationDef {
                             default_value: 0.5, min_value: Some(0.0), max_value: Some(1.0) },
     ],
     needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

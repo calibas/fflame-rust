@@ -44,6 +44,7 @@ pub static TARGET: VariationDef = VariationDef {
     // 1 derived value at slot 3:
     //   3: t_size_2  (size / 2)
     needs_transform: false,
+    writes_color: false,
     init_param_count: 1,
     wgsl_init: Some(r#"
 fn init_target(user: array<f32, 3>) -> array<f32, 1> {
@@ -132,6 +133,7 @@ pub static YIN_YANG: VariationDef = VariationDef {
     //   7: sinb   sin(π · ang2)
     //   8: cosb   cos(π · ang2)
     needs_transform: false,
+    writes_color: false,
     init_param_count: 4,
     wgsl_init: Some(r#"
 fn init_yin_yang(user: array<f32, 5>) -> array<f32, 4> {
