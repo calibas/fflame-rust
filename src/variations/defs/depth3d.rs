@@ -15,7 +15,8 @@ pub static ZCONE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -41,7 +42,8 @@ pub static FLATTEN: VariationDef = VariationDef {
     phase: VariationPhase::Post,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -66,7 +68,8 @@ pub static ZSCALE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

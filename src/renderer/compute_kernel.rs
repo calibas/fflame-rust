@@ -286,6 +286,13 @@ impl FlameRenderer {
         let palette_size = self.buffers.palette_size();
         self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
 
+        // Recreating variation_params_buffer wipes the init-derived slots
+        // (slots N..N+M, written by the init dispatch). User-param slots
+        // 0..N are repopulated by FlameBuffers::with_palette_size's call to
+        // update_variation_params, but init slots will be zeros until init
+        // dispatches again — flag it dirty so next compute_pass re-runs init.
+        self.init_dirty = true;
+
         // Restore xaos buffer if flame has xaos weights
         self.update_xaos_buffer(device, queue, flame);
 

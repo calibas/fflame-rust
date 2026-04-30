@@ -1,6 +1,6 @@
 //! Variations that depend on affine matrix access
 //!
-//! These need `needs_affine: true` so the body can read from
+//! These need `needs_transform: true` so the body can read from
 //! `transforms[xform_id]`. Before the affine-access plumbing landed, these
 //! couldn't be ported faithfully.
 //!
@@ -28,12 +28,13 @@ pub static POPCORN: VariationDef = VariationDef {
     category: VariationCategory::Advanced2D,
     phase: VariationPhase::Normal,
     needs_rng: false,
-    needs_affine: true,
+    needs_transform: true,
     parameters: &[],
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
-fn variation_popcorn(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
+fn variation_popcorn(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     let xf = transforms[xform_id];
     var dx = tan(3.0 * p.y);
     if (dx != dx) { dx = 0.0; }   // NaN guard
@@ -46,7 +47,7 @@ fn variation_popcorn(p: vec2<f32>, xform_id: u32) -> vec2<f32> {
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_popcorn(p: vec3<f32>, xform_id: u32) -> vec3<f32> {
+fn variation_popcorn(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     let xf = transforms[xform_id];
     var dx = tan(3.0 * p.y);
     if (dx != dx) { dx = 0.0; }

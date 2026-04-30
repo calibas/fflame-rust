@@ -33,7 +33,8 @@ pub static SINQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -66,7 +67,8 @@ pub static COSQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -99,7 +101,8 @@ pub static SINHQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -132,7 +135,8 @@ pub static COSHQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -168,7 +172,8 @@ pub static SECQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -205,7 +210,8 @@ pub static CSCQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -242,7 +248,8 @@ pub static SECHQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -279,7 +286,8 @@ pub static CSCHQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -321,7 +329,8 @@ pub static TANQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -369,7 +378,8 @@ pub static COTQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -419,7 +429,8 @@ pub static TANHQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -468,7 +479,8 @@ pub static COTHQ: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

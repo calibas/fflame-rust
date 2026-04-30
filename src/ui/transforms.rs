@@ -462,6 +462,23 @@ fn render_advanced_settings(
         let _ = config_manager.force_commit_preview(&ConfigPath::TransformOpacity { index });
     }
 
+    // Direct Color slider (Apophysis pluginColor — blend strength for DC variations)
+    let mut temp_dc = transform.direct_color;
+    let response_dc = ui.add(super::VkbSlider::new(&mut temp_dc, 0.0..=1.0).text(t!("transform.direct_color")))
+        .on_hover_text(t!("tooltips.direct_color"));
+    if response_dc.changed() {
+        if let Ok(update_type) = config_manager.update_param(
+            ConfigPath::TransformDirectColor { index },
+            temp_dc.into()
+        ) {
+            transform.direct_color = config_manager.active_config().flame.transforms[index].direct_color;
+            max_update = max_update.max(update_type);
+        }
+    }
+    if response_dc.drag_stopped() {
+        let _ = config_manager.force_commit_preview(&ConfigPath::TransformDirectColor { index });
+    }
+
     max_update
 }
 

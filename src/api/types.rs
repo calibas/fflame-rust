@@ -147,6 +147,10 @@ pub struct CreateTransformInput {
     pub color_speed: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opacity: Option<f32>,
+    /// Apophysis direct-color blend strength (pluginColor). Optional;
+    /// older API servers without this field default to 0.0 client-side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direct_color: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variations: Option<HashMap<String, f32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -185,6 +189,10 @@ pub struct TransformResponse {
     pub color: f32,
     pub color_speed: f32,
     pub opacity: f32,
+    /// Apophysis direct-color blend strength. Older API responses without
+    /// this field default to 0.0.
+    #[serde(default)]
+    pub direct_color: f32,
     pub variations: HashMap<String, f32>,
     pub variation_params: HashMap<String, f32>,
     pub post_affine_enabled: bool,
@@ -706,11 +714,18 @@ pub struct VariationDownload {
     pub phase: ApiVariationPhase,
     #[serde(default)]
     pub needs_rng: bool,
-    /// Whether this variation reads affine matrix fields. When true, the
-    /// generated WGSL signature includes `xform_id: u32`. Old API responses
-    /// without this field default to false.
+    /// Whether this variation needs `xform_id` for reads from the
+    /// per-transform `transforms[xform_id]` storage buffer (affine, weight,
+    /// color, etc.). When true, the generated WGSL signature includes
+    /// `xform_id: u32`. Old API responses using `needs_affine` are accepted
+    /// via serde alias; new payloads use `needs_transform`.
+    #[serde(default, alias = "needs_affine")]
+    pub needs_transform: bool,
+    /// Whether this variation writes the iteration-local color register `vc`
+    /// (Apophysis direct-color variations). When true, the WGSL signature
+    /// gains `vc: ptr<function, f32>`. Old API responses default to false.
     #[serde(default)]
-    pub needs_affine: bool,
+    pub writes_color: bool,
     #[serde(default)]
     pub parameters: Vec<ApiVariationParameter>,
     pub shader_2d: String,

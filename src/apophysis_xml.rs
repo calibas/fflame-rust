@@ -392,6 +392,10 @@ fn parse_xform_element(
                 // Parse opacity (0.0 to 1.0, default 1.0)
                 transform.opacity = value.parse().unwrap_or(1.0);
             }
+            "pluginColor" | "plugin_color" => {
+                // Apophysis direct-color blend strength (0.0 = standard, 1.0 = full DC)
+                transform.direct_color = value.parse().unwrap_or(0.0);
+            }
             "post" => {
                 // Parse post-affine: "pa pc pb pd pe pf" (same column-major order as coefs)
                 let parts: Vec<&str> = value.split_whitespace().collect();
@@ -476,6 +480,10 @@ fn parse_finalxform_element(
             "color_speed" | "symmetry" => {
                 // Apophysis calls this "symmetry" in XML
                 transform.color_speed = value.parse().unwrap_or(0.0);
+            }
+            "pluginColor" | "plugin_color" => {
+                // Apophysis direct-color blend strength
+                transform.direct_color = value.parse().unwrap_or(0.0);
             }
             "coefs" => {
                 // Parse "a c b d e f" format (Apophysis order)

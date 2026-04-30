@@ -49,11 +49,20 @@ pub struct VariationDef {
     /// Whether this variation requires RNG
     pub needs_rng: bool,
 
-    /// Whether this variation reads from the per-transform affine matrix
-    /// (the `transforms[xform_id]` storage buffer). When true, the function
-    /// signature includes `xform_id: u32` even for variations without
-    /// parameters, so the body can read `transforms[xform_id].a/b/c/d/e/f`.
-    pub needs_affine: bool,
+    /// Whether this variation needs `xform_id` so it can read fields from
+    /// the per-transform `transforms[xform_id]` storage buffer — affine
+    /// matrix (a/b/c/d/e/f), weight, color, opacity, direct_color. When
+    /// true, the function signature includes `xform_id: u32` even for
+    /// variations without parameters.
+    pub needs_transform: bool,
+
+    /// Whether this variation writes to the iteration-local color register
+    /// `vc` (Apophysis direct-color "DC" variations). When true, the WGSL
+    /// signature gains `vc: ptr<function, f32>` so the body can do
+    /// `*vc = palette_position;` based on geometry. The main loop lerps
+    /// between standard color evolution and `vc` using the transform's
+    /// `direct_color` field.
+    pub writes_color: bool,
 
     /// Parameters for this variation
     pub parameters: &'static [VariationParamDef],

@@ -15,19 +15,20 @@ pub static PRE_ZSCALE: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
-fn variation_pre_zscale(p: vec2<f32>, weight: f32) -> vec2<f32> {
+fn variation_pre_zscale(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Pre_ZScale only affects Z (3D mode), pass through in 2D
     return p;
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_pre_zscale(p: vec3<f32>, weight: f32) -> vec3<f32> {
-    // Apophysis: Pre-phase Z scaling
-    // FTz *= vars[variation_id] (weight is the scale factor)
+fn variation_pre_zscale(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis: Pre-phase Z scaling. Variation weight is the scale factor.
+    let weight = transforms[xform_id].variations[variation_id];
     return vec3<f32>(p.x, p.y, p.z * weight);
 }
 "#),
@@ -40,19 +41,20 @@ pub static PRE_ZTRANSLATE: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
-fn variation_pre_ztranslate(p: vec2<f32>, weight: f32) -> vec2<f32> {
+fn variation_pre_ztranslate(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Pre_ZTranslate only affects Z (3D mode), pass through in 2D
     return p;
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_pre_ztranslate(p: vec3<f32>, weight: f32) -> vec3<f32> {
-    // Apophysis: Pre-phase Z translation
-    // FTz += vars[variation_id] (weight is the translation amount)
+fn variation_pre_ztranslate(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    // Apophysis: Pre-phase Z translation. Variation weight is the offset.
+    let weight = transforms[xform_id].variations[variation_id];
     return vec3<f32>(p.x, p.y, p.z + weight);
 }
 "#),
@@ -65,7 +67,8 @@ pub static PRE_SPHERICAL: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -91,18 +94,21 @@ pub static PRE_SINUSOIDAL: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
-fn variation_pre_sinusoidal(p: vec2<f32>, weight: f32) -> vec2<f32> {
+fn variation_pre_sinusoidal(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Pre-Sinusoidal: Pre-phase sinusoidal wave
+    let weight = transforms[xform_id].variations[variation_id];
     return vec2<f32>(weight * sin(p.x), weight * sin(p.y));
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_pre_sinusoidal(p: vec3<f32>, weight: f32) -> vec3<f32> {
+fn variation_pre_sinusoidal(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Pre-Sinusoidal: Pre-phase sinusoidal wave (3D)
+    let weight = transforms[xform_id].variations[variation_id];
     return vec3<f32>(weight * sin(p.x), weight * sin(p.y), weight * p.z);
 }
 "#),
@@ -115,22 +121,25 @@ pub static PRE_DISC: VariationDef = VariationDef {
     phase: VariationPhase::Pre,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: true,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
-fn variation_pre_disc(p: vec2<f32>, weight: f32) -> vec2<f32> {
+fn variation_pre_disc(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
     // Apophysis Pre-Disc: Pre-phase disc transformation
     const PI: f32 = 3.14159265359;
+    let weight = transforms[xform_id].variations[variation_id];
     let rad = sqrt(dot(p, p));
     let r = (weight / PI) * atan2(p.x, p.y);
     return vec2<f32>(sin(PI * rad) * r, cos(PI * rad) * r);
 }
 "#,
     wgsl_3d: Some(r#"
-fn variation_pre_disc(p: vec3<f32>, weight: f32) -> vec3<f32> {
+fn variation_pre_disc(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
     // Apophysis Pre-Disc: Pre-phase disc transformation (3D)
     const PI: f32 = 3.14159265359;
+    let weight = transforms[xform_id].variations[variation_id];
     let rad = sqrt(dot(p.xy, p.xy));
     let r = (weight / PI) * atan2(p.x, p.y);
     return vec3<f32>(sin(PI * rad) * r, cos(PI * rad) * r, weight * p.z);
@@ -157,7 +166,8 @@ pub static PRE_BWRAPS: VariationDef = VariationDef {
     //   7: rfactor             (radius / max_bubble)
     //   8: inner_twist_rad     (inner_twist · π/180)
     //   9: outer_twist_rad     (outer_twist · π/180)
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 5,
     wgsl_init: Some(r#"
 fn init_pre_bwraps(user: array<f32, 5>) -> array<f32, 5> {
@@ -292,7 +302,8 @@ pub static PRE_CROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0),
         param!("zero", "Zero", bool, false),
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -403,7 +414,8 @@ pub static PRE_FALLOFF2: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

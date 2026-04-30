@@ -121,8 +121,7 @@ impl ShaderCache {
         let last_registry_version = crate::variations::global_registry().version();
 
         // Build init pipeline alongside the main pipeline. Returns None /
-        // None / 0 when no active variation has `wgsl_init` — which is the
-        // current state for every variation in the registry.
+        // None / 0 when no active variation in this flame has `wgsl_init`.
         let init_bind_group_layout = Self::create_init_bind_group_layout(device);
         let (init_shader_source, init_pipeline, init_pair_count) = Self::build_init_resources(
             device,
