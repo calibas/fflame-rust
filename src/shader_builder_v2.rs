@@ -1382,18 +1382,14 @@ impl ShaderBuilder {
         shader
     }
 
-    /// Build 2D EXPORT shader - outputs samples to buffer for CPU histogram
-    /// NOTE: Uses 3D shader internally to support configs with 3D variations like "flatten"
-    /// even when render_mode is 2D. The 3D shader handles 2D correctly (Z is just ignored).
-    pub fn build_export_2d(&self, active_variations: &HashMap<String, f32>) -> String {
-        // Use 3D shader for export - it handles all variation types correctly
-        // The 2D vs 3D distinction only matters for how Z is displayed, not for export
-        self.build_export_3d(active_variations)
-    }
-
-    /// Build 3D EXPORT shader - outputs samples to buffer for CPU histogram
-    pub fn build_export_3d(&self, active_variations: &HashMap<String, f32>) -> String {
-        let active_3d = self.active_with_local_indices(active_variations, true);
+    /// Build the EXPORT shader — outputs samples to a buffer for CPU
+    /// histogram accumulation. Uses the 3D code path regardless of the
+    /// flame's render_mode: the 2D vs 3D distinction only matters for how Z
+    /// is displayed, not for sample collection. Configs with 3D variations
+    /// (e.g. flatten, hemisphere) need the 3D path even when render_mode is
+    /// 2D, which is why there's no separate 2D export shader.
+    pub fn build_export(&self, active_variations: &HashMap<String, f32>) -> String {
+        let active = self.active_with_local_indices(active_variations, true);
 
         let mut shader = String::new();
 
@@ -1419,18 +1415,18 @@ impl ShaderBuilder {
         shader.push('\n');
 
         // 6. Core variations (3D) from embedded VariationDef WGSL (only active ones)
-        shader.push_str(&self.generate_variation_code(&active_3d, true));
+        shader.push_str(&self.generate_variation_code(&active, true));
         shader.push('\n');
 
         // 7. Generate apply_variations (no inlining for export shaders)
-        let has_dc = self.has_dc_variation(&active_3d);
-        shader.push_str(&self.build_apply_variations_3d(&active_3d, None, has_dc));
+        let has_dc = self.has_dc_variation(&active);
+        shader.push_str(&self.build_apply_variations_3d(&active, None, has_dc));
         shader.push('\n');
 
         // 8. Export main — routed through TemplateProcessor with HAS_DC gate.
         let mut processor = TemplateProcessor::new();
         processor.set("HAS_DC", has_dc);
-        shader.push_str(&processor.process(include_str!("../shaders/core/main_3d_export.wgsl")));
+        shader.push_str(&processor.process(include_str!("../shaders/core/main_export.wgsl")));
 
         shader
     }
