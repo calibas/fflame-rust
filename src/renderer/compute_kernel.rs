@@ -286,6 +286,13 @@ impl FlameRenderer {
         let palette_size = self.buffers.palette_size();
         self.buffers = FlameBuffers::with_palette_size(device, queue, width, height, flame, palette_size);
 
+        // Recreating variation_params_buffer wipes the init-derived slots
+        // (slots N..N+M, written by the init dispatch). User-param slots
+        // 0..N are repopulated by FlameBuffers::with_palette_size's call to
+        // update_variation_params, but init slots will be zeros until init
+        // dispatches again — flag it dirty so next compute_pass re-runs init.
+        self.init_dirty = true;
+
         // Restore xaos buffer if flame has xaos weights
         self.update_xaos_buffer(device, queue, flame);
 
@@ -437,12 +444,6 @@ impl FlameRenderer {
         if self.init_dirty {
             if let Some(init_pipeline) = self.pipelines.shader_cache.init_pipeline.as_ref() {
                 let pair_count = self.pipelines.shader_cache.init_pair_count;
-                log::debug!(
-                    "init dispatch: total_iterations={} pair_count={} workgroups={}",
-                    self.total_iterations,
-                    pair_count,
-                    (pair_count + 63) / 64,
-                );
                 if pair_count > 0 {
                     let workgroup_count = (pair_count + 63) / 64;
                     let mut init_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
@@ -454,11 +455,6 @@ impl FlameRenderer {
                     init_pass.dispatch_workgroups(workgroup_count, 1, 1);
                     drop(init_pass);
                 }
-            } else {
-                log::debug!(
-                    "init dispatch skipped: total_iterations={} init_pipeline=None",
-                    self.total_iterations,
-                );
             }
             self.init_dirty = false;
         }
