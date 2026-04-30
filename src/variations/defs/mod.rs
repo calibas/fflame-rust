@@ -24,6 +24,7 @@ mod numbered;
 mod heavy_init;
 mod init_ports;
 mod affine_ports;
+mod dc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -46,6 +47,7 @@ pub use numbered::*;
 pub use heavy_init::*;
 pub use init_ports::*;
 pub use affine_ports::*;
+pub use dc::*;
 
 use super::definition::VariationDef;
 
@@ -259,4 +261,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &YIN_YANG,
     // Affine-access ports (off the affine-access watchlist)
     &POPCORN,
+    // Direct-color (DC) variations — first uses of writes_color
+    &DC_LINEAR,
+    &DC_BUBBLE,
 ];
