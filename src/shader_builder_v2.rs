@@ -1304,8 +1304,11 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
         shader.push('\n');
 
-        // 8. Tiled main
-        shader.push_str(include_str!("../shaders/core/main_2d_tiled.wgsl"));
+        // 8. Tiled main — routed through TemplateProcessor with no conditions
+        // set, in preparation for upcoming HAS_DC gating + 2D/3D consolidation.
+        // No-op for output today: the shader source has no `{{#if}}` blocks.
+        let processor = TemplateProcessor::new();
+        shader.push_str(&processor.process(include_str!("../shaders/core/main_2d_tiled.wgsl")));
 
         shader
     }
@@ -1340,8 +1343,9 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
         shader.push('\n');
 
-        // 7. Tiled main
-        shader.push_str(include_str!("../shaders/core/main_3d_tiled.wgsl"));
+        // 7. Tiled main — routed through TemplateProcessor (see 2D builder).
+        let processor = TemplateProcessor::new();
+        shader.push_str(&processor.process(include_str!("../shaders/core/main_3d_tiled.wgsl")));
 
         shader
     }
@@ -1390,8 +1394,9 @@ impl ShaderBuilder {
         shader.push_str(&self.build_apply_variations_3d(&active_3d, None));
         shader.push('\n');
 
-        // 8. Export main
-        shader.push_str(include_str!("../shaders/core/main_3d_export.wgsl"));
+        // 8. Export main — routed through TemplateProcessor (see tiled builders).
+        let processor = TemplateProcessor::new();
+        shader.push_str(&processor.process(include_str!("../shaders/core/main_3d_export.wgsl")));
 
         shader
     }
