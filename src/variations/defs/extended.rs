@@ -15,7 +15,8 @@ pub static ZTRANSLATE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: false,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -43,7 +44,8 @@ pub static JULIA3D: VariationDef = VariationDef {
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -10.0, 10.0),
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -171,7 +173,8 @@ pub static FALLOFF2: VariationDef = VariationDef {
             max_value: Some(2.0),
         },
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -302,7 +305,8 @@ pub static WEDGE: VariationDef = VariationDef {
     // 2 derived values at slots 4..6:
     //   4: angle_rad  (angle_deg · π/180)
     //   5: comp_fac   (1 − angle_rad · count / (2π))
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_wedge(user: array<f32, 4>) -> array<f32, 2> {
@@ -368,7 +372,8 @@ pub static EPISPIRAL: VariationDef = VariationDef {
         param!("thickness", "Thickness", unlimited_float, 0.0, -2.0, 2.0),
         param!("holes", "Holes", unlimited_float, 1.0, -10.0, 10.0),
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -424,7 +429,8 @@ pub static BWRAPS: VariationDef = VariationDef {
     //   5: g2        (gain² / (radius + ε) + ε)
     //   6: r2        (radius²)
     //   7: rfactor   (radius / max_bubble, where max_bubble = clamp(g2·radius))
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 3,
     wgsl_init: Some(r#"
 fn init_bwraps(user: array<f32, 5>) -> array<f32, 3> {
@@ -541,7 +547,8 @@ pub static JULIASCOPE: VariationDef = VariationDef {
         param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0),
         param!("dist", "Distance", unlimited_float, 1.0, -10.0, 10.0),
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -623,7 +630,8 @@ pub static JULIA3DZ: VariationDef = VariationDef {
     parameters: &[
         param!("power", "Power", unlimited_int, 2.0, -20.0, 20.0),
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -690,7 +698,8 @@ pub static CURL3D: VariationDef = VariationDef {
         param!("cy", "CY", unlimited_float, 0.0, -5.0, 5.0),
         param!("cz", "CZ", unlimited_float, 0.0, -5.0, 5.0),
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -743,7 +752,8 @@ pub static RADIAL_BLUR: VariationDef = VariationDef {
     // 2 derived values at slots 1..3:
     //   1: spin_var  (sin(angle_deg · π/360))
     //   2: zoom_var  (cos(angle_deg · π/360))
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 2,
     wgsl_init: Some(r#"
 fn init_radial_blur(user: array<f32, 1>) -> array<f32, 2> {
@@ -798,7 +808,8 @@ pub static BLUR_CIRCLE: VariationDef = VariationDef {
     phase: VariationPhase::Normal,
     needs_rng: true,
     parameters: &[],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -888,7 +899,8 @@ pub static BLUR_ZOOM: VariationDef = VariationDef {
         param!("x", "X", unlimited_float, 0.0, -20.0, 20.0),
         param!("y", "Y", unlimited_float, 0.0, -20.0, 20.0),
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -934,7 +946,8 @@ pub static BLUR_PIXELIZE: VariationDef = VariationDef {
         param!("size", "Size", unlimited_float, 0.1, 0.0000001, 10.0),
         param!("scale", "Scale", unlimited_float, 1.0, -20.0, 20.0),
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -986,7 +999,8 @@ pub static SEPARATION: VariationDef = VariationDef {
         param!("xinside", "X Inside", unlimited_float, 0.0, -20.0, 20.0),
         param!("yinside", "Y Inside", unlimited_float, 0.0, -20.0, 20.0),
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1053,7 +1067,8 @@ pub static MOBIUS: VariationDef = VariationDef {
         param!("re_d", "Re D", unlimited_float, 1.0, -20.0, 20.0),
         param!("im_d", "Im D", unlimited_float, 0.0, -20.0, 20.0),
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"
@@ -1125,7 +1140,8 @@ pub static CROP: VariationDef = VariationDef {
         param!("scatter_area", "Scatter Area", float, 0.0, -1.0, 1.0),
         param!("zero", "Zero", bool, false),
     ],
-    needs_affine: false,
+    needs_transform: false,
+    writes_color: false,
     init_param_count: 0,
     wgsl_init: None,
     wgsl_2d: r#"

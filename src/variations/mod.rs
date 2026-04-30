@@ -100,10 +100,17 @@ pub struct VariationInfo {
     /// Whether this variation needs RNG
     pub needs_rng: bool,
 
-    /// Whether this variation reads from the per-transform affine matrix.
-    /// When true, the function signature includes `xform_id: u32` even for
-    /// variations without parameters.
-    pub needs_affine: bool,
+    /// Whether this variation needs `xform_id` for reads from the
+    /// per-transform `transforms[xform_id]` storage buffer (affine, weight,
+    /// color, etc.). When true, the function signature includes
+    /// `xform_id: u32` even for variations without parameters.
+    pub needs_transform: bool,
+
+    /// Whether this variation writes the iteration-local color register `vc`
+    /// (Apophysis direct-color variations). When true, the WGSL signature
+    /// gains `vc: ptr<function, f32>`. The shader builder uses this to
+    /// detect whether any DC variation is active and emit the Step 3 lerp.
+    pub writes_color: bool,
 
     /// Whether this is a core (built-in) or plugin variation
     pub is_core: bool,
@@ -166,7 +173,8 @@ impl VariationInfo {
             phase: api_phase_to_runtime(&dl.phase),
             wgsl_function,
             needs_rng: dl.needs_rng,
-            needs_affine: dl.needs_affine,
+            needs_transform: dl.needs_transform,
+            writes_color: dl.writes_color,
             is_core: false,
             wgsl_source: Some(dl.shader_2d.clone()),
             wgsl_source_3d: dl.shader_3d.clone(),
@@ -186,7 +194,8 @@ impl VariationInfo {
             phase: def.phase.clone(),
             wgsl_function: def.wgsl_function_name(),
             needs_rng: def.needs_rng,
-            needs_affine: def.needs_affine,
+            needs_transform: def.needs_transform,
+            writes_color: def.writes_color,
             is_core: true, // All VariationDef are core variations
             wgsl_source: Some(def.wgsl_2d.to_string()),
             wgsl_source_3d: def.wgsl_3d.map(|s| s.to_string()),

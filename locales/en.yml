@@ -260,6 +260,7 @@ transform:
   color: "Color"
   color_speed: "Color Speed"
   opacity: "Opacity"
+  direct_color: "Direct Color"
   add: "➕ Add Transform"
   delete: "🗑"
   edit_triangle: "Edit 🔺"
@@ -609,6 +610,7 @@ history:
     transform_color: "Transform %{index} → Color"
     transform_color_speed: "Transform %{index} → Color Speed"
     transform_opacity: "Transform %{index} → Opacity"
+    transform_direct_color: "Transform %{index} → Direct Color"
     transform_affine: "Transform %{index} → Affine %{param}"
     transform_post_affine_enabled: "Transform %{index} → Post-Affine Enabled"
     transform_post_affine: "Transform %{index} → Post-Affine %{param}"
@@ -1367,6 +1369,7 @@ tooltips:
   post_affine_matrix: "Post-affine coefficients applied after variations."
   color_speed: "How fast the color index changes during iteration.\n-1 to 1, where 0 = no change."
   opacity: "Transparency of points from this transform.\n0 = invisible, 1 = fully opaque"
+  direct_color: "Blend strength for direct-color (DC) variations like dc_linear, dc_bubble.\n0 = standard color evolution; 1 = DC variations fully control color.\nNo effect if no DC variations are active."
   transform_solo: "Isolate this transform by hiding all others.\n Click again to restore."
 
   blend_rate: "How fast new samples blend with existing.\n0.01 = slow/smooth, 1.0 = fast/flickery"
