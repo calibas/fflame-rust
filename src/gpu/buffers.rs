@@ -511,12 +511,14 @@ impl FlameBuffers {
             mapped_at_creation: false,
         });
 
-        // Upload initial transforms with solo mode handling
-        let registry = crate::variations::global_registry();
-        let gpu_transforms = GpuTransform::from_flame(flame, &registry);
-        queue.write_buffer(&transform_buffer, 0, bytemuck::cast_slice(&gpu_transforms));
-
-        // Create variation parameters storage buffer sized for MAX_TRANSFORMS
+        // Create variation parameters storage buffer sized for MAX_TRANSFORMS.
+        // Both transforms and variation_params buffers are populated below via
+        // update_transforms / update_variation_params (after Self is constructed),
+        // matching the exact code path used by load_config + update_flame. This
+        // avoids the prior split where the initial write was unpadded while
+        // subsequent writes were padded to MAX_TRANSFORMS — the inconsistent
+        // shape couldn't be triggered as a visible bug, but it was extra
+        // surface area for things to go wrong.
         let params_buffer_size = (MAX_TRANSFORMS * std::mem::size_of::<GpuVariationParams>()) as u64;
         let variation_params_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Variation Params Buffer"),
@@ -524,10 +526,6 @@ impl FlameBuffers {
             usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
-        // Upload initial variation parameters (include final transform if present)
-        let gpu_params = GpuVariationParams::from_flame(flame, &registry);
-        queue.write_buffer(&variation_params_buffer, 0, bytemuck::cast_slice(&gpu_params));
 
         // Create params uniform buffer
         let params = GpuParams {
@@ -813,7 +811,7 @@ impl FlameBuffers {
             ..Default::default()
         });
 
-        Self {
+        let buffers = Self {
             transform_buffer,
             variation_params_buffer,
             params_buffer,
@@ -844,7 +842,16 @@ impl FlameBuffers {
             width,
             height,
             palette_size,
-        }
+        };
+
+        // Populate transform / variation-params buffers via the exact same
+        // code path used by every subsequent update (load_config, update_flame).
+        // Single source of truth — no risk of the initial write disagreeing
+        // with the steady-state write.
+        buffers.update_transforms(queue, flame);
+        buffers.update_variation_params(queue, flame);
+
+        buffers
     }
 
     /// Get the current palette size
