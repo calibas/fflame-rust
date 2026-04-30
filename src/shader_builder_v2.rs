@@ -931,21 +931,21 @@ impl ShaderBuilder {
 
             for (name, idx, info) in &pre_variations {
                 // Pre-variations directly modify temp (NOT weighted sum!)
-                let needs_rng = info.needs_rng;
-                let has_params = !info.parameters.is_empty();
-
                 let mut params = String::new();
 
                 // Variations with parameters get (xform_id, variation_id) for
                 // get_param lookups. needs_transform variations also get both
                 // so they can read transforms[xform_id].variations[variation_id]
                 // (e.g., pre_rotate_x reads its own weight from the buffer).
-                if has_params || info.needs_transform {
+                if !info.parameters.is_empty() || info.needs_transform {
                     params.push_str(&format!(", xform_id, {}u", idx));
                 }
-
-                if needs_rng {
+                if info.needs_rng {
                     params.push_str(", rng");
+                }
+                // DC variations get the iteration-local color register pointer.
+                if info.writes_color {
+                    params.push_str(", vc");
                 }
 
                 code.push_str(&format!(
@@ -968,19 +968,17 @@ impl ShaderBuilder {
         code.push_str("    var result = vec2<f32>(0.0, 0.0);\n\n");
 
         for (_name, idx, info) in &normal_variations {
-            let call = if !info.parameters.is_empty() || info.needs_transform {
-                if info.needs_rng {
-                    format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
-                } else {
-                    format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
-                }
-            } else {
-                if info.needs_rng {
-                    format!("{}(temp, rng)", info.wgsl_function)
-                } else {
-                    format!("{}(temp)", info.wgsl_function)
-                }
-            };
+            let mut args = String::from("temp");
+            if !info.parameters.is_empty() || info.needs_transform {
+                args.push_str(&format!(", xform_id, {}u", idx));
+            }
+            if info.needs_rng {
+                args.push_str(", rng");
+            }
+            if info.writes_color {
+                args.push_str(", vc");
+            }
+            let call = format!("{}({})", info.wgsl_function, args);
 
             // Use inlined weights when available (enables dead code elimination)
             if use_inlined {
@@ -1011,20 +1009,19 @@ impl ShaderBuilder {
 
             for (_name, idx, info) in &post_variations {
                 // Post-variations directly modify result (NOT weighted sum!)
-                let needs_rng = info.needs_rng;
-                let has_params = !info.parameters.is_empty();
-
                 let mut params = String::from("result");
 
                 // has_params || needs_transform → pass (xform_id, variation_id).
                 // Pure no-param no-needs_transform variations (e.g. flatten 2D
                 // stub) get just `result`.
-                if has_params || info.needs_transform {
+                if !info.parameters.is_empty() || info.needs_transform {
                     params.push_str(&format!(", xform_id, {}u", idx));
                 }
-
-                if needs_rng {
+                if info.needs_rng {
                     params.push_str(", rng");
+                }
+                if info.writes_color {
+                    params.push_str(", vc");
                 }
 
                 code.push_str(&format!(
@@ -1088,21 +1085,16 @@ impl ShaderBuilder {
 
             for (name, idx, info) in &pre_variations {
                 // Pre-variations directly modify temp (NOT weighted sum!)
-                let needs_rng = info.needs_rng;
-                let has_params = !info.parameters.is_empty();
-
                 let mut params = String::new();
 
-                // Variations with parameters get (xform_id, variation_id) for
-                // get_param lookups. needs_transform variations also get both
-                // so they can read transforms[xform_id].variations[variation_id]
-                // (e.g., pre_rotate_x reads its own weight from the buffer).
-                if has_params || info.needs_transform {
+                if !info.parameters.is_empty() || info.needs_transform {
                     params.push_str(&format!(", xform_id, {}u", idx));
                 }
-
-                if needs_rng {
+                if info.needs_rng {
                     params.push_str(", rng");
+                }
+                if info.writes_color {
+                    params.push_str(", vc");
                 }
 
                 code.push_str(&format!(
@@ -1197,19 +1189,17 @@ impl ShaderBuilder {
                 }
                 _ => {
                     // Standard variation with function call
-                    let call = if !info.parameters.is_empty() || info.needs_transform {
-                        if info.needs_rng {
-                            format!("{}(temp, xform_id, {}u, rng)", info.wgsl_function, idx)
-                        } else {
-                            format!("{}(temp, xform_id, {}u)", info.wgsl_function, idx)
-                        }
-                    } else {
-                        if info.needs_rng {
-                            format!("{}(temp, rng)", info.wgsl_function)
-                        } else {
-                            format!("{}(temp)", info.wgsl_function)
-                        }
-                    };
+                    let mut args = String::from("temp");
+                    if !info.parameters.is_empty() || info.needs_transform {
+                        args.push_str(&format!(", xform_id, {}u", idx));
+                    }
+                    if info.needs_rng {
+                        args.push_str(", rng");
+                    }
+                    if info.writes_color {
+                        args.push_str(", vc");
+                    }
+                    let call = format!("{}({})", info.wgsl_function, args);
 
                     // Use inlined weights when available
                     if use_inlined {
@@ -1255,20 +1245,16 @@ impl ShaderBuilder {
                     }
                     _ => {
                         // Generic post-variations (rotation, post_bwraps, etc.)
-                        let needs_rng = info.needs_rng;
-                        let has_params = !info.parameters.is_empty();
-
                         let mut params = String::from("result");
 
-                        // has_params || needs_transform → pass (xform_id, variation_id).
-                        // Pure no-param post variations (none currently in this
-                        // path after migrations) call with just `result`.
-                        if has_params || info.needs_transform {
+                        if !info.parameters.is_empty() || info.needs_transform {
                             params.push_str(&format!(", xform_id, {}u", idx));
                         }
-
-                        if needs_rng {
+                        if info.needs_rng {
                             params.push_str(", rng");
+                        }
+                        if info.writes_color {
+                            params.push_str(", vc");
                         }
 
                         code.push_str(&format!(
