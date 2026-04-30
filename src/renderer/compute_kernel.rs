@@ -437,6 +437,12 @@ impl FlameRenderer {
         if self.init_dirty {
             if let Some(init_pipeline) = self.pipelines.shader_cache.init_pipeline.as_ref() {
                 let pair_count = self.pipelines.shader_cache.init_pair_count;
+                log::debug!(
+                    "init dispatch: total_iterations={} pair_count={} workgroups={}",
+                    self.total_iterations,
+                    pair_count,
+                    (pair_count + 63) / 64,
+                );
                 if pair_count > 0 {
                     let workgroup_count = (pair_count + 63) / 64;
                     let mut init_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
@@ -448,6 +454,11 @@ impl FlameRenderer {
                     init_pass.dispatch_workgroups(workgroup_count, 1, 1);
                     drop(init_pass);
                 }
+            } else {
+                log::debug!(
+                    "init dispatch skipped: total_iterations={} init_pipeline=None",
+                    self.total_iterations,
+                );
             }
             self.init_dirty = false;
         }
