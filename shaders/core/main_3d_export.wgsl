@@ -58,6 +58,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             continue;
         }
 
+{{#if HAS_DC}}
         // Apophysis 3-step color flow (see main_template.wgsl for details).
         var c_base: f32 = color_index;
         if (params.color_mode == 0u) {
@@ -69,6 +70,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Apply affine + variations (3D, Step 2)
         let affine_p = apply_affine(xform, current);
         current = apply_variations(xform, xform_idx, affine_p, &rng, &vc);
+{{else}}
+        // No DC variations: original 2-step flow.
+        let affine_p = apply_affine(xform, current);
+        current = apply_variations(xform, xform_idx, affine_p, &rng);
+{{/if}}
 
         // Apply post-affine if enabled for this transform
         if (xform.post_enabled > 0.5) {
@@ -78,6 +84,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Calculate speed
         let speed = length(current - old_pos);
 
+{{#if HAS_DC}}
         // Step 3 / speed-mode / path-map color update
         if (params.color_mode == 0u) {
             color_index = c_base + xform.direct_color * (vc - c_base);
@@ -85,9 +92,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         } else {
-            // Path map mode: use hash for export (simpler, no separate buffer)
             path_hash = (path_hash << params.bits_per_transform) | (xform_idx & ((1u << params.bits_per_transform) - 1u));
         }
+{{else}}
+        // Original Step 1: color_speed blend (palette mode), or speed/path-map.
+        if (params.color_mode == 0u) {
+            let symmetry = xform.color_speed;
+            let colorC1 = (1.0 + symmetry) / 2.0;
+            let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
+            color_index = color_index * colorC1 + colorC2;
+        } else if (params.color_mode == 1u) {
+            let speed_color = speed_to_color(speed);
+            color = mix(color, speed_color, params.speed_factor);
+        } else {
+            path_hash = (path_hash << params.bits_per_transform) | (xform_idx & ((1u << params.bits_per_transform) - 1u));
+        }
+{{/if}}
 
         // Skip burn-in
         if (i >= params.burn_in) {
@@ -95,9 +115,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             var final_pos = current;
             if (params.has_final_transform != 0u) {
                 let final_xform = transforms[params.final_transform_index];
+{{#if HAS_DC}}
                 var final_vc: f32 = color_index;
                 let affine_p = apply_affine(final_xform, current);
                 final_pos = apply_variations(final_xform, params.final_transform_index, affine_p, &rng, &final_vc);
+{{else}}
+                let affine_p = apply_affine(final_xform, current);
+                final_pos = apply_variations(final_xform, params.final_transform_index, affine_p, &rng);
+{{/if}}
                 // Post-affine on final transform
                 if (final_xform.post_enabled > 0.5) {
                     final_pos = apply_post_affine(final_xform, final_pos);

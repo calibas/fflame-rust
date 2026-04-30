@@ -617,6 +617,17 @@ impl ShaderBuilder {
             .collect()
     }
 
+    /// Returns true if any variation in the active set writes to the
+    /// iteration-local color register (has `writes_color: true`). Drives the
+    /// `HAS_DC` template condition: the main loop's c_base/vc/Step3 lerp and
+    /// the `vc` pointer parameter on `apply_variations` are emitted only when
+    /// this is true. Flames without DC variations skip them entirely.
+    fn has_dc_variation(&self, active_variations: &[(String, u32)]) -> bool {
+        active_variations.iter().any(|(name, _)| {
+            self.registry.get(name).is_some_and(|info| info.writes_color)
+        })
+    }
+
     /// Build the init compute shader for a flame's active variations.
     ///
     /// Returns `Some(wgsl)` if any active variation in the flame has a
@@ -839,12 +850,16 @@ impl ShaderBuilder {
         shader.push_str(&self.generate_variation_code(&active, render_3d));
         shader.push('\n');
 
+        // Compute has_dc once: drives both the apply_variations signature
+        // (with vs without `vc` param) and the HAS_DC template condition.
+        let has_dc = self.has_dc_variation(&active);
+
         // 7. Generate apply_variations with fixed registry indices
         // Pass inlined transforms for dead code elimination if available
         if render_3d {
-            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref()));
+            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc));
         } else {
-            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref()));
+            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc));
         }
         shader.push('\n');
 
@@ -864,6 +879,7 @@ impl ShaderBuilder {
         processor.set("RENDER_3D", render_3d);
         processor.set("PATH_TRACKING", path_features_enabled);
         processor.set("XAOS_ENABLED", xaos_enabled);
+        processor.set("HAS_DC", has_dc);
         shader.push_str(&processor.process(template));
 
         // DEBUG: Write shader to file for analysis (enabled via --dump-shader CLI flag)
@@ -884,25 +900,33 @@ impl ShaderBuilder {
     ///
     /// When `inlined_transforms` is provided, generates code with compile-time constant
     /// variation weights, enabling dead code elimination for unused variations per-transform.
+    /// When `has_dc` is true, the function takes a `vc: ptr<function, f32>` parameter for
+    /// direct-color variations to write to; when false, the parameter is omitted entirely
+    /// (zero-cost path when no DC variation is in the active set).
     fn build_apply_variations_2d(
         &self,
         active_variations: &[(String, u32)],
         inlined_transforms: Option<&Vec<InlinedTransform>>,
+        has_dc: bool,
     ) -> String {
         use crate::variations::VariationPhase;
 
         // When inlined, we generate per-transform specialized code
         let use_inlined = inlined_transforms.is_some();
 
+        let signature = if has_dc {
+            "fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {\n"
+        } else {
+            "fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {\n"
+        };
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
-             // The `vc` pointer is the iteration-local color register Apophysis calls\n\
-             // `vc` — direct-color variations (writes_color: true) overwrite it; ordinary\n\
-             // variations leave it alone. Main loop reads it after the call to compute\n\
-             // the Step 3 lerp with xform.direct_color. Currently no DC variations are\n\
-             // registered, so vc is unused in the body — the compiler eliminates it.\n\
-             fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {\n"
+             // When has_dc=true, takes a `vc` pointer (the iteration-local color register\n\
+             // Apophysis calls `vc`) so DC variations (writes_color: true) can write to it.\n\
+             // When has_dc=false, the parameter is omitted — no DC variation in the active\n\
+             // set means no inner call references vc, so it's pure overhead.\n",
         );
+        code.push_str(signature);
 
         // Separate variations by phase
         let mut pre_variations = Vec::new();
@@ -1046,17 +1070,23 @@ impl ShaderBuilder {
         &self,
         active_variations: &[(String, u32)],
         inlined_transforms: Option<&Vec<InlinedTransform>>,
+        has_dc: bool,
     ) -> String {
         use crate::variations::VariationPhase;
 
         // When inlined, we generate per-transform specialized code
         let use_inlined = inlined_transforms.is_some();
 
+        let signature = if has_dc {
+            "fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {\n"
+        } else {
+            "fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {\n"
+        };
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
-             // See 2D variant for the meaning of the `vc` pointer.\n\
-             fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {\n"
+             // See 2D variant for the meaning of the `vc` pointer.\n",
         );
+        code.push_str(signature);
 
         // Separate variations by phase
         let mut pre_variations = Vec::new();
@@ -1297,17 +1327,17 @@ impl ShaderBuilder {
         shader.push('\n');
 
         // 5. Generate apply_variations (no inlining for tiled shaders)
-        shader.push_str(&self.build_apply_variations_2d(&active_2d, None));
+        let has_dc = self.has_dc_variation(&active_2d);
+        shader.push_str(&self.build_apply_variations_2d(&active_2d, None, has_dc));
         shader.push('\n');
 
         // 7. Tiled utilities (uses full_width/full_height)
         shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
         shader.push('\n');
 
-        // 8. Tiled main — routed through TemplateProcessor with no conditions
-        // set, in preparation for upcoming HAS_DC gating + 2D/3D consolidation.
-        // No-op for output today: the shader source has no `{{#if}}` blocks.
-        let processor = TemplateProcessor::new();
+        // 8. Tiled main — routed through TemplateProcessor with HAS_DC gate.
+        let mut processor = TemplateProcessor::new();
+        processor.set("HAS_DC", has_dc);
         shader.push_str(&processor.process(include_str!("../shaders/core/main_2d_tiled.wgsl")));
 
         shader
@@ -1336,15 +1366,17 @@ impl ShaderBuilder {
         shader.push('\n');
 
         // 5. Generate apply_variations (no inlining for tiled shaders)
-        shader.push_str(&self.build_apply_variations_3d(&active_3d, None));
+        let has_dc = self.has_dc_variation(&active_3d);
+        shader.push_str(&self.build_apply_variations_3d(&active_3d, None, has_dc));
         shader.push('\n');
 
         // 6. Tiled utilities
         shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
         shader.push('\n');
 
-        // 7. Tiled main — routed through TemplateProcessor (see 2D builder).
-        let processor = TemplateProcessor::new();
+        // 7. Tiled main — routed through TemplateProcessor with HAS_DC gate.
+        let mut processor = TemplateProcessor::new();
+        processor.set("HAS_DC", has_dc);
         shader.push_str(&processor.process(include_str!("../shaders/core/main_3d_tiled.wgsl")));
 
         shader
@@ -1391,11 +1423,13 @@ impl ShaderBuilder {
         shader.push('\n');
 
         // 7. Generate apply_variations (no inlining for export shaders)
-        shader.push_str(&self.build_apply_variations_3d(&active_3d, None));
+        let has_dc = self.has_dc_variation(&active_3d);
+        shader.push_str(&self.build_apply_variations_3d(&active_3d, None, has_dc));
         shader.push('\n');
 
-        // 8. Export main — routed through TemplateProcessor (see tiled builders).
-        let processor = TemplateProcessor::new();
+        // 8. Export main — routed through TemplateProcessor with HAS_DC gate.
+        let mut processor = TemplateProcessor::new();
+        processor.set("HAS_DC", has_dc);
         shader.push_str(&processor.process(include_str!("../shaders/core/main_3d_export.wgsl")));
 
         shader

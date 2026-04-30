@@ -88,12 +88,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // visibility only, not IFS dynamics. Transform must update position for correct chaos game.
         let should_plot = rng_nextf(&rng) < xform.opacity;
 
-        // Apophysis 3-step color flow (XForm.pas:312-313, 1067, 1078-1081):
+{{#if HAS_DC}}
+        // Apophysis 3-step color flow (XForm.pas:312-313, 1067, 1078-1081),
+        // emitted only when at least one active variation has writes_color: true:
         //   Step 1: c_base = color_speed-blended palette index
         //   Step 2: variations run; DC variations (writes_color:true) write *vc
         //   Step 3: color_index = c_base + direct_color * (vc - c_base)
-        // When no DC variations are registered or direct_color=0, vc is unused
-        // and Step 3 reduces to color_index = c_base, bit-identical to today.
         var c_base: f32 = color_index;
         if (COLOR_MODE == 0u) {
             let symmetry = xform.color_speed;
@@ -101,9 +101,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         var vc: f32 = c_base;
 
-        // Apply affine + variations (Step 2)
+        // Apply affine + variations (Step 2; vc gets passed for DC writes)
         let affine_p = apply_affine(xform, current);
         current = apply_variations(xform, xform_idx, affine_p, &rng, &vc);
+{{else}}
+        // No DC variations active: original 2-step flow — variations first,
+        // then color_speed blend. Bit-identical to pre-direct-color codebase.
+        let affine_p = apply_affine(xform, current);
+        current = apply_variations(xform, xform_idx, affine_p, &rng);
+{{/if}}
 
         // Apply post-affine (compile-time gated for zero cost when unused)
         if (HAS_POST_AFFINE) {
@@ -115,13 +121,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         // Calculate speed (distance traveled)
         let speed = length(current - old_pos);
 
-        // Step 3: write final color_index (palette mode), or speed-based (speed mode)
+{{#if HAS_DC}}
+        // Step 3 (palette mode), or speed-based color (speed mode).
         if (COLOR_MODE == 0u) {
             color_index = c_base + xform.direct_color * (vc - c_base);
         } else if (COLOR_MODE == 1u) {
             let speed_color = speed_to_color(speed);
             color = mix(color, speed_color, params.speed_factor);
         }
+{{else}}
+        // Original Step 1 (palette mode), or speed-based color (speed mode).
+        if (COLOR_MODE == 0u) {
+            let symmetry = xform.color_speed;
+            let colorC1 = (1.0 + symmetry) / 2.0;
+            let colorC2 = xform.color * (1.0 - symmetry) / 2.0;
+            color_index = color_index * colorC1 + colorC2;
+        } else if (COLOR_MODE == 1u) {
+            let speed_color = speed_to_color(speed);
+            color = mix(color, speed_color, params.speed_factor);
+        }
+{{/if}}
 {{#if PATH_TRACKING}}
         // Note: COLOR_MODE == 2 (PathMap) handled below with path buffer writes
 {{else}}
@@ -168,6 +187,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             var final_pos = current;
             if (HAS_FINAL_TRANSFORM) {
                 let final_xform = transforms[FINAL_TRANSFORM_INDEX];
+{{#if HAS_DC}}
                 // Final transform's vc is discarded — DC blend is per-iteration only.
                 var final_vc: f32 = color_index;
 {{#if RENDER_3D}}
@@ -176,6 +196,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 {{else}}
                 let affine_p = apply_affine(final_xform, current);
                 final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng, &final_vc);
+{{/if}}
+{{else}}
+{{#if RENDER_3D}}
+                let affine_p = apply_affine(final_xform, final_pos);
+                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng);
+{{else}}
+                let affine_p = apply_affine(final_xform, current);
+                final_pos = apply_variations(final_xform, FINAL_TRANSFORM_INDEX, affine_p, &rng);
+{{/if}}
 {{/if}}
                 // Post-affine on final transform
                 if (HAS_POST_AFFINE) {
