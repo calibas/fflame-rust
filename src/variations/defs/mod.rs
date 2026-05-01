@@ -28,6 +28,7 @@ mod dc;
 mod hypertile;
 mod classic_2d;
 mod mobius_extended;
+mod circle_blur;
 
 pub use basic::*;
 pub use advanced::*;
@@ -54,6 +55,7 @@ pub use dc::*;
 pub use hypertile::*;
 pub use classic_2d::*;
 pub use mobius_extended::*;
+pub use circle_blur::*;
 
 use super::definition::VariationDef;
 
@@ -287,4 +289,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // Möbius family extensions
     &MOBIUSN,
     &MOBIQ,
+    // Circle / blur distortions
+    &CIRCLEBLUR,
+    &CIRCLESPLIT,
+    &FLIPCIRCLE,
+    &BLUR_LINEAR,
 ];
