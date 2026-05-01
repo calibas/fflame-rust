@@ -34,6 +34,7 @@ mod glynn;
 mod wedge_extended;
 mod shapes3;
 mod radial_extras;
+mod internal_weight;
 
 pub use basic::*;
 pub use advanced::*;
@@ -66,6 +67,7 @@ pub use glynn::*;
 pub use wedge_extended::*;
 pub use shapes3::*;
 pub use radial_extras::*;
+pub use internal_weight::*;
 
 use super::definition::VariationDef;
 
@@ -324,4 +326,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // Radial extras — variations whose X/Y output doesn't scale with weight
     &ONION,
     &TARGET_SP,
+    // Internal-weight watchlist via needs_transform
+    &LOONIE3,
+    &LOONIE_3D,
+    &SIGMOID,
+    &BLOCKY,
 ];
