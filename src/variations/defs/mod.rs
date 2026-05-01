@@ -31,6 +31,7 @@ mod mobius_extended;
 mod circle_blur;
 mod numbered_extras;
 mod glynn;
+mod wedge_extended;
 
 pub use basic::*;
 pub use advanced::*;
@@ -60,6 +61,7 @@ pub use mobius_extended::*;
 pub use circle_blur::*;
 pub use numbered_extras::*;
 pub use glynn::*;
+pub use wedge_extended::*;
 
 use super::definition::VariationDef;
 
@@ -308,4 +310,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &GLYNN_SIM1,
     &GLYNN_SIM2,
     &GLYNN_SIM3,
+    // Wedge family extensions
+    &WEDGE_JULIA,
+    &WEDGE_SPH,
 ];
