@@ -41,6 +41,7 @@ mod blur_extras;
 mod boarders;
 mod standalone_exotics;
 mod parametric_curves;
+mod stub_recoveries;
 
 pub use basic::*;
 pub use advanced::*;
@@ -80,6 +81,7 @@ pub use blur_extras::*;
 pub use boarders::*;
 pub use standalone_exotics::*;
 pub use parametric_curves::*;
+pub use stub_recoveries::*;
 
 use super::definition::VariationDef;
 
@@ -367,4 +369,11 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &LISSAJOUS,
     &VOGEL,
     &CROP3D,
+    // Stub-bucket recoveries (cpp PluginVarCalc empty; ported from Java)
+    &BSPLIT,
+    &CYLINDER2,
+    &ECLIPSE,
+    &LOZI,
+    &PULSE,
+    &HYPERSHIFT,
 ];
