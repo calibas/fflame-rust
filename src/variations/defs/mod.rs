@@ -44,6 +44,7 @@ mod parametric_curves;
 mod stub_recoveries;
 mod maurer_hyper;
 mod misc_2d;
+mod misc_extras;
 
 pub use basic::*;
 pub use advanced::*;
@@ -86,6 +87,7 @@ pub use parametric_curves::*;
 pub use stub_recoveries::*;
 pub use maurer_hyper::*;
 pub use misc_2d::*;
+pub use misc_extras::*;
 
 use super::definition::VariationDef;
 
@@ -392,4 +394,11 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SPHERICALN,
     &SPLIGON,
     &TILE_HLP,
+    // Miscellaneous larger / 3D primitives
+    &HO,
+    &CHUNK,
+    &PTRANSFORM,
+    &RATIONAL3,
+    &TILE_REVERSE,
+    &ORTHO,
 ];
