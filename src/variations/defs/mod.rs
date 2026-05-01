@@ -36,6 +36,7 @@ mod shapes3;
 mod radial_extras;
 mod internal_weight;
 mod pre_post_bridges;
+mod truchet;
 
 pub use basic::*;
 pub use advanced::*;
@@ -70,6 +71,7 @@ pub use shapes3::*;
 pub use radial_extras::*;
 pub use internal_weight::*;
 pub use pre_post_bridges::*;
+pub use truchet::*;
 
 use super::definition::VariationDef;
 
@@ -337,4 +339,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &PRE_CURL,
     &POST_JULIAQ,
     &POST_JULIA3DQ,
+    // Truchet family
+    &TRUCHET_FILL,
 ];
