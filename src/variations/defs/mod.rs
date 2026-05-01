@@ -38,6 +38,7 @@ mod internal_weight;
 mod pre_post_bridges;
 mod truchet;
 mod blur_extras;
+mod boarders;
 
 pub use basic::*;
 pub use advanced::*;
@@ -74,6 +75,7 @@ pub use internal_weight::*;
 pub use pre_post_bridges::*;
 pub use truchet::*;
 pub use blur_extras::*;
+pub use boarders::*;
 
 use super::definition::VariationDef;
 
@@ -347,4 +349,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SINEBLUR,
     &STARBLUR,
     &R_CIRCLEBLUR,
+    // Boarders / border-tile family
+    &BOARDERS,
+    &BOARDERS2,
+    &PRE_BOARDERS2,
+    &SPLITBRDR,
 ];
