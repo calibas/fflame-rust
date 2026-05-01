@@ -83,3 +83,4 @@ Timestamp,Fractal,ConfigFile,Resolution,Platform,Commit,CommitName,TotalIteratio
 2026-01-20 07:35:32,simple3,output/simple3.fflame,1920x1080,Windows,e86ca93,Current,39812333568,256,0.90,128,16264.54,166.95,1.03,16018.04,16384.44,2.45,5,1.91.1,release
 2026-01-27 10:11:19,simple3,output/simple3.fflame,1920x1080,Windows,04eac9b,Current,39812333568,256,0.90,128,16350.08,139.43,0.85,16197.24,16534.31,2.43,5,1.91.1,release
 2026-02-02 09:31:19,simple3,output/simple3.fflame,1920x1080,Windows,a552375,Current,39812333568,256,0.90,128,15793.61,139.40,0.88,15666.91,15988.43,2.52,5,1.91.1,release
+2026-04-30 18:06:25,simple3,output/simple3.fflame,1920x1080,Windows,5857103,Current,39812333568,256,0.90,128,15766.92,44.02,0.28,15703.90,15806.34,2.53,5,1.91.1,release
