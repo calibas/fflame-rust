@@ -25,6 +25,7 @@ mod heavy_init;
 mod init_ports;
 mod affine_ports;
 mod dc;
+mod hypertile;
 
 pub use basic::*;
 pub use advanced::*;
@@ -48,6 +49,7 @@ pub use heavy_init::*;
 pub use init_ports::*;
 pub use affine_ports::*;
 pub use dc::*;
+pub use hypertile::*;
 
 use super::definition::VariationDef;
 
@@ -264,4 +266,11 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // Direct-color (DC) variations — first uses of writes_color
     &DC_LINEAR,
     &DC_BUBBLE,
+    // Hypertile family (Zueuk's hyperbolic tilings)
+    &HYPERTILE,
+    &HYPERTILE1,
+    &HYPERTILE2,
+    &HYPERTILE3D,
+    &HYPERTILE3D1,
+    &HYPERTILE3D2,
 ];
