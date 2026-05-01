@@ -10,11 +10,11 @@ Source repo: https://github.com/mwegner/chaotica-apophysis-plugins-from-jwildfir
 
 | | Count |
 |---|---|
-| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **277** as of 2026-05-01 — see [Porting progress](#porting-progress-2026-04-27))* |
+| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **291** as of 2026-05-01 — see [Porting progress](#porting-progress-2026-04-27))* |
 | Upstream `.cpp` files | **636** |
 | Already implemented (exact name match) | 78 |
 | Ours-only (name doesn't appear upstream) | 6 |
-| Upstream-only (potentially to port) | **558** *(initially; **~365 remaining** after the porting since)* |
+| Upstream-only (potentially to port) | **558** *(initially; **~351 remaining** after the porting since)* |
 
 Lists are checked into this directory:
 - [variation-upstream-only.txt](variation-upstream-only.txt) — all 558 upstream-only names
@@ -79,7 +79,7 @@ What we **don't** support:
 1. ✅ **This doc + lists** — done
 2. ✅ **Bulk-fetch the 415 .cpp files** for offline analysis — done (subagent run, 2026-04-26). The same source is now mirrored locally under `output/jwildfire-vars/` (gitignored) for offline reading via the file tools — preferred over web-fetching during ports.
 3. ✅ **Per-file classification** — pure / parameterized / RNG / uses-internal-weight / broken — done (see [Classification](#classification-auto-generated-2026-04-26) below)
-4. 🚧 **Port in batches** — 35 batches landed (193 variations); see [Porting progress](#porting-progress-2026-04-27) below
+4. 🚧 **Port in batches** — 38 batches landed (207 variations); see [Porting progress](#porting-progress-2026-04-27) below
 5. ⏳ **Database import scripts** — generate from the ported `VariationDef`s for upload to the variations API
 6. ⏳ **Test pass** — flame referencing each new variation renders correctly via local registry, then via API fetch with cache cleared
 
@@ -130,8 +130,11 @@ both the shader emitter and the buffer populator, sharing
 | 33 | `misc_extras.rs` | Larger / 3D primitives | 6 | `ho` (3D hyperbolic-octahedron — uses sign-preserving `pow` to handle negative bases that WGSL `pow` rejects), `chunk` (quadratic-conic mask, divide-out), `ptransform`, `rational3` (degree-3 complex-rational), `tile_reverse`, `ortho` (4-branch Möbius warp). |
 | 34 | `bipolar_series.rs` | B-/E-series + barycentroid | 10 | Faber's bSeries (`bcollide`, `bmod`, `bswirl`) and eSeries (`ecollide`, `emod`, `eswirl`, `escale`, `epush`, `erotate`) using bipolar/elliptic coordinate transforms; plus `barycentroid` (Xyrus02). All clean factor through outer multiplier. Each E-series body inlines the same elliptic preamble — we trust GPU compiler CSE when multiple are active. |
 | 35 | `singleton_misc.rs` | Standalone misc | 8 | `corners` (recovered 7 omitted params from Java; cpp exposed only 2 of 9), `modulus`, `octagon` (3D), `circus`, `circlize` (divide-out for the `+ hole` term — cpp's "tsk tsk... not scaled by vvar"), `circlize2` (clean), `atan` (3-mode selector), `murl` (cpp put per-iter intermediates in the persistent struct unnecessarily — treated as locals). |
-| **Total new** | | | **193** | |
-| Registry size | | | **277** | (84 base + 193 ported) |
+| 36 | `misc_extras2.rs` | More misc | 6 | `collideoscope` (Faber's radial branch-and-mod), `bent2` (per-quadrant scale), `mcarpet` (bubble + twist + tilt; FracFx), `lineart3d` (3D sign-preserving power), `oscilloscope` (Y-flip in damped cosine band), `fibonacci2` (Larry Berlin — Binet-formula complex Fibonacci with constants inlined). Skipped `cubicLattice_3D` (mid-iteration accumulator read). |
+| 37 | `misc_extras3.rs` | Even more misc | 4 | `oscilloscope2` (DarkBeam tweak — both X and Y flipped inside band), `lineart` (2D version of lineart3d — porter naming inconsistency `lineart` vs `linearT`), `phoenix_julia` (TyrantWave; X/Y distortion + N-th-root random branch), `pow_block` (cothe / DarkBeam — generalized N-th root). Skipped `arctruchet` (malloc'd persistent state), `circleTrans1` (do-while + hash). |
+| 38 | `stub_recoveries2.rs` | More unported_stub recoveries | 4 | `disc3` (8 user knobs over base disc), `projective` (eralex61 — linear-fractional projective), `tqmirror` (Anderson — quadrant fold-mirror; needs_transform for VVAR-as-threshold), `intersection` (Stefanov — random row/col tile blur, needs_transform for divide-out). Skipped `mobius_strip` (10 params + multi-mode init; focused single-port batch better), `pre_recip` (Java Complex class extensively used). |
+| **Total new** | | | **207** | |
+| Registry size | | | **291** | (84 base + 207 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -156,6 +159,9 @@ Branches and commits:
   `2fbb1cf` (stub recoveries), `efaa12f` (maurer_rose + hypercrop),
   `ca5f946` (misc 2d), `85066ce` (misc extras), `b628bec` (B/E-series),
   `6eb8ca5` (singleton misc).
+- Batches 36–38 also on `variation-bulk-port-2`. Commits in order:
+  `996b5f8` (misc extras 2), `2389c2c` (misc extras 3), `2ee631b`
+  (stub recoveries 2).
 
 ### Notable decisions during porting
 
@@ -1105,6 +1111,9 @@ Solving the first sub-case alone would unlock all three blur variants
 | `exblur` | `param_rng` | 228 | `_r[4]` ring buffer (same pattern) |
 | `nblur` | `param` | 430 | larger, but same architectural blocker |
 | `curliecue2` | `rng` | 166 | autonomous trajectory; ignores input point |
+| `arctruchet` | `param_rng` | 367 | malloc'd `_tiltArray` of per-thread persistent state plus `PluginVarTerminate` to free it |
+| `hexnix3D` | `param` | 247 | `rswtch` / `fcycle` / `bcycle` cycle counters that persist across iterations |
+| `hexaplay3D` | `param` | 177 | same persistent cycle counters |
 
 #### Mid-iteration accumulator reads
 
@@ -1119,6 +1128,7 @@ input point, not the running accumulator.
 |---|---|---:|---|
 | `farblur` | `param_rng` | 213 | reads FPx, FPy, FPz mid-iteration |
 | `post_depth` | `param` | 144 | post-phase, reads BOTH pre-affine `FTx` and post-variations `FPx` (already mentioned in batch-24 deferral) |
+| `cubicLattice_3D` | `param` | 157 | reads BOTH pre-affine `FTx`/`FTy`/`FTz` and post-variations `FPx`/`FPy`/`FPz` mid-iteration |
 
 #### Z-coordinate clamping / non-linear-weight FPz assignment
 
