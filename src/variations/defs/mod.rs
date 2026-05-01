@@ -45,6 +45,7 @@ mod stub_recoveries;
 mod maurer_hyper;
 mod misc_2d;
 mod misc_extras;
+mod bipolar_series;
 
 pub use basic::*;
 pub use advanced::*;
@@ -88,6 +89,7 @@ pub use stub_recoveries::*;
 pub use maurer_hyper::*;
 pub use misc_2d::*;
 pub use misc_extras::*;
+pub use bipolar_series::*;
 
 use super::definition::VariationDef;
 
@@ -401,4 +403,15 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &RATIONAL3,
     &TILE_REVERSE,
     &ORTHO,
+    // Bipolar (B-) and Elliptic (E-) coordinate-system series (Faber)
+    &BCOLLIDE,
+    &BMOD,
+    &BSWIRL,
+    &BARYCENTROID,
+    &ECOLLIDE,
+    &EMOD,
+    &ESWIRL,
+    &ESCALE,
+    &EPUSH,
+    &EROTATE,
 ];
