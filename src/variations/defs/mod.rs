@@ -32,6 +32,7 @@ mod circle_blur;
 mod numbered_extras;
 mod glynn;
 mod wedge_extended;
+mod shapes3;
 
 pub use basic::*;
 pub use advanced::*;
@@ -62,6 +63,7 @@ pub use circle_blur::*;
 pub use numbered_extras::*;
 pub use glynn::*;
 pub use wedge_extended::*;
+pub use shapes3::*;
 
 use super::definition::VariationDef;
 
@@ -313,4 +315,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // Wedge family extensions
     &WEDGE_JULIA,
     &WEDGE_SPH,
+    // Standalone shapes — 3rd batch (super_shape, henon, apollony)
+    &SUPER_SHAPE,
+    &HENON,
+    &APOLLONY,
 ];
