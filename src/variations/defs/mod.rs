@@ -35,6 +35,7 @@ mod wedge_extended;
 mod shapes3;
 mod radial_extras;
 mod internal_weight;
+mod pre_post_bridges;
 
 pub use basic::*;
 pub use advanced::*;
@@ -68,6 +69,7 @@ pub use wedge_extended::*;
 pub use shapes3::*;
 pub use radial_extras::*;
 pub use internal_weight::*;
+pub use pre_post_bridges::*;
 
 use super::definition::VariationDef;
 
@@ -331,4 +333,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &LOONIE_3D,
     &SIGMOID,
     &BLOCKY,
+    // Pre/post bridges
+    &PRE_CURL,
+    &POST_JULIAQ,
+    &POST_JULIA3DQ,
 ];
