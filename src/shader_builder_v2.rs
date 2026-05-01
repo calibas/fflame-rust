@@ -617,6 +617,17 @@ impl ShaderBuilder {
             .collect()
     }
 
+    /// Returns true if any variation in the active set writes to the
+    /// iteration-local color register (has `writes_color: true`). Drives the
+    /// `HAS_DC` template condition: the main loop's c_base/vc/Step3 lerp and
+    /// the `vc` pointer parameter on `apply_variations` are emitted only when
+    /// this is true. Flames without DC variations skip them entirely.
+    fn has_dc_variation(&self, active_variations: &[(String, u32)]) -> bool {
+        active_variations.iter().any(|(name, _)| {
+            self.registry.get(name).is_some_and(|info| info.writes_color)
+        })
+    }
+
     /// Build the init compute shader for a flame's active variations.
     ///
     /// Returns `Some(wgsl)` if any active variation in the flame has a
@@ -839,12 +850,16 @@ impl ShaderBuilder {
         shader.push_str(&self.generate_variation_code(&active, render_3d));
         shader.push('\n');
 
+        // Compute has_dc once: drives both the apply_variations signature
+        // (with vs without `vc` param) and the HAS_DC template condition.
+        let has_dc = self.has_dc_variation(&active);
+
         // 7. Generate apply_variations with fixed registry indices
         // Pass inlined transforms for dead code elimination if available
         if render_3d {
-            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref()));
+            shader.push_str(&self.build_apply_variations_3d(&active, constants.inlined_transforms.as_ref(), has_dc));
         } else {
-            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref()));
+            shader.push_str(&self.build_apply_variations_2d(&active, constants.inlined_transforms.as_ref(), has_dc));
         }
         shader.push('\n');
 
@@ -864,6 +879,7 @@ impl ShaderBuilder {
         processor.set("RENDER_3D", render_3d);
         processor.set("PATH_TRACKING", path_features_enabled);
         processor.set("XAOS_ENABLED", xaos_enabled);
+        processor.set("HAS_DC", has_dc);
         shader.push_str(&processor.process(template));
 
         // DEBUG: Write shader to file for analysis (enabled via --dump-shader CLI flag)
@@ -884,25 +900,33 @@ impl ShaderBuilder {
     ///
     /// When `inlined_transforms` is provided, generates code with compile-time constant
     /// variation weights, enabling dead code elimination for unused variations per-transform.
+    /// When `has_dc` is true, the function takes a `vc: ptr<function, f32>` parameter for
+    /// direct-color variations to write to; when false, the parameter is omitted entirely
+    /// (zero-cost path when no DC variation is in the active set).
     fn build_apply_variations_2d(
         &self,
         active_variations: &[(String, u32)],
         inlined_transforms: Option<&Vec<InlinedTransform>>,
+        has_dc: bool,
     ) -> String {
         use crate::variations::VariationPhase;
 
         // When inlined, we generate per-transform specialized code
         let use_inlined = inlined_transforms.is_some();
 
+        let signature = if has_dc {
+            "fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {\n"
+        } else {
+            "fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>) -> vec2<f32> {\n"
+        };
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
-             // The `vc` pointer is the iteration-local color register Apophysis calls\n\
-             // `vc` — direct-color variations (writes_color: true) overwrite it; ordinary\n\
-             // variations leave it alone. Main loop reads it after the call to compute\n\
-             // the Step 3 lerp with xform.direct_color. Currently no DC variations are\n\
-             // registered, so vc is unused in the body — the compiler eliminates it.\n\
-             fn apply_variations(xform: Transform, xform_id: u32, p: vec2<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec2<f32> {\n"
+             // When has_dc=true, takes a `vc` pointer (the iteration-local color register\n\
+             // Apophysis calls `vc`) so DC variations (writes_color: true) can write to it.\n\
+             // When has_dc=false, the parameter is omitted — no DC variation in the active\n\
+             // set means no inner call references vc, so it's pure overhead.\n",
         );
+        code.push_str(signature);
 
         // Separate variations by phase
         let mut pre_variations = Vec::new();
@@ -1046,17 +1070,23 @@ impl ShaderBuilder {
         &self,
         active_variations: &[(String, u32)],
         inlined_transforms: Option<&Vec<InlinedTransform>>,
+        has_dc: bool,
     ) -> String {
         use crate::variations::VariationPhase;
 
         // When inlined, we generate per-transform specialized code
         let use_inlined = inlined_transforms.is_some();
 
+        let signature = if has_dc {
+            "fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {\n"
+        } else {
+            "fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>) -> vec3<f32> {\n"
+        };
         let mut code = String::from(
             "// Apply all variations with Apophysis 4-phase execution model (XForm.pas:343-383)\n\
-             // See 2D variant for the meaning of the `vc` pointer.\n\
-             fn apply_variations(xform: Transform, xform_id: u32, p: vec3<f32>, rng: ptr<function, RngState>, vc: ptr<function, f32>) -> vec3<f32> {\n"
+             // See 2D variant for the meaning of the `vc` pointer.\n",
         );
+        code.push_str(signature);
 
         // Separate variations by phase
         let mut pre_variations = Vec::new();
@@ -1276,7 +1306,20 @@ impl ShaderBuilder {
     /// Build 2D TILED trajectory shader with active variations
     /// Uses full-resolution coordinates and routes samples to tile buffers
     pub fn build_trajectory_2d_tiled(&self, active_variations: &HashMap<String, f32>) -> String {
-        let active_2d = self.active_with_local_indices(active_variations, false);
+        self.build_trajectory_tiled(active_variations, false)
+    }
+
+    /// Build 3D TILED trajectory shader with active variations
+    pub fn build_trajectory_3d_tiled(&self, active_variations: &HashMap<String, f32>) -> String {
+        self.build_trajectory_tiled(active_variations, true)
+    }
+
+    /// Build TILED trajectory shader (2D or 3D), with HAS_DC + RENDER_3D
+    /// template conditions. Same shader source for both modes — the
+    /// `{{#if RENDER_3D}}` gates select vec2/vec3 init and the matching
+    /// pixel projection helper.
+    fn build_trajectory_tiled(&self, active_variations: &HashMap<String, f32>, render_3d: bool) -> String {
+        let active = self.active_with_local_indices(active_variations, render_3d);
 
         let mut shader = String::new();
 
@@ -1288,76 +1331,49 @@ impl ShaderBuilder {
         shader.push_str(include_str!("../shaders/core/rng.wgsl"));
         shader.push('\n');
 
-        // 3. Affine
-        shader.push_str(include_str!("../shaders/core/affine.wgsl"));
+        // 3. Affine — 3D affine includes rotate_x/rotate_y helpers used by
+        // some 3D variations; 2D affine has just apply_affine + post-affine.
+        if render_3d {
+            shader.push_str(include_str!("../shaders/core/affine_3d.wgsl"));
+        } else {
+            shader.push_str(include_str!("../shaders/core/affine.wgsl"));
+        }
         shader.push('\n');
 
-        // 4. Core variations (2D) from embedded VariationDef WGSL (only active ones)
-        shader.push_str(&self.generate_variation_code(&active_2d, false));
+        // 4. Core variations from embedded VariationDef WGSL (only active ones)
+        shader.push_str(&self.generate_variation_code(&active, render_3d));
         shader.push('\n');
 
         // 5. Generate apply_variations (no inlining for tiled shaders)
-        shader.push_str(&self.build_apply_variations_2d(&active_2d, None));
+        let has_dc = self.has_dc_variation(&active);
+        if render_3d {
+            shader.push_str(&self.build_apply_variations_3d(&active, None, has_dc));
+        } else {
+            shader.push_str(&self.build_apply_variations_2d(&active, None, has_dc));
+        }
         shader.push('\n');
 
-        // 7. Tiled utilities (uses full_width/full_height)
+        // 6. Tiled utilities (uses full_width/full_height)
         shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
         shader.push('\n');
 
-        // 8. Tiled main
-        shader.push_str(include_str!("../shaders/core/main_2d_tiled.wgsl"));
+        // 7. Unified tiled main — RENDER_3D + HAS_DC select the variant.
+        let mut processor = TemplateProcessor::new();
+        processor.set("RENDER_3D", render_3d);
+        processor.set("HAS_DC", has_dc);
+        shader.push_str(&processor.process(include_str!("../shaders/core/main_tiled.wgsl")));
 
         shader
     }
 
-    /// Build 3D TILED trajectory shader with active variations
-    pub fn build_trajectory_3d_tiled(&self, active_variations: &HashMap<String, f32>) -> String {
-        let active_3d = self.active_with_local_indices(active_variations, true);
-
-        let mut shader = String::new();
-
-        // 1. Tiled header
-        shader.push_str(include_str!("../shaders/core/header_tiled.wgsl"));
-        shader.push('\n');
-
-        // 2. RNG
-        shader.push_str(include_str!("../shaders/core/rng.wgsl"));
-        shader.push('\n');
-
-        // 3. Affine (3D)
-        shader.push_str(include_str!("../shaders/core/affine_3d.wgsl"));
-        shader.push('\n');
-
-        // 4. Core variations (3D) from embedded VariationDef WGSL (only active ones)
-        shader.push_str(&self.generate_variation_code(&active_3d, true));
-        shader.push('\n');
-
-        // 5. Generate apply_variations (no inlining for tiled shaders)
-        shader.push_str(&self.build_apply_variations_3d(&active_3d, None));
-        shader.push('\n');
-
-        // 6. Tiled utilities
-        shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
-        shader.push('\n');
-
-        // 7. Tiled main
-        shader.push_str(include_str!("../shaders/core/main_3d_tiled.wgsl"));
-
-        shader
-    }
-
-    /// Build 2D EXPORT shader - outputs samples to buffer for CPU histogram
-    /// NOTE: Uses 3D shader internally to support configs with 3D variations like "flatten"
-    /// even when render_mode is 2D. The 3D shader handles 2D correctly (Z is just ignored).
-    pub fn build_export_2d(&self, active_variations: &HashMap<String, f32>) -> String {
-        // Use 3D shader for export - it handles all variation types correctly
-        // The 2D vs 3D distinction only matters for how Z is displayed, not for export
-        self.build_export_3d(active_variations)
-    }
-
-    /// Build 3D EXPORT shader - outputs samples to buffer for CPU histogram
-    pub fn build_export_3d(&self, active_variations: &HashMap<String, f32>) -> String {
-        let active_3d = self.active_with_local_indices(active_variations, true);
+    /// Build the EXPORT shader — outputs samples to a buffer for CPU
+    /// histogram accumulation. Uses the 3D code path regardless of the
+    /// flame's render_mode: the 2D vs 3D distinction only matters for how Z
+    /// is displayed, not for sample collection. Configs with 3D variations
+    /// (e.g. flatten, hemisphere) need the 3D path even when render_mode is
+    /// 2D, which is why there's no separate 2D export shader.
+    pub fn build_export(&self, active_variations: &HashMap<String, f32>) -> String {
+        let active = self.active_with_local_indices(active_variations, true);
 
         let mut shader = String::new();
 
@@ -1383,16 +1399,99 @@ impl ShaderBuilder {
         shader.push('\n');
 
         // 6. Core variations (3D) from embedded VariationDef WGSL (only active ones)
-        shader.push_str(&self.generate_variation_code(&active_3d, true));
+        shader.push_str(&self.generate_variation_code(&active, true));
         shader.push('\n');
 
         // 7. Generate apply_variations (no inlining for export shaders)
-        shader.push_str(&self.build_apply_variations_3d(&active_3d, None));
+        let has_dc = self.has_dc_variation(&active);
+        shader.push_str(&self.build_apply_variations_3d(&active, None, has_dc));
         shader.push('\n');
 
-        // 8. Export main
-        shader.push_str(include_str!("../shaders/core/main_3d_export.wgsl"));
+        // 8. Export main — routed through TemplateProcessor with HAS_DC gate.
+        let mut processor = TemplateProcessor::new();
+        processor.set("HAS_DC", has_dc);
+        shader.push_str(&processor.process(include_str!("../shaders/core/main_export.wgsl")));
 
         shader
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Verify the unified main_tiled.wgsl produces the expected 2D and 3D
+    /// variants when run through the TemplateProcessor with RENDER_3D set
+    /// appropriately. Catches the obvious wrong-init / wrong-projection
+    /// regressions if someone ever breaks the {{#if RENDER_3D}} blocks.
+    #[test]
+    fn tiled_shader_render_3d_gates() {
+        let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
+        let mut active = HashMap::new();
+        active.insert("linear".to_string(), 1.0);
+
+        let shader_2d = builder.build_trajectory_2d_tiled(&active);
+        let shader_3d = builder.build_trajectory_3d_tiled(&active);
+
+        // utilities_tiled.wgsl defines BOTH world_to_pixel and
+        // world_to_pixel_3d functions, so check for the call site
+        // specifically (the `let pixel = ...` line in the main loop).
+        // 2D path: vec2<f32> init, world_to_pixel call (not _3d)
+        assert!(shader_2d.contains("var current = vec2<f32>("),
+                "2D tiled missing vec2 init");
+        assert!(shader_2d.contains("let pixel = world_to_pixel(final_pos);"),
+                "2D tiled missing world_to_pixel call");
+        assert!(!shader_2d.contains("var current = vec3<f32>("),
+                "2D tiled has vec3 init (RENDER_3D leaked)");
+        assert!(!shader_2d.contains("let pixel = world_to_pixel_3d(final_pos);"),
+                "2D tiled has world_to_pixel_3d call site (RENDER_3D leaked)");
+
+        // 3D path: vec3<f32> init, world_to_pixel_3d call
+        assert!(shader_3d.contains("var current = vec3<f32>("),
+                "3D tiled missing vec3 init");
+        assert!(shader_3d.contains("let pixel = world_to_pixel_3d(final_pos);"),
+                "3D tiled missing world_to_pixel_3d call");
+        assert!(!shader_3d.contains("var current = vec2<f32>("),
+                "3D tiled has vec2 init (RENDER_3D leaked)");
+        assert!(!shader_3d.contains("let pixel = world_to_pixel(final_pos);"),
+                "3D tiled has world_to_pixel call site (RENDER_3D leaked)");
+
+        // Neither should contain unprocessed template tags
+        for (name, src) in [("2d", &shader_2d), ("3d", &shader_3d)] {
+            assert!(!src.contains("{{#if"), "{} tiled has unprocessed {{#if}} tag", name);
+            assert!(!src.contains("{{else}}"), "{} tiled has unprocessed {{else}} tag", name);
+            assert!(!src.contains("{{/if}}"), "{} tiled has unprocessed {{/if}} tag", name);
+        }
+    }
+
+    /// HAS_DC=false should yield a shader with the older 2-step color flow
+    /// (no c_base/vc, no Step 3 lerp, apply_variations called without &vc).
+    /// HAS_DC=true should have the 3-step flow.
+    #[test]
+    fn tiled_shader_has_dc_gates() {
+        let builder = ShaderBuilder::new(crate::variations::global_registry().clone());
+
+        // Flame using just `linear` — no DC variation
+        let mut active_no_dc = HashMap::new();
+        active_no_dc.insert("linear".to_string(), 1.0);
+        let shader = builder.build_trajectory_2d_tiled(&active_no_dc);
+        assert!(!shader.contains("var c_base"),
+                "HAS_DC=false shader contains c_base");
+        assert!(!shader.contains("xform.direct_color"),
+                "HAS_DC=false shader contains direct_color load");
+        assert!(shader.contains("apply_variations(xform, xform_idx, affine_p, &rng)"),
+                "HAS_DC=false call site missing 4-arg apply_variations");
+
+        // Flame using dc_linear — has writes_color: true
+        let mut active_dc = HashMap::new();
+        active_dc.insert("dc_linear".to_string(), 1.0);
+        let shader = builder.build_trajectory_2d_tiled(&active_dc);
+        assert!(shader.contains("var c_base"),
+                "HAS_DC=true shader missing c_base");
+        assert!(shader.contains("xform.direct_color"),
+                "HAS_DC=true shader missing direct_color use");
+        assert!(shader.contains("apply_variations(xform, xform_idx, affine_p, &rng, &vc)"),
+                "HAS_DC=true call site missing 5-arg apply_variations");
     }
 }

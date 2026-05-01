@@ -325,12 +325,10 @@ impl HighResExporter {
             }
         }
 
-        // Build shader
+        // Build shader. The export shader uses the 3D code path regardless
+        // of render_mode — see build_export's doc comment.
         let shader_builder = ShaderBuilder::new(global_registry().clone());
-        let shader_source = match config.flame.render_mode {
-            RenderMode::TwoD => shader_builder.build_export_2d(&active_variations),
-            RenderMode::ThreeD => shader_builder.build_export_3d(&active_variations),
-        };
+        let shader_source = shader_builder.build_export(&active_variations);
 
         let shader_module = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Export Compute Shader"),
