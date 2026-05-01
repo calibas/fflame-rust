@@ -46,6 +46,7 @@ mod maurer_hyper;
 mod misc_2d;
 mod misc_extras;
 mod bipolar_series;
+mod singleton_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -90,6 +91,7 @@ pub use maurer_hyper::*;
 pub use misc_2d::*;
 pub use misc_extras::*;
 pub use bipolar_series::*;
+pub use singleton_misc::*;
 
 use super::definition::VariationDef;
 
@@ -414,4 +416,13 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &ESCALE,
     &EPUSH,
     &EROTATE,
+    // Singleton misc
+    &CORNERS,
+    &MODULUS,
+    &OCTAGON,
+    &CIRCUS,
+    &CIRCLIZE,
+    &CIRCLIZE2,
+    &ATAN_VAR,
+    &MURL,
 ];
