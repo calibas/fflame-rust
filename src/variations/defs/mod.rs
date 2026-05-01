@@ -37,6 +37,7 @@ mod radial_extras;
 mod internal_weight;
 mod pre_post_bridges;
 mod truchet;
+mod blur_extras;
 
 pub use basic::*;
 pub use advanced::*;
@@ -72,6 +73,7 @@ pub use radial_extras::*;
 pub use internal_weight::*;
 pub use pre_post_bridges::*;
 pub use truchet::*;
+pub use blur_extras::*;
 
 use super::definition::VariationDef;
 
@@ -341,4 +343,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &POST_JULIA3DQ,
     // Truchet family
     &TRUCHET_FILL,
+    // Additional blur primitives
+    &SINEBLUR,
+    &STARBLUR,
+    &R_CIRCLEBLUR,
 ];
