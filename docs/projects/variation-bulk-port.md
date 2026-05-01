@@ -10,11 +10,11 @@ Source repo: https://github.com/mwegner/chaotica-apophysis-plugins-from-jwildfir
 
 | | Count |
 |---|---|
-| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **208** as of 2026-05-01 — see [Porting progress](#porting-progress-2026-04-27))* |
+| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **237** as of 2026-05-01 — see [Porting progress](#porting-progress-2026-04-27))* |
 | Upstream `.cpp` files | **636** |
 | Already implemented (exact name match) | 78 |
 | Ours-only (name doesn't appear upstream) | 6 |
-| Upstream-only (potentially to port) | **558** *(initially; **~434 remaining** after the porting since)* |
+| Upstream-only (potentially to port) | **558** *(initially; **~405 remaining** after the porting since)* |
 
 Lists are checked into this directory:
 - [variation-upstream-only.txt](variation-upstream-only.txt) — all 558 upstream-only names
@@ -79,7 +79,7 @@ What we **don't** support:
 1. ✅ **This doc + lists** — done
 2. ✅ **Bulk-fetch the 415 .cpp files** for offline analysis — done (subagent run, 2026-04-26). The same source is now mirrored locally under `output/jwildfire-vars/` (gitignored) for offline reading via the file tools — preferred over web-fetching during ports.
 3. ✅ **Per-file classification** — pure / parameterized / RNG / uses-internal-weight / broken — done (see [Classification](#classification-auto-generated-2026-04-26) below)
-4. 🚧 **Port in batches** — 19 batches landed (124 variations); see [Porting progress](#porting-progress-2026-04-27) below
+4. 🚧 **Port in batches** — 29 batches landed (153 variations); see [Porting progress](#porting-progress-2026-04-27) below
 5. ⏳ **Database import scripts** — generate from the ported `VariationDef`s for upload to the variations API
 6. ⏳ **Test pass** — flame referencing each new variation renders correctly via local registry, then via API fetch with cache cleared
 
@@ -114,8 +114,18 @@ both the shader emitter and the buffer populator, sharing
 | 17 | `circle_blur.rs` | Circle/blur distortions | 4 | `circleblur`, `circlesplit`, `flipcircle` (uses needs_transform to read VVAR for its radius comparison), `blur_linear` (init for sin/cos of angle). |
 | 18 | `numbered_extras.rs` | Numbered cont'd | 3 | `bipolar2`, `blob3d`, `circular2`. |
 | 19 | `glynn.rs` | Glynnia + GlynnSim set | 5 | `glynnia` (factored the `_vvar2 = VVAR · sqrt(2)/2` internal weight cleanly), `glynnia3`, `glynnSim1`/`2`/`3`. The GlynnSim ports follow the Java semantics rather than the cpp (the cpp `circle()` helper takes `Point` by value — porter bug; we inline the helper, matching the JWildfire engine's output). |
-| **Total new** | | | **124** | |
-| Registry size | | | **208** | (84 base + 124 ported) |
+| 20 | `wedge_extended.rs` | Wedge family extensions | 2 | `wedge_julia`, `wedge_sph`. wedge_julia upstream computes `ca = cos(sa)` (cos-of-sin-of-a, not cos(a)) — preserved in both Java and cpp. |
+| 21 | `shapes3.rs` | Big standalone shapes | 3 | `super_shape`, `henon` (cpp PluginVarCalc was unported_stub — translated from the Java comment), `apollony` (Apollonian-gasket IFS via 3-way random branch). |
+| 22 | `radial_extras.rs` | Radial weight-independent | 2 | `onion`, `target_sp`. Both have X/Y output lines lacking the usual `VVAR *` multiplier — body uses `needs_transform` + divide-out so outer × w restores the cpp output. New pattern; described in [Notable decisions](#notable-decisions-during-porting). |
+| 23 | `internal_weight.rs` | Watchlist via needs_transform | 4 | `loonie3`, `loonie_3d`, `sigmoid`, `blocky`. Two patterns: threshold-only weight (factors cleanly) and non-linear weight (divide-out). `blocky`'s upstream `sqrt_safe(vp, x)` macro-expansion bug bypassed — we follow Java intent. |
+| 24 | `pre_post_bridges.rs` | Pre/post phase bridges | 3 | `pre_curl`, `post_juliaq`, `post_julia3dq`. Pre/post phases have no outer multiplier, so body reads `w` via `needs_transform` and applies VVAR directly. Cpp's `GOODRAND_0X(INT_MAX) * inv_power_2pi` replaced with `floor(rand · power) * inv_power_2pi` (semantically equivalent uniform N-th-root branch without distribution bias). |
+| 25 | `truchet.rs` | Truchet kickoff | 1 | `truchet_fill`. Internal weight via `scale = 1/VVAR` plus weight-independent FPx/FPy lines — divide-out pattern. Other Truchet members deferred (mostly `unportable_dc` or `unported_stub`). |
+| 26 | `blur_extras.rs` | More blur primitives | 3 | `sineblur`, `starblur`, `r_circleblur`. All factor cleanly through outer multiplier. `farblur`/`exblur`/`nblur` deferred — persistent `_r[4]` state buffer. |
+| 27 | `boarders.rs` | Boarders / border-tile | 4 | `boarders`, `boarders2`, `pre_boarders2`, `splitbrdr`. `pre_boarders2` is pre-phase with `needs_transform` to apply VVAR inside (no outer multiplier). `splitbrdr` mostly factors but ends with two extra non-VVAR lines — divide-out. |
+| 28 | `standalone_exotics.rs` | Misc exotics | 3 | `kaleidoscope` (preserves cpp's `cos(45.0)` = 45 RADIANS quirk), `taurus` (Z-only divide-out), `hole2` (cpp was unported_stub; 10 radial-shape selector translated from Java). |
+| 29 | `parametric_curves.rs` | Parametric curves + crop | 4 | `spirograph`, `lissajous`, `vogel` (φ-spiral), `crop3d`. crop3d uses standard outer-multiplier convention (cpp's `FPx = VVAR · x` matches our `+= VVAR · x` when crop3d is the only normal variation in its transform — typical use). |
+| **Total new** | | | **153** | |
+| Registry size | | | **237** | (84 base + 153 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -130,6 +140,12 @@ Branches and commits:
 - Batches 14–19 on `variation-port-hypertile`. Commits in order:
   `3b9f648` (hypertile), `5c882ce` (classic 2D), `a4f56e8` (Möbius),
   `1a7974d` (circle/blur), `5aee059` (numbered extras), `9f4b603` (Glynn).
+- Batches 20–29 on `variation-bulk-port-2`. Commits in order:
+  `a29145d` (wedge), `10e5e05` (shapes3), `fc0601d` (radial extras),
+  `6094b56` (internal-weight watchlist), `f6460d1` (pre/post bridges),
+  `5a463de` (truchet kickoff), `5af2340` (blur extras), `6203121`
+  (boarders), `d26ec36` (standalone exotics), `ca293ad` (parametric
+  curves + crop3D).
 
 ### Notable decisions during porting
 
@@ -211,6 +227,68 @@ These are places where I diverged from a literal C++→WGSL port and why:
   `weight · (1/dx · ...)` — the weight factors out cleanly through our
   outer-multiplier. Ports do **not** need `needs_transform`; they ship
   with full fidelity at any weight. Adjusts the watchlist below.
+- **`onion` / `target_sp` (batch 22) — divide-out pattern for
+  weight-independent X/Y.** Both upstream variations write `FPx +=
+  stuff` *without* multiplying `stuff` by VVAR — making the X/Y output
+  weight-independent in the cpp semantics (only Z preserve, where
+  present, scales with weight). Our pipeline always multiplies the
+  variation's return by the weight in the outer dispatcher, so we read
+  the weight via `needs_transform` and divide it out (`return output ·
+  inv_w`) — outer × w then restores the cpp result. New pattern;
+  reused by `truchet_fill` (batch 25), `blocky` Z-divide variants in
+  batch 23, `splitbrdr` (batch 27), `kaleidoscope`/`taurus`/`crop3d`
+  (batches 28–29) for the same shape of mismatch.
+- **`sigmoid` (batch 23) — sign-pass for absolute weight.** Upstream
+  uses `vv = |VVAR|` then `FPx += vv · stuff`. We emit `sign(w) · stuff`
+  so outer × w = `|w| · stuff`. Edge: `select(sign(w), 1.0, w == 0)`
+  to keep weight=0 well-defined.
+- **`blocky` (batch 23) — fixed upstream `sqrt_safe` macro bug.**
+  Upstream's `sqrt_safe(vp, x)` helper takes `double x` as its function
+  argument but reads `VAR(x)` inside (via the macro that expands to the
+  variation's `x` *user parameter*) — a porter bug that ignores the
+  function's actual argument and returns `sqrt(user_x)` regardless of
+  what the caller passed. We follow the obvious Java intent
+  (`sqrt(max(1 − a², 0))`) rather than reproducing the bug — preserving
+  the cpp behavior would make `blocky`'s output depend on a user
+  parameter that has no business affecting that codepath.
+- **`flipcircle` (batch 17) — `needs_transform` for threshold weight.**
+  Upstream's `r² > VVAR²` uses VVAR as a comparison threshold (geometry
+  varies with weight). Body reads `w = transforms[xform_id]
+  .variations[variation_id]` directly. Threshold-only weight; output
+  factors cleanly. (Same pattern reused by `loonie3`/`loonie_3d` in
+  batch 23.)
+- **`pre_curl` / `post_juliaq` / `post_julia3dq` (batch 24) — direct
+  VVAR application in pre/post phases.** Pre and post phases replace
+  `temp` (no outer multiplier in our dispatcher), so the body just
+  reads `w` via `needs_transform` and uses it directly inline.
+- **`pre_boarders2` (batch 27) — same pattern as batch 24.** Pre-phase
+  variant of `boarders2`; cpp uses `FTx = VVAR · stuff` (assignment).
+  Body reads weight and applies VVAR directly.
+- **N-th-root branch sampling (batch 24).** Cpp posts (`post_juliaq`,
+  `post_julia3dq`) use `GOODRAND_0X(INT_MAX) · inv_power_2pi` for the
+  N-th-root branch index. We replace with `floor(rand · power) ·
+  inv_power_2pi` — semantically equivalent uniform branch selection
+  without the cpp's distribution bias when `power` doesn't divide
+  `2^31` evenly.
+- **`kaleidoscope` (batch 28) — preserved upstream `cos(45.0)` quirk.**
+  Both Java and cpp use `cos(45.0)` and `sin(45.0)` — that's 45
+  RADIANS (≈ 0.5253 / 0.8509), not degrees. Looks like the original
+  author intended degrees but `Math.cos`/`cos` take radians. Long-lived
+  quirk; preserved.
+- **`crop3d` (batch 29) — accept the assignment-vs-accumulator
+  caveat.** Cpp uses `FPx = VVAR · x` (assignment). Returning `x`
+  unscaled and letting the outer multiplier reapply VVAR matches cpp at
+  any weight when crop3d is the only normal variation in its transform
+  (typical use); diverges when mixed with other normal variations. Same
+  caveat applies to the `circlecrop` family — but `crop3d` is small
+  enough that the divergence is documented inline and the variation
+  ships.
+- **`hole2` (batch 28) and `henon` (batch 21) — translated from Java
+  comment block.** Both are `unported_stub` in upstream cpp (empty
+  `PluginVarCalc`). The Java implementations live in the embedded
+  comment block at the bottom of each file; we ported directly from
+  there. `hole2` cascades through 10 radial-formula cases via a
+  `shape` int.
 
 ### Newly-found classifier misses (during porting)
 
@@ -771,7 +849,7 @@ Options per case:
 
 | name | bucket | LOC | params | 3d | notes |
 |---|---|---:|---:|:---:|---|
-| `blocky` | `param` | 196 | 3 | no | VVAR used internally |
+| ~~`blocky`~~ | `param` | 196 | 3 | no | **PORTED batch 23** — non-linear weight (`v · r` ≈ w²); body reads `w` via `needs_transform` and divides output by `w` so outer × w restores the cpp result. Also fixes the upstream `sqrt_safe` macro bug. |
 | `cubic3d` | `param` | 180 | 2 | yes | VVAR used internally |
 | `elliptic2` | `param_rng` | 241 | 11 | no | VVAR used internally |
 | `extrude` | `param_rng` | 142 | 1 | yes | VVAR used internally |
@@ -782,8 +860,8 @@ Options per case:
 | `hexnix3d` | `param` | 247 | 4 | yes | VVAR used internally |
 | `idisc` | `pure` | 141 | 0 | no | VVAR used internally; 2 porter-omitted params (recover from Java) |
 | `loonie2` | `param` | 253 | 3 | no | VVAR used internally |
-| `loonie3` | `pure` | 145 | 0 | no | VVAR used internally |
-| `loonie_3d` | `pure` | 80 | 0 | yes | added during porting (batch 9 skip): uses precomputed `sqrvvar = VVAR²` in comparison and sqrt arg |
+| ~~`loonie3`~~ | `pure` | 145 | 0 | no | **PORTED batch 23** — threshold-only weight pattern (`r² < w²` comparison; output factors cleanly). |
+| ~~`loonie_3d`~~ | `pure` | 80 | 0 | yes | **PORTED batch 23** — threshold-only weight, same pattern as loonie3. |
 | `loq` | `param` | 148 | 1 | yes | VVAR used internally |
 | `npolar` | `param_rng` | 193 | 2 | no | VVAR used internally |
 | `popcorn2_3d` | `param` | 115 | 4 | yes | VVAR used internally **and** assigns FPz instead of accumulating — see [Architectural blockers](#architectural-blockers-deferred). |
@@ -794,7 +872,7 @@ Options per case:
 | `scry2` | `param` | 242 | 3 | no | VVAR used internally |
 | `scry_3d` | `pure` | 92 | 0 | yes | VVAR used internally |
 | `secant2` | `pure` | 131 | 0 | no | added during porting (ported with caveat in batch 7): `r = VVAR·sqrt(...)` then `cos(r)` — non-linear weight scaling |
-| `sigmoid` | `param` | 200 | 2 | no | VVAR used internally |
+| ~~`sigmoid`~~ | `param` | 200 | 2 | no | **PORTED batch 23** — `vv = |VVAR|` pattern; body emits `sign(w) · output` so outer × w = `|w| · output`. |
 | `spliptic_bs` | `param_rng` | 188 | 2 | no | VVAR used internally |
 | `squircular` | `pure` | 118 | 0 | no | VVAR used internally |
 | `truchet_fill` | `param` | 282 | 3 | no | VVAR used internally |
@@ -887,6 +965,61 @@ to render a nested flame as a sub-step. WGSL doesn't support recursive
 function calls and our shader has no buffer for "another flame's
 transforms"; both would need substantial pipeline changes. Listed in
 the upstream `unportable_subflame` bucket already.
+
+#### Persistent per-thread variation state
+
+A small but recurring pattern: variations that maintain state between
+iterations within a single thread. Java keeps this state on the
+`VariationFunc` instance; cpp ports keep it on the `Variation*`
+struct. Either way, neither approach maps to our model — we have no
+per-variation per-thread storage between iterations.
+
+The two sub-cases:
+- **Circular history buffer** of recent random draws (`farblur`,
+  `exblur`, `nblur`): `_r[4]` array advanced one slot per iteration,
+  used as a low-pass-filter weight on the current draw.
+- **Autonomous trajectory walk** (`curliecue2`): `(x0, y0, theta,
+  phi)` updated each iteration *ignoring* the input point; the
+  variation effectively walks its own path through space, ignoring
+  the IFS attractor entirely.
+
+Solving the first sub-case alone would unlock all three blur variants
+(small, popular). The second is more architecturally fundamental.
+
+| name | bucket | LOC | notes |
+|---|---|---:|---|
+| `farblur` | `param_rng` | 213 | `_r[4]` ring buffer; also reads mid-iteration FPx accumulator (see below) |
+| `exblur` | `param_rng` | 228 | `_r[4]` ring buffer (same pattern) |
+| `nblur` | `param` | 430 | larger, but same architectural blocker |
+| `curliecue2` | `rng` | 166 | autonomous trajectory; ignores input point |
+
+#### Mid-iteration accumulator reads
+
+Most upstream variations only read the input point (`FTx`/`FTy`/`FTz`)
+plus the variation's own state. A handful instead read the running
+post-variations accumulator (`FPx`/`FPy`/`FPz`) before this variation
+adds to it — i.e., they "see" prior variations' contributions in the
+same iteration. Our normal-phase calling convention exposes only the
+input point, not the running accumulator.
+
+| name | bucket | LOC | notes |
+|---|---|---:|---|
+| `farblur` | `param_rng` | 213 | reads FPx, FPy, FPz mid-iteration |
+| `post_depth` | `param` | 144 | post-phase, reads BOTH pre-affine `FTx` and post-variations `FPx` (already mentioned in batch-24 deferral) |
+
+#### Z-coordinate clamping / non-linear-weight FPz assignment
+
+A few variations assign `FPz` (rather than `+=`) to a clamped value
+or to a non-linear function of weight. Our outer-multiplier
+convention can't reproduce a saturating Z without doing the
+saturation inside *with the weight already known* — feasible via
+`needs_transform`, but the divide-out pattern fights with the
+clamping (the clamp is in absolute units, not weight-scaled units).
+
+| name | bucket | LOC | notes |
+|---|---|---:|---|
+| `flower_db` | `param` | 194 | `FPz = -stem_length` clamp + non-linear weight scaling on Z |
+| `popcorn2_3d` | `param` | 115 | listed under assignment-vs-accumulator; same Z-assignment issue |
 
 ### Affine-coefficient access watchlist — RESOLVED 2026-04-29
 
