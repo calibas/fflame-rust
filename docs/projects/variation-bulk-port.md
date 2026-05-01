@@ -10,11 +10,11 @@ Source repo: https://github.com/mwegner/chaotica-apophysis-plugins-from-jwildfir
 
 | | Count |
 |---|---|
-| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **237** as of 2026-05-01 — see [Porting progress](#porting-progress-2026-04-27))* |
+| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **277** as of 2026-05-01 — see [Porting progress](#porting-progress-2026-04-27))* |
 | Upstream `.cpp` files | **636** |
 | Already implemented (exact name match) | 78 |
 | Ours-only (name doesn't appear upstream) | 6 |
-| Upstream-only (potentially to port) | **558** *(initially; **~405 remaining** after the porting since)* |
+| Upstream-only (potentially to port) | **558** *(initially; **~365 remaining** after the porting since)* |
 
 Lists are checked into this directory:
 - [variation-upstream-only.txt](variation-upstream-only.txt) — all 558 upstream-only names
@@ -79,7 +79,7 @@ What we **don't** support:
 1. ✅ **This doc + lists** — done
 2. ✅ **Bulk-fetch the 415 .cpp files** for offline analysis — done (subagent run, 2026-04-26). The same source is now mirrored locally under `output/jwildfire-vars/` (gitignored) for offline reading via the file tools — preferred over web-fetching during ports.
 3. ✅ **Per-file classification** — pure / parameterized / RNG / uses-internal-weight / broken — done (see [Classification](#classification-auto-generated-2026-04-26) below)
-4. 🚧 **Port in batches** — 29 batches landed (153 variations); see [Porting progress](#porting-progress-2026-04-27) below
+4. 🚧 **Port in batches** — 35 batches landed (193 variations); see [Porting progress](#porting-progress-2026-04-27) below
 5. ⏳ **Database import scripts** — generate from the ported `VariationDef`s for upload to the variations API
 6. ⏳ **Test pass** — flame referencing each new variation renders correctly via local registry, then via API fetch with cache cleared
 
@@ -124,8 +124,14 @@ both the shader emitter and the buffer populator, sharing
 | 27 | `boarders.rs` | Boarders / border-tile | 4 | `boarders`, `boarders2`, `pre_boarders2`, `splitbrdr`. `pre_boarders2` is pre-phase with `needs_transform` to apply VVAR inside (no outer multiplier). `splitbrdr` mostly factors but ends with two extra non-VVAR lines — divide-out. |
 | 28 | `standalone_exotics.rs` | Misc exotics | 3 | `kaleidoscope` (preserves cpp's `cos(45.0)` = 45 RADIANS quirk), `taurus` (Z-only divide-out), `hole2` (cpp was unported_stub; 10 radial-shape selector translated from Java). |
 | 29 | `parametric_curves.rs` | Parametric curves + crop | 4 | `spirograph`, `lissajous`, `vogel` (φ-spiral), `crop3d`. crop3d uses standard outer-multiplier convention (cpp's `FPx = VVAR · x` matches our `+= VVAR · x` when crop3d is the only normal variation in its transform — typical use). |
-| **Total new** | | | **153** | |
-| Registry size | | | **237** | (84 base + 153 ported) |
+| 30 | `stub_recoveries.rs` | unported_stub recoveries | 6 | `bsplit` (cpp `APO_VARIABLES` empty — recovered 2 user params from Java), `cylinder2`, `eclipse`, `lozi`, `pulse`, `hypershift`. Each cpp PluginVarCalc was empty; ported from the embedded Java comment block. |
+| 31 | `maurer_hyper.rs` | Maurer rose + hypercrop | 2 | `maurer_rose` (Gregg Helt 2016, 11 user params, RNG-branched line/point/curve sampling), `hypercrop` (n-gon corner-cropping warp; another unported_stub recovery). |
+| 32 | `misc_2d.rs` | Small 2D primitives | 8 | `split`, `squirrel`, `stripes`, `shift` (init: cos/sin of angle), `pressure_wave` (porter bug — cpp prepare hardcoded init values to 1.0; recovered the actual `pwx = freq·2π, ipwx = 1/pwx` from Java), `sphericaln`, `spligon`, `tile_hlp` (needs_transform for offset). |
+| 33 | `misc_extras.rs` | Larger / 3D primitives | 6 | `ho` (3D hyperbolic-octahedron — uses sign-preserving `pow` to handle negative bases that WGSL `pow` rejects), `chunk` (quadratic-conic mask, divide-out), `ptransform`, `rational3` (degree-3 complex-rational), `tile_reverse`, `ortho` (4-branch Möbius warp). |
+| 34 | `bipolar_series.rs` | B-/E-series + barycentroid | 10 | Faber's bSeries (`bcollide`, `bmod`, `bswirl`) and eSeries (`ecollide`, `emod`, `eswirl`, `escale`, `epush`, `erotate`) using bipolar/elliptic coordinate transforms; plus `barycentroid` (Xyrus02). All clean factor through outer multiplier. Each E-series body inlines the same elliptic preamble — we trust GPU compiler CSE when multiple are active. |
+| 35 | `singleton_misc.rs` | Standalone misc | 8 | `corners` (recovered 7 omitted params from Java; cpp exposed only 2 of 9), `modulus`, `octagon` (3D), `circus`, `circlize` (divide-out for the `+ hole` term — cpp's "tsk tsk... not scaled by vvar"), `circlize2` (clean), `atan` (3-mode selector), `murl` (cpp put per-iter intermediates in the persistent struct unnecessarily — treated as locals). |
+| **Total new** | | | **193** | |
+| Registry size | | | **277** | (84 base + 193 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -146,6 +152,10 @@ Branches and commits:
   `5a463de` (truchet kickoff), `5af2340` (blur extras), `6203121`
   (boarders), `d26ec36` (standalone exotics), `ca293ad` (parametric
   curves + crop3D).
+- Batches 30–35 also on `variation-bulk-port-2`. Commits in order:
+  `2fbb1cf` (stub recoveries), `efaa12f` (maurer_rose + hypercrop),
+  `ca5f946` (misc 2d), `85066ce` (misc extras), `b628bec` (B/E-series),
+  `6eb8ca5` (singleton misc).
 
 ### Notable decisions during porting
 
@@ -289,6 +299,82 @@ These are places where I diverged from a literal C++→WGSL port and why:
   comment block at the bottom of each file; we ported directly from
   there. `hole2` cascades through 10 radial-formula cases via a
   `shape` int.
+- **Stub-bucket bulk recoveries (batch 30).** Six more
+  `unported_stub` cpp ports translated from their Java comment blocks
+  in one batch: `bsplit` (also a porter-omitted param case — cpp's
+  `APO_VARIABLES` was empty, recovered 2 user params from Java),
+  `cylinder2`, `eclipse`, `lozi`, `pulse`, `hypershift`. The Java
+  comment block is reliable as-is for these — the cpp porter just
+  forgot to translate the body.
+- **`pressure_wave` (batch 32) — porter bug fix.** cpp's
+  `PluginVarPrepare` hardcodes `_pwx = _pwy = _ipwx = _ipwy = 1.0`
+  unconditionally — porter forgot to translate the actual derivation
+  in Java's `setParameter` (`pwx = freq · 2π; ipwx = 1/pwx`, with
+  freq=0 fallback). Without the fix the variation behaves like
+  identity-plus-sin regardless of frequency. Recovered from the Java
+  comment block.
+- **`blocky` (batch 23) — `sqrt_safe` macro bug fix.** cpp's
+  `sqrt_safe(vp, x)` helper takes a `double x` argument but uses
+  `VAR(x)` inside (which the macro expands to the variation's `x`
+  user parameter, not the function argument). The cpp code thus
+  ignores the function argument and returns `sqrt(user_x)` — a clear
+  porter bug. We follow Java's obvious intent (`sqrt(max(1 − a², 0))`)
+  rather than reproducing the bug.
+- **`corners` (batch 35) — porter-omitted params recovery.** cpp's
+  `APO_VARIABLES` exposes only `xwidth` and `ywidth`; the other 7
+  params (`multx, multy, xpower, ypower, xypower, logmode, log_base`)
+  live in the Java comment block. Recovered all 9.
+- **`ho` (batch 33) — sign-preserving `pow` for negative bases.**
+  WGSL's `pow(x, p)` returns NaN for negative `x` (unlike many cpp
+  `pow` implementations which can be permissive in some configs). We
+  use `pow(|x|, p) · sign(x)` to keep the variation's output continuous
+  through `x = 0` while matching upstream visual.
+- **N-th-root branch sampling (batches 16, 24).** Multiple variations
+  use cpp's `GOODRAND_0X(INT_MAX) · 2π/power` to pick a random N-th-root
+  branch. We replace with `floor(rand · power) · 2π/power` —
+  semantically equivalent uniform branch selection without the cpp
+  approach's distribution bias when `power` doesn't divide `2^31`
+  evenly. Used in `mobiusN`, `post_juliaq`, `post_julia3dq`,
+  `sphericaln`, `cpow2`, `cpow3`.
+- **`murl` (batch 35) — cpp's spurious `Variables` struct fields.**
+  cpp put `_c, _p2, _vp, _a, _sina, _cosa, _r, _re, _im, _rl` in the
+  per-thread `Variables` struct, but they're all computed inside
+  `PluginVarCalc` from per-iteration values — they're not "init"
+  values. Treated as local variables (no init slots needed).
+
+### Common patterns shaken out (cumulative through batch 35)
+
+By the end of batch 35 we've seen the following concrete patterns
+recur enough to be canonical references for future ports:
+
+1. **Outer multiplier factors cleanly** (the easy case). Just port
+   `f(p)` without the `VVAR *` and let the outer dispatcher reapply.
+2. **Threshold-only weight** (`flipcircle`, `loonie3`/`_3d`,
+   `chunk`'s comparison): use `needs_transform: true` to read the
+   weight, use it as a comparison threshold, return the unscaled
+   output.
+3. **Multiplicative VVAR factors out** (`glynnia`, `glynnia3`):
+   identify the algebraic VVAR factor by hand and drop it from the
+   body; outer multiplier reapplies.
+4. **`vv = |VVAR|` sign-pass** (`sigmoid`): emit `sign(w) · output`
+   so outer × w = `|w| · output`.
+5. **Divide-out** (`onion`, `target_sp`, `truchet_fill`, `splitbrdr`,
+   `kaleidoscope`, `taurus` Z-only, `crop3d` (caveat), `corners`,
+   `circlize`, `tile_hlp`, `chunk`'s output, `blocky`, `hypershift`,
+   `eclipse`, `splitbrdr`, etc.): `needs_transform: true`, body
+   computes the cpp output using the read weight, divides by `w`
+   in the return so outer × w restores the cpp result.
+6. **Direct VVAR application in pre/post phases** (`pre_curl`,
+   `pre_boarders2`, `post_juliaq`, `post_julia3dq`): pre/post phases
+   have no outer multiplier in our dispatcher, so just read `w` via
+   `needs_transform` and apply it inline.
+7. **Recover from Java comment block** for `unported_stub` cpp ports
+   (`henon`, `hole2`, `bsplit`, `cylinder2`, `eclipse`, `lozi`,
+   `pulse`, `hypershift`, `hypercrop`).
+8. **Recover from Java for porter-omitted params** (`target`,
+   `yin_yang`, `bsplit`, `pressure_wave`, `corners`, etc.): cpp had
+   an empty or shrunken `APO_VARIABLES`; Java's `setParameter` lists
+   the actual full param schema.
 
 ### Newly-found classifier misses (during porting)
 
@@ -965,6 +1051,33 @@ to render a nested flame as a sub-step. WGSL doesn't support recursive
 function calls and our shader has no buffer for "another flame's
 transforms"; both would need substantial pipeline changes. Listed in
 the upstream `unportable_subflame` bucket already.
+
+#### 16-slot per-variation budget overflow
+
+Our variation parameter buffer gives each variation 16 contiguous
+slots (user params + init-derived values combined). A small set of
+upstream variations declare more than 16 user params; even with zero
+init slots they don't fit.
+
+The fix would be to widen the per-variation slot count (with a
+corresponding cut to the per-flame variation cap, currently ~50) or
+to introduce a parallel "extended params" buffer for the few
+variations that need it. Until then these are blocked by budget, not
+by math:
+
+| name | bucket | LOC | notes |
+|---|---|---:|---|
+| `synth` | `param` | 1149 | 35 user params |
+| `maurer_lines` | `param_rng` | 4677 | 36 user params |
+| `quaternion` | `unported_stub` | 966 | 92 user params (extreme) |
+| `complex` | `unported_stub` | 707 | 64 user params |
+| `vibration2` | `unported_stub` | 338 | 26 user params |
+| `inversion` | `param_rng` | 1110 | 25 user params |
+| `jubiq` | `param_rng` | 401 | 24 user params |
+| `truchet_ae` | `unportable_dc` | 881 | 22 user params (also DC-blocked) |
+
+`mobiq` ships at exactly 16 user params (no init room) — the budget
+limit, not over it. Anything bigger needs the budget extension.
 
 #### Persistent per-thread variation state
 
