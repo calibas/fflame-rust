@@ -40,6 +40,7 @@ mod truchet;
 mod blur_extras;
 mod boarders;
 mod standalone_exotics;
+mod parametric_curves;
 
 pub use basic::*;
 pub use advanced::*;
@@ -78,6 +79,7 @@ pub use truchet::*;
 pub use blur_extras::*;
 pub use boarders::*;
 pub use standalone_exotics::*;
+pub use parametric_curves::*;
 
 use super::definition::VariationDef;
 
@@ -360,4 +362,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &KALEIDOSCOPE,
     &TAURUS,
     &HOLE2,
+    // Parametric curves + 3D crop
+    &SPIROGRAPH,
+    &LISSAJOUS,
+    &VOGEL,
+    &CROP3D,
 ];
