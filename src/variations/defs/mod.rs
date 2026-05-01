@@ -49,6 +49,7 @@ mod bipolar_series;
 mod singleton_misc;
 mod misc_extras2;
 mod misc_extras3;
+mod stub_recoveries2;
 
 pub use basic::*;
 pub use advanced::*;
@@ -96,6 +97,7 @@ pub use bipolar_series::*;
 pub use singleton_misc::*;
 pub use misc_extras2::*;
 pub use misc_extras3::*;
+pub use stub_recoveries2::*;
 
 use super::definition::VariationDef;
 
@@ -441,4 +443,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &LINEART,
     &PHOENIX_JULIA,
     &POW_BLOCK,
+    // Stub-bucket recoveries 2nd file
+    &DISC3,
+    &PROJECTIVE,
+    &TQMIRROR,
+    &INTERSECTION,
 ];
