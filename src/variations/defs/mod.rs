@@ -29,6 +29,7 @@ mod hypertile;
 mod classic_2d;
 mod mobius_extended;
 mod circle_blur;
+mod numbered_extras;
 
 pub use basic::*;
 pub use advanced::*;
@@ -56,6 +57,7 @@ pub use hypertile::*;
 pub use classic_2d::*;
 pub use mobius_extended::*;
 pub use circle_blur::*;
+pub use numbered_extras::*;
 
 use super::definition::VariationDef;
 
@@ -294,4 +296,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CIRCLESPLIT,
     &FLIPCIRCLE,
     &BLUR_LINEAR,
+    // Numbered extras (continuation of batch 9 numbered.rs)
+    &BIPOLAR2,
+    &BLOB3D,
+    &CIRCULAR2,
 ];
