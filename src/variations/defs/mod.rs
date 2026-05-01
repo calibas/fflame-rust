@@ -43,6 +43,7 @@ mod standalone_exotics;
 mod parametric_curves;
 mod stub_recoveries;
 mod maurer_hyper;
+mod misc_2d;
 
 pub use basic::*;
 pub use advanced::*;
@@ -84,6 +85,7 @@ pub use standalone_exotics::*;
 pub use parametric_curves::*;
 pub use stub_recoveries::*;
 pub use maurer_hyper::*;
+pub use misc_2d::*;
 
 use super::definition::VariationDef;
 
@@ -381,4 +383,13 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // Larger param-heavy: maurer_rose + hypercrop
     &MAURER_ROSE,
     &HYPERCROP,
+    // Miscellaneous small 2D primitives
+    &SPLIT,
+    &SQUIRREL,
+    &STRIPES,
+    &SHIFT,
+    &PRESSURE_WAVE,
+    &SPHERICALN,
+    &SPLIGON,
+    &TILE_HLP,
 ];
