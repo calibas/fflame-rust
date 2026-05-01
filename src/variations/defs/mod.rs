@@ -27,6 +27,7 @@ mod affine_ports;
 mod dc;
 mod hypertile;
 mod classic_2d;
+mod mobius_extended;
 
 pub use basic::*;
 pub use advanced::*;
@@ -52,6 +53,7 @@ pub use affine_ports::*;
 pub use dc::*;
 pub use hypertile::*;
 pub use classic_2d::*;
+pub use mobius_extended::*;
 
 use super::definition::VariationDef;
 
@@ -282,4 +284,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CIRCULAR,
     &PANORAMA1,
     &PANORAMA2,
+    // Möbius family extensions
+    &MOBIUSN,
+    &MOBIQ,
 ];
