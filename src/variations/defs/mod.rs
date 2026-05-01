@@ -26,6 +26,7 @@ mod init_ports;
 mod affine_ports;
 mod dc;
 mod hypertile;
+mod classic_2d;
 
 pub use basic::*;
 pub use advanced::*;
@@ -50,6 +51,7 @@ pub use init_ports::*;
 pub use affine_ports::*;
 pub use dc::*;
 pub use hypertile::*;
+pub use classic_2d::*;
 
 use super::definition::VariationDef;
 
@@ -273,4 +275,11 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &HYPERTILE3D,
     &HYPERTILE3D1,
     &HYPERTILE3D2,
+    // Classic 2D — popular geometric / blur / panoramic primitives
+    &FAN,
+    &FISHEYE,
+    &GRIDOUT,
+    &CIRCULAR,
+    &PANORAMA1,
+    &PANORAMA2,
 ];
