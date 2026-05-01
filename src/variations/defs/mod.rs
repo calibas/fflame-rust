@@ -42,6 +42,7 @@ mod boarders;
 mod standalone_exotics;
 mod parametric_curves;
 mod stub_recoveries;
+mod maurer_hyper;
 
 pub use basic::*;
 pub use advanced::*;
@@ -82,6 +83,7 @@ pub use boarders::*;
 pub use standalone_exotics::*;
 pub use parametric_curves::*;
 pub use stub_recoveries::*;
+pub use maurer_hyper::*;
 
 use super::definition::VariationDef;
 
@@ -376,4 +378,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &LOZI,
     &PULSE,
     &HYPERSHIFT,
+    // Larger param-heavy: maurer_rose + hypercrop
+    &MAURER_ROSE,
+    &HYPERCROP,
 ];
