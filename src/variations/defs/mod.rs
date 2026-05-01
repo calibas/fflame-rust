@@ -39,6 +39,7 @@ mod pre_post_bridges;
 mod truchet;
 mod blur_extras;
 mod boarders;
+mod standalone_exotics;
 
 pub use basic::*;
 pub use advanced::*;
@@ -76,6 +77,7 @@ pub use pre_post_bridges::*;
 pub use truchet::*;
 pub use blur_extras::*;
 pub use boarders::*;
+pub use standalone_exotics::*;
 
 use super::definition::VariationDef;
 
@@ -354,4 +356,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &BOARDERS2,
     &PRE_BOARDERS2,
     &SPLITBRDR,
+    // Standalone exotics
+    &KALEIDOSCOPE,
+    &TAURUS,
+    &HOLE2,
 ];
