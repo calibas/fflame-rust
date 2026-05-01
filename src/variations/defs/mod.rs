@@ -33,6 +33,7 @@ mod numbered_extras;
 mod glynn;
 mod wedge_extended;
 mod shapes3;
+mod radial_extras;
 
 pub use basic::*;
 pub use advanced::*;
@@ -64,6 +65,7 @@ pub use numbered_extras::*;
 pub use glynn::*;
 pub use wedge_extended::*;
 pub use shapes3::*;
+pub use radial_extras::*;
 
 use super::definition::VariationDef;
 
@@ -319,4 +321,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SUPER_SHAPE,
     &HENON,
     &APOLLONY,
+    // Radial extras — variations whose X/Y output doesn't scale with weight
+    &ONION,
+    &TARGET_SP,
 ];
