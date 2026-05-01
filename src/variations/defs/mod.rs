@@ -30,6 +30,7 @@ mod classic_2d;
 mod mobius_extended;
 mod circle_blur;
 mod numbered_extras;
+mod glynn;
 
 pub use basic::*;
 pub use advanced::*;
@@ -58,6 +59,7 @@ pub use classic_2d::*;
 pub use mobius_extended::*;
 pub use circle_blur::*;
 pub use numbered_extras::*;
+pub use glynn::*;
 
 use super::definition::VariationDef;
 
@@ -300,4 +302,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &BIPOLAR2,
     &BLOB3D,
     &CIRCULAR2,
+    // Glynn family — Faber's glynnia + eralex61's GlynnSim
+    &GLYNNIA,
+    &GLYNNIA3,
+    &GLYNN_SIM1,
+    &GLYNN_SIM2,
+    &GLYNN_SIM3,
 ];
