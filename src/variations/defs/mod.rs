@@ -48,6 +48,7 @@ mod misc_extras;
 mod bipolar_series;
 mod singleton_misc;
 mod misc_extras2;
+mod misc_extras3;
 
 pub use basic::*;
 pub use advanced::*;
@@ -94,6 +95,7 @@ pub use misc_extras::*;
 pub use bipolar_series::*;
 pub use singleton_misc::*;
 pub use misc_extras2::*;
+pub use misc_extras3::*;
 
 use super::definition::VariationDef;
 
@@ -434,4 +436,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &LINEART3D,
     &OSCILLOSCOPE,
     &FIBONACCI2,
+    // Even more misc
+    &OSCILLOSCOPE2,
+    &LINEART,
+    &PHOENIX_JULIA,
+    &POW_BLOCK,
 ];
