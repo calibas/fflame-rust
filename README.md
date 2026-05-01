@@ -55,3 +55,4 @@ Fractal renderers:
 - [IFStile](https://ifstile.com/)
 - [Fracterm](https://github.com/dovskyi/fracterm)
 - [Fractal Path Tracer](https://github.com/adam-pa/FPT)
+- [Fred's Fractal Factory](https://www.torpor.com/fred/fred.htm)

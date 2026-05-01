@@ -10,11 +10,11 @@ Source repo: https://github.com/mwegner/chaotica-apophysis-plugins-from-jwildfir
 
 | | Count |
 |---|---|
-| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** |
+| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **208** as of 2026-05-01 — see [Porting progress](#porting-progress-2026-04-27))* |
 | Upstream `.cpp` files | **636** |
 | Already implemented (exact name match) | 78 |
 | Ours-only (name doesn't appear upstream) | 6 |
-| Upstream-only (potentially to port) | **558** |
+| Upstream-only (potentially to port) | **558** *(initially; **~434 remaining** after the porting since)* |
 
 Lists are checked into this directory:
 - [variation-upstream-only.txt](variation-upstream-only.txt) — all 558 upstream-only names
@@ -77,9 +77,9 @@ What we **don't** support:
 ## Plan
 
 1. ✅ **This doc + lists** — done
-2. ✅ **Bulk-fetch the 415 .cpp files** for offline analysis — done (subagent run, 2026-04-26)
+2. ✅ **Bulk-fetch the 415 .cpp files** for offline analysis — done (subagent run, 2026-04-26). The same source is now mirrored locally under `output/jwildfire-vars/` (gitignored) for offline reading via the file tools — preferred over web-fetching during ports.
 3. ✅ **Per-file classification** — pure / parameterized / RNG / uses-internal-weight / broken — done (see [Classification](#classification-auto-generated-2026-04-26) below)
-4. 🚧 **Port in batches** — 8 batches landed (79 variations); see [Porting progress](#porting-progress-2026-04-27) below
+4. 🚧 **Port in batches** — 19 batches landed (124 variations); see [Porting progress](#porting-progress-2026-04-27) below
 5. ⏳ **Database import scripts** — generate from the ported `VariationDef`s for upload to the variations API
 6. ⏳ **Test pass** — flame referencing each new variation renders correctly via local registry, then via API fetch with cache cleared
 
@@ -105,13 +105,31 @@ both the shader emitter and the buffer populator, sharing
 | 8 | `shapes2.rs` | Standalone shapes continued | 12 | `ennepers` upstream uses `=` not `+=` — fixed (see decisions). |
 | 9 | `numbered.rs` | Numbered/3D variants of existing | 12 | First ports with init-step precompute inlined (juliaq/julia3dq/juliac). |
 | 10 | `heavy_init.rs` | cpow2, cpow3, disc2 (heavy init) | 3 | Larger init-step precomputes inlined into the per-iteration body. |
-| **Total new** | | | **93** | |
-| Registry size | | | **177** | (84 base + 93 ported) |
+| 11 | `init_ports.rs` | `target`, `yin_yang` | 2 | First ports using the new `wgsl_init` dispatch step (per-flame precompute on the GPU). Cleared the porter-omitted-init watchlist for these two. |
+| 12 | `affine_ports.rs` | `popcorn` (+ `waves` migration) | 1 | First port using the new `needs_transform` flag. `waves` was simultaneously migrated from a hard-coded placeholder to the actual Scott Draves formula. |
+| 13 | `dc.rs` | `dc_linear`, `dc_bubble` | 2 | First ports using `writes_color: true` (direct-color register `vc` plus the Apophysis 3-step color flow). Required broadening `needs_affine` → `needs_transform` so DC bodies can read the per-iteration weight. |
+| 14 | `hypertile.rs` | Zueuk hyperbolic tilings | 6 | `hypertile`/`1`/`2`/`3d`/`3d1`/`3d2`. All use `wgsl_init` for the {p,q}-tile-radius precompute. The 3 sub-families' `r` formulas are algebraically equivalent — preserved each variation's exact fallback condition for parity. |
+| 15 | `classic_2d.rs` | Popular standalone 2D | 6 | `fan` (needs_transform for affine coeffs), `fisheye` (preserves cpp X/Y swap — corrected version is our `eyefish`), `gridout`, `circular`, `panorama1`, `panorama2`. |
+| 16 | `mobius_extended.rs` | Möbius extensions | 2 | `mobiusN` (N-power Möbius, 10 user params + |power|<1 clamp inlined) and `mobiq` (quaternion Möbius, full 3D, exactly 16 user params — the buffer-slot maximum, no init room). `prepost_mobius` skipped (priority-2 pre+post pattern). |
+| 17 | `circle_blur.rs` | Circle/blur distortions | 4 | `circleblur`, `circlesplit`, `flipcircle` (uses needs_transform to read VVAR for its radius comparison), `blur_linear` (init for sin/cos of angle). |
+| 18 | `numbered_extras.rs` | Numbered cont'd | 3 | `bipolar2`, `blob3d`, `circular2`. |
+| 19 | `glynn.rs` | Glynnia + GlynnSim set | 5 | `glynnia` (factored the `_vvar2 = VVAR · sqrt(2)/2` internal weight cleanly), `glynnia3`, `glynnSim1`/`2`/`3`. The GlynnSim ports follow the Java semantics rather than the cpp (the cpp `circle()` helper takes `Point` by value — porter bug; we inline the helper, matching the JWildfire engine's output). |
+| **Total new** | | | **124** | |
+| Registry size | | | **208** | (84 base + 124 ported) |
 
-Branch: `variation-bulk-port-batch1`. Commits in order:
-`a7ecc30`, `8698337`, `0ef937e` (refactor), `dd1239c`, `ae80fbc`, `3fc37a8`,
-`d11533a`, `a7664e8`, `28e571a`, `46b8c7e`, `d132ce3` (doc update),
-`a61cc70`, `3756ce1` (doc update), `4c739ae`.
+Branches and commits:
+- Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
+  `a7ecc30`, `8698337`, `0ef937e` (refactor), `dd1239c`, `ae80fbc`, `3fc37a8`,
+  `d11533a`, `a7664e8`, `28e571a`, `46b8c7e`, `d132ce3` (doc update),
+  `a61cc70`, `3756ce1` (doc update), `4c739ae`.
+- Batches 11–12 on `variation-init-dispatch` (introduces `wgsl_init` and the
+  `needs_affine` flag, later renamed to `needs_transform`). Merge: PR #59.
+- Batch 13 on `transform-and-dc` (introduces `writes_color`, broadens
+  `needs_affine` → `needs_transform`, adds `Transform.direct_color`). Merge:
+  PR #60.
+- Batches 14–19 on `variation-port-hypertile`. Commits in order:
+  `3b9f648` (hypertile), `5c882ce` (classic 2D), `a4f56e8` (Möbius),
+  `1a7974d` (circle/blur), `5aee059` (numbered extras), `9f4b603` (Glynn).
 
 ### Notable decisions during porting
 
@@ -146,6 +164,53 @@ These are places where I diverged from a literal C++→WGSL port and why:
 - **Init-step inlining (`log_apo`, `log_db`, ...)** — upstream computes
   `_denom = 0.5 / log(base)` etc. in `init()`. We have no init hook, so we
   recompute per-iteration. Negligible perf cost, slight code duplication.
+  *Resolved post-batch-10:* batches 11+ have the `wgsl_init` GPU dispatch,
+  so newer ports do the precompute once per flame setup instead of
+  inlining. Ports done before that (batch 1–10) stay as-is.
+- **`fisheye` (batch 15) — preserved upstream X/Y swap.** Upstream's
+  `fisheye.cpp` uses `FTy / r` for the X output and `FTx / r` for Y —
+  swapped from the Java intent. The corrected version is `eyefish`,
+  already in our base 84. Both ship; flames pick whichever matches their
+  upstream lineage.
+- **`fan` / `panorama1`/`panorama2` (batch 15) — preserved cpp atan2 form.**
+  Upstream's atan2 args are non-standard (`atan2(x, y)` rather than the
+  usual `atan2(y, x)`). Same systematic porter swap as `log_db` etc.,
+  preserved for parity.
+- **`mobiusN` (batch 16) — `|power| < 1` clamp inlined.** Upstream's
+  `init()` clamps `power = 1.0` when `|power| < 1`. We don't get a chance
+  to mutate user params from `wgsl_init`, so the clamp lives in the body
+  (one extra branch per iteration; negligible).
+- **`mobiq` (batch 16) — exactly fills the param-slot budget.** 16 user
+  params × 1 quaternion-Möbius variation = the full 16-slot per-variation
+  buffer space. No room for derived-init values, so the body inlines the
+  full quaternion arithmetic.
+- **`prepost_mobius` (batch 16) — skipped, architectural.** Upstream is a
+  JWildfire priority-2 variation: it runs the **inverse** Möbius BEFORE
+  the affine *and* the forward Möbius AFTER the variation accumulator,
+  with assignment (`FPx = ...`) rather than `+=`. Our pre/normal/post
+  phase model has separate slots for pre and post, and the normal phase
+  accumulates. See [Architectural blockers](#architectural-blockers-deferred).
+- **`flipcircle` (batch 17) — internal weight via `needs_transform`.**
+  Upstream's `r² > VVAR²` comparison treats VVAR as the radius of the
+  flip threshold, so the geometry varies with weight. Rather than
+  hard-coding weight=1, the body reads
+  `transforms[xform_id].variations[variation_id]` directly; full fidelity
+  at any weight.
+- **`glynnSim1`/`2`/`3` (batch 19) — followed Java, not the cpp port.**
+  The cpp ports declare `void circle(Variation* vp, Point p)` with
+  `Point p` as a value parameter, so writes inside the helper don't
+  mutate the caller's `_toolPoint` — the cpp body reads stale state. The
+  Java original passes `Point` by reference (object types in Java) and
+  writes propagate. We inline the helper directly into the body so writes
+  are local variables (the natural WGSL idiom), matching the JWildfire
+  engine. Flames built against the buggy C++ port will differ.
+- **`glynnia` / `glynnia3` (batch 19) — internal weight factored out.**
+  Both are flagged on the internal-weight watchlist (`_vvar2 = VVAR ·
+  sqrt(2)/2`, plus `r = VVAR / dx` in two branches). Algebraic check
+  showed the upstream output is `weight · (sqrt(2)/2 · ...)` and
+  `weight · (1/dx · ...)` — the weight factors out cleanly through our
+  outer-multiplier. Ports do **not** need `needs_transform`; they ship
+  with full fidelity at any weight. Adjusts the watchlist below.
 
 ### Newly-found classifier misses (during porting)
 
@@ -171,7 +236,10 @@ Patterns the auto-classifier didn't flag but porting surfaced:
 
 ## Open questions
 
-- **Internal weight convention** — for variations that use `weight` inside their formula (not just as outer multiplier), do we want to extend `VariationDef` to optionally pass weight into the function, or accept the per-variation rewrite cost? Current approach: hard-code weight=1 internal, which matches upstream at weight=1 and drifts otherwise. Document the divergence per variation. Revisit if a high-value flame needs full fidelity.
+- **Internal weight convention** — ~~for variations that use `weight` inside their formula (not just as outer multiplier), do we want to extend `VariationDef` to optionally pass weight into the function, or accept the per-variation rewrite cost?~~ **RESOLVED 2026-04-29 / 2026-05-01.** `needs_transform: true` lets the body read `transforms[xform_id].variations[variation_id]` directly, no `VariationDef` extension needed. Two patterns in use:
+  - *Multiplicative VVAR* — factor through the outer multiplier (cleanest; `glynnia`/`glynnia3` use this pattern).
+  - *VVAR as magnitude/threshold* — use `needs_transform` (`flipcircle` uses this pattern).
+  Watchlist entries below should be reattacked with these patterns in mind.
 - **`_wf` salvage pass** — some `_wf` variations are pure functions despite the suffix; worth a quick scan before discarding all 54.
 - **Renames for our 6 ours-only entries** — keep current names (preset compatibility) and port upstream's `_3d` / `2` / `7` variants under their upstream names (so a flame from JWildfire loads correctly).
 
@@ -709,8 +777,8 @@ Options per case:
 | `extrude` | `param_rng` | 142 | 1 | yes | VVAR used internally |
 | `flux` | `param` | 150 | 1 | no | added during porting (batch 8 skip): `xpw = FTx + VVAR` shifts position by weight |
 | `fourth` | `param` | 262 | 5 | no | VVAR used internally |
-| `glynnia` | `rng` | 198 | 0 | no | VVAR used internally |
-| `glynnia3` | `param_rng` | 246 | 4 | no | VVAR used internally |
+| ~~`glynnia`~~ | `rng` | 198 | 0 | no | **PORTED batch 19** — internal `_vvar2 = VVAR·sqrt(2)/2` and `r = VVAR/dx` factor out cleanly through the outer multiplier. No `needs_transform` required. |
+| ~~`glynnia3`~~ | `param_rng` | 246 | 4 | no | **PORTED batch 19** — same factoring as `glynnia`. |
 | `hexnix3d` | `param` | 247 | 4 | yes | VVAR used internally |
 | `idisc` | `pure` | 141 | 0 | no | VVAR used internally; 2 porter-omitted params (recover from Java) |
 | `loonie2` | `param` | 253 | 3 | no | VVAR used internally |
@@ -718,9 +786,9 @@ Options per case:
 | `loonie_3d` | `pure` | 80 | 0 | yes | added during porting (batch 9 skip): uses precomputed `sqrvvar = VVAR²` in comparison and sqrt arg |
 | `loq` | `param` | 148 | 1 | yes | VVAR used internally |
 | `npolar` | `param_rng` | 193 | 2 | no | VVAR used internally |
-| `popcorn2_3d` | `param` | 115 | 4 | yes | VVAR used internally |
+| `popcorn2_3d` | `param` | 115 | 4 | yes | VVAR used internally **and** assigns FPz instead of accumulating — see [Architectural blockers](#architectural-blockers-deferred). |
 | `prepost_affine` | `param` | 314 | 9 | yes | VVAR used internally |
-| `prepost_mobius` | `param` | 250 | 8 | no | VVAR used internally |
+| `prepost_mobius` | `param` | 250 | 8 | no | VVAR used internally; also blocked by priority-2 pre+post pattern — see [Architectural blockers](#architectural-blockers-deferred). |
 | `rays` | `rng` | 119 | 0 | no | added during porting (batch 8 skip): `ang = VVAR·rng·π`, `r = VVAR/(x²+y²)`, `tanr = VVAR·tan(ang)·r` — three internal uses |
 | `rays1` | `pure` | 119 | 0 | no | added during porting (batch 8 skip): `u = 1/tan(sqrt(t)) + VVAR·(2/π)²` — additive |
 | `scry2` | `param` | 242 | 3 | no | VVAR used internally |
@@ -735,7 +803,90 @@ Options per case:
 **During the port:** `secant2` was shipped at weight=1 fidelity (deviates at
 other weights, see decisions above). `rays`, `rays1`, `flux`, `loonie_3d`
 were skipped from their respective batches — revisit when we make the
-design call on internal-weight handling.
+design call on internal-weight handling. **Update 2026-05-01:** `needs_transform`
+unblocks reading the per-variation weight from the body, so the (b) option is
+now available without a `VariationDef` change. `flipcircle` (batch 17) was
+ported using exactly this pattern — read `transforms[xform_id].variations[variation_id]`
+inside the body. The same approach should work for any of the watchlist
+entries that use VVAR as a magnitude / threshold rather than as an additive
+shift. Items where VVAR factors *cleanly* (algebraically multiplicative)
+should prefer factoring through the outer multiplier — see `glynnia` /
+`glynnia3` ports for the pattern.
+
+### Architectural blockers (deferred)
+
+Variations that don't fit our shader / phase model. Each blocker is a class
+of incompatibility, not a per-variation issue; resolving the class unlocks
+all members at once. Tracked here so the next implementer doesn't re-discover
+the issue on each port attempt.
+
+#### Assignment-vs-accumulator (FPx = …, not FPx +=)
+
+Our normal-phase pipeline accumulates: each variation contributes
+`weight · f(p)` and the contributions are summed. A subset of upstream
+variations *replace* `FPx`/`FPy`/`FPz` with an absolute value (and some of
+them also add a constant offset that doesn't factor through the outer
+multiplier). The replacement semantics implicitly require the variation to
+be the only normal-phase contributor in its transform; mixing with other
+variations changes the output.
+
+We could port these with a `needs_transform: true` body that reads its own
+weight and rescales the output to match the cpp's `FPx = weight · stuff +
+offset`, but the "no other normal variations allowed" caveat would still
+apply (since we have no way to clear prior contributions from inside one
+variation).
+
+| name | bucket | LOC | notes |
+|---|---|---:|---|
+| `circlecrop` | `param_rng` | 237 | `FPx = rad_v · …` plus `+ x0` shift after. |
+| `pre_circlecrop` | `param_rng` | 232 | Same body as `circlecrop`, pre-phase. |
+| `post_circlecrop` | `param_rng` | 232 | Same body as `circlecrop`, post-phase. |
+| `post_rblur` | `param_rng` | 168 | `FPx = VVAR · (FPx + …)` post-phase blur with absolute assignment. |
+| `popcorn2_3d` | `param` | 115 | XY uses `+=` (compatible), but `FPz = …` assigns. |
+| `prepost_mobius` | `param` | 250 | See "priority-2 pre+post" below. |
+
+#### Priority-2 pre+post (single variation runs both before and after the affine)
+
+JWildfire's "priority 2" variations run both the inverse op on `FTx`/`FTy`
+**before** the affine *and* the forward op on `FPx`/`FPy` **after** it.
+Our pre/normal/post phase model has separate slots for pre and post; a
+single variation can't bind both. Porting these needs either a
+`PrePost` phase with two WGSL bodies on one `VariationDef`, or splitting
+the upstream variation into two independent `VariationDef`s and
+documenting that they should be wired together by convention.
+
+| name | bucket | LOC | notes |
+|---|---|---:|---|
+| `prepost_mobius` | `param` | 250 | Inverse Möbius pre-affine + forward Möbius post-affine, with assignment. |
+| `prepost_affine` | `param` | 314 | (Internal-weight too.) |
+| `prepost_circlize` | `param` | 234 | |
+
+#### Indefinite-loop iterators (do-while sampling)
+
+A few "circle*" generator variations sample candidate points in a
+`do-while` loop until a discrete-noise condition is satisfied. On the
+GPU, an unbounded loop can spin if the density param is small, and the
+discrete noise function used (`DiscretNoise2 = bit-mixed integer hash`)
+needs careful WGSL adaptation (the C `(int)` truncation differs from
+WGSL `i32`).
+
+We could port these with (a) a hard cap on loop iterations + a sentinel
+fallback, accepting visual divergence in low-density configs, or (b) a
+direct sampling formula equivalent to "expected value" of the do-while.
+
+| name | bucket | LOC | notes |
+|---|---|---:|---|
+| `circleRand` | `param_rng` | 95 | Hash-keyed cell sampling with rejection. |
+| `circleLinear` | `param_rng` | 124 | Same hash; cell-mode geometry. |
+| `circleTrans1` | `param_rng` | 128 | Same hash; helper outputs `(Ux, Vy)`. |
+
+#### Subflame state (recursion via JWildfire's flame engine)
+
+Upstream `*subfl*` variations call back into the host flame's IFS engine
+to render a nested flame as a sub-step. WGSL doesn't support recursive
+function calls and our shader has no buffer for "another flame's
+transforms"; both would need substantial pipeline changes. Listed in
+the upstream `unportable_subflame` bucket already.
 
 ### Affine-coefficient access watchlist — RESOLVED 2026-04-29
 
@@ -792,9 +943,9 @@ Two related conditions, both flagged here:
 | `post_heat` | `pure` | 278 | 9 | yes | 9 porter-omitted params (recover from Java) |
 | `pre_blur3d` | `rng` | 162 | 5 | no | 5 porter-omitted params (recover from Java) |
 | `seashell3d` | `rng` | 186 | 4 | yes | 4 porter-omitted params (recover from Java) |
-| `target` | `param` | 193 | 1 init | no | added during porting (batch 7 skip): reads `_t_size_2 = size/2`. Likely safe to inline once Java is checked. |
+| ~~`target`~~ | `param` | 193 | 1 init | no | **PORTED batch 11** via the new `wgsl_init` GPU dispatch (`_t_size_2 = size/2`). |
 | `wdisc` | `pure` | 137 | 2 | no | 2 porter-omitted params (recover from Java) |
-| `yin_yang` | `param_rng` | 102 | 4 init | no | added during porting (batch 8 skip): reads `cosa/sina/cosb/sinb` precomputed from `ang1`/`ang2`. Inlinable. |
+| ~~`yin_yang`~~ | `param_rng` | 102 | 4 init | no | **PORTED batch 11** via `wgsl_init` (precomputes `sin/cos(π·ang1)`, `sin/cos(π·ang2)`). |
 
 ### Anomalies
 

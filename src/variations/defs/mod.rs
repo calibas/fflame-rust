@@ -25,6 +25,12 @@ mod heavy_init;
 mod init_ports;
 mod affine_ports;
 mod dc;
+mod hypertile;
+mod classic_2d;
+mod mobius_extended;
+mod circle_blur;
+mod numbered_extras;
+mod glynn;
 
 pub use basic::*;
 pub use advanced::*;
@@ -48,6 +54,12 @@ pub use heavy_init::*;
 pub use init_ports::*;
 pub use affine_ports::*;
 pub use dc::*;
+pub use hypertile::*;
+pub use classic_2d::*;
+pub use mobius_extended::*;
+pub use circle_blur::*;
+pub use numbered_extras::*;
+pub use glynn::*;
 
 use super::definition::VariationDef;
 
@@ -264,4 +276,36 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // Direct-color (DC) variations — first uses of writes_color
     &DC_LINEAR,
     &DC_BUBBLE,
+    // Hypertile family (Zueuk's hyperbolic tilings)
+    &HYPERTILE,
+    &HYPERTILE1,
+    &HYPERTILE2,
+    &HYPERTILE3D,
+    &HYPERTILE3D1,
+    &HYPERTILE3D2,
+    // Classic 2D — popular geometric / blur / panoramic primitives
+    &FAN,
+    &FISHEYE,
+    &GRIDOUT,
+    &CIRCULAR,
+    &PANORAMA1,
+    &PANORAMA2,
+    // Möbius family extensions
+    &MOBIUSN,
+    &MOBIQ,
+    // Circle / blur distortions
+    &CIRCLEBLUR,
+    &CIRCLESPLIT,
+    &FLIPCIRCLE,
+    &BLUR_LINEAR,
+    // Numbered extras (continuation of batch 9 numbered.rs)
+    &BIPOLAR2,
+    &BLOB3D,
+    &CIRCULAR2,
+    // Glynn family — Faber's glynnia + eralex61's GlynnSim
+    &GLYNNIA,
+    &GLYNNIA3,
+    &GLYNN_SIM1,
+    &GLYNN_SIM2,
+    &GLYNN_SIM3,
 ];
