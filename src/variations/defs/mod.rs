@@ -53,6 +53,7 @@ mod stub_recoveries2;
 mod lazy_family;
 mod misc_extras4;
 mod watchlist_misc;
+mod classic_blades_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -104,6 +105,7 @@ pub use stub_recoveries2::*;
 pub use lazy_family::*;
 pub use misc_extras4::*;
 pub use watchlist_misc::*;
+pub use classic_blades_misc::*;
 
 use super::definition::VariationDef;
 
@@ -475,4 +477,14 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &RAYS1,
     &LOONIE2,
     &FOURTH,
+    // Classic blades + misc
+    &ARCH,
+    &BI_LINEAR,
+    &BLADE,
+    &BLADE3D,
+    &SQUARIZE,
+    &SQUISH,
+    &TWOFACE,
+    &TWINTRIAN,
+    &UNPOLAR,
 ];
