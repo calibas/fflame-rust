@@ -67,6 +67,7 @@ mod apo_misc12;
 mod apo_misc13;
 mod spin_phase;
 mod apo_misc14;
+mod apo_misc15;
 
 pub use basic::*;
 pub use advanced::*;
@@ -132,6 +133,7 @@ pub use apo_misc12::*;
 pub use apo_misc13::*;
 pub use spin_phase::*;
 pub use apo_misc14::*;
+pub use apo_misc15::*;
 
 use super::definition::VariationDef;
 
@@ -595,4 +597,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &WAVES2_RADIAL,
     &SPLIPTIC_BS,
     &POINCARE3D,
+    // Apo misc 15
+    &PRE_SINUSOIDAL3D,
+    &PRE_BLUR3D,
+    &JULIAN3DX,
 ];
