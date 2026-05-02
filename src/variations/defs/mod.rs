@@ -55,6 +55,7 @@ mod misc_extras4;
 mod watchlist_misc;
 mod classic_blades_misc;
 mod apo_misc;
+mod erf_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -108,6 +109,7 @@ pub use misc_extras4::*;
 pub use watchlist_misc::*;
 pub use classic_blades_misc::*;
 pub use apo_misc::*;
+pub use erf_misc::*;
 
 use super::definition::VariationDef;
 
@@ -498,4 +500,13 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &ROUNDSPHER,
     &CHECKS,
     &CONE,
+    // Erf family + small misc
+    &ERF,
+    &ERF3D,
+    &D_SPHERICAL,
+    &DUSTPOINT,
+    &DELTAA,
+    &EDISC,
+    &CURVE,
+    &ELLIPTIC2,
 ];
