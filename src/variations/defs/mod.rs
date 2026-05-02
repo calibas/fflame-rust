@@ -86,6 +86,7 @@ mod butterfly_fay_misc;
 mod minkowskope_misc;
 mod glynnlissa_misc;
 mod glynnspiro_misc;
+mod glynnsshape_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -170,6 +171,7 @@ pub use butterfly_fay_misc::*;
 pub use minkowskope_misc::*;
 pub use glynnlissa_misc::*;
 pub use glynnspiro_misc::*;
+pub use glynnsshape_misc::*;
 
 use super::definition::VariationDef;
 
@@ -678,4 +680,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &GLYNNLISSA,
     // glynnspiro
     &GLYNNSPIRO,
+    // glynnSShape
+    &GLYNNSSHAPE,
 ];
