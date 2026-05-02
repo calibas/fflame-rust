@@ -60,6 +60,7 @@ mod simple_classics;
 mod inflate_z;
 mod apo_misc7;
 mod apo_misc8;
+mod apo_misc9;
 
 pub use basic::*;
 pub use advanced::*;
@@ -118,6 +119,7 @@ pub use simple_classics::*;
 pub use inflate_z::*;
 pub use apo_misc7::*;
 pub use apo_misc8::*;
+pub use apo_misc9::*;
 
 use super::definition::VariationDef;
 
@@ -547,4 +549,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &LAYERED_SPIRAL,
     &ATAN2_SPIRALS,
     &GRIDOUT2,
+    // Apo misc 9
+    &EJULIA,
+    &EMOTION,
+    &FLOWER_DB,
+    &JULIAN2,
 ];
