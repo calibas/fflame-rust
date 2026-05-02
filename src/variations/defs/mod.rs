@@ -82,6 +82,7 @@ mod circlecrop_misc;
 mod exblur_misc;
 mod curl_sp_misc;
 mod extrude_misc;
+mod butterfly_fay_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -162,6 +163,7 @@ pub use circlecrop_misc::*;
 pub use exblur_misc::*;
 pub use curl_sp_misc::*;
 pub use extrude_misc::*;
+pub use butterfly_fay_misc::*;
 
 use super::definition::VariationDef;
 
@@ -662,4 +664,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CURL_SP,
     // extrude
     &EXTRUDE,
+    // butterfly_fay
+    &BUTTERFLY_FAY,
 ];
