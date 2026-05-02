@@ -10,11 +10,11 @@ Source repo: https://github.com/mwegner/chaotica-apophysis-plugins-from-jwildfir
 
 | | Count |
 |---|---|
-| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **326** as of 2026-05-01 — see [Porting progress](#porting-progress-2026-04-27))* |
+| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **364** as of 2026-05-02 — see [Porting progress](#porting-progress-2026-04-27))* |
 | Upstream `.cpp` files | **636** |
 | Already implemented (exact name match) | 78 |
 | Ours-only (name doesn't appear upstream) | 6 |
-| Upstream-only (potentially to port) | **558** *(initially; **~316 remaining** after the porting since)* |
+| Upstream-only (potentially to port) | **558** *(initially; **~278 remaining** after the porting since)* |
 
 Lists are checked into this directory:
 - [variation-upstream-only.txt](variation-upstream-only.txt) — all 558 upstream-only names
@@ -138,8 +138,14 @@ both the shader emitter and the buffer populator, sharing
 | 41 | `watchlist_misc.rs` | Internal-weight watchlist + misc | 8 | `trade` (Faber — clean two-disc swap), `voron` (eralex61 — Voronoi-cell snap with bit-mixed i32 hash; relies on signed-int wrap parity between cpp and WGSL), `squircular` (Möbius — VVAR² in body radius; needs_transform divide-out), `flux` (meckie — additive `xpw=x+VVAR` shift; needs_transform), `rays` (Z+ — RNG cubic in VVAR; needs_transform), `rays1` (Raykoid666 — additive VVAR inside `1/tan + VVAR·(2/π)²`; needs_transform), `loonie2` (dark-beam — N-sided loonie, sqrvvar=w² threshold, 6 init slots, runtime sides loop; needs_transform), `fourth` (guagapunyaimel — 4-quadrant compound: spherical/loonie/susan/linear; needs_transform divide-out). |
 | 42 | `classic_blades_misc.rs` | Classic blades + small classics | 9 | `arch`, `blade`, `blade3D`, `twintrian` (Z+ Jan 2007 family — RNG with VVAR inside angle; needs_transform divide-out; `blade3D` is Full3D with explicit z output); `bi_linear` (clean swap); `squarize` (Faber angle-pack); `squish` (Faber, 1 user param + 1 init slot, RNG); `twoface` (Apo classic — internal w; needs_transform); `unpolar` (Apo classic — `w/(2π)` factor; needs_transform). `twintrian` uses `log/ln(10)` for log10 since WGSL has no log10. |
 | 43 | `apo_misc.rs` | Apophysis miscellany 5 | 8 | `xerf` (zephyrtronium / dark-beam — 3D piecewise erf/inverse; ships A&S 7.1.26 erf approximation, max error ~1.5e-7); `inverted_julia` (Whittaker Courtney 2018 — 9 user params recovered from Java setParameter; cpp APO_VARIABLES only declared 2); `idisc` (Faber — needs_transform divide-out); `conic` (cyberxaos — needs_transform divide-out, RNG); `power` (Apo classic — preserves cpp's cosA-instead-of-sinA exponent quirk + xy-output swap, rotating Java result 90°); `roundspher` (Raykoid666 — body has w² factor, needs_transform divide-out); `checks` (Apo classic — 4 user + 1 init, RNG); `cone` (Brad Stefanov — 9 params recovered from Java unported_stub, 3D, RNG). |
-| **Total new** | | | **242** | |
-| Registry size | | | **326** | (84 base + 242 ported) |
+| 44 | `erf_misc.rs` | Erf family + small misc | 8 | `erf` and `erf3D` (zephyrtronium / dark-beam — component-wise erf, 3D variant Full3D; A&S 7.1.26 polynomial inlined twice rather than shared as helper to avoid name collision with `xerf_erf`); `d_spherical` (Tatyana Zabanova — RNG-blended spherical/linear, both branches factor cleanly); `dustpoint` (Jesus Sosa — 3-point pivot/overlap IFS triangle, RNG); `deltaA` (Faber — radial ratio + half angle difference, needs_transform divide-out); `edisc` (Apo Plugin Pack — elliptic disc with `w/11.57…` empirical scale, needs_transform divide-out); `curve` (Apo Plugin Pack — 4 user + 2 init slots for `pc_xlen/pc_ylen = max(length², 1e-20)`); `elliptic2` (Brad Stefanov — 11 user + 1 init slot, RNG, needs_transform divide-out — body has internal `_v = w·h/π` plus an unweighted `+ ps` offset that costs an extra `1/w` factor through the divide-out). |
+| 45 | `simple_classics.rs` | Simple Apophysis classics | 8 | `exp2` (`w·exp(x·π)·(cos y·π, sin y·π)`); `exponential` (`w·exp(x-1)·(cos π·y, sin π·y)`); `flipy` (Faber — `if x>0: y = -y`); `funnel` (Raykoid666 — `tanh·(sec + N·π)`, 1 user param `effect` int); `invpolar` (`(1+y)·(sin x·π, cos x·π)`); `perspective` (Apo classic — 2 user + 2 init slots); `line` (Anderson 2013 — 2 user Java-recovered, cpp APO_VARIABLES empty; RNG; Full3D; needs_transform divide-out; drops the unit-vector normalization since `\|u\| ≡ 1`); `holesq` (dark-beam — square hole, needs_transform divide-out where additive ±1 offsets cost one `1/w` each). |
+| 46 | `inflate_z.rs` | inflateZ family + foci_3D + sintrange | 8 | `inflateZ_1..6` (Larry Berlin — clean Z-only Depth3D variations; `_4` uses RNG for sign flip on `(π/2 − atan2)·0.25`; `_6` clamps the `acos` input to `[-1, 1]` to avoid NaN); `sintrange` (Ffey — `sin(x)·(x²+w-(x²+y²)·w)` per axis; cpp uses `FPx = …` like anamorphcyl; 1 user param `w` distinct from VVAR); `foci_3D` (Larry Berlin — Full3D foci with `cosy·cosz` denominator; in 2D mode `boot` falls back unconditionally to `atan2(y, x)`). |
+| 47 | `apo_misc7.rs` | Apophysis miscellany 7 | 5 | `asteria` (dark-beam — RNG-blended linear/asteria; 1 user + 2 init; needs_transform divide-out); `estiq` (zephyrtronium — quaternion exponential extension; Full3D); `fdisc` (CozyG — fractal disc; 8 user params recovered from Java; cpp APO_VARIABLES empty); `bTransform` (Faber — bipolar transform; 4 user + RNG; cpp's `GOODRAND_0X(INT_MAX) % power` replaced with `floor(rand · power)`); `nPolar` (Faber — N-power polar; 2 user + 4 init; needs_transform divide-out; preserves cpp's `atan2(x, y)` swap in input transform and final unwrap). |
+| 48 | `apo_misc8.rs` | Apophysis miscellany 8 | 5 | `csc_squared` (Whittaker Courtney 2018 — 7 user Java-recovered; cpp APO_VARIABLES empty); `hyperbolicellipse` (1 user `a`; cpp `=` like anamorphcyl); `layered_spiral` (Will Evans — `(a·cos t, a·sin t)` with `t = x²+y²+ε`); `atan2_spirals` (Whittaker Courtney 2018 — 14 user params Java-recovered; cpp APO_VARIABLES empty); `gridout2` (Faber/Faber 2007 + Stefanov vars — 8-cell quadrant routing on `round(x)·c` vs `round(y)·d`). |
+| 49 | `apo_misc9.rs` | Apophysis miscellany 9 | 4 | `eJulia` (Faber — elliptic-coordinate Julia; 1 user power int + 1 init slot for sign; RNG); `eMotion` (Faber — elliptic-coordinate motion; 2 user move/rotate); `flower_db` (CozyG — Full3D flower with stem; 7 user; needs_transform divide-out; output mixes w-scaled petal radius and constant ±stem_length floor; preserves cpp's `atan2(x, y)` swap); `julian2` (Xyrus02 — JuliaN with affine pre-transform; 8 user + 2 init; RNG; cpp's `GOODRAND_0X(INT_MAX) % absN` replaced with `floor(rand · absN)`). |
+| **Total new** | | | **280** | |
+| Registry size | | | **364** | (84 base + 280 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -171,6 +177,10 @@ Branches and commits:
   `c61e734` (lazy family), `8dff306` (misc extras 4), `c3ce9b0`
   (watchlist + misc), `079cecb` (classic blades + misc), `9767976`
   (apo misc 5).
+- Batches 44–49 also on `variation-bulk-port-2`. Commits in order:
+  `22a7dbb` (erf family + misc), `ee9eb47` (simple classics),
+  `b626e8c` (inflateZ family + foci_3D + sintrange), `58231c4`
+  (apo misc 7), `07cf6c9` (apo misc 8), `dc152a1` (apo misc 9).
 
 ### Notable decisions during porting
 
