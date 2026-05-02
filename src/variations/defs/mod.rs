@@ -76,6 +76,7 @@ mod bwraps2_phase;
 mod post_heat_misc;
 mod post_rblur_misc;
 mod onion2_misc;
+mod jacobi_elliptic;
 
 pub use basic::*;
 pub use advanced::*;
@@ -150,6 +151,7 @@ pub use bwraps2_phase::*;
 pub use post_heat_misc::*;
 pub use post_rblur_misc::*;
 pub use onion2_misc::*;
+pub use jacobi_elliptic::*;
 
 use super::definition::VariationDef;
 
@@ -636,4 +638,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &POST_RBLUR,
     // onion2
     &ONION2,
+    // Jacobi elliptic family
+    &JAC_SN,
+    &JAC_CN,
+    &JAC_DN,
 ];
