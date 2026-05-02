@@ -10,11 +10,11 @@ Source repo: https://github.com/mwegner/chaotica-apophysis-plugins-from-jwildfir
 
 | | Count |
 |---|---|
-| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **291** as of 2026-05-01 — see [Porting progress](#porting-progress-2026-04-27))* |
+| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **326** as of 2026-05-01 — see [Porting progress](#porting-progress-2026-04-27))* |
 | Upstream `.cpp` files | **636** |
 | Already implemented (exact name match) | 78 |
 | Ours-only (name doesn't appear upstream) | 6 |
-| Upstream-only (potentially to port) | **558** *(initially; **~351 remaining** after the porting since)* |
+| Upstream-only (potentially to port) | **558** *(initially; **~316 remaining** after the porting since)* |
 
 Lists are checked into this directory:
 - [variation-upstream-only.txt](variation-upstream-only.txt) — all 558 upstream-only names
@@ -133,8 +133,13 @@ both the shader emitter and the buffer populator, sharing
 | 36 | `misc_extras2.rs` | More misc | 6 | `collideoscope` (Faber's radial branch-and-mod), `bent2` (per-quadrant scale), `mcarpet` (bubble + twist + tilt; FracFx), `lineart3d` (3D sign-preserving power), `oscilloscope` (Y-flip in damped cosine band), `fibonacci2` (Larry Berlin — Binet-formula complex Fibonacci with constants inlined). Skipped `cubicLattice_3D` (mid-iteration accumulator read). |
 | 37 | `misc_extras3.rs` | Even more misc | 4 | `oscilloscope2` (DarkBeam tweak — both X and Y flipped inside band), `lineart` (2D version of lineart3d — porter naming inconsistency `lineart` vs `linearT`), `phoenix_julia` (TyrantWave; X/Y distortion + N-th-root random branch), `pow_block` (cothe / DarkBeam — generalized N-th root). Skipped `arctruchet` (malloc'd persistent state), `circleTrans1` (do-while + hash). |
 | 38 | `stub_recoveries2.rs` | More unported_stub recoveries | 4 | `disc3` (8 user knobs over base disc), `projective` (eralex61 — linear-fractional projective), `tqmirror` (Anderson — quadrant fold-mirror; needs_transform for VVAR-as-threshold), `intersection` (Stefanov — random row/col tile blur, needs_transform for divide-out). Skipped `mobius_strip` (10 params + multi-mode init; focused single-port batch better), `pre_recip` (Java Complex class extensively used). |
-| **Total new** | | | **207** | |
-| Registry size | | | **291** | (84 base + 207 ported) |
+| 39 | `lazy_family.rs` | Lazy family (Faber / FarDareisMai) | 2 | `lazyjess` (4 user, 4 init slots: vertex, sin_vertex, pie_slice, corner_rot — n=2 special case + n>2 inscribed N-gon test), `lazytravis` (3 user, 2 init slots: 4·spin_in/4·spin_out — square fold-mirror with quadrant routing on perimeter parameterization). Both `needs_transform` for VVAR-as-threshold. |
+| 40 | `misc_extras4.rs` | More misc | 8 | `anamorphcyl` (Sosa), `svf` (gossamer light, 3D), `shredlin` (Zy0rg), `shredrad` (Zy0rg — porter bug: cpp PluginVarPrepare empty; `_alpha = 2π/n` recovered from Java setParameter), `xheart` (xyrus02), `stwin` (Apo pack — needs_transform divide-out), `whorl` (Apo pack — needs_transform for VVAR threshold), `devil_warp` (dark-beam — needs_transform divide-out). |
+| 41 | `watchlist_misc.rs` | Internal-weight watchlist + misc | 8 | `trade` (Faber — clean two-disc swap), `voron` (eralex61 — Voronoi-cell snap with bit-mixed i32 hash; relies on signed-int wrap parity between cpp and WGSL), `squircular` (Möbius — VVAR² in body radius; needs_transform divide-out), `flux` (meckie — additive `xpw=x+VVAR` shift; needs_transform), `rays` (Z+ — RNG cubic in VVAR; needs_transform), `rays1` (Raykoid666 — additive VVAR inside `1/tan + VVAR·(2/π)²`; needs_transform), `loonie2` (dark-beam — N-sided loonie, sqrvvar=w² threshold, 6 init slots, runtime sides loop; needs_transform), `fourth` (guagapunyaimel — 4-quadrant compound: spherical/loonie/susan/linear; needs_transform divide-out). |
+| 42 | `classic_blades_misc.rs` | Classic blades + small classics | 9 | `arch`, `blade`, `blade3D`, `twintrian` (Z+ Jan 2007 family — RNG with VVAR inside angle; needs_transform divide-out; `blade3D` is Full3D with explicit z output); `bi_linear` (clean swap); `squarize` (Faber angle-pack); `squish` (Faber, 1 user param + 1 init slot, RNG); `twoface` (Apo classic — internal w; needs_transform); `unpolar` (Apo classic — `w/(2π)` factor; needs_transform). `twintrian` uses `log/ln(10)` for log10 since WGSL has no log10. |
+| 43 | `apo_misc.rs` | Apophysis miscellany 5 | 8 | `xerf` (zephyrtronium / dark-beam — 3D piecewise erf/inverse; ships A&S 7.1.26 erf approximation, max error ~1.5e-7); `inverted_julia` (Whittaker Courtney 2018 — 9 user params recovered from Java setParameter; cpp APO_VARIABLES only declared 2); `idisc` (Faber — needs_transform divide-out); `conic` (cyberxaos — needs_transform divide-out, RNG); `power` (Apo classic — preserves cpp's cosA-instead-of-sinA exponent quirk + xy-output swap, rotating Java result 90°); `roundspher` (Raykoid666 — body has w² factor, needs_transform divide-out); `checks` (Apo classic — 4 user + 1 init, RNG); `cone` (Brad Stefanov — 9 params recovered from Java unported_stub, 3D, RNG). |
+| **Total new** | | | **242** | |
+| Registry size | | | **326** | (84 base + 242 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -162,6 +167,10 @@ Branches and commits:
 - Batches 36–38 also on `variation-bulk-port-2`. Commits in order:
   `996b5f8` (misc extras 2), `2389c2c` (misc extras 3), `2ee631b`
   (stub recoveries 2).
+- Batches 39–43 also on `variation-bulk-port-2`. Commits in order:
+  `c61e734` (lazy family), `8dff306` (misc extras 4), `c3ce9b0`
+  (watchlist + misc), `079cecb` (classic blades + misc), `9767976`
+  (apo misc 5).
 
 ### Notable decisions during porting
 
