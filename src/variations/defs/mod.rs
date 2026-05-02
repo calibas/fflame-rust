@@ -89,6 +89,7 @@ mod glynnspiro_misc;
 mod glynnsshape_misc;
 mod apo_misc18;
 mod apo_misc19;
+mod apo_misc20;
 
 pub use basic::*;
 pub use advanced::*;
@@ -176,6 +177,7 @@ pub use glynnspiro_misc::*;
 pub use glynnsshape_misc::*;
 pub use apo_misc18::*;
 pub use apo_misc19::*;
+pub use apo_misc20::*;
 
 use super::definition::VariationDef;
 
@@ -693,4 +695,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // apo_misc19: mobius_strip, circleLinear
     &MOBIUS_STRIP,
     &CIRCLE_LINEAR,
+    // apo_misc20: cannabiscurve_wf, spherical3D_wf, swirl3D_wf
+    &CANNABISCURVE_WF,
+    &SPHERICAL3D_WF,
+    &SWIRL3D_WF,
 ];
