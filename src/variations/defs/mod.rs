@@ -57,6 +57,7 @@ mod classic_blades_misc;
 mod apo_misc;
 mod erf_misc;
 mod simple_classics;
+mod inflate_z;
 
 pub use basic::*;
 pub use advanced::*;
@@ -112,6 +113,7 @@ pub use classic_blades_misc::*;
 pub use apo_misc::*;
 pub use erf_misc::*;
 pub use simple_classics::*;
+pub use inflate_z::*;
 
 use super::definition::VariationDef;
 
@@ -520,4 +522,13 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &PERSPECTIVE,
     &LINE,
     &HOLESQ,
+    // Inflate Z family + foci_3D + sintrange
+    &INFLATEZ_1,
+    &INFLATEZ_2,
+    &INFLATEZ_3,
+    &INFLATEZ_4,
+    &INFLATEZ_5,
+    &INFLATEZ_6,
+    &SINTRANGE,
+    &FOCI_3D,
 ];
