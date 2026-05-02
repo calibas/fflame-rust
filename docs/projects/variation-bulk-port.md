@@ -10,11 +10,11 @@ Source repo: https://github.com/mwegner/chaotica-apophysis-plugins-from-jwildfir
 
 | | Count |
 |---|---|
-| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **394** as of 2026-05-02 — see [Porting progress](#porting-progress-2026-04-27))* |
+| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **401** as of 2026-05-02 — see [Porting progress](#porting-progress-2026-04-27))* |
 | Upstream `.cpp` files | **636** |
 | Already implemented (exact name match) | 78 |
 | Ours-only (name doesn't appear upstream) | 6 |
-| Upstream-only (potentially to port) | **558** *(initially; **~248 remaining** after the porting since)* |
+| Upstream-only (potentially to port) | **558** *(initially; **~241 remaining** after the porting since)* |
 
 Lists are checked into this directory:
 - [variation-upstream-only.txt](variation-upstream-only.txt) — all 558 upstream-only names
@@ -154,8 +154,13 @@ both the shader emitter and the buffer populator, sharing
 | 57 | `rosoni_misc.rs` | Rosoni | 1 | `rosoni` (DarkBeam — 7 user + 2 init slots; clipping/rotational pattern with N-step rotation loop XOR-toggling a `cerc` flag based on whether the rotated point falls inside an inner shape; output point taken at iteration `sweetiter`). Clean factor through outer. |
 | 58 | `apo_misc16.rs` | Apophysis miscellany 16 | 2 | `seashell3D` (Jesus Sosa — 4 user Java-recovered; cpp APO_VARIABLES empty; RNG; Full3D parametric sea shell; cpp `FPx = …` like anamorphcyl); `hypershift2` (tatasz / Stefanov — 2 user + 4 init slots; RNG; Full3D hyperbolic 2-shift). |
 | 59 | `bwraps7_misc.rs` | bwraps7 | 1 | `bwraps7` (slobo777, version 7 — newer version of bwraps algorithm with updated `_g2` formula: `gain² + ε` instead of `gain² / radius + ε`. Both ship so flames built against either lineage render the same). 5 user + 3 init slots. |
-| **Total new** | | | **310** | |
-| Registry size | | | **394** | (84 base + 310 ported) |
+| 60 | `apo_misc17.rs` | Apophysis miscellany 17 | 2 | `loq` (zephyrtronium — 1 user `base` (default e); 3D quaternion-Apo inverse-log; clean factor through outer); `spirograph3D` (Java-recovered, cpp PluginVarCalc empty unported_stub; 7 user; RNG; Full3D parametric spirograph with 5 width modes; cpp's `direct_color` flag dropped — adding conditional `vc` writes complicates the writes_color model). |
+| 61 | `bwraps2_phase.rs` | bwraps2 phase | 2 | `pre_bwraps2` and `post_bwraps2` (Xyrus02 — bubble-wrap variants with `g2 = gain² / cellsize + ε`. Three lineages ship: `bwraps` uses gain²/radius, `bwraps7` uses gain², these use gain²/cellsize). 5 user + 3 init slots each. |
+| 62 | `post_heat_misc.rs` | post_heat | 1 | `post_heat` (?, Java-recovered cpp PluginVarCalc empty; 9 user params; no init slots — derived values computed at runtime to fit budget; post-phase 3D heat-distortion via sin perturbations on r/θ/φ spherical coords; needs_transform). |
+| 63 | `post_rblur_misc.rs` | post_rblur | 1 | `post_rblur` (Xyrus02 — post-phase radial blur jitters point by distance-from-center scaled by `2·strength`; 4 user + 1 init slot; RNG). |
+| 64 | `onion2_misc.rs` | onion2 | 1 | `onion2` (Nicolaus Anderson 2013, Java-recovered; 8 user; Full3D onion-shape via circle-to-exp transition at "meeting point", projected onto sphere; needs_transform divide-out — body has both `w·X` and `1/w²·X` terms in 3D output, bounded by safe_w guards). |
+| **Total new** | | | **317** | |
+| Registry size | | | **401** | (84 base + 317 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -197,6 +202,9 @@ Branches and commits:
 - Batches 55–59 also on `variation-bulk-port-2`. Commits in order:
   `4819ebb` (apo misc 14), `794083c` (apo misc 15), `1fc1d49`
   (rosoni), `589c4dc` (apo misc 16), `9890575` (bwraps7).
+- Batches 60–64 also on `variation-bulk-port-2`. Commits in order:
+  `f65c070` (apo misc 17), `adfe912` (bwraps2 phase), `110d3d1`
+  (post_heat), `f7aa97b` (post_rblur), `8504e5f` (onion2).
 
 ### Notable decisions during porting
 
