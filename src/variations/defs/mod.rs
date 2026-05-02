@@ -61,6 +61,7 @@ mod inflate_z;
 mod apo_misc7;
 mod apo_misc8;
 mod apo_misc9;
+mod apo_misc10;
 
 pub use basic::*;
 pub use advanced::*;
@@ -120,6 +121,7 @@ pub use inflate_z::*;
 pub use apo_misc7::*;
 pub use apo_misc8::*;
 pub use apo_misc9::*;
+pub use apo_misc10::*;
 
 use super::definition::VariationDef;
 
@@ -554,4 +556,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &EMOTION,
     &FLOWER_DB,
     &JULIAN2,
+    // Apo misc 10
+    &MASK,
+    &OVOID3D,
+    &MURL2,
+    &MINKQM,
 ];
