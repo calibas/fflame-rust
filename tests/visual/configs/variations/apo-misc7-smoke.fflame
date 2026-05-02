@@ -1,0 +1,166 @@
+{
+  "flame": {
+    "name": "ApoMisc7Smoke",
+    "transforms": [
+      {
+        "a": 0.5,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 0.5,
+        "e": 0.6,
+        "f": 0.6,
+        "g": 0.0,
+        "weight": 1.0,
+        "variations": {
+          "linear": 0.3,
+          "asteria": 0.7
+        },
+        "variation_params": {
+          "asteria.alpha": 0.0
+        },
+        "color": 0.0,
+        "color_speed": 0.0,
+        "opacity": 1.0
+      },
+      {
+        "a": 0.5,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 0.5,
+        "e": 0.0,
+        "f": 0.6,
+        "g": 0.0,
+        "weight": 1.0,
+        "variations": {
+          "linear": 0.3,
+          "estiq": 0.5
+        },
+        "color": 0.2,
+        "color_speed": 0.0,
+        "opacity": 1.0
+      },
+      {
+        "a": 0.5,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 0.5,
+        "e": -0.6,
+        "f": 0.6,
+        "g": 0.0,
+        "weight": 1.0,
+        "variations": {
+          "linear": 0.3,
+          "fdisc": 0.7
+        },
+        "variation_params": {
+          "fdisc.ashift": 1.0,
+          "fdisc.rshift": 1.0,
+          "fdisc.xshift": 0.0,
+          "fdisc.yshift": 0.0,
+          "fdisc.term1": 1.0,
+          "fdisc.term2": 0.0,
+          "fdisc.term3": 0.0,
+          "fdisc.term4": 0.0
+        },
+        "color": 0.4,
+        "color_speed": 0.0,
+        "opacity": 1.0
+      },
+      {
+        "a": 0.5,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 0.5,
+        "e": 0.6,
+        "f": -0.6,
+        "g": 0.0,
+        "weight": 1.0,
+        "variations": {
+          "linear": 0.3,
+          "bTransform": 0.7
+        },
+        "variation_params": {
+          "bTransform.rotate": 0.5,
+          "bTransform.power": 3.0,
+          "bTransform.move": 0.0,
+          "bTransform.split": 0.2
+        },
+        "color": 0.6,
+        "color_speed": 0.0,
+        "opacity": 1.0
+      },
+      {
+        "a": 0.5,
+        "b": 0.0,
+        "c": 0.0,
+        "d": 0.5,
+        "e": -0.6,
+        "f": -0.6,
+        "g": 0.0,
+        "weight": 1.0,
+        "variations": {
+          "linear": 0.3,
+          "nPolar": 0.5
+        },
+        "variation_params": {
+          "nPolar.parity": 0.0,
+          "nPolar.n": 3.0
+        },
+        "color": 1.0,
+        "color_speed": 0.0,
+        "opacity": 1.0
+      }
+    ],
+    "render_mode": "TwoD",
+    "projection": "Orthographic"
+  },
+  "zoom": 1.0,
+  "pan_x": 0.0,
+  "pan_y": 0.0,
+  "rotation": 0.0,
+  "camera_rotation_x": 0.0,
+  "camera_rotation_y": 0.0,
+  "camera_z": 0.0,
+  "density_scale": 1.0,
+  "speed_factor": 0.5,
+  "max_iterations": 5000000,
+  "histogram_color_scale": 100.0,
+  "low_density_smoothing": 0.5,
+  "density_compression_strength": 0.0,
+  "blend_factor": 0.1,
+  "use_dynamic_blend": true,
+  "target_iterations_per_pixel": 0,
+  "iterations_per_thread": 256,
+  "speed_multiplier": 1,
+  "color_mode": "Palette",
+  "palette_index": 1,
+  "palette": {
+    "name": "Smoke",
+    "stops": [
+      { "position": 0.0, "color": [0.05, 0.05, 0.2] },
+      { "position": 0.33, "color": [0.6, 0.2, 0.0] },
+      { "position": 0.66, "color": [0.9, 0.7, 0.1] },
+      { "position": 1.0, "color": [1.0, 1.0, 0.95] }
+    ],
+    "locked": false
+  },
+  "palette_rotation": 0.0,
+  "background_color": [0.0, 0.0, 0.0],
+  "tonemap_mode": "Logarithmic",
+  "tonemap_curve": {
+    "points": [
+      { "x": 0.0, "y": 0.0 },
+      { "x": 1.0, "y": 1.0 }
+    ]
+  },
+  "use_curve": true,
+  "exposure": 1.0,
+  "gamma": 1.0,
+  "gamma_threshold": 0.0025,
+  "brightness": 1.0,
+  "vibrancy": 1.0,
+  "saturation": 1.0,
+  "hue_shift": 0.0,
+  "value_scale": 1.0,
+  "deterministic_rng": true
+}
