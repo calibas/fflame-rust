@@ -87,6 +87,7 @@ mod minkowskope_misc;
 mod glynnlissa_misc;
 mod glynnspiro_misc;
 mod glynnsshape_misc;
+mod apo_misc18;
 
 pub use basic::*;
 pub use advanced::*;
@@ -172,6 +173,7 @@ pub use minkowskope_misc::*;
 pub use glynnlissa_misc::*;
 pub use glynnspiro_misc::*;
 pub use glynnsshape_misc::*;
+pub use apo_misc18::*;
 
 use super::definition::VariationDef;
 
@@ -682,4 +684,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &GLYNNSPIRO,
     // glynnSShape
     &GLYNNSSHAPE,
+    // apo_misc18: lazysensen, spherecrop, xheart_blur_wf
+    &LAZYSENSEN,
+    &SPHERECROP,
+    &XHEART_BLUR_WF,
 ];
