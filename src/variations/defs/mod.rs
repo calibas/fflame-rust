@@ -65,6 +65,7 @@ mod apo_misc10;
 mod apo_misc11;
 mod apo_misc12;
 mod apo_misc13;
+mod spin_phase;
 
 pub use basic::*;
 pub use advanced::*;
@@ -128,6 +129,7 @@ pub use apo_misc10::*;
 pub use apo_misc11::*;
 pub use apo_misc12::*;
 pub use apo_misc13::*;
+pub use spin_phase::*;
 
 use super::definition::VariationDef;
 
@@ -582,4 +584,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &Q_ODE,
     &RIPPLE,
     &SCRY2,
+    // Spin / pre / post phase
+    &PRE_SPIN_Z,
+    &POST_SPIN_Z,
+    &POST_SPHERICAL,
+    &PRE_DISC3D,
 ];
