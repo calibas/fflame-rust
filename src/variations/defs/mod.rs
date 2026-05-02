@@ -63,6 +63,7 @@ mod apo_misc8;
 mod apo_misc9;
 mod apo_misc10;
 mod apo_misc11;
+mod apo_misc12;
 
 pub use basic::*;
 pub use advanced::*;
@@ -124,6 +125,7 @@ pub use apo_misc8::*;
 pub use apo_misc9::*;
 pub use apo_misc10::*;
 pub use apo_misc11::*;
+pub use apo_misc12::*;
 
 use super::definition::VariationDef;
 
@@ -569,4 +571,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SPH3D,
     &INVSQUIRCULAR,
     &SPHERE_NJA,
+    // Apo misc 12
+    &RINGS,
+    &RIPPLED,
+    &WAFFLE,
+    &STRIPFIT,
 ];
