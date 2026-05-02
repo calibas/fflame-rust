@@ -81,6 +81,7 @@ mod circlecrop_phase;
 mod circlecrop_misc;
 mod exblur_misc;
 mod curl_sp_misc;
+mod extrude_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -160,6 +161,7 @@ pub use circlecrop_phase::*;
 pub use circlecrop_misc::*;
 pub use exblur_misc::*;
 pub use curl_sp_misc::*;
+pub use extrude_misc::*;
 
 use super::definition::VariationDef;
 
@@ -658,4 +660,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &EXBLUR,
     // curl_sp
     &CURL_SP,
+    // extrude
+    &EXTRUDE,
 ];
