@@ -50,6 +50,7 @@ mod singleton_misc;
 mod misc_extras2;
 mod misc_extras3;
 mod stub_recoveries2;
+mod lazy_family;
 
 pub use basic::*;
 pub use advanced::*;
@@ -98,6 +99,7 @@ pub use singleton_misc::*;
 pub use misc_extras2::*;
 pub use misc_extras3::*;
 pub use stub_recoveries2::*;
+pub use lazy_family::*;
 
 use super::definition::VariationDef;
 
@@ -448,4 +450,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &PROJECTIVE,
     &TQMIRROR,
     &INTERSECTION,
+    // Lazy family (Faber / FarDareisMai)
+    &LAZYJESS,
+    &LAZYTRAVIS,
 ];
