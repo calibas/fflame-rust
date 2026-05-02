@@ -10,11 +10,11 @@ Source repo: https://github.com/mwegner/chaotica-apophysis-plugins-from-jwildfir
 
 | | Count |
 |---|---|
-| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **364** as of 2026-05-02 — see [Porting progress](#porting-progress-2026-04-27))* |
+| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **384** as of 2026-05-02 — see [Porting progress](#porting-progress-2026-04-27))* |
 | Upstream `.cpp` files | **636** |
 | Already implemented (exact name match) | 78 |
 | Ours-only (name doesn't appear upstream) | 6 |
-| Upstream-only (potentially to port) | **558** *(initially; **~278 remaining** after the porting since)* |
+| Upstream-only (potentially to port) | **558** *(initially; **~258 remaining** after the porting since)* |
 
 Lists are checked into this directory:
 - [variation-upstream-only.txt](variation-upstream-only.txt) — all 558 upstream-only names
@@ -144,8 +144,13 @@ both the shader emitter and the buffer populator, sharing
 | 47 | `apo_misc7.rs` | Apophysis miscellany 7 | 5 | `asteria` (dark-beam — RNG-blended linear/asteria; 1 user + 2 init; needs_transform divide-out); `estiq` (zephyrtronium — quaternion exponential extension; Full3D); `fdisc` (CozyG — fractal disc; 8 user params recovered from Java; cpp APO_VARIABLES empty); `bTransform` (Faber — bipolar transform; 4 user + RNG; cpp's `GOODRAND_0X(INT_MAX) % power` replaced with `floor(rand · power)`); `nPolar` (Faber — N-power polar; 2 user + 4 init; needs_transform divide-out; preserves cpp's `atan2(x, y)` swap in input transform and final unwrap). |
 | 48 | `apo_misc8.rs` | Apophysis miscellany 8 | 5 | `csc_squared` (Whittaker Courtney 2018 — 7 user Java-recovered; cpp APO_VARIABLES empty); `hyperbolicellipse` (1 user `a`; cpp `=` like anamorphcyl); `layered_spiral` (Will Evans — `(a·cos t, a·sin t)` with `t = x²+y²+ε`); `atan2_spirals` (Whittaker Courtney 2018 — 14 user params Java-recovered; cpp APO_VARIABLES empty); `gridout2` (Faber/Faber 2007 + Stefanov vars — 8-cell quadrant routing on `round(x)·c` vs `round(y)·d`). |
 | 49 | `apo_misc9.rs` | Apophysis miscellany 9 | 4 | `eJulia` (Faber — elliptic-coordinate Julia; 1 user power int + 1 init slot for sign; RNG); `eMotion` (Faber — elliptic-coordinate motion; 2 user move/rotate); `flower_db` (CozyG — Full3D flower with stem; 7 user; needs_transform divide-out; output mixes w-scaled petal radius and constant ±stem_length floor; preserves cpp's `atan2(x, y)` swap); `julian2` (Xyrus02 — JuliaN with affine pre-transform; 8 user + 2 init; RNG; cpp's `GOODRAND_0X(INT_MAX) % absN` replaced with `floor(rand · absN)`). |
-| **Total new** | | | **280** | |
-| Registry size | | | **364** | (84 base + 280 ported) |
+| 50 | `apo_misc10.rs` | Apophysis miscellany 10 | 4 | `mask` (Raykoid666/CozyG — 5 user Java-recovered; cpp APO_VARIABLES empty; local helper renamed `body` since WGSL reserves `common` as a future keyword); `ovoid3d` (Larry Berlin — 3 user x/y/z scales; Full3D); `murl2` (2 user c, power int; needs_transform divide-out for internal `_vp = w · pow(c+1, 2/power)` factor); `minkQM` (dark-beam — 6 user; per-axis Minkowski's question-mark via runtime loop bounded by `f`; helper `minkqm_minkowski` defined separately in 2D and 3D bodies). |
+| 51 | `apo_misc11.rs` | Apophysis miscellany 11 | 5 | `swirl3` (1 user shift; log-spiral; preserves cpp atan2 swap); `wdisc` (Faber — π/(sqrt+1) angle folded around r=0); `sph3D` (xyrus02 — 3 user x/y/z scales; Full3D; preserves upstream's `zz = x · tz` typo where cpp+Java both use x_scale instead of z_scale); `invsquircular` (Java-recovered unported_stub; needs_transform divide-out for nonlinear w² inside `r2 = sqrt(r·(w²·r − 4u²v²)/w)`); `sphere_nja` (6 user; Full3D parametric sphere; needs_transform divide-out — body has w-scaled `r/z` plus unscaled `+ shift_x/y` offsets). |
+| 52 | `apo_misc12.rs` | Apophysis miscellany 12 | 4 | `rings` (Apo classic — reads affine xf.e for `dx`; preserves cpp xy-output swap; needs_transform divide-out since cpp body lacks VVAR on output); `rippled` (Raykoid666 — clean factor); `waffle` (Jed Kelsey — 4 user + 2 init slots cos_rot/sin_rot; w stripped from cpp's `vcosr/vsinr` so it factors cleanly through outer; RNG); `stripfit` (dark-beam Java-recovered unported_stub — 1 user dx; body has `(y − fity ± 1)·dxp` additive unscaled term; needs_transform divide-out). |
+| 53 | `apo_misc13.rs` | Apophysis miscellany 13 | 3 | `q_ode` (dark-beam Java-recovered unported_stub; 12 user; only q_ode02·x and q_ode11·y get w factor in cpp, rest unscaled; needs_transform divide-out); `ripple` (Xyrus02 — 8 user + 6 init slots `_f, _p, _s, _vxp, _pxa, _pixa`; cpp uses `FPx = …` like anamorphcyl); `scry2` (dark-beam — 3 user + 6 init slots; runtime sides loop; scry-style `d = r1·(r2 + 1/w)` so output contains 1/w; needs_transform divide-out; uses local `circle_v = sqrt(x²+y²)` to avoid cpp's `double VAR(circle)` macro-redeclaration bug, same pattern as loonie2). |
+| 54 | `spin_phase.rs` | Spin / pre / post phase | 4 | `pre_spin_z` and `post_spin_z` (rotation by `w · π/2` around Z, applied at pre and post phase respectively); `post_spherical` (`r = w / (x² + y²)`); `pre_disc3d` (gossamer light — 1 user `pi` configurable; pre-phase disc with explicit z output `vv · r · cos(z)`; preserves cpp `atan2(x, y)` swap). All four use `needs_transform: true` to read the per-variation weight and apply it directly inside the body (pre/post phases have no outer multiplier). |
+| **Total new** | | | **300** | |
+| Registry size | | | **384** | (84 base + 300 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -181,6 +186,9 @@ Branches and commits:
   `22a7dbb` (erf family + misc), `ee9eb47` (simple classics),
   `b626e8c` (inflateZ family + foci_3D + sintrange), `58231c4`
   (apo misc 7), `07cf6c9` (apo misc 8), `dc152a1` (apo misc 9).
+- Batches 50–54 also on `variation-bulk-port-2`. Commits in order:
+  `423022c` (apo misc 10), `42eb780` (apo misc 11), `c7e8968`
+  (apo misc 12), `5e0c0f4` (apo misc 13), `0cd7f71` (spin / phase).
 
 ### Notable decisions during porting
 
