@@ -70,6 +70,7 @@ mod apo_misc14;
 mod apo_misc15;
 mod rosoni_misc;
 mod apo_misc16;
+mod bwraps7_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -138,6 +139,7 @@ pub use apo_misc14::*;
 pub use apo_misc15::*;
 pub use rosoni_misc::*;
 pub use apo_misc16::*;
+pub use bwraps7_misc::*;
 
 use super::definition::VariationDef;
 
@@ -610,4 +612,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // Apo misc 16
     &SEASHELL3D,
     &HYPERSHIFT2,
+    // bwraps7
+    &BWRAPS7,
 ];
