@@ -10,11 +10,11 @@ Source repo: https://github.com/mwegner/chaotica-apophysis-plugins-from-jwildfir
 
 | | Count |
 |---|---|
-| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **384** as of 2026-05-02 — see [Porting progress](#porting-progress-2026-04-27))* |
+| Our current variations (`ALL_VARIATIONS` in `src/variations/defs/mod.rs`) | **84** *(at start; **394** as of 2026-05-02 — see [Porting progress](#porting-progress-2026-04-27))* |
 | Upstream `.cpp` files | **636** |
 | Already implemented (exact name match) | 78 |
 | Ours-only (name doesn't appear upstream) | 6 |
-| Upstream-only (potentially to port) | **558** *(initially; **~258 remaining** after the porting since)* |
+| Upstream-only (potentially to port) | **558** *(initially; **~248 remaining** after the porting since)* |
 
 Lists are checked into this directory:
 - [variation-upstream-only.txt](variation-upstream-only.txt) — all 558 upstream-only names
@@ -149,8 +149,13 @@ both the shader emitter and the buffer populator, sharing
 | 52 | `apo_misc12.rs` | Apophysis miscellany 12 | 4 | `rings` (Apo classic — reads affine xf.e for `dx`; preserves cpp xy-output swap; needs_transform divide-out since cpp body lacks VVAR on output); `rippled` (Raykoid666 — clean factor); `waffle` (Jed Kelsey — 4 user + 2 init slots cos_rot/sin_rot; w stripped from cpp's `vcosr/vsinr` so it factors cleanly through outer; RNG); `stripfit` (dark-beam Java-recovered unported_stub — 1 user dx; body has `(y − fity ± 1)·dxp` additive unscaled term; needs_transform divide-out). |
 | 53 | `apo_misc13.rs` | Apophysis miscellany 13 | 3 | `q_ode` (dark-beam Java-recovered unported_stub; 12 user; only q_ode02·x and q_ode11·y get w factor in cpp, rest unscaled; needs_transform divide-out); `ripple` (Xyrus02 — 8 user + 6 init slots `_f, _p, _s, _vxp, _pxa, _pixa`; cpp uses `FPx = …` like anamorphcyl); `scry2` (dark-beam — 3 user + 6 init slots; runtime sides loop; scry-style `d = r1·(r2 + 1/w)` so output contains 1/w; needs_transform divide-out; uses local `circle_v = sqrt(x²+y²)` to avoid cpp's `double VAR(circle)` macro-redeclaration bug, same pattern as loonie2). |
 | 54 | `spin_phase.rs` | Spin / pre / post phase | 4 | `pre_spin_z` and `post_spin_z` (rotation by `w · π/2` around Z, applied at pre and post phase respectively); `post_spherical` (`r = w / (x² + y²)`); `pre_disc3d` (gossamer light — 1 user `pi` configurable; pre-phase disc with explicit z output `vv · r · cos(z)`; preserves cpp `atan2(x, y)` swap). All four use `needs_transform: true` to read the per-variation weight and apply it directly inside the body (pre/post phases have no outer multiplier). |
-| **Total new** | | | **300** | |
-| Registry size | | | **384** | (84 base + 300 ported) |
+| 55 | `apo_misc14.rs` | Apophysis miscellany 14 | 3 | `waves2_radial` (Tatyana Zabanova / Stefanov — 6 user; radial falloff applied to waves2-style sine offsets); `spliptic_bs` (Brad Stefanov — 2 user + 1 init slot for `2/π`; RNG; needs_transform divide-out for unscaled `± x` / `± y` constant offsets); `poincare3D` (Zueuk — 3 user + 10 init slots; Full3D hyperbolic tiling). |
+| 56 | `apo_misc15.rs` | Apophysis miscellany 15 | 3 | `pre_sinusoidal3d` (gossamer light — 0 user; pre-phase 3D variant; reads JUST-WRITTEN x, y inside z computation); `pre_blur3D` (0 user; pre-phase Gaussian-blur via sum-of-6-uniforms · sphere; cpp's persistent `_gauss_rnd[6]` buffer replaced with 6 fresh randoms per call); `julian3Dx` (Xyrus02 — 8 user + 2 init slots; RNG; Full3D; needs_transform divide-out). |
+| 57 | `rosoni_misc.rs` | Rosoni | 1 | `rosoni` (DarkBeam — 7 user + 2 init slots; clipping/rotational pattern with N-step rotation loop XOR-toggling a `cerc` flag based on whether the rotated point falls inside an inner shape; output point taken at iteration `sweetiter`). Clean factor through outer. |
+| 58 | `apo_misc16.rs` | Apophysis miscellany 16 | 2 | `seashell3D` (Jesus Sosa — 4 user Java-recovered; cpp APO_VARIABLES empty; RNG; Full3D parametric sea shell; cpp `FPx = …` like anamorphcyl); `hypershift2` (tatasz / Stefanov — 2 user + 4 init slots; RNG; Full3D hyperbolic 2-shift). |
+| 59 | `bwraps7_misc.rs` | bwraps7 | 1 | `bwraps7` (slobo777, version 7 — newer version of bwraps algorithm with updated `_g2` formula: `gain² + ε` instead of `gain² / radius + ε`. Both ship so flames built against either lineage render the same). 5 user + 3 init slots. |
+| **Total new** | | | **310** | |
+| Registry size | | | **394** | (84 base + 310 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -189,6 +194,9 @@ Branches and commits:
 - Batches 50–54 also on `variation-bulk-port-2`. Commits in order:
   `423022c` (apo misc 10), `42eb780` (apo misc 11), `c7e8968`
   (apo misc 12), `5e0c0f4` (apo misc 13), `0cd7f71` (spin / phase).
+- Batches 55–59 also on `variation-bulk-port-2`. Commits in order:
+  `4819ebb` (apo misc 14), `794083c` (apo misc 15), `1fc1d49`
+  (rosoni), `589c4dc` (apo misc 16), `9890575` (bwraps7).
 
 ### Notable decisions during porting
 
