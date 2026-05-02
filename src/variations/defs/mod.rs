@@ -51,6 +51,7 @@ mod misc_extras2;
 mod misc_extras3;
 mod stub_recoveries2;
 mod lazy_family;
+mod misc_extras4;
 
 pub use basic::*;
 pub use advanced::*;
@@ -100,6 +101,7 @@ pub use misc_extras2::*;
 pub use misc_extras3::*;
 pub use stub_recoveries2::*;
 pub use lazy_family::*;
+pub use misc_extras4::*;
 
 use super::definition::VariationDef;
 
@@ -453,4 +455,13 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // Lazy family (Faber / FarDareisMai)
     &LAZYJESS,
     &LAZYTRAVIS,
+    // Misc 4
+    &ANAMORPHCYL,
+    &SVF,
+    &SHREDLIN,
+    &SHREDRAD,
+    &XHEART,
+    &STWIN,
+    &WHORL,
+    &DEVIL_WARP,
 ];
