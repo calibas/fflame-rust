@@ -80,6 +80,7 @@ mod jacobi_elliptic;
 mod circlecrop_phase;
 mod circlecrop_misc;
 mod exblur_misc;
+mod curl_sp_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -158,6 +159,7 @@ pub use jacobi_elliptic::*;
 pub use circlecrop_phase::*;
 pub use circlecrop_misc::*;
 pub use exblur_misc::*;
+pub use curl_sp_misc::*;
 
 use super::definition::VariationDef;
 
@@ -654,4 +656,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // circlecrop (normal phase) + exblur
     &CIRCLECROP,
     &EXBLUR,
+    // curl_sp
+    &CURL_SP,
 ];
