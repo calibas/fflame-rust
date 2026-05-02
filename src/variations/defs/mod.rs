@@ -83,6 +83,7 @@ mod exblur_misc;
 mod curl_sp_misc;
 mod extrude_misc;
 mod butterfly_fay_misc;
+mod minkowskope_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -164,6 +165,7 @@ pub use exblur_misc::*;
 pub use curl_sp_misc::*;
 pub use extrude_misc::*;
 pub use butterfly_fay_misc::*;
+pub use minkowskope_misc::*;
 
 use super::definition::VariationDef;
 
@@ -666,4 +668,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &EXTRUDE,
     // butterfly_fay
     &BUTTERFLY_FAY,
+    // minkowskope
+    &MINKOWSKOPE,
 ];
