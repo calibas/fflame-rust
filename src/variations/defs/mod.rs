@@ -90,6 +90,7 @@ mod glynnsshape_misc;
 mod apo_misc18;
 mod apo_misc19;
 mod apo_misc20;
+mod apo_misc21;
 
 pub use basic::*;
 pub use advanced::*;
@@ -178,6 +179,7 @@ pub use glynnsshape_misc::*;
 pub use apo_misc18::*;
 pub use apo_misc19::*;
 pub use apo_misc20::*;
+pub use apo_misc21::*;
 
 use super::definition::VariationDef;
 
@@ -699,4 +701,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CANNABISCURVE_WF,
     &SPHERICAL3D_WF,
     &SWIRL3D_WF,
+    // apo_misc21: heart_wf, post_ztranslate_wf, post_mirror_wf
+    &HEART_WF,
+    &POST_ZTRANSLATE_WF,
+    &POST_MIRROR_WF,
 ];
