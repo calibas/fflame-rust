@@ -58,6 +58,7 @@ mod apo_misc;
 mod erf_misc;
 mod simple_classics;
 mod inflate_z;
+mod apo_misc7;
 
 pub use basic::*;
 pub use advanced::*;
@@ -114,6 +115,7 @@ pub use apo_misc::*;
 pub use erf_misc::*;
 pub use simple_classics::*;
 pub use inflate_z::*;
+pub use apo_misc7::*;
 
 use super::definition::VariationDef;
 
@@ -531,4 +533,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &INFLATEZ_6,
     &SINTRANGE,
     &FOCI_3D,
+    // Apo misc 7
+    &ASTERIA,
+    &ESTIQ,
+    &FDISC,
+    &BTRANSFORM,
+    &NPOLAR,
 ];
