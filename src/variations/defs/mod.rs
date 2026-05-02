@@ -88,6 +88,7 @@ mod glynnlissa_misc;
 mod glynnspiro_misc;
 mod glynnsshape_misc;
 mod apo_misc18;
+mod apo_misc19;
 
 pub use basic::*;
 pub use advanced::*;
@@ -174,6 +175,7 @@ pub use glynnlissa_misc::*;
 pub use glynnspiro_misc::*;
 pub use glynnsshape_misc::*;
 pub use apo_misc18::*;
+pub use apo_misc19::*;
 
 use super::definition::VariationDef;
 
@@ -688,4 +690,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &LAZYSENSEN,
     &SPHERECROP,
     &XHEART_BLUR_WF,
+    // apo_misc19: mobius_strip, circleLinear
+    &MOBIUS_STRIP,
+    &CIRCLE_LINEAR,
 ];
