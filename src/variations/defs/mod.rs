@@ -73,6 +73,7 @@ mod apo_misc16;
 mod bwraps7_misc;
 mod apo_misc17;
 mod bwraps2_phase;
+mod post_heat_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -144,6 +145,7 @@ pub use apo_misc16::*;
 pub use bwraps7_misc::*;
 pub use apo_misc17::*;
 pub use bwraps2_phase::*;
+pub use post_heat_misc::*;
 
 use super::definition::VariationDef;
 
@@ -624,4 +626,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // bwraps2 phase variants
     &PRE_BWRAPS2,
     &POST_BWRAPS2,
+    // post_heat
+    &POST_HEAT,
 ];
