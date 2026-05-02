@@ -56,6 +56,7 @@ mod watchlist_misc;
 mod classic_blades_misc;
 mod apo_misc;
 mod erf_misc;
+mod simple_classics;
 
 pub use basic::*;
 pub use advanced::*;
@@ -110,6 +111,7 @@ pub use watchlist_misc::*;
 pub use classic_blades_misc::*;
 pub use apo_misc::*;
 pub use erf_misc::*;
+pub use simple_classics::*;
 
 use super::definition::VariationDef;
 
@@ -509,4 +511,13 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &EDISC,
     &CURVE,
     &ELLIPTIC2,
+    // Simple Apophysis classics
+    &EXP2,
+    &EXPONENTIAL,
+    &FLIPY,
+    &FUNNEL,
+    &INVPOLAR,
+    &PERSPECTIVE,
+    &LINE,
+    &HOLESQ,
 ];
