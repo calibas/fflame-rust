@@ -84,6 +84,7 @@ mod curl_sp_misc;
 mod extrude_misc;
 mod butterfly_fay_misc;
 mod minkowskope_misc;
+mod glynnlissa_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -166,6 +167,7 @@ pub use curl_sp_misc::*;
 pub use extrude_misc::*;
 pub use butterfly_fay_misc::*;
 pub use minkowskope_misc::*;
+pub use glynnlissa_misc::*;
 
 use super::definition::VariationDef;
 
@@ -670,4 +672,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &BUTTERFLY_FAY,
     // minkowskope
     &MINKOWSKOPE,
+    // glynnlissa
+    &GLYNNLISSA,
 ];
