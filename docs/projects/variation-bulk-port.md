@@ -186,8 +186,15 @@ both the shader emitter and the buffer populator, sharing
 | 89 | `affine3d_misc.rs` | affine3D | 1 | `affine3D` (Framelet — general 3D affine with separate yaw/pitch/roll rotations, per-axis scales, optional shear, translation; 15 user params at exact slot budget; no init slots — sin/cos of rotation angles computed inline per iteration to avoid 16-slot overflow; cpp's `_hasShear` flag replaced by inline `\|shXY\|+\|shXZ\|+…>ε` test; Full3D). |
 | 90 | `truchet2_misc.rs` | truchet2 | 1 | `truchet2` (tatasz / Stefanov / Sosa — Java-recovered variant of truchet with two interpolated exponents/widths controlled by `xp` (position within cell mapped to [0,1] via fmod-and-fold); 7 user params; no init slots; same multiplicative-LCG hash as original truchet; cpp's "fill" sentinels (100.0/10000.0) preserved). |
 | 91 | `truchet_misc.rs` | truchet (TyrantWave) | 1 | `truchet` (TyrantWave 2008 — original Truchet plugin; 7 user params; needs_transform divide-out for `scale = (cos(r) − sin(r))/VVAR` plus unweighted output lines; slow drawmode (extended=1) iterates LCG `niter` times bounded ≤ 1000 — preserved as runtime-bounded WGSL loop with explicit cap inside `for (var i=0; i<1000; …)`; cpp TC color writes skipped). Note: `truchet_fill` (a different cpp variation) was ported in batch 25. |
-| **Total new** | | | **362** | |
-| Registry size | | | **446** | (84 base + 362 ported) |
+| 92 | `post_axis_symmetry_misc.rs` | post_axis_symmetry_wf | 1 | `post_axis_symmetry_wf` (Maschke — post-phase axis-symmetry mirror across X, Y, or Z axis at a chosen center, with optional rotation; 5 spatial user (axis int, centre_x/y/z, rotation degrees) + 2 init `_sina/_cosa = sin/cos(rotation·2π/180/2)`; cpp's 6 colorshift params skipped; cpp's `_halve_dist = VVAR/2` computed inline since it depends on weight; cpp's `_doRotate` flag replaced by inline `\|sina\| > ε` test). |
+| 93 | `pre_wave3d_misc.rs` | pre_wave3D_wf | 1 | `pre_wave3D_wf` (Maschke — pre-phase wave perturbation displacing the affine input along one of four axis modes (XY, YZ, ZX, RADIAL); 7 user (axis int, wavelen, phase, damping, centre_x/y/z); body computes `r → dl → amplitude·sin(2π·dl + phase)` with optional damping `exp(-dl·damping)`; needs_transform=true for weight in pre phase). |
+| 94 | `circle_rand_misc.rs` | circleRand + CircleTrans1 | 2 | Both use deterministic per-cell noise hash (same `n^13 ^ n` style as circleLinear/pointgrid_wf, here `cr_disc_noise`) plus rejection-sampling loop bounded at 32 iterations to fit WGSL's uniform-control-flow requirements. `circleRand` (5 user — random sample in `[-X, X]×[-Y, Y]` accepted iff per-cell noise ≤ Dens AND in-cell radius ≤ noise·Sc); `CircleTrans1` (5 user — first half-translates toward (X, Y), then resamples via circleRand-style rejection if in dense cell). cpp's unbounded `do { } while` loops capped at 32 iters. |
+| 95 | `iconattractor_misc.rs` | iconattractor_js | 1 | `iconattractor_js` (Sosa, 2018 — Symmetric Icon Attractors from "Symmetry in Chaos" by Field/Golubitsky; 4 user (preset_id int 0-16, centerx, centery, scale) + 1 init `_bdcs`; cpp picks one of 17 preset (degree, a, b, g, o, l) tuples randomly at init — replaced with `preset_id` user param so user picks specific attractor; 17 presets baked into `ic_preset(id)` switch; complex-power loop preserved as runtime-bounded WGSL loop with cap at 24). |
+| 96 | `waveblur_misc.rs` | waveblur_wf | 1 | `waveblur_wf` (Maschke — polar wave-blur emitting points on a circle whose radius is a wave function of uniform-random angle; 7 user (count int, amplitude_z, phase, damping_z, color_scale, color_offset, direct_color int); body uses needs_transform to read w for the damping multiplier since cpp's r already has VVAR factor when used in damping; Full3D). |
+| 97 | `siercarpet_misc.rs` | siercarpet_js | 1 | `siercarpet_js` (Sosa, 2017 — Cross Carpet by Roger Bagula, Java-recovered; 1 user `m` int 3-12; cpp's 25-element `_a[]/_b[]` lookup tables replaced with single-pair inline computation based on random index `l` parity; cpp's persistent `_d` state irrelevant — guard `d % 2m != 5 % 2*m` always true). |
+| 98 | `popcorn2_3d_misc.rs` | popcorn2_3D | 1 | `popcorn2_3D` (Berlin, 2009 — 3D mod of popcorn2; 4 user; cpp reads `FPz` accumulator — recovered by picking consistent `otherZ == 0` default branch (FPz starts at 0 each iteration in our model); body has needs_transform divide-out for `tmpVV = sgn(w)·w²` non-linear weight dep — `tmpVV/w = min(\|w\|, 1)` absorbs complication). |
+| **Total new** | | | **370** | |
+| Registry size | | | **454** | (84 base + 370 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -252,6 +259,11 @@ Branches and commits:
 - Batches 88–91 also on `variation-bulk-port-2`. Commits in order:
   `c1a4700` (dc_cube + pre_rect_wf), `8383808` (affine3D),
   `c8a28c1` (truchet2), `60950a2` (truchet — TyrantWave).
+- Batches 92–98 also on `variation-bulk-port-2`. Commits in order:
+  `f4824a4` (post_axis_symmetry_wf), `620aad8` (pre_wave3D_wf),
+  `1168912` (circleRand + CircleTrans1), `58e8d3b`
+  (iconattractor_js — 17-preset baking), `db29f2f` (waveblur_wf),
+  `c20679f` (siercarpet_js), `8ca0d77` (popcorn2_3D).
 
 ### Notable decisions during porting
 
