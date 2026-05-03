@@ -114,6 +114,7 @@ mod popcorn2_3d_misc;
 mod jac_asn_misc;
 mod plusrecip_misc;
 mod gamma_misc;
+mod bubblet3d_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -226,6 +227,7 @@ pub use popcorn2_3d_misc::*;
 pub use jac_asn_misc::*;
 pub use plusrecip_misc::*;
 pub use gamma_misc::*;
+pub use bubblet3d_misc::*;
 
 use super::definition::VariationDef;
 
@@ -818,4 +820,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &PLUSRECIP,
     // gamma_misc: gamma
     &GAMMA,
+    // bubblet3d_misc: bubbleT3D
+    &BUBBLE_T3D,
 ];
