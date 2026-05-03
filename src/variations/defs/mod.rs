@@ -93,6 +93,7 @@ mod apo_misc20;
 mod apo_misc21;
 mod apo_misc22;
 mod sosa_attractors;
+mod sosa_attractors2;
 
 pub use basic::*;
 pub use advanced::*;
@@ -184,6 +185,7 @@ pub use apo_misc20::*;
 pub use apo_misc21::*;
 pub use apo_misc22::*;
 pub use sosa_attractors::*;
+pub use sosa_attractors2::*;
 
 use super::definition::VariationDef;
 
@@ -717,4 +719,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CLIFFORD_JS,
     &SVENSSON_JS,
     &SATTRACTOR_JS,
+    // sosa_attractors2: threepoint_js, lorenz_js, woggle_js
+    &THREEPOINT_JS,
+    &LORENZ_JS,
+    &WOGGLE_JS,
 ];
