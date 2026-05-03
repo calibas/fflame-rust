@@ -95,6 +95,7 @@ mod apo_misc22;
 mod sosa_attractors;
 mod sosa_attractors2;
 mod sosa_attractors3;
+mod sosa_attractors4;
 
 pub use basic::*;
 pub use advanced::*;
@@ -188,6 +189,7 @@ pub use apo_misc22::*;
 pub use sosa_attractors::*;
 pub use sosa_attractors2::*;
 pub use sosa_attractors3::*;
+pub use sosa_attractors4::*;
 
 use super::definition::VariationDef;
 
@@ -728,4 +730,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // sosa_attractors3: lace_js, wallpaper_js
     &LACE_JS,
     &WALLPAPER_JS,
+    // sosa_attractors4: hadamard_js, invtree_js, crown_js
+    &HADAMARD_JS,
+    &INVTREE_JS,
+    &CROWN_JS,
 ];
