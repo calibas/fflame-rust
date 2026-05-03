@@ -102,6 +102,7 @@ mod pointgrid_misc;
 mod dc_misc;
 mod dc_misc2;
 mod affine3d_misc;
+mod truchet2_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -202,6 +203,7 @@ pub use pointgrid_misc::*;
 pub use dc_misc::*;
 pub use dc_misc2::*;
 pub use affine3d_misc::*;
+pub use truchet2_misc::*;
 
 use super::definition::VariationDef;
 
@@ -769,4 +771,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &PRE_RECT_WF,
     // affine3d_misc: affine3D
     &AFFINE3D,
+    // truchet2_misc: truchet2
+    &TRUCHET2,
 ];
