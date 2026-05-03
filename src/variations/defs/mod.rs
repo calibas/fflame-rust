@@ -112,6 +112,7 @@ mod waveblur_misc;
 mod siercarpet_misc;
 mod popcorn2_3d_misc;
 mod jac_asn_misc;
+mod plusrecip_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -222,6 +223,7 @@ pub use waveblur_misc::*;
 pub use siercarpet_misc::*;
 pub use popcorn2_3d_misc::*;
 pub use jac_asn_misc::*;
+pub use plusrecip_misc::*;
 
 use super::definition::VariationDef;
 
@@ -810,4 +812,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &POPCORN2_3D,
     // jac_asn_misc: jac_asn
     &JAC_ASN,
+    // plusrecip_misc: plusrecip
+    &PLUSRECIP,
 ];
