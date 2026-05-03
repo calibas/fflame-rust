@@ -91,6 +91,7 @@ mod apo_misc18;
 mod apo_misc19;
 mod apo_misc20;
 mod apo_misc21;
+mod apo_misc22;
 
 pub use basic::*;
 pub use advanced::*;
@@ -180,6 +181,7 @@ pub use apo_misc18::*;
 pub use apo_misc19::*;
 pub use apo_misc20::*;
 pub use apo_misc21::*;
+pub use apo_misc22::*;
 
 use super::definition::VariationDef;
 
@@ -705,4 +707,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &HEART_WF,
     &POST_ZTRANSLATE_WF,
     &POST_MIRROR_WF,
+    // apo_misc22: dc_carpet, post_point_symmetry_wf, cpow3_wf
+    &DC_CARPET,
+    &POST_POINT_SYMMETRY_WF,
+    &CPOW3_WF,
 ];
