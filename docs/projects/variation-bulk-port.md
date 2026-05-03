@@ -178,8 +178,12 @@ both the shader emitter and the buffer populator, sharing
 | 81 | `sosa_attractors2.rs` | Sosa attractors batch 2 | 3 | `threepoint_js` (0 user; Roger Bagula 3-branch IFS triangle; pivot+overlap; RNG 2 calls/iter; signature is `(p, rng)` not `(p, xform_id, variation_id, rng)` — caught by initial shader validation error since 0 params triggers the simpler signature); `lorenz_js` (7 user Java-recovered; cpp APO_VARIABLES had only 3; 1 init slot _bdcs=1/scale; Full3D Lorenz attractor Euler-step); `woggle_js` (1 user `m` Java-recovered; cpp's persistent `_a[25]/_b[25]` tables replaced with runtime cos/sin; RNG 1 call/iter). |
 | 82 | `sosa_attractors3.rs` | Sosa attractors batch 3 | 2 | `lace_js` (0 user; Paul Bourke's lace.c — 4-branch Sierpinski-triangle-like IFS with three pivot points at vertices of equilateral triangle; RNG 1 call/iter); `wallpaper_js` (3 user a/b/c Java-recovered; Mira-style sqrt warp blended with identity; needs_transform divide-out since cpp body lacks VVAR scaling on both branches; RNG 1 call/iter; cpp's setBrightness side effect ignored). |
 | 83 | `sosa_attractors4.rs` | Sosa attractors batch 4 | 3 | `hadamard_js` (0 user; Paul Bourke's roger18.c — 3-branch Hadamard IFS; RNG 2 calls/iter); `invtree_js` (0 user; Paul Bourke's trifraction2 — 3-branch inverse-tree IFS; RNG 2 calls/iter); `crown_js` (Roger Bagula crown function; 2 user a/b Java-recovered; 14-iteration complex sum wt += (sin(a^k·(-1)^k·t)/a^(b·k), cos(...)/a^(b·k)); Full3D — z = mag²² of accumulated complex; cpp's `y = wt.real()` is a porter typo, Java's `y = wt.im` is restored; cpp's TC color write skipped). |
-| **Total new** | | | **343** | |
-| Registry size | | | **427** | (84 base + 343 ported) |
+| 84 | `wf_curves.rs` | WF polar curves + bubble | 4 | `epispiral_wf` (1 user `waves`; r = 0.5/cos(waves·a); returns (0,0) when cos hits zero); `cloverleaf_wf` (1 user `filled` int; r = sin(2a) + 0.25·sin(6a); RNG when filled==1); `rose_wf` (3 user amp/waves/filled; r = amp·cos(waves·a); RNG when filled==1); `bubble_wf` (0 user; bubble inversion plus random ±z bump ±(2/r − 1); Full3D; RNG 1 call/iter). All preserve cpp's atan2(x, y) swap. |
+| 85 | `waves_wf_family.rs` | waves2/3/4_wf + dinis_surface_wf | 4 | Three sine/cosine perturbation variations (waves2_wf single trig, waves3_wf squared trig, waves4_wf triple-trig product) sharing 8 user (scalex, scaley, freqx, freqy, use_cos_x int, use_cos_y int, dampx, dampy) + 2 init (_dampingX/Y = exp(damp) or 1). Plus `dinis_surface_wf` (Maschke — Dini's Surface parametric mapping; 2 user a/b; Full3D; uses log(tan(v/2)) guarded with abs+max). |
+| 86 | `pointgrid_misc.rs` | pointgrid family + apocarpet_js | 3 | `pointgrid_wf` (Maschke — 8 user + 2 init `_dx/_dy = (max-min)/count`; cpp's `GOODRAND_SEED` reseeding for deterministic per-cell jitter replaced with deterministic integer hash `(n^13 ^ n)` keyed on `(seed, xIdx, yIdx)`); `pointgrid3d_wf` (11 user + 3 init; same hash-based jitter; Full3D); `apocarpet_js` (Sosa, Paul Bourke's roger17.c — 6-branch Apollonian Carpet IFS using inversion + four scaled translates by `r = 1/(1+√2)`). |
+| 87 | `dc_misc.rs` | dc_cylinder/2 + dc_triangle | 3 | `dc_cylinder` (FracFx — 6 user + 2 init `_ldcs = 1/scale, _ldca = offset·π`; persistent `_r[4]` replaced with fresh randoms; needs_transform divide-out since `FPy += rr + FTy·y` lacks VVAR; Full3D); `dc_cylinder2` (same with `FPy += rr·FTy·y`); `dc_triangle` (Apophysis — 2 user + 1 init `_A = clamp(scatter_area, -1, 1)`; barycentric mapping using xform's affine as triangle vertices). All three skip TC color writes per writes_color compromise. |
+| **Total new** | | | **357** | |
+| Registry size | | | **441** | (84 base + 357 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -237,6 +241,10 @@ Branches and commits:
 - Batches 80–83 also on `variation-bulk-port-2`. Commits in order:
   `3e50c25` (Sosa attractors), `0bbac7c` (Sosa attractors 2),
   `6aa4204` (Sosa attractors 3), `d923106` (Sosa attractors 4).
+- Batches 84–87 also on `variation-bulk-port-2`. Commits in order:
+  `4006dce` (WF curves), `123ac89` (waves WF family +
+  dinis_surface), `5c3cb13` (pointgrid + apocarpet),
+  `1fee445` (dc_cylinder/2 + dc_triangle).
 
 ### Notable decisions during porting
 
