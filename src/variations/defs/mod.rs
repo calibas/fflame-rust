@@ -109,6 +109,7 @@ mod pre_wave3d_misc;
 mod circle_rand_misc;
 mod iconattractor_misc;
 mod waveblur_misc;
+mod siercarpet_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -216,6 +217,7 @@ pub use pre_wave3d_misc::*;
 pub use circle_rand_misc::*;
 pub use iconattractor_misc::*;
 pub use waveblur_misc::*;
+pub use siercarpet_misc::*;
 
 use super::definition::VariationDef;
 
@@ -798,4 +800,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &ICONATTRACTOR_JS,
     // waveblur_misc: waveblur_wf
     &WAVEBLUR_WF,
+    // siercarpet_misc: siercarpet_js
+    &SIERCARPET_JS,
 ];
