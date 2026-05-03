@@ -106,6 +106,7 @@ mod truchet2_misc;
 mod truchet_misc;
 mod post_axis_symmetry_misc;
 mod pre_wave3d_misc;
+mod circle_rand_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -210,6 +211,7 @@ pub use truchet2_misc::*;
 pub use truchet_misc::*;
 pub use post_axis_symmetry_misc::*;
 pub use pre_wave3d_misc::*;
+pub use circle_rand_misc::*;
 
 use super::definition::VariationDef;
 
@@ -785,4 +787,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &POST_AXIS_SYMMETRY_WF,
     // pre_wave3d_misc: pre_wave3D_wf
     &PRE_WAVE3D_WF,
+    // circle_rand_misc: circleRand, CircleTrans1
+    &CIRCLE_RAND,
+    &CIRCLE_TRANS1,
 ];
