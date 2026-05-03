@@ -100,6 +100,7 @@ mod wf_curves;
 mod waves_wf_family;
 mod pointgrid_misc;
 mod dc_misc;
+mod dc_misc2;
 
 pub use basic::*;
 pub use advanced::*;
@@ -198,6 +199,7 @@ pub use wf_curves::*;
 pub use waves_wf_family::*;
 pub use pointgrid_misc::*;
 pub use dc_misc::*;
+pub use dc_misc2::*;
 
 use super::definition::VariationDef;
 
@@ -760,4 +762,7 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &DC_CYLINDER,
     &DC_CYLINDER2,
     &DC_TRIANGLE,
+    // dc_misc2: dc_cube, pre_rect_wf
+    &DC_CUBE,
+    &PRE_RECT_WF,
 ];
