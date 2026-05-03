@@ -105,6 +105,7 @@ mod affine3d_misc;
 mod truchet2_misc;
 mod truchet_misc;
 mod post_axis_symmetry_misc;
+mod pre_wave3d_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -208,6 +209,7 @@ pub use affine3d_misc::*;
 pub use truchet2_misc::*;
 pub use truchet_misc::*;
 pub use post_axis_symmetry_misc::*;
+pub use pre_wave3d_misc::*;
 
 use super::definition::VariationDef;
 
@@ -781,4 +783,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &TRUCHET,
     // post_axis_symmetry_misc: post_axis_symmetry_wf
     &POST_AXIS_SYMMETRY_WF,
+    // pre_wave3d_misc: pre_wave3D_wf
+    &PRE_WAVE3D_WF,
 ];
