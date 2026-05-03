@@ -92,6 +92,7 @@ mod apo_misc19;
 mod apo_misc20;
 mod apo_misc21;
 mod apo_misc22;
+mod sosa_attractors;
 
 pub use basic::*;
 pub use advanced::*;
@@ -182,6 +183,7 @@ pub use apo_misc19::*;
 pub use apo_misc20::*;
 pub use apo_misc21::*;
 pub use apo_misc22::*;
+pub use sosa_attractors::*;
 
 use super::definition::VariationDef;
 
@@ -711,4 +713,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &DC_CARPET,
     &POST_POINT_SYMMETRY_WF,
     &CPOW3_WF,
+    // sosa_attractors: clifford_js, svensson_js, sattractor_js
+    &CLIFFORD_JS,
+    &SVENSSON_JS,
+    &SATTRACTOR_JS,
 ];
