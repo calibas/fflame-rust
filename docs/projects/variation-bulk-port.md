@@ -159,8 +159,23 @@ both the shader emitter and the buffer populator, sharing
 | 62 | `post_heat_misc.rs` | post_heat | 1 | `post_heat` (?, Java-recovered cpp PluginVarCalc empty; 9 user params; no init slots — derived values computed at runtime to fit budget; post-phase 3D heat-distortion via sin perturbations on r/θ/φ spherical coords; needs_transform). |
 | 63 | `post_rblur_misc.rs` | post_rblur | 1 | `post_rblur` (Xyrus02 — post-phase radial blur jitters point by distance-from-center scaled by `2·strength`; 4 user + 1 init slot; RNG). |
 | 64 | `onion2_misc.rs` | onion2 | 1 | `onion2` (Nicolaus Anderson 2013, Java-recovered; 8 user; Full3D onion-shape via circle-to-exp transition at "meeting point", projected onto sphere; needs_transform divide-out — body has both `w·X` and `1/w²·X` terms in 3D output, bounded by safe_w guards). |
-| **Total new** | | | **317** | |
-| Registry size | | | **401** | (84 base + 317 ported) |
+| 65 | `jacobi_elliptic.rs` | Jacobi elliptic family | 3 | `jac_sn`, `jac_cn`, `jac_dn` — Jacobi elliptic functions sn, cn, dn. Each has its own per-variation prefixed helper (`jac_sn_je`, `jac_cn_je`, `jac_dn_je`) for the AGM-style 8-iteration descent (~1e-7 precision). 749 lines total. |
+| 66 | `circlecrop_phase.rs` | pre/post circlecrop | 2 | `pre_circlecrop` and `post_circlecrop` (Xyrus02 — 5 user + 1 init slot _cA = clamp(scatter_area, -1, 1); RNG; doHide-as-(0,0) compromise). Both use needs_transform (no outer multiplier in pre/post phases). |
+| 67 | `circlecrop_misc.rs` + `exblur_misc.rs` | circlecrop + exblur | 2 | `circlecrop` (normal-phase circlecrop; needs_transform divide-out for `+x0/+y0` constant offsets that don't factor through outer); `exblur` (zephyrtronium — replaced persistent `_r[4]` state buffer with fresh randoms per call, same compromise as later applied to `farblur`/`nblur`). |
+| 68 | `curl_sp_misc.rs` | curl_sp | 1 | `curl_sp` (Xyrus02 — 6 user + 4 init slots; cpp's TC color drift dropped per writes_color compromise). |
+| 69 | `extrude_misc.rs` | extrude | 1 | `extrude` (Xyrus02 — 1 user `root_face`; Z-only Depth3D variation with random extrusion sampled uniformly across an axial slab). |
+| 70 | `butterfly_fay_misc.rs` | butterfly_fay | 1 | `butterfly_fay` (11 user + 1 init slot; 6-mode spread routing for Fay's butterfly curve; RNG). |
+| 71 | `minkowskope_misc.rs` | minkowskope | 1 | `minkowskope` (Apo plugin pack, dark-beam tweak 2017 — 6 user + 2 init slots; Minkowski question-mark wave). |
+| 72 | `glynnlissa_misc.rs` | glynnlissa | 1 | `glynnlissa` (Java-recovered cpp PluginVarCalc empty unported_stub; 11 user + 3 init slots — Glynn × Lissajous). |
+| 73 | `glynnspiro_misc.rs` | glynnspiro | 1 | `glynnspiro` (11 user + 3 init slots — Glynn × spirograph3D). |
+| 74 | `glynnsshape_misc.rs` | glynnSShape | 1 | `glynnSShape` (Java-recovered cpp PluginVarCalc empty unported_stub; 11 user + 3 init slots — Glynn × Gielis SuperShape; same Glynn pattern as glynnlissa/glynnspiro). |
+| 75 | `apo_misc18.rs` | Apophysis miscellany 18 | 3 | `lazysensen` (bezo97 — Java-recovered; 3 user; per-axis floor-and-flip parity rule); `spherecrop` (Xyrus02 — 6 user + 1 init `_cA = clamp(scatter_area, -1, 1)`; needs_transform divide-out for the `+x0/+y0/+z0` offsets; doHide branch returns (0,0,0) compromise); `xheart_blur_wf` (Xyrus02-derived — 2 user + 3 init `_sina, _cosa, _rat`; RNG random heart-shape blur). |
+| 76 | `apo_misc19.rs` | Apophysis miscellany 19 | 2 | `mobius_strip` (slobo777 / chronologicaldot / CozyG — Java-recovered; 10 user + 4 init slots `rotxSin/Cos, rotySin/Cos`; HIDE→(0,0,0), LEAVE→needs_transform divide-out, modify_z==0 falls back to z=0 since cpp's accumulator self-amp can't be replicated); `circleLinear` (FracFx — 8 user; deterministic per-cell noise hash `n^13 ^ n` selecting between full-linear, scaled, and ring-radius mappings). bubble2 was already in `numbered.rs` — skipped. |
+| 77 | `apo_misc20.rs` | Apophysis miscellany 20 | 3 | `cannabiscurve_wf` (1 user `filled` int, RNG when filled==1; cannabis-curve polar plot); `spherical3D_wf` (2 user invert/exponent + 1 init `_regularForm` flag; 3D spherical inversion); `swirl3D_wf` (Maschke — 1 user `n`; 3D swirl with z = sin(6·cos(rad) − n·ang); cpp's color write skipped). |
+| 78 | `apo_misc21.rs` | Apophysis miscellany 21 | 3 | `heart_wf` (Maschke — 5 user; polar heart-curve with left/right radial scales); `post_ztranslate_wf` (Maschke — 0 user; trivial post-phase Z translate `p.z += w`); `post_mirror_wf` (Maschke — 8 spatial user; post-phase axis-mirror with independent 50% chance per axis; cpp colorshift params skipped). |
+| 79 | `apo_misc22.rs` | Apophysis miscellany 22 | 3 | `dc_carpet` (Apophysis — 2 user; randomized fractal carpet using signum(c)·fmod(\|c\|, 1) plus random ±1 cell offset, mapped through transform's affine; reads xf.a/b/c/d/e/f via needs_transform; cpp TC writes skipped); `post_point_symmetry_wf` (Maschke — 3 user; post-phase N-fold rotational symmetry; computes per-iter rotation angle on-the-fly instead of caching `_sina[16]/_cosa[16]` which would overflow our 16-slot init budget); `cpow3_wf` (CozyG — 7 user + 7 init slots; CPow3 family with discrete spread, secondary spread, offset; RNG). |
+| **Total new** | | | **332** | |
+| Registry size | | | **416** | (84 base + 332 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -205,6 +220,16 @@ Branches and commits:
 - Batches 60–64 also on `variation-bulk-port-2`. Commits in order:
   `f65c070` (apo misc 17), `adfe912` (bwraps2 phase), `110d3d1`
   (post_heat), `f7aa97b` (post_rblur), `8504e5f` (onion2).
+- Batches 65–69 also on `variation-bulk-port-2`. Commits in order:
+  `81d9e12` (Jacobi elliptic), `cff091d` (pre/post circlecrop),
+  `9c87b90` (circlecrop + exblur), `9aca25f` (curl_sp), `bf9db4e`
+  (extrude).
+- Batches 70–74 also on `variation-bulk-port-2`. Commits in order:
+  `33f1612` (butterfly_fay), `e594cb0` (minkowskope), `30530c7`
+  (glynnlissa), `e085987` (glynnspiro), `c3aa987` (glynnSShape).
+- Batches 75–79 also on `variation-bulk-port-2`. Commits in order:
+  `e2ea0dd` (apo misc 18), `6677cee` (apo misc 19), `20c74d8`
+  (apo misc 20), `7b6270d` (apo misc 21), `3ca3599` (apo misc 22).
 
 ### Notable decisions during porting
 
