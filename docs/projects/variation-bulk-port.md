@@ -174,8 +174,12 @@ both the shader emitter and the buffer populator, sharing
 | 77 | `apo_misc20.rs` | Apophysis miscellany 20 | 3 | `cannabiscurve_wf` (1 user `filled` int, RNG when filled==1; cannabis-curve polar plot); `spherical3D_wf` (2 user invert/exponent + 1 init `_regularForm` flag; 3D spherical inversion); `swirl3D_wf` (Maschke — 1 user `n`; 3D swirl with z = sin(6·cos(rad) − n·ang); cpp's color write skipped). |
 | 78 | `apo_misc21.rs` | Apophysis miscellany 21 | 3 | `heart_wf` (Maschke — 5 user; polar heart-curve with left/right radial scales); `post_ztranslate_wf` (Maschke — 0 user; trivial post-phase Z translate `p.z += w`); `post_mirror_wf` (Maschke — 8 spatial user; post-phase axis-mirror with independent 50% chance per axis; cpp colorshift params skipped). |
 | 79 | `apo_misc22.rs` | Apophysis miscellany 22 | 3 | `dc_carpet` (Apophysis — 2 user; randomized fractal carpet using signum(c)·fmod(\|c\|, 1) plus random ±1 cell offset, mapped through transform's affine; reads xf.a/b/c/d/e/f via needs_transform; cpp TC writes skipped); `post_point_symmetry_wf` (Maschke — 3 user; post-phase N-fold rotational symmetry; computes per-iter rotation angle on-the-fly instead of caching `_sina[16]/_cosa[16]` which would overflow our 16-slot init budget); `cpow3_wf` (CozyG — 7 user + 7 init slots; CPow3 family with discrete spread, secondary spread, offset; RNG). |
-| **Total new** | | | **332** | |
-| Registry size | | | **416** | (84 base + 332 ported) |
+| 80 | `sosa_attractors.rs` | Sosa attractors (Jesus Sosa, 2017, JS-suffix family — Paul Bourke's collection) | 3 | `clifford_js` (4 user, Java-recovered; Clifford attractor xn+1=sin(a·yn)+c·cos(a·xn), yn+1=sin(b·xn)+d·cos(b·yn); cpp's `_a=0.0`/`_d=0.0` are porter typos restored to Java -1.4/-6.56 etc.); `svensson_js` (4 user, Java-recovered; Svensson attractor); `sattractor_js` (1 user `m`, Java-recovered, Henon IFS variant; cpp's persistent `_a[13]/_b[13]` lookup tables replaced with runtime cos/sin to fit our 16-slot budget; RNG 2 calls/iter). |
+| 81 | `sosa_attractors2.rs` | Sosa attractors batch 2 | 3 | `threepoint_js` (0 user; Roger Bagula 3-branch IFS triangle; pivot+overlap; RNG 2 calls/iter; signature is `(p, rng)` not `(p, xform_id, variation_id, rng)` — caught by initial shader validation error since 0 params triggers the simpler signature); `lorenz_js` (7 user Java-recovered; cpp APO_VARIABLES had only 3; 1 init slot _bdcs=1/scale; Full3D Lorenz attractor Euler-step); `woggle_js` (1 user `m` Java-recovered; cpp's persistent `_a[25]/_b[25]` tables replaced with runtime cos/sin; RNG 1 call/iter). |
+| 82 | `sosa_attractors3.rs` | Sosa attractors batch 3 | 2 | `lace_js` (0 user; Paul Bourke's lace.c — 4-branch Sierpinski-triangle-like IFS with three pivot points at vertices of equilateral triangle; RNG 1 call/iter); `wallpaper_js` (3 user a/b/c Java-recovered; Mira-style sqrt warp blended with identity; needs_transform divide-out since cpp body lacks VVAR scaling on both branches; RNG 1 call/iter; cpp's setBrightness side effect ignored). |
+| 83 | `sosa_attractors4.rs` | Sosa attractors batch 4 | 3 | `hadamard_js` (0 user; Paul Bourke's roger18.c — 3-branch Hadamard IFS; RNG 2 calls/iter); `invtree_js` (0 user; Paul Bourke's trifraction2 — 3-branch inverse-tree IFS; RNG 2 calls/iter); `crown_js` (Roger Bagula crown function; 2 user a/b Java-recovered; 14-iteration complex sum wt += (sin(a^k·(-1)^k·t)/a^(b·k), cos(...)/a^(b·k)); Full3D — z = mag²² of accumulated complex; cpp's `y = wt.real()` is a porter typo, Java's `y = wt.im` is restored; cpp's TC color write skipped). |
+| **Total new** | | | **343** | |
+| Registry size | | | **427** | (84 base + 343 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -230,6 +234,9 @@ Branches and commits:
 - Batches 75–79 also on `variation-bulk-port-2`. Commits in order:
   `e2ea0dd` (apo misc 18), `6677cee` (apo misc 19), `20c74d8`
   (apo misc 20), `7b6270d` (apo misc 21), `3ca3599` (apo misc 22).
+- Batches 80–83 also on `variation-bulk-port-2`. Commits in order:
+  `3e50c25` (Sosa attractors), `0bbac7c` (Sosa attractors 2),
+  `6aa4204` (Sosa attractors 3), `d923106` (Sosa attractors 4).
 
 ### Notable decisions during porting
 
