@@ -182,8 +182,12 @@ both the shader emitter and the buffer populator, sharing
 | 85 | `waves_wf_family.rs` | waves2/3/4_wf + dinis_surface_wf | 4 | Three sine/cosine perturbation variations (waves2_wf single trig, waves3_wf squared trig, waves4_wf triple-trig product) sharing 8 user (scalex, scaley, freqx, freqy, use_cos_x int, use_cos_y int, dampx, dampy) + 2 init (_dampingX/Y = exp(damp) or 1). Plus `dinis_surface_wf` (Maschke — Dini's Surface parametric mapping; 2 user a/b; Full3D; uses log(tan(v/2)) guarded with abs+max). |
 | 86 | `pointgrid_misc.rs` | pointgrid family + apocarpet_js | 3 | `pointgrid_wf` (Maschke — 8 user + 2 init `_dx/_dy = (max-min)/count`; cpp's `GOODRAND_SEED` reseeding for deterministic per-cell jitter replaced with deterministic integer hash `(n^13 ^ n)` keyed on `(seed, xIdx, yIdx)`); `pointgrid3d_wf` (11 user + 3 init; same hash-based jitter; Full3D); `apocarpet_js` (Sosa, Paul Bourke's roger17.c — 6-branch Apollonian Carpet IFS using inversion + four scaled translates by `r = 1/(1+√2)`). |
 | 87 | `dc_misc.rs` | dc_cylinder/2 + dc_triangle | 3 | `dc_cylinder` (FracFx — 6 user + 2 init `_ldcs = 1/scale, _ldca = offset·π`; persistent `_r[4]` replaced with fresh randoms; needs_transform divide-out since `FPy += rr + FTy·y` lacks VVAR; Full3D); `dc_cylinder2` (same with `FPy += rr·FTy·y`); `dc_triangle` (Apophysis — 2 user + 1 init `_A = clamp(scatter_area, -1, 1)`; barycentric mapping using xform's affine as triangle vertices). All three skip TC color writes per writes_color compromise. |
-| **Total new** | | | **357** | |
-| Registry size | | | **441** | (84 base + 357 ported) |
+| 88 | `dc_misc2.rs` | dc_cube + pre_rect_wf | 2 | `dc_cube` (Apophysis — 3 user x/y/z scales; cpp also declared 6 color params c1..c6 omitted per writes_color compromise; picks one of 6 cube faces and emits a random point on that face; RNG 4 calls/iter; Full3D); `pre_rect_wf` (Maschke — 4 user x0/x1/y0/y1 + 2 init `_dx, _dy`; pre-phase replaces affine input with uniform random sample from a rectangle; RNG 2 calls/iter). |
+| 89 | `affine3d_misc.rs` | affine3D | 1 | `affine3D` (Framelet — general 3D affine with separate yaw/pitch/roll rotations, per-axis scales, optional shear, translation; 15 user params at exact slot budget; no init slots — sin/cos of rotation angles computed inline per iteration to avoid 16-slot overflow; cpp's `_hasShear` flag replaced by inline `\|shXY\|+\|shXZ\|+…>ε` test; Full3D). |
+| 90 | `truchet2_misc.rs` | truchet2 | 1 | `truchet2` (tatasz / Stefanov / Sosa — Java-recovered variant of truchet with two interpolated exponents/widths controlled by `xp` (position within cell mapped to [0,1] via fmod-and-fold); 7 user params; no init slots; same multiplicative-LCG hash as original truchet; cpp's "fill" sentinels (100.0/10000.0) preserved). |
+| 91 | `truchet_misc.rs` | truchet (TyrantWave) | 1 | `truchet` (TyrantWave 2008 — original Truchet plugin; 7 user params; needs_transform divide-out for `scale = (cos(r) − sin(r))/VVAR` plus unweighted output lines; slow drawmode (extended=1) iterates LCG `niter` times bounded ≤ 1000 — preserved as runtime-bounded WGSL loop with explicit cap inside `for (var i=0; i<1000; …)`; cpp TC color writes skipped). Note: `truchet_fill` (a different cpp variation) was ported in batch 25. |
+| **Total new** | | | **362** | |
+| Registry size | | | **446** | (84 base + 362 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -245,6 +249,9 @@ Branches and commits:
   `4006dce` (WF curves), `123ac89` (waves WF family +
   dinis_surface), `5c3cb13` (pointgrid + apocarpet),
   `1fee445` (dc_cylinder/2 + dc_triangle).
+- Batches 88–91 also on `variation-bulk-port-2`. Commits in order:
+  `c1a4700` (dc_cube + pre_rect_wf), `8383808` (affine3D),
+  `c8a28c1` (truchet2), `60950a2` (truchet — TyrantWave).
 
 ### Notable decisions during porting
 
