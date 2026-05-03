@@ -103,6 +103,7 @@ mod dc_misc;
 mod dc_misc2;
 mod affine3d_misc;
 mod truchet2_misc;
+mod truchet_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -204,6 +205,7 @@ pub use dc_misc::*;
 pub use dc_misc2::*;
 pub use affine3d_misc::*;
 pub use truchet2_misc::*;
+pub use truchet_misc::*;
 
 use super::definition::VariationDef;
 
@@ -773,4 +775,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &AFFINE3D,
     // truchet2_misc: truchet2
     &TRUCHET2,
+    // truchet_misc: truchet
+    &TRUCHET,
 ];
