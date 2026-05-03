@@ -101,6 +101,7 @@ mod waves_wf_family;
 mod pointgrid_misc;
 mod dc_misc;
 mod dc_misc2;
+mod affine3d_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -200,6 +201,7 @@ pub use waves_wf_family::*;
 pub use pointgrid_misc::*;
 pub use dc_misc::*;
 pub use dc_misc2::*;
+pub use affine3d_misc::*;
 
 use super::definition::VariationDef;
 
@@ -765,4 +767,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     // dc_misc2: dc_cube, pre_rect_wf
     &DC_CUBE,
     &PRE_RECT_WF,
+    // affine3d_misc: affine3D
+    &AFFINE3D,
 ];
