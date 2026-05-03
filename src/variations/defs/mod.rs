@@ -113,6 +113,7 @@ mod siercarpet_misc;
 mod popcorn2_3d_misc;
 mod jac_asn_misc;
 mod plusrecip_misc;
+mod gamma_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -224,6 +225,7 @@ pub use siercarpet_misc::*;
 pub use popcorn2_3d_misc::*;
 pub use jac_asn_misc::*;
 pub use plusrecip_misc::*;
+pub use gamma_misc::*;
 
 use super::definition::VariationDef;
 
@@ -814,4 +816,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &JAC_ASN,
     // plusrecip_misc: plusrecip
     &PLUSRECIP,
+    // gamma_misc: gamma
+    &GAMMA,
 ];
