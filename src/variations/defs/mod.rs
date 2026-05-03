@@ -98,6 +98,7 @@ mod sosa_attractors3;
 mod sosa_attractors4;
 mod wf_curves;
 mod waves_wf_family;
+mod pointgrid_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -194,6 +195,7 @@ pub use sosa_attractors3::*;
 pub use sosa_attractors4::*;
 pub use wf_curves::*;
 pub use waves_wf_family::*;
+pub use pointgrid_misc::*;
 
 use super::definition::VariationDef;
 
@@ -748,4 +750,8 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &WAVES3_WF,
     &WAVES4_WF,
     &DINIS_SURFACE_WF,
+    // pointgrid_misc: pointgrid_wf, pointgrid3d_wf, apocarpet_js
+    &POINTGRID_WF,
+    &POINTGRID3D_WF,
+    &APOCARPET_JS,
 ];
