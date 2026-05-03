@@ -111,6 +111,7 @@ mod iconattractor_misc;
 mod waveblur_misc;
 mod siercarpet_misc;
 mod popcorn2_3d_misc;
+mod jac_asn_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -220,6 +221,7 @@ pub use iconattractor_misc::*;
 pub use waveblur_misc::*;
 pub use siercarpet_misc::*;
 pub use popcorn2_3d_misc::*;
+pub use jac_asn_misc::*;
 
 use super::definition::VariationDef;
 
@@ -806,4 +808,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &SIERCARPET_JS,
     // popcorn2_3d_misc: popcorn2_3D
     &POPCORN2_3D,
+    // jac_asn_misc: jac_asn
+    &JAC_ASN,
 ];
