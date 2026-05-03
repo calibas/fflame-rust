@@ -96,6 +96,7 @@ mod sosa_attractors;
 mod sosa_attractors2;
 mod sosa_attractors3;
 mod sosa_attractors4;
+mod wf_curves;
 
 pub use basic::*;
 pub use advanced::*;
@@ -190,6 +191,7 @@ pub use sosa_attractors::*;
 pub use sosa_attractors2::*;
 pub use sosa_attractors3::*;
 pub use sosa_attractors4::*;
+pub use wf_curves::*;
 
 use super::definition::VariationDef;
 
@@ -734,4 +736,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &HADAMARD_JS,
     &INVTREE_JS,
     &CROWN_JS,
+    // wf_curves: epispiral_wf, cloverleaf_wf, rose_wf, bubble_wf
+    &EPISPIRAL_WF,
+    &CLOVERLEAF_WF,
+    &ROSE_WF,
+    &BUBBLE_WF,
 ];
