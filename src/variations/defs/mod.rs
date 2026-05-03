@@ -97,6 +97,7 @@ mod sosa_attractors2;
 mod sosa_attractors3;
 mod sosa_attractors4;
 mod wf_curves;
+mod waves_wf_family;
 
 pub use basic::*;
 pub use advanced::*;
@@ -192,6 +193,7 @@ pub use sosa_attractors2::*;
 pub use sosa_attractors3::*;
 pub use sosa_attractors4::*;
 pub use wf_curves::*;
+pub use waves_wf_family::*;
 
 use super::definition::VariationDef;
 
@@ -741,4 +743,9 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CLOVERLEAF_WF,
     &ROSE_WF,
     &BUBBLE_WF,
+    // waves_wf_family: waves2_wf, waves3_wf, waves4_wf, dinis_surface_wf
+    &WAVES2_WF,
+    &WAVES3_WF,
+    &WAVES4_WF,
+    &DINIS_SURFACE_WF,
 ];
