@@ -193,8 +193,12 @@ both the shader emitter and the buffer populator, sharing
 | 96 | `waveblur_misc.rs` | waveblur_wf | 1 | `waveblur_wf` (Maschke — polar wave-blur emitting points on a circle whose radius is a wave function of uniform-random angle; 7 user (count int, amplitude_z, phase, damping_z, color_scale, color_offset, direct_color int); body uses needs_transform to read w for the damping multiplier since cpp's r already has VVAR factor when used in damping; Full3D). |
 | 97 | `siercarpet_misc.rs` | siercarpet_js | 1 | `siercarpet_js` (Sosa, 2017 — Cross Carpet by Roger Bagula, Java-recovered; 1 user `m` int 3-12; cpp's 25-element `_a[]/_b[]` lookup tables replaced with single-pair inline computation based on random index `l` parity; cpp's persistent `_d` state irrelevant — guard `d % 2m != 5 % 2*m` always true). |
 | 98 | `popcorn2_3d_misc.rs` | popcorn2_3D | 1 | `popcorn2_3D` (Berlin, 2009 — 3D mod of popcorn2; 4 user; cpp reads `FPz` accumulator — recovered by picking consistent `otherZ == 0` default branch (FPz starts at 0 each iteration in our model); body has needs_transform divide-out for `tmpVV = sgn(w)·w²` non-linear weight dep — `tmpVV/w = min(\|w\|, 1)` absorbs complication). |
-| **Total new** | | | **370** | |
-| Registry size | | | **454** | (84 base + 370 ported) |
+| 99 | `jac_asn_misc.rs` | jac_asn | 1 | `jac_asn` (Dark-Beam — inverse Jacobi sn/cn/sc/dn via Norbert Rosch's incomplete elliptic integral with Landen transformations; 3 user; **establishes WGSL complex-arithmetic toolkit** with `jac_cmul/cdiv/cabs/clog/csqrt/csin/ccos/casin/cacos/casinh` inline helpers prefixed `jac_`; 4 type modes; bounded 10-iter Landen loop with early-exit). |
+| 100 | `plusrecip_misc.rs` | plusrecip | 1 | `plusrecip` (Dark-Beam, 2019 — `k = z + sqrt(z² - a)`, conjugate-rotate when squared magnitude shrinks below \|a\|, then ensure positive real part; 2 user; uses `pr_csqrt/cmul/cabs` complex helpers prefixed `pr_`). |
+| 101 | `gamma_misc.rs` | gamma | 1 | `gamma` (zephyrtronium / dark-beam — `lgamma(hypot(x, y))·w` for x, `atan2(y, x)·w` for y; 0 user; **lgamma implemented via 8-term Lanczos approximation** (g=7) since WGSL lacks built-in; reflection formula handles x < 0.5). |
+| 102 | `bubblet3d_misc.rs` | bubbleT3D | 1 | `bubbleT3D` (FractalDesire — 3D bubble inversion with optional radial stripes and Z-axis holes; 6 user + 7 init; cpp's `_s, _c` reassigned per-iter in modus_blur=1 branch are computed inline; cpp's unbounded `while (angXY > _angStrip2)` replaced with `floor()`-based fmod; three stripe branches × two hole branches × symmetry mode preserved). |
+| **Total new** | | | **374** | |
+| Registry size | | | **458** | (84 base + 374 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -264,6 +268,10 @@ Branches and commits:
   `1168912` (circleRand + CircleTrans1), `58e8d3b`
   (iconattractor_js — 17-preset baking), `db29f2f` (waveblur_wf),
   `c20679f` (siercarpet_js), `8ca0d77` (popcorn2_3D).
+- Batches 99–102 also on `variation-bulk-port-2`. Commits in order:
+  `bf4e593` (jac_asn — establishes complex-math toolkit),
+  `71170ae` (plusrecip), `cf99bdb` (gamma — Lanczos lgamma),
+  `3513c5d` (bubbleT3D).
 
 ### Notable decisions during porting
 
