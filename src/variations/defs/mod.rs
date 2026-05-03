@@ -110,6 +110,7 @@ mod circle_rand_misc;
 mod iconattractor_misc;
 mod waveblur_misc;
 mod siercarpet_misc;
+mod popcorn2_3d_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -218,6 +219,7 @@ pub use circle_rand_misc::*;
 pub use iconattractor_misc::*;
 pub use waveblur_misc::*;
 pub use siercarpet_misc::*;
+pub use popcorn2_3d_misc::*;
 
 use super::definition::VariationDef;
 
@@ -802,4 +804,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &WAVEBLUR_WF,
     // siercarpet_misc: siercarpet_js
     &SIERCARPET_JS,
+    // popcorn2_3d_misc: popcorn2_3D
+    &POPCORN2_3D,
 ];
