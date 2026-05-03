@@ -108,6 +108,7 @@ mod post_axis_symmetry_misc;
 mod pre_wave3d_misc;
 mod circle_rand_misc;
 mod iconattractor_misc;
+mod waveblur_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -214,6 +215,7 @@ pub use post_axis_symmetry_misc::*;
 pub use pre_wave3d_misc::*;
 pub use circle_rand_misc::*;
 pub use iconattractor_misc::*;
+pub use waveblur_misc::*;
 
 use super::definition::VariationDef;
 
@@ -794,4 +796,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &CIRCLE_TRANS1,
     // iconattractor_misc: iconattractor_js
     &ICONATTRACTOR_JS,
+    // waveblur_misc: waveblur_wf
+    &WAVEBLUR_WF,
 ];
