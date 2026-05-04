@@ -119,6 +119,9 @@ mod waves2b_misc;
 mod prepost_compromise;
 mod dc_carpet3d_misc;
 mod vibration2_misc;
+mod gridout3d_misc;
+mod jubiq_misc;
+mod supershape3d_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -236,6 +239,9 @@ pub use waves2b_misc::*;
 pub use prepost_compromise::*;
 pub use dc_carpet3d_misc::*;
 pub use vibration2_misc::*;
+pub use gridout3d_misc::*;
+pub use jubiq_misc::*;
+pub use supershape3d_misc::*;
 
 use super::definition::VariationDef;
 
@@ -839,4 +845,10 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &DC_CARPET3D,
     // vibration2_misc: vibration2 (26 user — first port unblocked by packed buffer)
     &VIBRATION2,
+    // gridout3d_misc: gridout3D (26 user)
+    &GRIDOUT_3D,
+    // jubiq_misc: jubiq (24 user + 2 init)
+    &JUBIQ,
+    // supershape3d_misc: superShape3d (16 user + 10 init)
+    &SUPERSHAPE_3D,
 ];

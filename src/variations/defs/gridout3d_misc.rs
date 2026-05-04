@@ -1,0 +1,159 @@
+//! gridout3D (Faber + Faber 2007-2008, ported by Dark-Beam 2017,
+//! variables added by Brad Stefanov)
+//!
+//! Eight-region grid offset based on the sign of `rint(x)·xx` and
+//! `rint(y)·yy` and the comparison between |x| and |y|. Each region
+//! adds (or subtracts, or multiplies for some Z cases) a per-region
+//! constant triplet to (x, y, z).
+//!
+//! 26 user params:
+//!   - xx, yy: rounding gates for x/y sign comparison
+//!   - xa..xh, ya..yh, za..zh: per-region offsets (8 regions × 3 axes)
+//!
+//! No init slots. Body factors cleanly through outer multiplier.
+//! 3D variation (full3D) since it modifies z.
+//!
+//! Quirks preserved from cpp body:
+//!   - region D (y<=0, x<=0, y>x): y output uses `- yd` not `+ yd`
+//!   - regions E/F/G/H (y>0): z output uses `* ze..*zh` (multiply)
+//!     instead of the `+ za..+zd` used by y<=0 regions
+//!   - region E: x output uses `- xe`; region G: x uses `- xg`;
+//!     region H: y uses `- yh`
+//!
+//! 26 user params places this over the old 16-slot ceiling — port
+//! enabled by the packed-variation-params buffer (this branch).
+//!
+//! Source: `output/jwildfire-vars/output/gridout3d.cpp`
+//! (Java-recovered; cpp PluginVarCalc empty unported_stub).
+
+use crate::variations::{
+    definition::{VariationDef, VariationParamDef},
+    ParamType, VariationCategory, VariationPhase,
+};
+use crate::param;
+
+pub static GRIDOUT_3D: VariationDef = VariationDef {
+    name: "gridout3D",
+    display_name: "Gridout 3D",
+    category: VariationCategory::Full3D,
+    phase: VariationPhase::Normal,
+    needs_rng: false,
+    parameters: &[
+        param!("xx", "X Gate", unlimited_float, 1.0, -10.0, 10.0),
+        param!("yy", "Y Gate", unlimited_float, 1.0, -10.0, 10.0),
+        param!("xa", "XA", unlimited_float, 1.0, -10.0, 10.0),
+        param!("xb", "XB", unlimited_float, 0.0, -10.0, 10.0),
+        param!("xc", "XC", unlimited_float, 1.0, -10.0, 10.0),
+        param!("xd", "XD", unlimited_float, 0.0, -10.0, 10.0),
+        param!("xe", "XE", unlimited_float, 1.0, -10.0, 10.0),
+        param!("xf", "XF", unlimited_float, 0.0, -10.0, 10.0),
+        param!("xg", "XG", unlimited_float, 1.0, -10.0, 10.0),
+        param!("xh", "XH", unlimited_float, 0.0, -10.0, 10.0),
+        param!("ya", "YA", unlimited_float, 0.0, -10.0, 10.0),
+        param!("yb", "YB", unlimited_float, 1.0, -10.0, 10.0),
+        param!("yc", "YC", unlimited_float, 0.0, -10.0, 10.0),
+        param!("yd", "YD", unlimited_float, 1.0, -10.0, 10.0),
+        param!("ye", "YE", unlimited_float, 0.0, -10.0, 10.0),
+        param!("yf", "YF", unlimited_float, 1.0, -10.0, 10.0),
+        param!("yg", "YG", unlimited_float, 0.0, -10.0, 10.0),
+        param!("yh", "YH", unlimited_float, 1.0, -10.0, 10.0),
+        param!("za", "ZA", unlimited_float, 0.0, -10.0, 10.0),
+        param!("zb", "ZB", unlimited_float, 0.0, -10.0, 10.0),
+        param!("zc", "ZC", unlimited_float, 0.0, -10.0, 10.0),
+        param!("zd", "ZD", unlimited_float, 0.0, -10.0, 10.0),
+        param!("ze", "ZE", unlimited_float, 1.0, -10.0, 10.0),
+        param!("zf", "ZF", unlimited_float, 1.0, -10.0, 10.0),
+        param!("zg", "ZG", unlimited_float, 1.0, -10.0, 10.0),
+        param!("zh", "ZH", unlimited_float, 1.0, -10.0, 10.0),
+    ],
+    needs_transform: false,
+    writes_color: false,
+    init_param_count: 0,
+    wgsl_init: None,
+    wgsl_2d: r#"
+fn variation_gridout3D(p: vec2<f32>, xform_id: u32, variation_id: u32) -> vec2<f32> {
+    let xx = get_param(xform_id, variation_id, 0u);
+    let yy = get_param(xform_id, variation_id, 1u);
+    let xa = get_param(xform_id, variation_id, 2u);
+    let xb = get_param(xform_id, variation_id, 3u);
+    let xc = get_param(xform_id, variation_id, 4u);
+    let xd = get_param(xform_id, variation_id, 5u);
+    let xe = get_param(xform_id, variation_id, 6u);
+    let xf = get_param(xform_id, variation_id, 7u);
+    let xg = get_param(xform_id, variation_id, 8u);
+    let xh = get_param(xform_id, variation_id, 9u);
+    let ya = get_param(xform_id, variation_id, 10u);
+    let yb = get_param(xform_id, variation_id, 11u);
+    let yc = get_param(xform_id, variation_id, 12u);
+    let yd = get_param(xform_id, variation_id, 13u);
+    let ye = get_param(xform_id, variation_id, 14u);
+    let yf = get_param(xform_id, variation_id, 15u);
+    let yg = get_param(xform_id, variation_id, 16u);
+    let yh = get_param(xform_id, variation_id, 17u);
+    // 2D: emit just x/y; the 8-region z handling lives in the 3D body
+    let x = round(p.x) * xx;
+    let y = round(p.y) * yy;
+    if (y <= 0.0) {
+        if (x > 0.0) {
+            if (-y >= x) { return vec2<f32>(p.x + xa, p.y + ya); }
+            return vec2<f32>(p.x + xb, p.y + yb);
+        }
+        if (y <= x) { return vec2<f32>(p.x + xc, p.y + yc); }
+        return vec2<f32>(p.x + xd, p.y - yd);
+    }
+    if (x > 0.0) {
+        if (y >= x) { return vec2<f32>(p.x - xe, p.y + ye); }
+        return vec2<f32>(p.x + xf, p.y + yf);
+    }
+    if (y >= -x) { return vec2<f32>(p.x - xg, p.y + yg); }
+    return vec2<f32>(p.x + xh, p.y - yh);
+}
+"#,
+    wgsl_3d: Some(r#"
+fn variation_gridout3D(p: vec3<f32>, xform_id: u32, variation_id: u32) -> vec3<f32> {
+    let xx = get_param(xform_id, variation_id, 0u);
+    let yy = get_param(xform_id, variation_id, 1u);
+    let xa = get_param(xform_id, variation_id, 2u);
+    let xb = get_param(xform_id, variation_id, 3u);
+    let xc = get_param(xform_id, variation_id, 4u);
+    let xd = get_param(xform_id, variation_id, 5u);
+    let xe = get_param(xform_id, variation_id, 6u);
+    let xf = get_param(xform_id, variation_id, 7u);
+    let xg = get_param(xform_id, variation_id, 8u);
+    let xh = get_param(xform_id, variation_id, 9u);
+    let ya = get_param(xform_id, variation_id, 10u);
+    let yb = get_param(xform_id, variation_id, 11u);
+    let yc = get_param(xform_id, variation_id, 12u);
+    let yd = get_param(xform_id, variation_id, 13u);
+    let ye = get_param(xform_id, variation_id, 14u);
+    let yf = get_param(xform_id, variation_id, 15u);
+    let yg = get_param(xform_id, variation_id, 16u);
+    let yh = get_param(xform_id, variation_id, 17u);
+    let za = get_param(xform_id, variation_id, 18u);
+    let zb = get_param(xform_id, variation_id, 19u);
+    let zc = get_param(xform_id, variation_id, 20u);
+    let zd = get_param(xform_id, variation_id, 21u);
+    let ze = get_param(xform_id, variation_id, 22u);
+    let zf = get_param(xform_id, variation_id, 23u);
+    let zg = get_param(xform_id, variation_id, 24u);
+    let zh = get_param(xform_id, variation_id, 25u);
+
+    let x = round(p.x) * xx;
+    let y = round(p.y) * yy;
+    if (y <= 0.0) {
+        if (x > 0.0) {
+            if (-y >= x) { return vec3<f32>(p.x + xa, p.y + ya, p.z + za); }
+            return vec3<f32>(p.x + xb, p.y + yb, p.z + zb);
+        }
+        if (y <= x) { return vec3<f32>(p.x + xc, p.y + yc, p.z + zc); }
+        return vec3<f32>(p.x + xd, p.y - yd, p.z + zd);
+    }
+    if (x > 0.0) {
+        if (y >= x) { return vec3<f32>(p.x - xe, p.y + ye, p.z * ze); }
+        return vec3<f32>(p.x + xf, p.y + yf, p.z * zf);
+    }
+    if (y >= -x) { return vec3<f32>(p.x - xg, p.y + yg, p.z * zg); }
+    return vec3<f32>(p.x + xh, p.y - yh, p.z * zh);
+}
+"#),
+};
