@@ -125,6 +125,7 @@ mod supershape3d_misc;
 mod wz_lost_variations;
 mod quaternion_misc;
 mod xtrb_misc;
+mod curliecue2_misc;
 
 pub use basic::*;
 pub use advanced::*;
@@ -248,6 +249,7 @@ pub use supershape3d_misc::*;
 pub use wz_lost_variations::*;
 pub use quaternion_misc::*;
 pub use xtrb_misc::*;
+pub use curliecue2_misc::*;
 
 use super::definition::VariationDef;
 
@@ -864,4 +866,6 @@ pub static ALL_VARIATIONS: &[&VariationDef] = &[
     &QUATERNION,
     // xtrb_misc: xtrb (6 user + 22 init = 28 slots) — Zueuk's TriBorders trilinear hex variation
     &XTRB,
+    // curliecue2_misc: curliecue2 (1 user + 4 state) — Sosa walker; first state-using port
+    &CURLIECUE2,
 ];
