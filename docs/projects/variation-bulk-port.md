@@ -197,8 +197,11 @@ both the shader emitter and the buffer populator, sharing
 | 100 | `plusrecip_misc.rs` | plusrecip | 1 | `plusrecip` (Dark-Beam, 2019 — `k = z + sqrt(z² - a)`, conjugate-rotate when squared magnitude shrinks below \|a\|, then ensure positive real part; 2 user; uses `pr_csqrt/cmul/cabs` complex helpers prefixed `pr_`). |
 | 101 | `gamma_misc.rs` | gamma | 1 | `gamma` (zephyrtronium / dark-beam — `lgamma(hypot(x, y))·w` for x, `atan2(y, x)·w` for y; 0 user; **lgamma implemented via 8-term Lanczos approximation** (g=7) since WGSL lacks built-in; reflection formula handles x < 0.5). |
 | 102 | `bubblet3d_misc.rs` | bubbleT3D | 1 | `bubbleT3D` (FractalDesire — 3D bubble inversion with optional radial stripes and Z-axis holes; 6 user + 7 init; cpp's `_s, _c` reassigned per-iter in modus_blur=1 branch are computed inline; cpp's unbounded `while (angXY > _angStrip2)` replaced with `floor()`-based fmod; three stripe branches × two hole branches × symmetry mode preserved). |
-| **Total new** | | | **374** | |
-| Registry size | | | **458** | (84 base + 374 ported) |
+| 103 | `waves2b_misc.rs` | waves2b | 1 | `waves2b` (dark-beam, 2014 — generalization of waves2 with three per-axis modes selected by `pwx`/`pwy`: power-mode sin, Jacobi sn, or **Bessel J1** via Abramowitz & Stegun 9.4.4 / 9.4.6 polynomial approximations; 10 user + 2 init; J1 helper `w2b_bessel_j1` implements both \|x\| ≤ 3 polynomial and \|x\| > 3 asymptotic forms with sign-preserving J1(-x) = -J1(x)). |
+| 104 | `prepost_compromise.rs` | prepost_circlize, prepost_mobius | 2 | Two priority-2 "prepost" variations ported as **single-phase compromise** (cpp runs both pre and post; we apply just the "post" half). `prepost_circlize` (3 user + 2 init `_pi_n, _cospi_n`; cpp's `lerp(r, r/factor, VVAR)` becomes `r/factor` — affects very low weight blending). `prepost_mobius` (8 user; complex Möbius `(a·z + b) / (c·z + d)` in real/imag form; body factors cleanly). |
+| 105 | `dc_carpet3d_misc.rs` | dc_carpet3D | 1 | `dc_carpet3D` (Xyrus02 / Stefanov, Java-recovered — 14 user (origin, 6 colors unused, stretch/scale, scale_z, offset_z, reset_z); spatial transform uses xform's affine via needs_transform; **color-z coupling dropped** — output.z = p.z + offset_z/w (drop `dz = color · scale_z + offset_z` and reset_z since they require color writes). |
+| **Total new** | | | **378** | |
+| Registry size | | | **462** | (84 base + 378 ported) |
 
 Branches and commits:
 - Batches 1–10 on `variation-bulk-port-batch1`. Commits in order:
@@ -272,6 +275,10 @@ Branches and commits:
   `bf4e593` (jac_asn — establishes complex-math toolkit),
   `71170ae` (plusrecip), `cf99bdb` (gamma — Lanczos lgamma),
   `3513c5d` (bubbleT3D).
+- Batches 103–105 also on `variation-bulk-port-2`. Commits in order:
+  `2a273f2` (waves2b — Bessel J1 polynomial approximation),
+  `73e836f` (prepost_circlize + prepost_mobius single-phase compromise),
+  `25115a1` (dc_carpet3D — color-z coupling dropped).
 
 ### Notable decisions during porting
 
