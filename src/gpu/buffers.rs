@@ -6,9 +6,6 @@ use crate::scene::palette::Palette;
 /// Maximum number of transforms supported (buffer is pre-allocated for this many)
 pub const MAX_TRANSFORMS: usize = 32;
 
-/// Maximum parameters per variation (expandable if needed)
-pub const MAX_PARAMS_PER_VARIATION: usize = 16;
-
 /// GPU representation of Transform (must match WGSL struct layout)
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -119,15 +116,32 @@ impl GpuTransform {
     }
 }
 
-/// GPU representation of variation parameters for ONE transform
-/// Total size: 100 variations × 16 params = 1600 floats = 6400 bytes per transform
+/// Maximum total variation-parameter slots per transform.
+///
+/// This is the packed buffer's capacity. With the packed layout, each
+/// variation occupies exactly `parameters.len() + init_param_count`
+/// slots, so the cap applies to `sum(active_variation_slot_counts)`,
+/// not to any single variation. Even pathological flames stay well
+/// below this — typical flames use 30-150 slots.
+pub const MAX_VARIATION_PARAM_SLOTS: usize = 1600;
+
+/// GPU representation of variation parameters for ONE transform.
+///
+/// Layout is **packed**: each active variation gets exactly
+/// `parameters.len() + init_param_count` consecutive slots starting
+/// at its packed offset (computed by
+/// [`crate::scene::transforms::compute_packed_layout`]). The shader
+/// builder generates a per-flame `get_param` that maps `variation_id`
+/// (per-flame local index) to its packed offset, so host and shader
+/// stay in sync.
+///
+/// The buffer is sized to a worst-case ceiling
+/// (`MAX_VARIATION_PARAM_SLOTS = 1600` floats = 6400 bytes); flames
+/// only fill the prefix they need, leaving the tail zeroed.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct GpuVariationParams {
-    /// Flat array indexed by: variation_id * MAX_PARAMS_PER_VARIATION + param_slot
-    /// Each variation gets MAX_PARAMS_PER_VARIATION consecutive slots.
-    /// Slots `0..N` are user parameters, slots `N..N+M` are init-derived.
-    pub params: [f32; 1600],  // 100 variations × 16 params
+    pub params: [f32; MAX_VARIATION_PARAM_SLOTS],
 }
 
 // Manual implementation for bytemuck (arrays > 128 not auto-derived)
@@ -135,18 +149,31 @@ unsafe impl bytemuck::Pod for GpuVariationParams {}
 unsafe impl bytemuck::Zeroable for GpuVariationParams {}
 
 impl GpuVariationParams {
-    /// Create the param-array for a single transform, indexed by per-flame
-    /// local variation indices (the same map used for `GpuTransform.variations`).
+    /// Create the packed param-array for a single transform.
+    ///
+    /// `local_map` and `registry` together yield each active variation's
+    /// packed offset (via `compute_packed_layout`), and we write each
+    /// variation's user-visible parameter values starting at that
+    /// offset. Init-derived slots are left at 0.0; the GPU init compute
+    /// dispatch fills them in before the main render pass reads them.
     pub fn from_transform(
         xform: &Transform,
         local_map: &std::collections::HashMap<String, u32>,
         registry: &crate::variations::VariationRegistry,
     ) -> Self {
-        let mut params = [0.0f32; 1600];
+        let mut params = [0.0f32; MAX_VARIATION_PARAM_SLOTS];
+
+        // Build name → offset lookup once per transform. Cheap; could be
+        // hoisted to caller for very large flames.
+        let layout = crate::scene::transforms::compute_packed_layout(local_map, registry);
+        let offset_for: std::collections::HashMap<&str, u32> = layout
+            .iter()
+            .map(|e| (e.name.as_str(), e.offset))
+            .collect();
 
         for (var_name, _weight) in &xform.variations {
-            let local_idx = match local_map.get(var_name) {
-                Some(&i) => i as usize,
+            let offset = match offset_for.get(var_name.as_str()) {
+                Some(&o) => o as usize,
                 None => continue, // not active or dropped past the cap
             };
             let info = match registry.get(var_name) {
@@ -155,15 +182,12 @@ impl GpuVariationParams {
             };
 
             for (param_idx, param_def) in info.parameters.iter().enumerate() {
-                if param_idx >= MAX_PARAMS_PER_VARIATION {
-                    break;
-                }
                 let value = xform.get_variation_param_or_default(
                     var_name,
                     &param_def.name,
                     registry,
                 );
-                let buffer_idx = local_idx * MAX_PARAMS_PER_VARIATION + param_idx;
+                let buffer_idx = offset + param_idx;
                 if buffer_idx < params.len() {
                     params[buffer_idx] = value;
                 }
@@ -183,6 +207,17 @@ impl GpuVariationParams {
             flame.extract_active_variations().into_keys(),
             registry,
         );
+        // Soft cap check: warn if total slot footprint approaches the buffer.
+        let total_slots = crate::scene::transforms::total_packed_slots(&local_map, registry);
+        if total_slots as usize > MAX_VARIATION_PARAM_SLOTS {
+            log::error!(
+                "Flame has {} packed variation slots, exceeds buffer capacity {}. \
+                 Some parameters will be lost. Active variations: {:?}",
+                total_slots,
+                MAX_VARIATION_PARAM_SLOTS,
+                local_map.keys().collect::<Vec<_>>(),
+            );
+        }
         let mut result: Vec<Self> = flame.transforms
             .iter()
             .map(|xform| Self::from_transform(xform, &local_map, registry))

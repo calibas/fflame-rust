@@ -1,13 +1,12 @@
 // Utility functions shared by 2D and 3D shaders
-
-// Get a variation parameter value for a specific transform
-// variation_id: Index of the variation (0-99)
-// param_slot: Parameter slot within the variation (0-15; user params first,
-//             then init-derived values)
-fn get_param(xform_id: u32, variation_id: u32, param_slot: u32) -> f32 {
-    let idx = variation_id * 16u + param_slot;
-    return variation_params[xform_id].params[idx];
-}
+//
+// NOTE: `get_param` is generated per-flame by the shader builder
+// (see `build_packed_get_param` in src/shader_builder_v2.rs) and
+// injected before this file is included. The injected version uses
+// per-variation packed offsets baked from the active variation set,
+// so each variation occupies exactly `parameters.len() +
+// init_param_count` slots in the variation_params buffer instead of
+// a fixed 16.
 
 // Select transform based on cumulative weights (uses params.num_transforms)
 fn select_transform(rand_val: f32) -> u32 {

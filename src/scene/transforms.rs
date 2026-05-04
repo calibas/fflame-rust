@@ -51,6 +51,81 @@ where
         .collect()
 }
 
+/// One entry in a flame's packed parameter layout: a variation, its
+/// per-flame local index, the offset where its slots start in the
+/// packed buffer, and how many slots it owns.
+///
+/// Returned by [`compute_packed_layout`] in local-index order, so the
+/// total slot count of a flame is `entries.last().map(|e| e.offset +
+/// e.slot_count).unwrap_or(0)`.
+#[derive(Debug, Clone)]
+pub struct PackedParamEntry {
+    pub name: String,
+    pub local_idx: u32,
+    pub offset: u32,
+    pub slot_count: u32,
+}
+
+/// Compute the packed parameter layout for a flame's active variation set.
+///
+/// Walks the local index map in order of `local_idx` (which matches
+/// registry order, see [`compute_local_index_map`]) and assigns each
+/// variation a contiguous slot range in the packed buffer:
+///
+/// ```text
+///   variation A (local_idx=0, slot_count=3): offset 0, slots [0..3)
+///   variation B (local_idx=1, slot_count=8): offset 3, slots [3..11)
+///   variation C (local_idx=2, slot_count=2): offset 11, slots [11..13)
+/// ```
+///
+/// Both the shader builder (for its generated `get_param` switch) and
+/// the host packer ([`crate::gpu::buffers::GpuVariationParams`]) must
+/// use this layout consistently — they're keyed by local_idx through
+/// the same registry-order assignment.
+///
+/// Variations not found in the registry are skipped (this is unusual —
+/// it would mean the flame references a variation that's been
+/// unregistered).
+pub fn compute_packed_layout(
+    local_map: &HashMap<String, u32>,
+    registry: &VariationRegistry,
+) -> Vec<PackedParamEntry> {
+    let mut entries: Vec<(&String, u32)> =
+        local_map.iter().map(|(n, &i)| (n, i)).collect();
+    entries.sort_by_key(|&(_, i)| i);
+
+    let mut out = Vec::with_capacity(entries.len());
+    let mut cursor: u32 = 0;
+    for (name, local_idx) in entries {
+        let slot_count = match registry.get(name) {
+            Some(info) => info.slot_count() as u32,
+            None => continue,
+        };
+        out.push(PackedParamEntry {
+            name: name.clone(),
+            local_idx,
+            offset: cursor,
+            slot_count,
+        });
+        cursor += slot_count;
+    }
+    out
+}
+
+/// Total number of slots needed to pack a flame's active variations.
+///
+/// Convenience wrapper that returns just the cursor value after walking
+/// [`compute_packed_layout`].
+pub fn total_packed_slots(
+    local_map: &HashMap<String, u32>,
+    registry: &VariationRegistry,
+) -> u32 {
+    compute_packed_layout(local_map, registry)
+        .last()
+        .map(|e| e.offset + e.slot_count)
+        .unwrap_or(0)
+}
+
 /// IFS Transform with named variations (V2)
 ///
 /// This struct is used for both regular transforms AND the final transform.
