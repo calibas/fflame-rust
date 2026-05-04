@@ -645,6 +645,97 @@ impl ShaderBuilder {
         crate::scene::transforms::compute_packed_layout(&local_map, &self.registry)
     }
 
+    /// Build the per-thread variation state block — a module-level
+    /// `var<private> thread_state` array plus generated `get_state` and
+    /// `set_state` accessors with per-(xform, variation) offsets baked in.
+    ///
+    /// Returns an empty string when no active variation declares state, so
+    /// stateless flames pay zero compile or runtime cost.
+    ///
+    /// State is keyed on `(xform_id, variation_id)` (not just
+    /// `variation_id` like `get_param`) — two transforms both using the
+    /// same stateful variation get independent state. The switch key is
+    /// encoded as `xform_id * 100 + variation_id`, which fits in u32 with
+    /// no collisions because `MAX_VARIATIONS_PER_FLAME = 100` and
+    /// `MAX_TRANSFORMS = 32`.
+    ///
+    /// `var<private>` is per-invocation (per-thread) and zero-initialized
+    /// by WGSL spec at thread start, persisting across the inner iteration
+    /// loop within one main() call. Re-initializes each compute dispatch.
+    fn build_state_accessors(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        active_variations: &[(String, u32)],
+    ) -> String {
+        let local_map: std::collections::HashMap<String, u32> =
+            active_variations.iter().map(|(n, i)| (n.clone(), *i)).collect();
+        let layout = crate::scene::transforms::compute_state_layout(
+            flame,
+            &local_map,
+            &self.registry,
+        );
+        if layout.is_empty() {
+            return String::new();
+        }
+        let total = layout
+            .last()
+            .map(|e| e.offset + e.state_count)
+            .unwrap_or(0);
+
+        let mut out = String::new();
+        out.push_str(&format!(
+            "// Per-thread variation state. var<private> is per-invocation and\n\
+             // zero-initialized by WGSL spec. Persists across the inner iteration\n\
+             // loop within a single main() call. See\n\
+             // docs/projects/intra-iteration-state-and-accum.md.\n\
+             var<private> thread_state: array<f32, {total}u>;\n\n",
+            total = total
+        ));
+
+        // Switch body shared by get_state and set_state.
+        let mut switch_body = String::new();
+        for entry in &layout {
+            let key = entry.xform_idx * 100 + entry.variation_local_id;
+            switch_body.push_str(&format!(
+                "        case {key}u: {{ offset = {off}u; }}  // xform {x}, {name}: {n} slots\n",
+                key = key,
+                off = entry.offset,
+                x = entry.xform_idx,
+                name = entry.variation_name,
+                n = entry.state_count,
+            ));
+        }
+
+        out.push_str(
+            "fn get_state(xform_id: u32, variation_id: u32, slot: u32) -> f32 {\n\
+             \x20   var offset: u32 = 0u;\n\
+             \x20   let key = xform_id * 100u + variation_id;\n\
+             \x20   switch (key) {\n",
+        );
+        out.push_str(&switch_body);
+        out.push_str(
+            "        default: { offset = 0u; }\n\
+             \x20   }\n\
+             \x20   return thread_state[offset + slot];\n\
+             }\n\n",
+        );
+
+        out.push_str(
+            "fn set_state(xform_id: u32, variation_id: u32, slot: u32, value: f32) {\n\
+             \x20   var offset: u32 = 0u;\n\
+             \x20   let key = xform_id * 100u + variation_id;\n\
+             \x20   switch (key) {\n",
+        );
+        out.push_str(&switch_body);
+        out.push_str(
+            "        default: { offset = 0u; }\n\
+             \x20   }\n\
+             \x20   thread_state[offset + slot] = value;\n\
+             }\n",
+        );
+        out
+    }
+
     /// Generate a per-flame `get_param` function with packed offsets baked
     /// from the active variation set.
     ///
@@ -889,6 +980,7 @@ impl ShaderBuilder {
     /// - `constants`: Hard-coded shader constants
     pub fn build_from_template(
         &self,
+        flame: &crate::scene::transforms::Flame,
         active_variations: &HashMap<String, f32>,
         render_3d: bool,
         path_features_enabled: bool,
@@ -941,6 +1033,12 @@ impl ShaderBuilder {
         //    utilities.wgsl — each variation now has exactly its declared
         //    slot count instead of a fixed 16.
         shader.push_str(&self.build_packed_get_param(&active));
+        shader.push('\n');
+
+        // 8a. Per-thread variation state (only emits if any active variation
+        //     declares state_count > 0; empty string for stateless flames).
+        //     See docs/projects/intra-iteration-state-and-accum.md.
+        shader.push_str(&self.build_state_accessors(flame, &active));
         shader.push('\n');
 
         // 9. Utilities
@@ -1073,6 +1171,13 @@ impl ShaderBuilder {
 
         for (_name, idx, info) in &normal_variations {
             let mut args = String::from("temp");
+            // needs_accum: pass current `result` (= cpp's FPx/FPy) so the
+            // variation can read the running accumulator of prior variations.
+            // Inserted right after `p` so the order matches the variation
+            // function's declared signature.
+            if info.needs_accum {
+                args.push_str(", result");
+            }
             if !info.parameters.is_empty() || info.needs_transform {
                 args.push_str(&format!(", xform_id, {}u", idx));
             }
@@ -1114,6 +1219,12 @@ impl ShaderBuilder {
             for (_name, idx, info) in &post_variations {
                 // Post-variations directly modify result (NOT weighted sum!)
                 let mut params = String::from("result");
+                // needs_accum: in post-phase, cpp's FP* is the variation
+                // output up to this point — same as our `result`. Pass it as
+                // the accum arg too.
+                if info.needs_accum {
+                    params.push_str(", result");
+                }
 
                 // has_params || needs_transform → pass (xform_id, variation_id).
                 // Pure no-param no-needs_transform variations (e.g. flatten 2D
@@ -1300,6 +1411,11 @@ impl ShaderBuilder {
                 _ => {
                     // Standard variation with function call
                     let mut args = String::from("temp");
+                    // needs_accum: pass current 3D `result` so the variation
+                    // can read the running accumulator (cpp's FPx/FPy/FPz).
+                    if info.needs_accum {
+                        args.push_str(", result");
+                    }
                     if !info.parameters.is_empty() || info.needs_transform {
                         args.push_str(&format!(", xform_id, {}u", idx));
                     }
@@ -1356,6 +1472,10 @@ impl ShaderBuilder {
                     _ => {
                         // Generic post-variations (rotation, post_bwraps, etc.)
                         let mut params = String::from("result");
+                        // needs_accum: in post-phase, cpp's FP* is `result`.
+                        if info.needs_accum {
+                            params.push_str(", result");
+                        }
 
                         if !info.parameters.is_empty() || info.needs_transform {
                             params.push_str(&format!(", xform_id, {}u", idx));
@@ -1385,20 +1505,33 @@ impl ShaderBuilder {
 
     /// Build 2D TILED trajectory shader with active variations
     /// Uses full-resolution coordinates and routes samples to tile buffers
-    pub fn build_trajectory_2d_tiled(&self, active_variations: &HashMap<String, f32>) -> String {
-        self.build_trajectory_tiled(active_variations, false)
+    pub fn build_trajectory_2d_tiled(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        active_variations: &HashMap<String, f32>,
+    ) -> String {
+        self.build_trajectory_tiled(flame, active_variations, false)
     }
 
     /// Build 3D TILED trajectory shader with active variations
-    pub fn build_trajectory_3d_tiled(&self, active_variations: &HashMap<String, f32>) -> String {
-        self.build_trajectory_tiled(active_variations, true)
+    pub fn build_trajectory_3d_tiled(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        active_variations: &HashMap<String, f32>,
+    ) -> String {
+        self.build_trajectory_tiled(flame, active_variations, true)
     }
 
     /// Build TILED trajectory shader (2D or 3D), with HAS_DC + RENDER_3D
     /// template conditions. Same shader source for both modes — the
     /// `{{#if RENDER_3D}}` gates select vec2/vec3 init and the matching
     /// pixel projection helper.
-    fn build_trajectory_tiled(&self, active_variations: &HashMap<String, f32>, render_3d: bool) -> String {
+    fn build_trajectory_tiled(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        active_variations: &HashMap<String, f32>,
+        render_3d: bool,
+    ) -> String {
         let active = self.active_with_local_indices(active_variations, render_3d);
 
         let mut shader = String::new();
@@ -1438,6 +1571,10 @@ impl ShaderBuilder {
         shader.push_str(&self.build_packed_get_param(&active));
         shader.push('\n');
 
+        // 6a. Per-thread variation state (empty for stateless flames).
+        shader.push_str(&self.build_state_accessors(flame, &active));
+        shader.push('\n');
+
         // 7. Tiled utilities (uses full_width/full_height)
         shader.push_str(include_str!("../shaders/core/utilities_tiled.wgsl"));
         shader.push('\n');
@@ -1457,7 +1594,11 @@ impl ShaderBuilder {
     /// is displayed, not for sample collection. Configs with 3D variations
     /// (e.g. flatten, hemisphere) need the 3D path even when render_mode is
     /// 2D, which is why there's no separate 2D export shader.
-    pub fn build_export(&self, active_variations: &HashMap<String, f32>) -> String {
+    pub fn build_export(
+        &self,
+        flame: &crate::scene::transforms::Flame,
+        active_variations: &HashMap<String, f32>,
+    ) -> String {
         let active = self.active_with_local_indices(active_variations, true);
 
         let mut shader = String::new();
@@ -1479,6 +1620,10 @@ impl ShaderBuilder {
         //    Was previously a fixed-stride function in utilities.wgsl;
         //    now generated per-flame from the active variation set.
         shader.push_str(&self.build_packed_get_param(&active));
+        shader.push('\n');
+
+        // 4a. Per-thread variation state (empty for stateless flames).
+        shader.push_str(&self.build_state_accessors(flame, &active));
         shader.push('\n');
 
         // 5. Standard utilities (no longer defines get_param, just helpers

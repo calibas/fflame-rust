@@ -320,8 +320,8 @@ impl TiledRenderer {
         // Build shader
         let shader_builder = ShaderBuilder::new(global_registry().clone());
         let shader_source = match config.flame.render_mode {
-            RenderMode::TwoD => shader_builder.build_trajectory_2d_tiled(&active_variations),
-            RenderMode::ThreeD => shader_builder.build_trajectory_3d_tiled(&active_variations),
+            RenderMode::TwoD => shader_builder.build_trajectory_2d_tiled(&config.flame, &active_variations),
+            RenderMode::ThreeD => shader_builder.build_trajectory_3d_tiled(&config.flame, &active_variations),
         };
 
         let shader_module = device.create_shader_module(ShaderModuleDescriptor {
